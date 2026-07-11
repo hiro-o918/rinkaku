@@ -70,11 +70,20 @@ static REGISTRY: &[RegistryEntry] = &[
         extensions: &["py"],
         support: || &python::PythonSupport,
     },
+    RegistryEntry {
+        extensions: &["ts"],
+        support: || &typescript::TypeScriptSupport,
+    },
+    RegistryEntry {
+        extensions: &["tsx"],
+        support: || &typescript::TsxSupport,
+    },
 ];
 
 pub mod go;
 pub mod python;
 pub mod rust;
+pub mod typescript;
 
 #[cfg(test)]
 mod tests {
@@ -102,6 +111,22 @@ mod tests {
 
         let support = actual.expect("expected Some(&dyn LanguageSupport) for .py path");
         assert_eq!("python", support.name());
+    }
+
+    #[test]
+    fn should_return_typescript_support_when_path_has_ts_extension() {
+        let actual = language_for_path("src/main.ts");
+
+        let support = actual.expect("expected Some(&dyn LanguageSupport) for .ts path");
+        assert_eq!("typescript", support.name());
+    }
+
+    #[test]
+    fn should_return_tsx_support_when_path_has_tsx_extension() {
+        let actual = language_for_path("src/Component.tsx");
+
+        let support = actual.expect("expected Some(&dyn LanguageSupport) for .tsx path");
+        assert_eq!("typescript", support.name());
     }
 
     #[test]
