@@ -20,11 +20,12 @@ use tree_sitter::StreamingIterator;
 /// contribute `container` names to the members nested inside them.
 ///
 /// Methods (Go receiver methods, Python/TypeScript class methods, Rust
-/// impl/trait methods, TypeScript arrow functions bound to a `const`) are
-/// all reported as `Function`, matching the precedent already set by the
-/// Rust support: `container` is what distinguishes "a method of X" from a
-/// free function, so a separate `Method` variant would duplicate
-/// information already carried by `container` without adding any.
+/// impl/trait methods, TypeScript arrow functions bound to a
+/// `const`/`let`/`var`) are all reported as `Function`, matching the
+/// precedent already set by the Rust support: `container` is what
+/// distinguishes "a method of X" from a free function, so a separate
+/// `Method` variant would duplicate information already carried by
+/// `container` without adding any.
 /// Variants are named for the language-neutral concept they represent, not
 /// for a specific language's keyword (e.g. `Class` covers both Python
 /// `class` and TypeScript `class`).

@@ -12,8 +12,9 @@ use super::LanguageSupport;
 
 /// Tree-sitter query capturing the definition node kinds whose signatures
 /// rinkaku extracts: functions (top-level and class methods),
-/// const-bound arrow functions, classes (including `abstract class`),
-/// abstract method signatures, interfaces, type aliases, and enums.
+/// arrow functions bound to `const`/`let`/`var`, classes (including
+/// `abstract class`), abstract method signatures, interfaces, type
+/// aliases, and enums.
 ///
 /// `variable_declarator` is captured whenever its `value` is an
 /// `arrow_function` (`const f = () => {}` / `let f = () => {}` /
