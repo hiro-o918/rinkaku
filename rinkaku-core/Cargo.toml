@@ -20,6 +20,7 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
