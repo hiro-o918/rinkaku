@@ -117,6 +117,16 @@ impl TagsResolver {
         reference_names: &HashSet<String>,
     ) -> Self {
         let mut index: HashMap<String, Vec<ResolvedSymbol>> = HashMap::new();
+        // `AhoCorasick::new` only errors on pathological inputs this call
+        // site cannot produce: an empty pattern set is handled gracefully
+        // (matches nothing, not an error), and the automaton construction
+        // itself only fails on internal overflow at pattern counts/lengths
+        // far beyond what a diff's `reference_names` (identifier-sized
+        // strings, at most a few hundred per run) could realistically
+        // reach. `.expect()` here documents "this is not expected to fail
+        // in practice" rather than a genuinely handled error path — there
+        // is no meaningful fallback if it somehow did (the resolver simply
+        // could not be built).
         let matcher = aho_corasick::AhoCorasick::new(reference_names)
             .expect("reference_names must build a valid AhoCorasick matcher");
 
@@ -200,6 +210,17 @@ impl Resolver for TagsResolver {
 /// are the ones most likely relevant to the referencing symbol; the excess
 /// count is reported via `ExtractedSymbol::omitted_dependency_matches`
 /// rather than silently dropped.
+///
+/// Ranking uses `Vec::sort_by_key`, which is stable: candidates that tie on
+/// `path_proximity_rank` (e.g. several same-directory matches) keep their
+/// relative order from `resolver.resolve(name)`. For [`TagsResolver`] that
+/// order is insertion order into its index, which follows the order of the
+/// `files` iterator `TagsResolver::new` was built from — in practice
+/// `main.rs`'s `git ls-files` output, i.e. lexicographic path order. This
+/// tie-break is therefore an incidental consequence of `git ls-files`'s
+/// ordering, not a deliberate ranking signal; a different `Resolver`
+/// implementation or file source could change which of several
+/// equally-close candidates survives the cap.
 pub fn resolve_dependencies(
     files: Vec<crate::render::FileReport>,
     resolver: &dyn Resolver,
@@ -288,6 +309,14 @@ const MAX_MATCHES_PER_NAME: usize = 3;
 ///    common grandparent directory ranks closer than a common
 ///    great-grandparent.
 /// 4. No shared directory prefix at all (other than the repository root).
+///
+/// Edge case: two files that both live directly at the repository root
+/// (e.g. `"a.rs"` and `"b.rs"`, no `/` in the path) both have an empty
+/// `path_dir_components` result and therefore rank as "same directory"
+/// (rank 2), not "no shared prefix" (rank 4) — there is no directory
+/// component to distinguish them by. This is a natural consequence of
+/// treating the repository root as a directory like any other, not a
+/// special case handled separately.
 fn path_proximity_rank(
     referencing_path: &str,
     candidate_path: &str,
