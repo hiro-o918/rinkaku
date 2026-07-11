@@ -12,6 +12,7 @@
 use crate::extract::ExtractedSymbol;
 use serde::Serialize;
 use std::fmt::Write as _;
+use thiserror::Error;
 
 /// The result of running the extraction pipeline over a whole diff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -54,54 +55,85 @@ pub enum OutputFormat {
     Json,
 }
 
+/// Errors that can occur while rendering a [`Report`].
+#[derive(Debug, Error)]
+pub enum RenderError {
+    /// Writing to the in-memory `String` buffer failed. This only happens
+    /// on allocation failure, which `std::fmt::Write` reports as `Err(())`
+    /// with no further detail; kept as a typed error (rather than
+    /// `.unwrap()`) so the fallible write calls in `render_markdown` can
+    /// use `?` instead of panicking.
+    #[error("failed to write Markdown output")]
+    Fmt(#[from] std::fmt::Error),
+    #[error("failed to serialize report as JSON: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
 /// Renders a [`Report`] in the requested [`OutputFormat`].
-///
-/// JSON rendering only fails if `serde_json` itself fails to serialize the
-/// `Report`, which does not happen for this data shape (no maps with
-/// non-string keys, no floats); the `Result` is kept so callers don't need
-/// to special-case a `.unwrap()` at the boundary.
-pub fn render(report: &Report, format: OutputFormat) -> Result<String, serde_json::Error> {
+pub fn render(report: &Report, format: OutputFormat) -> Result<String, RenderError> {
     match format {
-        OutputFormat::Markdown => Ok(render_markdown(report)),
-        OutputFormat::Json => serde_json::to_string_pretty(report),
+        OutputFormat::Markdown => render_markdown(report),
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(report)?),
     }
 }
 
 /// Renders a [`Report`] as Markdown: one heading per file with its
 /// symbols' signatures in a fenced code block, followed by a list of
 /// skipped files.
-fn render_markdown(report: &Report) -> String {
+fn render_markdown(report: &Report) -> Result<String, RenderError> {
     let mut out = String::new();
 
     for file in &report.files {
-        writeln!(out, "## {}", file.path).unwrap();
-        writeln!(out).unwrap();
+        writeln!(out, "## {}", file.path)?;
+        writeln!(out)?;
         for symbol in &file.symbols {
-            writeln!(out, "```").unwrap();
-            if let Some(container) = &symbol.container {
-                writeln!(out, "// {container}").unwrap();
+            let container_line = symbol.container.as_deref().map(|c| format!("// {c}"));
+            let fence = fence_for(container_line.as_deref(), &symbol.signature);
+            writeln!(out, "{fence}")?;
+            if let Some(container_line) = &container_line {
+                writeln!(out, "{container_line}")?;
             }
-            writeln!(out, "{}", symbol.signature).unwrap();
-            writeln!(out, "```").unwrap();
-            writeln!(out).unwrap();
+            writeln!(out, "{}", symbol.signature)?;
+            writeln!(out, "{fence}")?;
+            writeln!(out)?;
         }
     }
 
     if !report.skipped.is_empty() {
-        writeln!(out, "## Skipped files").unwrap();
-        writeln!(out).unwrap();
+        writeln!(out, "## Skipped files")?;
+        writeln!(out)?;
         for skipped in &report.skipped {
             writeln!(
                 out,
                 "- {} ({})",
                 skipped.path,
                 skip_reason_label(skipped.reason)
-            )
-            .unwrap();
+            )?;
         }
     }
 
-    out
+    Ok(out)
+}
+
+/// Picks a fence long enough that it cannot be closed early by a backtick
+/// run inside the fenced content: one backtick longer than the longest run
+/// of consecutive backticks in `content`, with a floor of 3 (the minimum
+/// valid Markdown fence).
+fn fence_for(container_line: Option<&str>, signature: &str) -> String {
+    let longest_run = [container_line.unwrap_or(""), signature]
+        .iter()
+        .flat_map(|text| longest_backtick_run(text))
+        .max()
+        .unwrap_or(0);
+    "`".repeat((longest_run + 1).max(3))
+}
+
+/// Length of the longest run of consecutive `` ` `` characters in `text`.
+fn longest_backtick_run(text: &str) -> Option<usize> {
+    text.split(|c| c != '`')
+        .map(str::len)
+        .filter(|&len| len > 0)
+        .max()
 }
 
 fn skip_reason_label(reason: SkipReason) -> &'static str {
@@ -185,6 +217,76 @@ fn foo(a: i32) -> i32
 // impl Foo
 fn bar(&self) -> i32
 ```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    // Regression test: a signature containing a backtick code fence (e.g. a
+    // doc comment example embedded in a macro invocation) used to break out
+    // of the surrounding Markdown fence because it was always rendered with
+    // exactly 3 backticks. The fence length must be at least one longer
+    // than the longest run of backticks appearing in the rendered content.
+    #[test]
+    fn should_widen_fence_when_signature_contains_a_backtick_run() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    name: "example_macro".to_string(),
+                    kind: SymbolKind::Function,
+                    signature: "fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }"
+                        .to_string(),
+                    range: LineRange { start: 1, end: 1 },
+                    container: None,
+                }],
+            }],
+            skipped: vec![],
+        };
+
+        let expected = "\
+## src/lib.rs
+
+````
+fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
+````
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    // Regression test: the container comment is part of the fenced block
+    // too, so a backtick run inside the container name must also widen the
+    // fence.
+    #[test]
+    fn should_widen_fence_when_container_contains_a_backtick_run() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    name: "bar".to_string(),
+                    kind: SymbolKind::Function,
+                    signature: "fn bar(&self) -> i32".to_string(),
+                    range: LineRange { start: 4, end: 6 },
+                    container: Some("impl Foo /* ```` */".to_string()),
+                }],
+            }],
+            skipped: vec![],
+        };
+
+        let expected = "\
+## src/lib.rs
+
+`````
+// impl Foo /* ```` */
+fn bar(&self) -> i32
+`````
 
 "
         .to_string();
