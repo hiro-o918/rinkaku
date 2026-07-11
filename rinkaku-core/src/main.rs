@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()> {
         Some(base) => {
             let diff_text = run_git_diff(base, &cli.head)?;
             let head = cli.head.clone();
-            let resolver = build_resolver(&cli, Some(&head))?;
+            let resolver = build_resolver(&cli, Some(&head), None)?;
             analyze_diff(
                 &diff_text,
                 move |path| read_git_show_file(None, &head, path),
@@ -92,7 +92,7 @@ fn main() -> anyhow::Result<()> {
             if diff_text.trim().is_empty() {
                 eprintln!("note: diff is empty, nothing to analyze");
             }
-            let resolver = build_resolver(&cli, None)?;
+            let resolver = build_resolver(&cli, None, None)?;
             analyze_diff(
                 &diff_text,
                 read_working_tree_file,
@@ -123,15 +123,27 @@ fn main() -> anyhow::Result<()> {
 /// same commit regardless of the working tree's state (same rationale as
 /// `read_git_show_file`, applied here to the whole repo rather than just
 /// the changed files).
-fn build_resolver(cli: &Cli, head: Option<&str>) -> anyhow::Result<Option<TagsResolver>> {
+/// `cwd` selects the repository `list_git_files` runs `git ls-files` in
+/// (same rationale as `read_git_show_file`'s `cwd`: `None` uses the
+/// process's current directory for production callers, `Some(dir)` pins
+/// it for tests). Only reached when `cli.deps != 0` — the `deps == 0`
+/// branch returns before doing any repository scan at all, verified by
+/// `should_skip_git_ls_files_when_deps_is_zero` below (pointing `cwd` at
+/// a directory with no git repository would make `list_git_files` fail,
+/// so a passing `Ok(None)` there is proof the scan never ran).
+fn build_resolver(
+    cli: &Cli,
+    head: Option<&str>,
+    cwd: Option<&std::path::Path>,
+) -> anyhow::Result<Option<TagsResolver>> {
     if cli.deps == 0 {
         return Ok(None);
     }
 
-    let paths = list_git_files()?;
+    let paths = list_git_files(cwd)?;
     let files = paths.into_iter().filter_map(|path| {
         let content = match head {
-            Some(head) => read_git_show_file(None, head, &path),
+            Some(head) => read_git_show_file(cwd, head, &path),
             None => read_working_tree_file(&path),
         };
         // A file listed by `git ls-files` can still fail to read (e.g.
@@ -144,12 +156,15 @@ fn build_resolver(cli: &Cli, head: Option<&str>) -> anyhow::Result<Option<TagsRe
     Ok(Some(TagsResolver::new(files, language_for_path)))
 }
 
-/// Lists every file tracked by git in the current repository via
-/// `git ls-files`.
-fn list_git_files() -> anyhow::Result<Vec<String>> {
-    let output = std::process::Command::new("git")
-        .args(["ls-files"])
-        .output()?;
+/// Lists every file tracked by git in `cwd` (or the process's current
+/// directory when `None`) via `git ls-files`.
+fn list_git_files(cwd: Option<&std::path::Path>) -> anyhow::Result<Vec<String>> {
+    let mut command = std::process::Command::new("git");
+    command.args(["ls-files"]);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command.output()?;
     if !output.status.success() {
         anyhow::bail!(
             "git ls-files failed: {}",
@@ -362,5 +377,54 @@ mod tests {
             .expect("git show should succeed for a committed file");
 
         assert_eq!(committed, actual);
+    }
+
+    // Regression test for the must-fix performance bug: `build_resolver`
+    // must return before doing any repository scan when `deps == 0`. This
+    // is exercised indirectly rather than by inspecting call counts (no
+    // mocking of `git`, per this project's test conventions): `cwd` points
+    // at a plain (non-git) tempdir, so if `list_git_files` were reached,
+    // `git ls-files` would fail there and `build_resolver` would return
+    // `Err`. Observing `Ok(None)` is therefore proof the scan never ran.
+    //
+    // NOTE: partial assertion (`is_none()` rather than a fully qualified
+    // comparison) because `TagsResolver` derives neither `Debug` nor
+    // `PartialEq` — its `HashMap` index isn't meant to be compared as a
+    // value, only used through `Resolver::resolve`. Which variant of
+    // `Option` came back is exactly what this test needs to know.
+    #[test]
+    fn should_skip_repository_scan_when_deps_is_zero() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        let cli = Cli {
+            base: None,
+            head: "HEAD".to_string(),
+            format: Format::Md,
+            deps: 0,
+        };
+
+        let actual = build_resolver(&cli, None, Some(dir.path()))
+            .expect("deps == 0 must not touch the repository at all");
+
+        assert!(actual.is_none());
+    }
+
+    // Sibling case to the one above: with `deps == 1` (repository scan
+    // enabled), the same non-git `cwd` makes `list_git_files` fail,
+    // confirming the scan is actually attempted in this branch and that
+    // the `Ok(None)` above is specific to `deps == 0`, not an artifact of
+    // the test directory itself.
+    #[test]
+    fn should_fail_when_deps_is_one_and_cwd_has_no_git_repository() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        let cli = Cli {
+            base: None,
+            head: "HEAD".to_string(),
+            format: Format::Md,
+            deps: 1,
+        };
+
+        let actual = build_resolver(&cli, None, Some(dir.path()));
+
+        assert!(actual.is_err());
     }
 }
