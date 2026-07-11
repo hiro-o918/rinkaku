@@ -37,13 +37,49 @@ See [`docs/adr/`](docs/adr) for the reasoning behind these choices.
 
 Early development. Diff parsing, tree-sitter extraction, the CLI
 (stdin/`--base` input, Markdown/JSON output), and 1-hop dependency
-expansion (`--deps`, the tags-based `Resolver`) are implemented. Not
-published to crates.io.
+expansion (`--deps`, the tags-based `Resolver`) are implemented.
 
 ## Installation
 
-TBD — not yet published. Once released, this section will cover
-`cargo install rinkaku` and prebuilt binaries.
+### Homebrew
+
+```sh
+brew install hiro-o918/tap/rinkaku
+```
+
+### Install script
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh | bash
+```
+
+You can also specify a version or install directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh | VERSION=v0.1.0 bash
+curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh | INSTALL_DIR=~/.local/bin bash
+```
+
+### From source (cargo install)
+
+```sh
+cargo install rinkaku
+```
+
+### GitHub Releases (manual)
+
+Download the tarball for your platform from the
+[latest release](https://github.com/hiro-o918/rinkaku/releases/latest),
+extract it, and place the `rinkaku` binary on your `PATH`:
+
+```sh
+tar xzf rinkaku-<target>.tar.gz
+mv rinkaku-<target>/rinkaku /usr/local/bin/
+```
+
+Where `<target>` is one of `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, or
+`aarch64-apple-darwin`.
 
 ## Usage
 
@@ -218,6 +254,10 @@ dependency context isn't needed.
 Requires a Rust toolchain (pinned in [`rust-toolchain.toml`](rust-toolchain.toml);
 `rustup` will install it automatically).
 
+The workspace has two crates: `rinkaku-core` (the pure diff-condensation
+library, published standalone so it can be embedded in other tools) and
+`rinkaku` (the thin CLI binary, depending on `rinkaku-core`).
+
 ```sh
 make test    # cargo test --all-features
 make lint    # cargo fmt --check + cargo clippy --all-targets --all-features -- -D warnings
@@ -297,9 +337,6 @@ the Roadmap below.
 - LSP-backed `Resolver` implementations (pyright, gopls, rust-analyzer,
   ...) as a higher-precision, opt-in alternative to the v1 tags-based
   `Resolver`.
-- Release automation (release-please, cross-compiled binary publishing)
-  — intentionally deferred out of the bootstrap PR; tracked as a
-  follow-up.
 
 ## License
 
