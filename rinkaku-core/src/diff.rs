@@ -153,8 +153,10 @@ fn parse_file_entry(lines: &[&str], start: usize) -> Result<(ChangedFile, usize)
 }
 
 /// Extracts the `a/...` and `b/...` paths from a `diff --git a/x b/y`
-/// header line. Falls back to an empty string on unexpected input; the
-/// authoritative path comes from `+++`/`rename to` lines parsed afterward.
+/// header line. Falls back to an empty string on unexpected input. The `b/`
+/// path returned here is authoritative and used as-is unless overwritten by
+/// a `rename to`/`copy to` line parsed afterward; `+++`/`---` lines are not
+/// consulted for path information.
 fn extract_git_header_paths(line: &str) -> (String, String) {
     let rest = line.trim_start_matches("diff --git ");
     if let Some(b_idx) = rest.find(" b/") {
