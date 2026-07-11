@@ -32,6 +32,21 @@
 //! whether a file's content matches can only be known after reading it.
 //! Not addressed here, since it is `main.rs`'s file-reading strategy
 //! rather than this module's indexing logic.
+//!
+//! Measured effect (see the PR description for the full numbers,
+//! `git archive`-extracted files so `git show` cost is excluded): on a
+//! same-language repository with all-generic-noise filtered
+//! `reference_names` (no `Vec`/`Option`/`String`/... — see below),
+//! ~88% fewer files were parsed and indexing was ~8x faster. But when
+//! `reference_names` includes common standard-library-style names (as a
+//! typical Rust diff's referenced names often do — `Vec`, `Option`,
+//! `Some`, `Ok`, `String`, ...), the prefilter's effect shrinks sharply:
+//! one real-world diff still had 93% of files pass the prefilter, since
+//! those names appear in nearly every file. `should_parse_file` is a
+//! substring match over raw content, not scoped to actual definition
+//! sites, so it cannot narrow this further without risking false
+//! negatives (see its own doc comment) — accepted as a known limitation
+//! rather than solved here.
 
 use crate::extract::extract_all_symbols;
 use crate::language::LanguageSupport;

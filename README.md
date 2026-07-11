@@ -22,7 +22,9 @@ every implementation line.
 - **Dependency expansion**: each changed symbol is expanded one hop out to
   the definitions it references, via tree-sitter tags queries (v1).
   LSP-based resolvers (pyright, gopls, etc.) are a pluggable extension
-  point (`Resolver` trait) planned for a later release.
+  point (`Resolver` trait) planned for a later release. Same-name matches
+  are ranked by path proximity to the referencing file and capped at 3 to
+  keep "Depends on" readable; see Known limitations below.
 - **Languages (v1, built-in)**: Rust, Go, Python, TypeScript. Each is a
   `LanguageSupport` trait implementation (grammar crate + tags query +
   signature-slicing rule), so language support is additive.
@@ -80,6 +82,44 @@ pure (no IO, no clock, no env), with tree-sitter parsing and future
 LSP/process boundaries isolated behind traits (`LanguageSupport`,
 `Resolver`) defined on the consumer side. See [`CLAUDE.md`](CLAUDE.md) and
 [`docs/adr/`](docs/adr) for details.
+
+### Known limitations
+
+- **No type resolution (by design, ADR 0003)**: dependency resolution
+  matches referenced names against definitions by name alone, with no
+  type information — it cannot disambiguate overloads, shadowed names, or
+  same-named symbols in unrelated modules. A future `Resolver`
+  implementation backed by an LSP server (pyright, gopls, rust-analyzer,
+  ...) is planned as a higher-precision, opt-in alternative for v2+; see
+  the Roadmap below.
+- **Same-name matches are ranked, not resolved**: when several
+  definitions share a referenced name, they are ranked by path proximity
+  to the referencing file (same file > same directory > shared path
+  prefix depth > other) and only the top 3 are shown; the rest are
+  reported as a count (`(+N more definitions matched by name)` in
+  Markdown, `omitted_matches` in JSON) rather than silently dropped or
+  listed in full. This bounds "Depends on" noise but does not guarantee
+  the top 3 include the actually-referenced definition.
+- **`_` and single-character identifiers are never resolved**: they are
+  filtered out of referenced names entirely, since under name-only
+  resolution they match too many unrelated definitions to be useful.
+- **The `--deps 1` indexing prefilter has limited effect when a diff
+  references common standard-library-style names**: `TagsResolver::new`
+  skips parsing files whose content cannot contain any referenced name at
+  all (measured ~88% fewer files parsed, ~8x faster indexing on a
+  same-language-only reference set — see the PR description for the full
+  numbers). But a name like `Vec`, `Option`, `String`, `Some`, or `Ok`
+  appears in nearly every Rust file in a real codebase, so a diff whose
+  referenced names include several of these sees little to no reduction
+  (measured ~93% of files still parsed on one real-world diff). The
+  prefilter is a substring match over raw file content, not scoped to
+  actual definitions, so it cannot distinguish "defines `Vec`" from
+  "mentions `Vec`" without also being safe against false negatives (see
+  `deps.rs`'s `should_parse_file` doc comment) — narrowing this further is
+  left for a future iteration. The dominant cost in `--base` mode remains
+  the per-file `git show` subprocess invocation for reading tracked files
+  (unrelated to this prefilter, and unaddressed — see `deps.rs`'s
+  performance doc comment).
 
 ### Roadmap / not yet done
 
