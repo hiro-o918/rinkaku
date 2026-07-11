@@ -113,3 +113,21 @@ jobs:
 
       - name: Publish rinkaku
         run: cargo publish -p rinkaku --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+
+  publish-homebrew:
+    needs: [publish-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # x86_64-apple-darwin is the tarball macOS Homebrew installs from
+      # (see awsctx's homebrew-release.yml, same convention).
+      - uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: rinkaku
+          formula-path: Formula/rinkaku.rb
+          homebrew-tap: hiro-o918/homebrew-tap
+          base-branch: main
+          tag-name: ${{ github.ref_name }}
+          download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rinkaku-x86_64-apple-darwin.tar.gz
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
