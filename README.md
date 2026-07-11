@@ -10,7 +10,13 @@ every implementation line.
 ## What it is
 
 - **Input**: a unified diff via stdin (`gh pr diff 123 | rinkaku`), or
-  `rinkaku --base main` to run `git diff` internally.
+  `rinkaku --base main` to run `git diff` internally. In `--base` mode,
+  file contents are read via `git show <head>:<path>` so extraction always
+  matches the diffed commit, regardless of the working tree's state. In
+  stdin mode, file contents are read off the working tree, which assumes
+  **the piped diff is consistent with the current working tree** (e.g. it
+  was just produced by `git diff` or already applied); a stale or
+  unrelated diff piped via stdin can produce misaligned line numbers.
 - **Core**: tree-sitter parses the changed files, finds the definitions
   that contain changed lines, and slices out their signatures.
 - **Dependency expansion**: each changed symbol is expanded one hop out to
