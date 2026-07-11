@@ -11,11 +11,12 @@
 //! hunk headers, which is a small, self-contained piece of parsing that
 //! doesn't justify an extra dependency.
 
+use serde::Serialize;
 use thiserror::Error;
 
 /// A contiguous, inclusive range of 1-based line numbers on the new side of
 /// a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct LineRange {
     pub start: usize,
     pub end: usize,
