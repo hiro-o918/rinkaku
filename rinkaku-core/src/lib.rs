@@ -9,4 +9,5 @@
 pub mod diff;
 pub mod extract;
 pub mod language;
+pub mod pipeline;
 pub mod render;
