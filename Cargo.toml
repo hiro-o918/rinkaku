@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["rinkaku-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Hironori Yamamoto"]
+license = "MIT"
+repository = "https://github.com/hiro-o918/rinkaku"
+
+[workspace.dependencies]
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+rstest = "0.23"
+pretty_assertions = "1.4"
+tempfile = "3.15"

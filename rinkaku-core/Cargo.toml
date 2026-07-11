@@ -1,0 +1,27 @@
+[package]
+name = "rinkaku-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Condense PR diffs into signatures and their dependencies for LLM-friendly review"
+
+[lib]
+name = "rinkaku_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rinkaku"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
