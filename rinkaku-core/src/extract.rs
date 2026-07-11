@@ -7,6 +7,7 @@
 
 use crate::diff::LineRange;
 use crate::language::LanguageSupport;
+use serde::Serialize;
 use tree_sitter::StreamingIterator;
 
 /// The kind of symbol a definition node represents, expressed in
@@ -16,7 +17,7 @@ use tree_sitter::StreamingIterator;
 /// No `Impl` variant: impl blocks are never reported as symbols in their
 /// own right (see the filtering in `extract_changed_symbols`) — they only
 /// contribute `container` names to the members nested inside them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SymbolKind {
     Function,
     Struct,
@@ -26,7 +27,7 @@ pub enum SymbolKind {
 
 /// A definition whose signature was extracted because one of its lines
 /// (declaration or body) fell inside a changed range.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExtractedSymbol {
     pub name: String,
     pub kind: SymbolKind,
