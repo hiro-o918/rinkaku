@@ -81,6 +81,69 @@ pub fn extract_changed_symbols(
         return Vec::new();
     }
 
+    with_definition_nodes(source, lang, |all_nodes, source_bytes| {
+        let touched_nodes: Vec<tree_sitter::Node> = all_nodes
+            .iter()
+            .copied()
+            .filter(|node| overlaps_any(node_to_line_range(*node), changed_ranges))
+            .collect();
+
+        touched_nodes
+            .iter()
+            .filter(|node| {
+                // Prefer the narrowest enclosing definition: a touched node
+                // that itself contains another touched node (e.g. an
+                // `impl_item`/`class_definition` containing a touched method,
+                // or a Python function containing a touched nested function)
+                // is suppressed as a symbol in its own right — otherwise a
+                // single changed line would surface both the inner definition
+                // and every definition enclosing it. Go's `method_declaration`
+                // is exempt implicitly: it is never nested inside its receiver
+                // struct's node (see `find_container`'s doc comment), so this
+                // situation cannot arise for Go structs.
+                !touched_nodes
+                    .iter()
+                    .any(|other| other != *node && is_descendant_of(*other, **node))
+            })
+            .filter_map(|node| build_symbol(*node, source_bytes, lang))
+            .collect()
+    })
+}
+
+/// Extracts every definition in `source`, regardless of whether it
+/// changed. Used by [`crate::deps::TagsResolver`] to build a repo-wide
+/// name-to-signature index: dependency resolution needs to look up
+/// definitions in files that were not part of the diff at all, so it
+/// cannot reuse `extract_changed_symbols`, which only ever reports
+/// definitions overlapping a given set of changed ranges.
+///
+/// Unlike `extract_changed_symbols`, nested definitions are not
+/// suppressed in favor of their narrowest enclosing one — an index needs
+/// every definition, and a nested definition's own `container` (set by
+/// `build_symbol`/`find_container`) already records its relationship to
+/// its enclosing block, so there is nothing to suppress.
+pub fn extract_all_symbols(source: &str, lang: &dyn LanguageSupport) -> Vec<ExtractedSymbol> {
+    with_definition_nodes(source, lang, |all_nodes, source_bytes| {
+        all_nodes
+            .iter()
+            .filter_map(|node| build_symbol(*node, source_bytes, lang))
+            .collect()
+    })
+}
+
+/// Parses `source`, runs `lang`'s `definition_query` to find every
+/// `@definition` node, and hands the resulting nodes (plus the source
+/// bytes they borrow from) to `f`. Node values borrow from the parsed
+/// tree, so this scoped-callback shape — rather than returning
+/// `Vec<Node>` directly — keeps the tree alive exactly as long as needed
+/// without leaking it or threading a `Tree` value out through every
+/// caller. Shared by `extract_changed_symbols` and `extract_all_symbols`,
+/// which differ only in how they filter/use the node list.
+fn with_definition_nodes<T>(
+    source: &str,
+    lang: &dyn LanguageSupport,
+    f: impl FnOnce(&[tree_sitter::Node], &[u8]) -> T,
+) -> T {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&lang.grammar())
@@ -99,39 +162,15 @@ pub fn extract_changed_symbols(
     let source_bytes = source.as_bytes();
     let mut matches = cursor.matches(&query, tree.root_node(), source_bytes);
 
-    let mut touched_nodes = Vec::new();
+    let mut nodes = Vec::new();
     while let Some(m) = matches.next() {
         for capture in m.captures {
-            if capture.index != definition_capture_index {
-                continue;
-            }
-            let node = capture.node;
-            let node_range = node_to_line_range(node);
-            if overlaps_any(node_range, changed_ranges) {
-                touched_nodes.push(node);
+            if capture.index == definition_capture_index {
+                nodes.push(capture.node);
             }
         }
     }
-
-    touched_nodes
-        .iter()
-        .filter(|node| {
-            // Prefer the narrowest enclosing definition: a touched node
-            // that itself contains another touched node (e.g. an
-            // `impl_item`/`class_definition` containing a touched method,
-            // or a Python function containing a touched nested function)
-            // is suppressed as a symbol in its own right — otherwise a
-            // single changed line would surface both the inner definition
-            // and every definition enclosing it. Go's `method_declaration`
-            // is exempt implicitly: it is never nested inside its receiver
-            // struct's node (see `find_container`'s doc comment), so this
-            // situation cannot arise for Go structs.
-            !touched_nodes
-                .iter()
-                .any(|other| other != *node && is_descendant_of(*other, **node))
-        })
-        .filter_map(|node| build_symbol(*node, source_bytes, lang))
-        .collect()
+    f(&nodes, source_bytes)
 }
 
 /// Whether `node` is strictly nested inside `ancestor` in the syntax tree.
@@ -472,6 +511,53 @@ mod tests {
 
         let expected: Vec<ExtractedSymbol> = Vec::new();
         let actual = extract_changed_symbols(source, &lang, &[]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_extract_every_definition_regardless_of_changed_ranges() {
+        let source = "\
+fn helper(x: i32) -> i32 {
+    x
+}
+
+struct Point {
+    x: i32,
+}
+";
+        let lang = RustSupport;
+
+        let expected = vec![
+            ExtractedSymbol {
+                name: "helper".to_string(),
+                kind: SymbolKind::Function,
+                signature: "fn helper(x: i32) -> i32".to_string(),
+                range: LineRange { start: 1, end: 3 },
+                container: None,
+                referenced_names: vec![],
+            },
+            ExtractedSymbol {
+                name: "Point".to_string(),
+                kind: SymbolKind::Struct,
+                signature: "struct Point { x: i32, }".to_string(),
+                range: LineRange { start: 5, end: 7 },
+                container: None,
+                referenced_names: vec!["Point".to_string()],
+            },
+        ];
+        let actual = extract_all_symbols(source, &lang);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_vec_when_source_has_no_definitions() {
+        let source = "const X: i32 = 1;\n";
+        let lang = RustSupport;
+
+        let expected: Vec<ExtractedSymbol> = Vec::new();
+        let actual = extract_all_symbols(source, &lang);
 
         assert_eq!(expected, actual);
     }
