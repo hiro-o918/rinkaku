@@ -7,3 +7,4 @@
 //! future adapter modules, never inside this pure core.
 
 pub mod diff;
+pub mod language;

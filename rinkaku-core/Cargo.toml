@@ -21,6 +21,8 @@ anyhow = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
