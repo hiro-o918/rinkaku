@@ -103,6 +103,23 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
             writeln!(out, "{}", symbol.signature)?;
             writeln!(out, "{fence}")?;
             writeln!(out)?;
+            if !symbol.dependencies.is_empty() {
+                writeln!(out, "Depends on:")?;
+                for dependency in &symbol.dependencies {
+                    // Inline code spans (not a fenced block): a
+                    // dependency list entry is one line per dependency,
+                    // so a fence per entry would be noisy. Path and
+                    // signature are not hardened against embedded
+                    // backticks the way the fenced blocks above are — a
+                    // signature is unlikely to contain a backtick run
+                    // long enough to break out of a single backtick span,
+                    // and this is a cosmetic-only failure mode (unlike
+                    // the fenced blocks, which without widening could
+                    // make later content render as code).
+                    writeln!(out, "- `{}`: `{}`", dependency.path, dependency.signature)?;
+                }
+                writeln!(out)?;
+            }
         }
     }
 
@@ -183,6 +200,7 @@ mod tests {
                     range: LineRange { start: 1, end: 3 },
                     container: None,
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![],
@@ -214,6 +232,7 @@ fn foo(a: i32) -> i32
                     range: LineRange { start: 4, end: 6 },
                     container: Some("impl Foo".to_string()),
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![],
@@ -226,6 +245,89 @@ fn foo(a: i32) -> i32
 // impl Foo
 fn bar(&self) -> i32
 ```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_depends_on_list_when_symbol_has_dependencies() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    name: "foo".to_string(),
+                    kind: SymbolKind::Function,
+                    signature: "fn foo(p: Point) -> i32".to_string(),
+                    range: LineRange { start: 1, end: 3 },
+                    container: None,
+                    referenced_names: vec!["Point".to_string()],
+                    dependencies: vec![crate::deps::ResolvedSymbol {
+                        signature: "struct Point { x: i32, y: i32 }".to_string(),
+                        path: "src/point.rs".to_string(),
+                    }],
+                }],
+            }],
+            skipped: vec![],
+        };
+
+        let expected = "\
+## src/lib.rs
+
+```
+fn foo(p: Point) -> i32
+```
+
+Depends on:
+- `src/point.rs`: `struct Point { x: i32, y: i32 }`
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencies() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    name: "foo".to_string(),
+                    kind: SymbolKind::Function,
+                    signature: "fn foo(p: Point) -> i32".to_string(),
+                    range: LineRange { start: 1, end: 3 },
+                    container: None,
+                    referenced_names: vec!["Point".to_string()],
+                    dependencies: vec![
+                        crate::deps::ResolvedSymbol {
+                            signature: "struct Point { x: i32 }".to_string(),
+                            path: "src/a.rs".to_string(),
+                        },
+                        crate::deps::ResolvedSymbol {
+                            signature: "struct Point { y: i32 }".to_string(),
+                            path: "src/b.rs".to_string(),
+                        },
+                    ],
+                }],
+            }],
+            skipped: vec![],
+        };
+
+        let expected = "\
+## src/lib.rs
+
+```
+fn foo(p: Point) -> i32
+```
+
+Depends on:
+- `src/a.rs`: `struct Point { x: i32 }`
+- `src/b.rs`: `struct Point { y: i32 }`
 
 "
         .to_string();
@@ -252,6 +354,7 @@ fn bar(&self) -> i32
                     range: LineRange { start: 1, end: 1 },
                     container: None,
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![],
@@ -286,6 +389,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
                     range: LineRange { start: 4, end: 6 },
                     container: Some("impl Foo /* ```` */".to_string()),
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![],
@@ -351,6 +455,7 @@ fn bar(&self) -> i32
                     range: LineRange { start: 1, end: 1 },
                     container: None,
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![SkippedFile {
@@ -388,6 +493,7 @@ fn foo()
                     range: LineRange { start: 1, end: 1 },
                     container: None,
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![SkippedFile {
@@ -410,7 +516,8 @@ fn foo()
             \"start\": 1,
             \"end\": 1
           },
-          \"container\": null
+          \"container\": null,
+          \"dependencies\": []
         }
       ]
     }
