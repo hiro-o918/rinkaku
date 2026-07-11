@@ -625,4 +625,27 @@ copy to src/new_name.rs
         let actual = parse_unified_diff(input).expect("parse should succeed");
         assert_eq!(expected, actual);
     }
+
+    // Pins the current behavior for a mode-change-only diff (e.g.
+    // `chmod +x`): git emits `old mode`/`new mode` headers with no `---`,
+    // `+++`, or hunks at all. There is no content change and thus no
+    // new-side line range to report, so this is treated as a Modified file
+    // with empty changed_ranges rather than a dedicated ChangeKind.
+    #[test]
+    fn should_return_modified_with_no_changed_ranges_when_only_mode_changes() {
+        let input = "\
+diff --git a/scripts/run.sh b/scripts/run.sh
+old mode 100644
+new mode 100755
+";
+        let expected = vec![ChangedFile {
+            path: "scripts/run.sh".to_string(),
+            old_path: None,
+            kind: ChangeKind::Modified,
+            changed_ranges: vec![],
+            is_binary: false,
+        }];
+        let actual = parse_unified_diff(input).expect("parse should succeed");
+        assert_eq!(expected, actual);
+    }
 }
