@@ -133,6 +133,12 @@ impl Resolver for TagsResolver {
 /// coinciding with the actual dependency target `b.rs::helper`) — see
 /// ADR 0003 for why resolution itself stays name-based (no type info),
 /// but exclusion does not need to inherit that imprecision.
+///
+/// Also caps same-name candidates at [`MAX_MATCHES_PER_NAME`] per
+/// referenced name, ranked by [`path_proximity_rank`] so the kept matches
+/// are the ones most likely relevant to the referencing symbol; the excess
+/// count is reported via `ExtractedSymbol::omitted_dependency_matches`
+/// rather than silently dropped.
 pub fn resolve_dependencies(
     files: Vec<crate::render::FileReport>,
     resolver: &dyn Resolver,
@@ -157,27 +163,107 @@ pub fn resolve_dependencies(
                     .into_iter()
                     .map(|mut symbol| {
                         let own_key = (symbol.name.clone(), file_path.clone());
-                        symbol.dependencies = symbol
-                            .referenced_names
-                            .iter()
-                            .flat_map(|name| {
-                                resolver
-                                    .resolve(name)
-                                    .into_iter()
-                                    .map(move |resolved| (name.clone(), resolved))
-                            })
-                            .filter(|(name, resolved)| {
-                                let key = (name.clone(), resolved.path.clone());
-                                key != own_key && !diff_symbols.contains(&key)
-                            })
-                            .map(|(_, resolved)| resolved)
-                            .collect();
+                        let mut dependencies = Vec::new();
+                        let mut omitted = 0usize;
+
+                        for name in &symbol.referenced_names {
+                            let mut candidates: Vec<ResolvedSymbol> = resolver
+                                .resolve(name)
+                                .into_iter()
+                                .filter(|resolved| {
+                                    let key = (name.clone(), resolved.path.clone());
+                                    key != own_key && !diff_symbols.contains(&key)
+                                })
+                                .collect();
+
+                            // Rank before truncating: the cap must keep the
+                            // closest matches, not an arbitrary prefix of
+                            // whatever order the resolver happened to
+                            // return them in (see
+                            // `rank_by_path_proximity`'s doc comment).
+                            candidates.sort_by_key(|resolved| {
+                                path_proximity_rank(&file_path, &resolved.path)
+                            });
+
+                            if candidates.len() > MAX_MATCHES_PER_NAME {
+                                omitted += candidates.len() - MAX_MATCHES_PER_NAME;
+                                candidates.truncate(MAX_MATCHES_PER_NAME);
+                            }
+                            dependencies.extend(candidates);
+                        }
+
+                        symbol.dependencies = dependencies;
+                        symbol.omitted_dependency_matches = omitted;
                         symbol
                     })
                     .collect(),
             }
         })
         .collect()
+}
+
+/// Maximum number of same-name candidate definitions kept per referenced
+/// name. Beyond this, name-only resolution (ADR 0003) tends to surface
+/// many equally-plausible-looking matches for common identifiers (e.g. a
+/// `Config` struct defined in several unrelated packages) that add noise
+/// rather than signal; 3 keeps the "Depends on" list skimmable while still
+/// showing more than one candidate when genuinely ambiguous.
+const MAX_MATCHES_PER_NAME: usize = 3;
+
+/// Ranks how close `candidate_path` is to `referencing_path`, lower being
+/// closer. Used to keep the most locally relevant matches when a
+/// name-only resolver (ADR 0003) returns several same-named candidates,
+/// since v1 has no type information to pick the syntactically "correct"
+/// one — proximity in the repository's directory tree is used as a proxy
+/// for "more likely to be the intended target", the same heuristic an
+/// editor's "go to definition" fallback (or a human skimming candidates)
+/// would reach for first.
+///
+/// Ranks, from closest to farthest:
+/// 1. Same file as the referencing symbol.
+/// 2. Same directory (immediate parent) as the referencing symbol.
+/// 3. Shares a path prefix with the referencing symbol — ranked by *shared
+///    prefix depth*, deeper (more path components in common) first, so a
+///    common grandparent directory ranks closer than a common
+///    great-grandparent.
+/// 4. No shared directory prefix at all (other than the repository root).
+fn path_proximity_rank(
+    referencing_path: &str,
+    candidate_path: &str,
+) -> (u8, std::cmp::Reverse<usize>) {
+    if candidate_path == referencing_path {
+        return (0, std::cmp::Reverse(usize::MAX));
+    }
+
+    let referencing_dir: Vec<&str> = path_dir_components(referencing_path);
+    let candidate_dir: Vec<&str> = path_dir_components(candidate_path);
+
+    if referencing_dir == candidate_dir {
+        return (1, std::cmp::Reverse(usize::MAX));
+    }
+
+    let shared_depth = referencing_dir
+        .iter()
+        .zip(candidate_dir.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    if shared_depth > 0 {
+        (2, std::cmp::Reverse(shared_depth))
+    } else {
+        (3, std::cmp::Reverse(0))
+    }
+}
+
+/// Splits a `/`-separated repository-relative path into its directory
+/// components, dropping the file name itself — e.g. `"src/pkg/a.rs"` →
+/// `["src", "pkg"]`. Paths are always `/`-separated regardless of host OS:
+/// they come from `git`, which normalizes separators, not from
+/// `std::path` traversal of the local filesystem.
+fn path_dir_components(path: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    parts.pop();
+    parts
 }
 
 #[cfg(test)]
@@ -358,6 +444,7 @@ mod tests {
                 container: None,
                 referenced_names: referenced_names.into_iter().map(str::to_string).collect(),
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }
         }
 
@@ -521,6 +608,140 @@ mod tests {
             let actual = resolve_dependencies(files, &resolver);
 
             assert_eq!(expected, actual);
+        }
+
+        /// Builds a `ResolvedSymbol` candidate at `path`, with a signature
+        /// derived from the path so mismatched ordering is easy to spot in
+        /// a failing assertion.
+        fn candidate(path: &str) -> ResolvedSymbol {
+            ResolvedSymbol {
+                signature: format!("fn helper() // {path}"),
+                path: path.to_string(),
+            }
+        }
+
+        #[test]
+        fn should_rank_same_file_candidate_above_other_candidates() {
+            // Four same-named candidates at increasing path distance from
+            // the referencing symbol's own file ("src/pkg/a.rs"): itself,
+            // same directory, a shared grandparent, and a wholly unrelated
+            // top-level path. Fed to the resolver in the *reverse* of
+            // proximity order so this test cannot pass by accident of
+            // input ordering.
+            let files = vec![FileReport {
+                path: "src/pkg/a.rs".to_string(),
+                symbols: vec![symbol("foo", vec!["helper"])],
+            }];
+            let resolver = FakeResolver {
+                matches: HashMap::from([(
+                    "helper",
+                    vec![
+                        candidate("other/unrelated.rs"),
+                        candidate("src/other_pkg/c.rs"),
+                        candidate("src/pkg/b.rs"),
+                        candidate("src/pkg/a.rs"),
+                    ],
+                )]),
+            };
+
+            let expected = vec![FileReport {
+                path: "src/pkg/a.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    dependencies: vec![
+                        candidate("src/pkg/a.rs"),
+                        candidate("src/pkg/b.rs"),
+                        candidate("src/other_pkg/c.rs"),
+                    ],
+                    omitted_dependency_matches: 1,
+                    ..symbol("foo", vec!["helper"])
+                }],
+            }];
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_keep_all_matches_when_at_or_under_the_cap() {
+            let files = vec![FileReport {
+                path: "src/pkg/a.rs".to_string(),
+                symbols: vec![symbol("foo", vec!["helper"])],
+            }];
+            let resolver = FakeResolver {
+                matches: HashMap::from([(
+                    "helper",
+                    vec![candidate("src/pkg/b.rs"), candidate("src/pkg/c.rs")],
+                )]),
+            };
+
+            let expected = vec![FileReport {
+                path: "src/pkg/a.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    dependencies: vec![candidate("src/pkg/b.rs"), candidate("src/pkg/c.rs")],
+                    omitted_dependency_matches: 0,
+                    ..symbol("foo", vec!["helper"])
+                }],
+            }];
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_accumulate_omitted_matches_across_multiple_referenced_names() {
+            // Two different referenced names each overflow the per-name cap
+            // by one match; the symbol-level omitted count is their sum,
+            // not just the last name processed.
+            let files = vec![FileReport {
+                path: "src/pkg/a.rs".to_string(),
+                symbols: vec![symbol("foo", vec!["helper", "other"])],
+            }];
+            let resolver = FakeResolver {
+                matches: HashMap::from([
+                    (
+                        "helper",
+                        vec![
+                            candidate("src/pkg/b.rs"),
+                            candidate("src/pkg/c.rs"),
+                            candidate("src/pkg/d.rs"),
+                            candidate("src/pkg/e.rs"),
+                        ],
+                    ),
+                    (
+                        "other",
+                        vec![
+                            ResolvedSymbol {
+                                signature: "fn other() // src/pkg/f.rs".to_string(),
+                                path: "src/pkg/f.rs".to_string(),
+                            },
+                            ResolvedSymbol {
+                                signature: "fn other() // src/pkg/g.rs".to_string(),
+                                path: "src/pkg/g.rs".to_string(),
+                            },
+                            ResolvedSymbol {
+                                signature: "fn other() // src/pkg/h.rs".to_string(),
+                                path: "src/pkg/h.rs".to_string(),
+                            },
+                            ResolvedSymbol {
+                                signature: "fn other() // src/pkg/i.rs".to_string(),
+                                path: "src/pkg/i.rs".to_string(),
+                            },
+                        ],
+                    ),
+                ]),
+            };
+
+            let actual = resolve_dependencies(files, &resolver);
+
+            // NOTE: partial assertion — only `omitted_dependency_matches`
+            // and the dependency count are checked, not the full ranked
+            // list, because all four candidates per name sit at the same
+            // proximity rank ("same directory") and their relative order
+            // among equally-ranked candidates is not a contract this test
+            // needs to pin down; the per-name cap-and-count behavior is.
+            let deps_symbol = &actual[0].symbols[0];
+            assert_eq!(6, deps_symbol.dependencies.len());
+            assert_eq!(2, deps_symbol.omitted_dependency_matches);
         }
     }
 }

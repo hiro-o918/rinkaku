@@ -71,7 +71,23 @@ pub struct ExtractedSymbol {
     /// symbol's own definition and any symbol already reported in the same
     /// diff (see `crate::deps::resolve_dependencies`). Empty when
     /// dependency resolution was skipped (`--deps 0`) or found nothing.
+    ///
+    /// Capped at 3 matches per referenced name, ranked by path proximity to
+    /// this symbol's own file (see `deps::resolve_dependencies`'s doc
+    /// comment) — matches beyond the cap are counted, not dropped, in
+    /// `omitted_dependency_matches`.
     pub dependencies: Vec<crate::deps::ResolvedSymbol>,
+    /// Count of same-name candidate definitions that resolved but were cut
+    /// by the top-3-per-name cap on `dependencies` (ADR 0003's name-only
+    /// resolution can otherwise return many same-named matches for a common
+    /// identifier). Zero when every match fit under the cap, dependency
+    /// resolution was skipped (`--deps 0`), or nothing resolved.
+    ///
+    /// Serialized as `omitted_matches` (shorter, output-facing name) even
+    /// though the Rust field name spells out "dependency" for clarity at
+    /// the call site.
+    #[serde(rename = "omitted_matches")]
+    pub omitted_dependency_matches: usize,
 }
 
 /// Extracts the signatures of definitions that contain at least one
@@ -246,6 +262,7 @@ fn build_symbol(
         // set of a file's extracted symbols is known (needed to exclude
         // diff-internal symbols from the resolved dependency list).
         dependencies: Vec::new(),
+        omitted_dependency_matches: 0,
     })
 }
 
@@ -578,6 +595,7 @@ struct Point {
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             },
             ExtractedSymbol {
                 name: "Point".to_string(),
@@ -587,6 +605,7 @@ struct Point {
                 container: None,
                 referenced_names: vec!["Point".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             },
         ];
         let actual = extract_all_symbols(source, &lang);
@@ -622,6 +641,7 @@ fn foo() -> i32 {
             container: None,
             referenced_names: vec!["bar".to_string()],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -659,6 +679,7 @@ fn foo(a: i32) -> i32 {
             container: None,
             referenced_names: vec![],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -684,6 +705,7 @@ fn foo(a: i32, c: i32) -> i32 {
             container: None,
             referenced_names: vec![],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -714,6 +736,7 @@ struct Point {
             // filters self-references before resolving.
             referenced_names: vec!["Point".to_string()],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -743,6 +766,7 @@ impl Foo {
             container: Some("impl Foo".to_string()),
             referenced_names: vec![],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -772,6 +796,7 @@ impl Foo {
             container: Some("impl Foo".to_string()),
             referenced_names: vec![],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -801,6 +826,7 @@ enum Color {
             // enum's own name is a `type_identifier`.
             referenced_names: vec!["Color".to_string()],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -829,6 +855,7 @@ trait Greeter {
             container: Some("trait Greeter".to_string()),
             referenced_names: vec!["String".to_string()],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -857,6 +884,7 @@ trait Greeter {
             // type of its method signature.
             referenced_names: vec!["Greeter".to_string(), "String".to_string()],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -891,6 +919,7 @@ const X: i32 = 1;
             container: None,
             referenced_names: vec![],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }],
     )]
     fn extract_changed_symbols_selective_cases(
@@ -949,6 +978,7 @@ fn foo(a: i32) -> i32 {
             container: None,
             referenced_names: vec![],
             dependencies: vec![],
+            omitted_dependency_matches: 0,
         }];
         let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -998,6 +1028,7 @@ func foo(a int) int {
                 // on `REFERENCE_QUERY` in language/go.rs).
                 referenced_names: vec!["int".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1024,6 +1055,7 @@ func foo(a int, c int) int {
                 container: None,
                 referenced_names: vec!["int".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1057,6 +1089,7 @@ type Repo struct {
                 // comment).
                 referenced_names: vec!["Repo".to_string(), "int".to_string(), "string".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1087,6 +1120,7 @@ type Fetcher interface {
                     "string".to_string(),
                 ],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1147,6 +1181,7 @@ func (r *Repo) Save(id string) error {
                     "string".to_string(),
                 ],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1178,6 +1213,7 @@ func (r Repo) Label() string {
                 container: Some("Repo".to_string()),
                 referenced_names: vec!["Repo".to_string(), "string".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1250,6 +1286,7 @@ func (r *Repo) Save(id string) error {
                     "string".to_string(),
                 ],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1281,6 +1318,7 @@ def foo(a):
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1304,6 +1342,7 @@ def foo(a, c):
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1335,6 +1374,7 @@ def top_level(a, b):
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1378,6 +1418,7 @@ def decorated(a):
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1410,6 +1451,7 @@ class Point:
                 // and `y`, deduplicated to a single entry.
                 referenced_names: vec!["int".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1435,6 +1477,7 @@ class Point:
                 container: Some("class Point".to_string()),
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1460,6 +1503,7 @@ class Point:
                 container: Some("class Point".to_string()),
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1493,6 +1537,7 @@ class Point:
                 // language/python.rs).
                 referenced_names: vec!["str".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1554,6 +1599,7 @@ class Point:
                 container: Some("class Point".to_string()),
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1585,6 +1631,7 @@ function foo(a: number): number {
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1609,6 +1656,7 @@ function foo(a: number, c: number): number {
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1634,6 +1682,7 @@ const arrow = (a: number): number => {
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1683,6 +1732,7 @@ interface Shape {
                 // node kind the reference query does not capture.
                 referenced_names: vec!["Shape".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1709,6 +1759,7 @@ type Point = {
                 container: None,
                 referenced_names: vec!["Point".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1736,6 +1787,7 @@ enum Color {
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1766,6 +1818,7 @@ class Circle {
                 container: None,
                 referenced_names: vec!["Circle".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1795,6 +1848,7 @@ class Circle {
                 container: Some("class Circle".to_string()),
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1824,6 +1878,7 @@ class Circle {
                 container: Some("class Circle".to_string()),
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1855,6 +1910,7 @@ class Circle {
                 container: Some("class Circle".to_string()),
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1916,6 +1972,7 @@ function foo(a: number): number {
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1947,6 +2004,7 @@ abstract class Shape {
                 container: Some("class Shape".to_string()),
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1976,6 +2034,7 @@ abstract class Shape {
                 container: None,
                 referenced_names: vec!["Shape".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2015,6 +2074,7 @@ class Circle {
                 // not captured; only the class's own self-reference is.
                 referenced_names: vec!["Circle".to_string()],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2042,6 +2102,7 @@ const Component = () => {
                 container: None,
                 referenced_names: vec![],
                 dependencies: vec![],
+                omitted_dependency_matches: 0,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_ranges);
 
