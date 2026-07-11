@@ -202,8 +202,8 @@ fn symbol_kind(node: tree_sitter::Node) -> Option<SymbolKind> {
         // TypeScript.
         "interface_declaration" => Some(SymbolKind::Interface),
         "type_alias_declaration" => Some(SymbolKind::TypeAlias),
-        "class_declaration" => Some(SymbolKind::Class),
-        "method_definition" => Some(SymbolKind::Function),
+        "class_declaration" | "abstract_class_declaration" => Some(SymbolKind::Class),
+        "method_definition" | "abstract_method_signature" => Some(SymbolKind::Function),
         "enum_declaration" => Some(SymbolKind::Enum),
         // `variable_declarator` is captured only for `const f = () => {}`
         // style arrow-function bindings (see the TypeScript definition
@@ -236,20 +236,25 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 ///   declaration up to (not including) the body is kept.
 /// - `struct_item`, `enum_item`, `trait_item`, `type_spec` (Go),
 ///   `interface_declaration`, `type_alias_declaration`, `enum_declaration`
-///   (TS): no separate "body" in the implementation sense — their
-///   fields/variants/method signatures *are* the API surface — so the whole
-///   node text is kept.
-/// - `class_definition` (Python), `class_declaration` (TS): the whole class
-///   text is kept (field/method signatures are the API surface, same as
-///   struct/interface), but nested method *bodies* are stripped so a class
-///   reads as a list of member signatures rather than full implementations.
-///   A per-method signature listing (rather than "whole class minus method
-///   bodies") would be more precise but adds real complexity — e.g.
-///   reconciling which subset of members to show when only one changed —
-///   that v1 defers; see the module-level rationale in `language/python.rs`
-///   and `language/typescript.rs`.
+///   (TS), `abstract_method_signature` (TS): no separate "body" in the
+///   implementation sense — their fields/variants/method signatures *are*
+///   the API surface — so the whole node text is kept.
+/// - `class_definition` (Python), `class_declaration` /
+///   `abstract_class_declaration` (TS): the whole class text is kept
+///   (field/method signatures are the API surface, same as
+///   struct/interface), but nested method *bodies* — including a class
+///   field whose value is an arrow function, e.g. `area = (): number => {
+///   ... }` — are stripped so a class reads as a list of member signatures
+///   rather than full implementations. A per-method signature listing
+///   (rather than "whole class minus method bodies") would be more precise
+///   but adds real complexity — e.g. reconciling which subset of members to
+///   show when only one changed — that v1 defers; see the module-level
+///   rationale in `language/python.rs` and `language/typescript.rs`.
 fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
-    if matches!(node.kind(), "class_definition" | "class_declaration") {
+    if matches!(
+        node.kind(),
+        "class_definition" | "class_declaration" | "abstract_class_declaration"
+    ) {
         return normalize_whitespace(&class_signature_text(node, source));
     }
 
@@ -303,14 +308,29 @@ fn class_signature_text(node: tree_sitter::Node, source: &[u8]) -> String {
 }
 
 /// Recursively collects the byte ranges of every nested method body inside
-/// a class node (`function_definition`/`method_definition`), without
-/// descending into a method's own body (a nested function *inside* a
-/// method body is implementation detail, not a member signature).
+/// a class node (`function_definition`/`method_definition`, or a TS class
+/// field whose value is an arrow function, e.g. `area = (): number => {
+/// ... }`), without descending into a method's own body (a nested function
+/// *inside* a method body is implementation detail, not a member
+/// signature).
+///
+/// `public_field_definition`'s body is nested one level deeper, under its
+/// `value` field's own `body`, rather than being a direct `body` field of
+/// the field definition itself — same shape as `variable_declarator` in
+/// `slice_signature`.
 fn collect_method_body_ranges(node: tree_sitter::Node, ranges: &mut Vec<std::ops::Range<usize>>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let is_method = matches!(child.kind(), "function_definition" | "method_definition");
         if is_method && let Some(body) = child.child_by_field_name("body") {
+            ranges.push(body.start_byte()..child.end_byte());
+            continue; // Don't descend into the stripped body.
+        }
+        if child.kind() == "public_field_definition"
+            && let Some(value) = child.child_by_field_name("value")
+            && value.kind() == "arrow_function"
+            && let Some(body) = value.child_by_field_name("body")
+        {
             ranges.push(body.start_byte()..child.end_byte());
             continue; // Don't descend into the stripped body.
         }
@@ -352,7 +372,7 @@ fn find_container(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
                 let name = definition_name(candidate, source)?;
                 return Some(format!("trait {name}"));
             }
-            "class_definition" | "class_declaration" => {
+            "class_definition" | "class_declaration" | "abstract_class_declaration" => {
                 let name = definition_name(candidate, source)?;
                 return Some(format!("class {name}"));
             }
@@ -1557,6 +1577,93 @@ function foo(a: number): number {
                 container: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_abstract_method_signature_with_class_container_when_abstract_method_line_changed()
+         {
+            let source = "\
+abstract class Shape {
+    abstract area(): number;
+    abstract perimeter(): number;
+}
+";
+            let lang = TypeScriptSupport;
+            // Line 3 (`abstract perimeter(): number;`) is fully inside that
+            // method's own node range, so — same "narrowest enclosing
+            // definition" rule as Rust trait methods — the method itself is
+            // reported (with its class as container) rather than the whole
+            // class body.
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "perimeter".to_string(),
+                kind: SymbolKind::Function,
+                signature: "abstract perimeter(): number".to_string(),
+                range: LineRange { start: 3, end: 3 },
+                container: Some("class Shape".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_abstract_class_signature_when_no_member_line_specifically_changed() {
+            let source = "\
+abstract class Shape {
+    abstract area(): number;
+    abstract perimeter(): number;
+}
+";
+            let lang = TypeScriptSupport;
+            // Line 1 (`abstract class Shape {`) belongs to the class node
+            // but not to any single member signature inside it.
+            let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "Shape".to_string(),
+                kind: SymbolKind::Class,
+                signature:
+                    "abstract class Shape { abstract area(): number; abstract perimeter(): number; }"
+                        .to_string(),
+                range: LineRange { start: 1, end: 4 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_strip_arrow_function_body_when_class_field_arrow_function_signature_changed() {
+            let source = "\
+class Circle {
+    radius: number;
+
+    area = (): number => {
+        return 3.14 * this.radius * this.radius;
+    };
+}
+";
+            let lang = TypeScriptSupport;
+            // Line 2 (`radius: number;`) is a class-level field, not
+            // inside the arrow function body — the extracted class
+            // signature must still have the arrow function's body
+            // stripped, matching how `method_definition` bodies are
+            // stripped.
+            let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "Circle".to_string(),
+                kind: SymbolKind::Class,
+                signature: "class Circle { radius: number; area = (): number => ; }".to_string(),
+                range: LineRange { start: 1, end: 7 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
             assert_eq!(expected, actual);
         }
