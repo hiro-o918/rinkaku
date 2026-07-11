@@ -48,6 +48,16 @@ pub enum AnalyzeError {
 /// [`crate::deps::resolve_dependencies`]. `None` skips dependency
 /// resolution entirely — no `Resolver::resolve` calls are made — which is
 /// how the CLI's `--deps 0` is wired (`main.rs`).
+///
+/// Known inefficiency: a changed file is parsed here (via
+/// `extract_changed_symbols`) and, when `resolver` is `TagsResolver`,
+/// parsed *again* while building that resolver's index
+/// (`TagsResolver::new` calls `extract_all_symbols` over every tracked
+/// file, changed files included). Measured as a minor contributor next to
+/// the per-file `git show`/`git ls-files` subprocess cost `--base` mode
+/// pays for indexing (see the performance note at the top of `deps.rs`),
+/// so left unaddressed for now rather than adding a cache purely on
+/// suspicion.
 pub fn analyze_diff(
     diff_text: &str,
     read_file: impl Fn(&str) -> std::io::Result<String>,
