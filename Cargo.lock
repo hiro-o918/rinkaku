@@ -535,19 +535,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
 
 [[package]]
-name = "rinkaku-core"
+name = "rinkaku"
 version = "0.1.0"
 dependencies = [
- "aho-corasick",
  "anyhow",
  "clap",
  "env_logger",
  "log",
  "pretty_assertions",
+ "rinkaku-core",
+ "rstest",
+ "tempfile",
+]
+
+[[package]]
+name = "rinkaku-core"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "pretty_assertions",
  "rstest",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror",
  "tree-sitter",
  "tree-sitter-go",

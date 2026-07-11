@@ -5,21 +5,17 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Condense PR diffs into signatures and their dependencies for LLM-friendly review"
+description = "Core diff-condensation engine for rinkaku: parses unified diffs and slices out changed symbols with their signatures and dependencies"
+readme = "../README.md"
+keywords = ["diff", "tree-sitter", "code-review", "llm"]
+categories = ["development-tools"]
 
 [lib]
 name = "rinkaku_core"
 path = "src/lib.rs"
 
-[[bin]]
-name = "rinkaku"
-path = "src/main.rs"
-
 [dependencies]
-clap = { workspace = true }
 anyhow = { workspace = true }
-log = { workspace = true }
-env_logger = { workspace = true }
 thiserror = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
@@ -33,4 +29,3 @@ serde_json = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }

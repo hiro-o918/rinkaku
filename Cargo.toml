@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rinkaku-core"]
+members = ["rinkaku-core", "rinkaku"]
 
 [workspace.package]
 version = "0.1.0"
