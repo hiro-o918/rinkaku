@@ -28,6 +28,11 @@ pub enum ChangeKind {
     Modified,
     Deleted,
     Renamed,
+    /// Produced by `git diff -C`'s `copy from`/`copy to` headers. Kept
+    /// distinct from `Renamed`: unlike a rename, the old-side path still
+    /// exists in the tree after the change, which callers computing
+    /// dependency graphs over the diff need to know.
+    Copied,
 }
 
 /// A single file entry parsed out of a unified diff.
@@ -100,6 +105,12 @@ fn parse_file_entry(lines: &[&str], start: usize) -> Result<(ChangedFile, usize)
         } else if let Some(rest) = line.strip_prefix("rename to ") {
             path = rest.to_string();
             kind = ChangeKind::Renamed;
+        } else if let Some(rest) = line.strip_prefix("copy from ") {
+            old_path = Some(rest.to_string());
+            kind = ChangeKind::Copied;
+        } else if let Some(rest) = line.strip_prefix("copy to ") {
+            path = rest.to_string();
+            kind = ChangeKind::Copied;
         } else if line.starts_with("new file mode") {
             kind = ChangeKind::Added;
         } else if line.starts_with("deleted file mode") {
@@ -568,5 +579,50 @@ index e69de29..4b825dc 100644
 ";
         let actual = parse_unified_diff(input);
         assert!(matches!(actual, Err(ParseError::MalformedHunkHeader(_))));
+    }
+
+    #[test]
+    fn should_set_old_path_and_kind_copied_when_file_is_copied_with_content_change() {
+        let input = "\
+diff --git a/src/old_name.rs b/src/new_name.rs
+similarity index 90%
+copy from src/old_name.rs
+copy to src/new_name.rs
+index e69de29..4b825dc 100644
+--- a/src/old_name.rs
++++ b/src/new_name.rs
+@@ -1,2 +1,3 @@
+ fn a() {}
++fn b() {}
+ fn c() {}
+";
+        let expected = vec![ChangedFile {
+            path: "src/new_name.rs".to_string(),
+            old_path: Some("src/old_name.rs".to_string()),
+            kind: ChangeKind::Copied,
+            changed_ranges: vec![LineRange { start: 2, end: 2 }],
+            is_binary: false,
+        }];
+        let actual = parse_unified_diff(input).expect("parse should succeed");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_changed_ranges_when_copy_is_pure_with_no_hunks() {
+        let input = "\
+diff --git a/src/old_name.rs b/src/new_name.rs
+similarity index 100%
+copy from src/old_name.rs
+copy to src/new_name.rs
+";
+        let expected = vec![ChangedFile {
+            path: "src/new_name.rs".to_string(),
+            old_path: Some("src/old_name.rs".to_string()),
+            kind: ChangeKind::Copied,
+            changed_ranges: vec![],
+            is_binary: false,
+        }];
+        let actual = parse_unified_diff(input).expect("parse should succeed");
+        assert_eq!(expected, actual);
     }
 }
