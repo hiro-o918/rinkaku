@@ -12,22 +12,32 @@ use super::LanguageSupport;
 
 /// Tree-sitter query capturing the definition node kinds whose signatures
 /// rinkaku extracts: functions (top-level and class methods),
-/// const-bound arrow functions, classes, interfaces, type aliases, and
-/// enums.
+/// const-bound arrow functions, classes (including `abstract class`),
+/// abstract method signatures, interfaces, type aliases, and enums.
 ///
-/// `variable_declarator` is captured only when its `value` is an
-/// `arrow_function` (`const f = () => {}` / `let f = () => {}`), so a
-/// plain `const x = 5;` binding is correctly excluded. Only the
-/// declarator is captured, not the enclosing `lexical_declaration` — a
-/// multi-binding statement (`const a = 1, b = () => {};`) is handled per
-/// declarator, matching how Go's `type_spec` is captured independently of
-/// its `type_declaration` parent.
+/// `variable_declarator` is captured whenever its `value` is an
+/// `arrow_function` (`const f = () => {}` / `let f = () => {}` /
+/// `var f = () => {}`), so a plain `const x = 5;` binding is correctly
+/// excluded while `let`/`var` arrow-function bindings are captured the same
+/// as `const` ones. Only the declarator is captured, not the enclosing
+/// `lexical_declaration`/`variable_declaration` — a multi-binding statement
+/// (`const a = 1, b = () => {};`) is handled per declarator, matching how
+/// Go's `type_spec` is captured independently of its `type_declaration`
+/// parent.
+///
+/// `abstract_class_declaration` is a distinct node kind from
+/// `class_declaration` in this grammar (an `abstract class Foo { ... }`),
+/// so it needs its own capture; `abstract_method_signature` (a
+/// body-less `abstract area(): number;` member inside such a class) is
+/// likewise distinct from `method_definition`.
 const DEFINITION_QUERY: &str = "\
 [
   (function_declaration) @definition.function
   (method_definition) @definition.function
+  (abstract_method_signature) @definition.function
   (variable_declarator value: (arrow_function)) @definition.function
   (class_declaration) @definition.class
+  (abstract_class_declaration) @definition.class
   (interface_declaration) @definition.interface
   (type_alias_declaration) @definition.type_alias
   (enum_declaration) @definition.enum
