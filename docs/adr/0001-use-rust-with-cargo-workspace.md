@@ -47,3 +47,34 @@ Key reasons:
 - Contributors need a Rust toolchain (pinned via `rust-toolchain.toml`);
   Go was the only alternative considered, and it loses on the tree-sitter
   cross-compilation trade-off above.
+
+## Amendment (2026-07-12): split the bin crate out of `rinkaku-core`
+
+The original decision above already named the target shape ("a
+`rinkaku-core` library crate (plus a thin `rinkaku` binary)"), but the
+bootstrap PR implemented `main.rs` and the `[[bin]]` target directly inside
+`rinkaku-core`'s `Cargo.toml` to keep the initial workspace minimal.
+
+This amendment carries out that deferred split: `rinkaku-core` becomes a
+lib-only crate (no `[[bin]]`), and a new `rinkaku` crate holds `main.rs`
+plus its CLI-only dependencies (`clap`, `log`, `env_logger`), depending on
+`rinkaku-core` via a `path` + `version` dependency.
+
+Reason: `cargo install rinkaku` requires a crate literally named `rinkaku`
+that produces a `[[bin]]`. A lib crate with an equally-named embedded
+binary (`rinkaku-core` producing a `rinkaku` binary) cannot be installed by
+crate name — `cargo install` resolves the crate name, not the bin name,
+against crates.io. Splitting the bin out is a prerequisite for publishing
+to crates.io at all, not an optional cleanup.
+
+Consequences:
+
+- `cargo install rinkaku` now works once both crates are published
+  (`rinkaku-core` first, then `rinkaku`, since the latter depends on the
+  former by version).
+- The `rinkaku` crate's `Cargo.toml` pins `rinkaku-core = { path = ...,
+  version = "0.1.0" }`: the `path` is used for workspace-local builds, the
+  `version` is what crates.io publishing requires and what a consumer
+  installing from the registry resolves against.
+- No behavior change: `main.rs`'s composition-root role, and its tests,
+  moved unchanged into the new crate.
