@@ -223,21 +223,25 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
 
     #[test]
     fn should_skip_file_with_unsupported_language_without_reading_it() {
+        // `.rb` has no registered `LanguageSupport` (only rs/go/py/ts/tsx
+        // are registered — see `language.rs`), so this exercises the
+        // unsupported-extension path without relying on an extension that
+        // might gain support later.
         let diff = "\
-diff --git a/src/main.py b/src/main.py
+diff --git a/src/main.rb b/src/main.rb
 index e69de29..4b825dc 100644
---- a/src/main.py
-+++ b/src/main.py
+--- a/src/main.rb
++++ b/src/main.rb
 @@ -1,1 +1,2 @@
- def foo():
-+    pass
+ def foo
++  1
 ";
         let read_file = fake_reader(HashMap::new());
 
         let expected = Report {
             files: vec![],
             skipped: vec![SkippedFile {
-                path: "src/main.py".to_string(),
+                path: "src/main.rb".to_string(),
                 reason: SkipReason::UnsupportedLanguage,
             }],
         };
@@ -320,6 +324,8 @@ index e69de29..4b825dc 100644
 
     #[test]
     fn should_process_multiple_files_with_mixed_outcomes_in_one_diff() {
+        // `.rb` has no registered `LanguageSupport` (see the note on
+        // `should_skip_file_with_unsupported_language_without_reading_it`).
         let diff = "\
 diff --git a/src/lib.rs b/src/lib.rs
 index e69de29..4b825dc 100644
@@ -328,13 +334,13 @@ index e69de29..4b825dc 100644
 @@ -1,1 +1,1 @@
 -fn a() {}
 +fn a() -> i32 { 0 }
-diff --git a/src/main.py b/src/main.py
+diff --git a/src/main.rb b/src/main.rb
 index e69de29..4b825dc 100644
---- a/src/main.py
-+++ b/src/main.py
+--- a/src/main.rb
++++ b/src/main.rb
 @@ -1,1 +1,2 @@
- def foo():
-+    pass
+ def foo
++  1
 ";
         let source = "fn a() -> i32 { 0 }\n";
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
@@ -351,7 +357,7 @@ index e69de29..4b825dc 100644
                 }],
             }],
             skipped: vec![SkippedFile {
-                path: "src/main.py".to_string(),
+                path: "src/main.rb".to_string(),
                 reason: SkipReason::UnsupportedLanguage,
             }],
         };
