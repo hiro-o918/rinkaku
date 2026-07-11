@@ -123,6 +123,56 @@ pub fn analyze_diff(
     Ok(Report { files, skipped })
 }
 
+/// Parses `diff_text` and collects every name referenced by any changed
+/// symbol across every changed file, reading each file's new-side content
+/// through `read_file` — the same walk `analyze_diff` performs, but
+/// stopping at `extract_changed_symbols` instead of going on to resolve
+/// dependencies or build a `Report`.
+///
+/// Exists so `main.rs` can compute the reference-name set a `TagsResolver`
+/// needs for its prefilter (`TagsResolver::new`'s `reference_names`
+/// parameter, see `deps.rs`'s performance doc comment) *before*
+/// constructing that resolver, which `analyze_diff` itself cannot do since
+/// it takes the resolver as an input rather than building one. This means
+/// the diff is parsed and changed files are read/parsed twice per run
+/// (once here, once inside `analyze_diff`) — the same known double-parse
+/// tradeoff `analyze_diff`'s doc comment already accepts for
+/// `TagsResolver::new`'s own indexing pass, extended to this walk too.
+///
+/// Deleted, binary, and unsupported-language files are skipped exactly as
+/// in `analyze_diff` (no names to collect from them). Files with no
+/// changed ranges (pure renames) are also skipped without reading, same
+/// rationale as `analyze_diff`.
+pub fn collect_referenced_names(
+    diff_text: &str,
+    read_file: impl Fn(&str) -> std::io::Result<String>,
+) -> Result<std::collections::HashSet<String>, AnalyzeError> {
+    let changed_files = parse_unified_diff(diff_text)?;
+    let mut names = std::collections::HashSet::new();
+
+    for changed_file in changed_files {
+        if changed_file.kind == ChangeKind::Deleted || changed_file.is_binary {
+            continue;
+        }
+        let Some(lang) = language_for_path(&changed_file.path) else {
+            continue;
+        };
+        if changed_file.changed_ranges.is_empty() {
+            continue;
+        }
+
+        let source = read_file(&changed_file.path).map_err(|source| AnalyzeError::ReadFile {
+            path: changed_file.path.clone(),
+            source,
+        })?;
+        for symbol in extract_changed_symbols(&source, lang, &changed_file.changed_ranges) {
+            names.extend(symbol.referenced_names);
+        }
+    }
+
+    Ok(names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +528,91 @@ fn foo(p: Point) -> i32 {
         actual.sort();
 
         assert_eq!(expected, actual);
+    }
+
+    mod collect_referenced_names_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_collect_names_referenced_by_changed_symbols() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(p: Point) -> i32 {
+-    0
++    helper(p)
+ }
+";
+            let source = "\
+fn foo(p: Point) -> i32 {
+    helper(p)
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let expected: std::collections::HashSet<String> =
+                ["Point".to_string(), "helper".to_string()]
+                    .into_iter()
+                    .collect();
+            let actual =
+                collect_referenced_names(diff, read_file).expect("collection should succeed");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_return_empty_set_when_diff_is_empty() {
+            let read_file = fake_reader(HashMap::new());
+
+            let expected: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let actual =
+                collect_referenced_names("", read_file).expect("collection should succeed");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_skip_deleted_file_without_reading_it() {
+            let diff = "\
+diff --git a/src/old.rs b/src/old.rs
+deleted file mode 100644
+index 4b825dc..0000000
+--- a/src/old.rs
++++ /dev/null
+@@ -1,2 +0,0 @@
+-fn a() {}
+-fn b() {}
+";
+            // No entry in the map: if this tried to read a deleted file,
+            // it would return Err and fail the test.
+            let read_file = fake_reader(HashMap::new());
+
+            let expected: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let actual =
+                collect_referenced_names(diff, read_file).expect("collection should succeed");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_return_err_when_diff_is_malformed() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 1,4 @@
+ fn a() {}
+";
+            let read_file = fake_reader(HashMap::new());
+
+            let actual = collect_referenced_names(diff, read_file);
+
+            assert!(matches!(actual, Err(AnalyzeError::Diff(_))));
+        }
     }
 }

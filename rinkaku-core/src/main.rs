@@ -78,10 +78,14 @@ fn main() -> anyhow::Result<()> {
         Some(base) => {
             let diff_text = run_git_diff(base, &cli.head)?;
             let head = cli.head.clone();
-            let resolver = build_resolver(&cli, Some(&head), None)?;
+            let read_file = {
+                let head = head.clone();
+                move |path: &str| read_git_show_file(None, &head, path)
+            };
+            let resolver = build_resolver(&cli, &diff_text, &read_file, Some(&head), None)?;
             analyze_diff(
                 &diff_text,
-                move |path| read_git_show_file(None, &head, path),
+                read_file,
                 resolver
                     .as_ref()
                     .map(|r| r as &dyn rinkaku_core::deps::Resolver),
@@ -92,14 +96,28 @@ fn main() -> anyhow::Result<()> {
             if diff_text.trim().is_empty() {
                 eprintln!("note: diff is empty, nothing to analyze");
             }
-            let resolver = build_resolver(&cli, None, None)?;
-            analyze_diff(
+            let resolver = build_resolver(&cli, &diff_text, read_working_tree_file, None, None)?;
+            let report = analyze_diff(
                 &diff_text,
                 read_working_tree_file,
                 resolver
                     .as_ref()
                     .map(|r| r as &dyn rinkaku_core::deps::Resolver),
-            )?
+            )?;
+            // Garbage stdin input (not empty, but not a unified diff
+            // either — e.g. a plain text file piped in by mistake) parses
+            // to zero recognized file entries: `parse_unified_diff` never
+            // errors on unrecognized text, it simply finds nothing to
+            // report (see `diff.rs`), so this would otherwise exit 0 with
+            // an empty report and no indication anything went wrong. Only
+            // checked when the input wasn't already flagged as empty
+            // above, and only for non-whitespace input, so this note and
+            // the empty-diff note above are mutually exclusive.
+            if !diff_text.trim().is_empty() && report.files.is_empty() && report.skipped.is_empty()
+            {
+                eprintln!("note: no file changes recognized in input; expected a unified diff");
+            }
+            report
         }
     };
 
@@ -117,6 +135,18 @@ fn main() -> anyhow::Result<()> {
 /// `ls-files` only ever lists tracked paths in the first place) — so the
 /// index only ever contains content the repository actually owns.
 ///
+/// Before indexing, `diff_text` is parsed once (via
+/// `pipeline::collect_referenced_names`, reading changed files through
+/// `diff_read_file`) to compute the set of names any changed symbol
+/// actually references. That set drives `TagsResolver::new`'s prefilter:
+/// only tracked files whose content could plausibly contain one of those
+/// names get parsed at all (see `deps.rs`'s performance doc comment for
+/// why this cannot lose recall). This re-parses the diff and re-reads
+/// changed files a second time (`analyze_diff` does its own pass over the
+/// same diff right after `build_resolver` returns) — accepted the same
+/// way `analyze_diff`'s doc comment already accepts `TagsResolver::new`
+/// parsing changed files a second time for its index.
+///
 /// `head`, when `Some`, matches `--base` mode's read strategy: file
 /// content is read via `git show <head>:<path>` rather than the working
 /// tree, so the index and the diff being analyzed are consistent with the
@@ -133,12 +163,17 @@ fn main() -> anyhow::Result<()> {
 /// so a passing `Ok(None)` there is proof the scan never ran).
 fn build_resolver(
     cli: &Cli,
+    diff_text: &str,
+    diff_read_file: impl Fn(&str) -> std::io::Result<String>,
     head: Option<&str>,
     cwd: Option<&std::path::Path>,
 ) -> anyhow::Result<Option<TagsResolver>> {
     if cli.deps == 0 {
         return Ok(None);
     }
+
+    let reference_names =
+        rinkaku_core::pipeline::collect_referenced_names(diff_text, diff_read_file)?;
 
     let paths = list_git_files(cwd)?;
     let files = paths.into_iter().filter_map(|path| {
@@ -153,7 +188,11 @@ fn build_resolver(
         // correctness-critical input.
         content.ok().map(|content| (path, content))
     });
-    Ok(Some(TagsResolver::new(files, language_for_path)))
+    Ok(Some(TagsResolver::new(
+        files,
+        language_for_path,
+        &reference_names,
+    )))
 }
 
 /// Lists every file tracked by git in `cwd` (or the process's current
@@ -401,8 +440,15 @@ mod tests {
             format: Format::Md,
             deps: 0,
         };
+        // Never called if `deps == 0` truly short-circuits before doing
+        // any work at all — deliberately panics so a regression that
+        // starts calling it would fail loudly rather than silently
+        // reading an empty string.
+        let read_file = |_: &str| -> std::io::Result<String> {
+            panic!("read_file must not be called when deps == 0")
+        };
 
-        let actual = build_resolver(&cli, None, Some(dir.path()))
+        let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()))
             .expect("deps == 0 must not touch the repository at all");
 
         assert!(actual.is_none());
@@ -422,8 +468,9 @@ mod tests {
             format: Format::Md,
             deps: 1,
         };
+        let read_file = |_: &str| -> std::io::Result<String> { Ok(String::new()) };
 
-        let actual = build_resolver(&cli, None, Some(dir.path()));
+        let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()));
 
         assert!(actual.is_err());
     }
