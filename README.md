@@ -27,9 +27,10 @@ See [`docs/adr/`](docs/adr) for the reasoning behind these choices.
 
 ## Status
 
-Early development. The CLI skeleton exists but diff parsing, tree-sitter
-extraction, and dependency resolution are not implemented yet. Not
-published to crates.io.
+Early development. Diff parsing, tree-sitter extraction, and the CLI
+(stdin/`--base` input, Markdown/JSON output) are implemented. Dependency
+expansion (`--deps`, the tags-based `Resolver`) is not implemented yet.
+Not published to crates.io.
 
 ## Installation
 
