@@ -262,6 +262,14 @@ fn build_symbol(
 /// named capture, since each language's query alternation captures a
 /// different sub-node depending on which branch matched (the callee
 /// identifier for a call, the identifier itself for a type reference).
+///
+/// `_` and single-character identifiers are dropped before insertion
+/// (`is_noise_name`): they are near-universal across unrelated files
+/// (Python/Go's conventional throwaway `_`, one-letter loop/receiver
+/// variables reused as call targets like `x()`), so a name-only resolver
+/// (ADR 0003) matches them against dozens of unrelated definitions instead
+/// of the one actually referenced — pure noise in the "Depends on" output
+/// rather than a useful, if imprecise, match.
 fn collect_referenced_names(
     node: tree_sitter::Node,
     source: &[u8],
@@ -284,13 +292,24 @@ fn collect_referenced_names(
             if !reference_capture_indices.contains(&capture.index) {
                 continue;
             }
-            if let Ok(text) = capture.node.utf8_text(source) {
+            if let Ok(text) = capture.node.utf8_text(source)
+                && !is_noise_name(text)
+            {
                 names.insert(text.to_string());
             }
         }
     }
 
     names.into_iter().collect()
+}
+
+/// Whether `name` is too generic to be worth resolving: the bare `_`
+/// placeholder, or any single-character identifier. Both appear constantly
+/// across unrelated definitions in most codebases, so under v1's name-only
+/// resolution (ADR 0003) they produce many spurious matches rather than
+/// useful ones — see `collect_referenced_names`'s doc comment.
+fn is_noise_name(name: &str) -> bool {
+    name.chars().count() <= 1
 }
 
 /// Maps a captured definition node to a language-neutral [`SymbolKind`].
@@ -571,6 +590,40 @@ struct Point {
             },
         ];
         let actual = extract_all_symbols(source, &lang);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_exclude_underscore_and_single_char_identifiers_from_referenced_names() {
+        let source = "\
+fn foo() -> i32 {
+    let _ = bar();
+    let a = 1;
+    x(a)
+}
+";
+        let lang = RustSupport;
+        let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+        // `bar` and `x` are real call targets (length > 1, not `_`), kept.
+        // A bare `_` is never captured as a `call_expression` callee by
+        // Rust's grammar, so this test instead exercises the general
+        // filter shared by every language's `collect_referenced_names`
+        // call site, which must drop both `_` and any single-character
+        // identifier (e.g. Python/TS's common but never-informative `x`,
+        // `_` local names) as noise unlikely to resolve to a meaningful,
+        // uniquely named definition.
+        let expected = vec![ExtractedSymbol {
+            name: "foo".to_string(),
+            kind: SymbolKind::Function,
+            signature: "fn foo() -> i32".to_string(),
+            range: LineRange { start: 1, end: 5 },
+            container: None,
+            referenced_names: vec!["bar".to_string()],
+            dependencies: vec![],
+        }];
+        let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
         assert_eq!(expected, actual);
     }
