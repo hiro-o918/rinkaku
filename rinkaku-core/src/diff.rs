@@ -51,6 +51,11 @@ pub struct ChangedFile {
 pub enum ParseError {
     #[error("malformed hunk header: {0}")]
     MalformedHunkHeader(String),
+    /// A hunk's body ended (because the next `diff --git` entry started, or
+    /// input ran out) before the new-side line count declared in its
+    /// `@@ ... @@` header was satisfied.
+    #[error("hunk body does not match declared line count: {0}")]
+    HunkBodyMismatch(String),
 }
 
 /// Parses unified diff text into a list of [`ChangedFile`] entries.
@@ -159,6 +164,12 @@ fn parse_hunk(lines: &[&str], start: usize) -> Result<(Vec<LineRange>, usize), P
 
     while i < lines.len() && new_line < hunk_end_new_line {
         let line = lines[i];
+        if line.starts_with("diff --git ") {
+            // The hunk body ended (next file's header started) before the
+            // declared new-side line count was reached. Treating this line
+            // as context would silently swallow the next file's entry.
+            return Err(ParseError::HunkBodyMismatch(header.to_string()));
+        }
         if line.starts_with('+') {
             if run_start.is_none() {
                 run_start = Some(new_line);
@@ -180,6 +191,11 @@ fn parse_hunk(lines: &[&str], start: usize) -> Result<(Vec<LineRange>, usize), P
             }
         }
         i += 1;
+    }
+    if new_line < hunk_end_new_line {
+        // Input ran out before the declared new-side line count was
+        // reached.
+        return Err(ParseError::HunkBodyMismatch(header.to_string()));
     }
     if let Some(s) = run_start.take() {
         ranges.push(LineRange {
@@ -506,5 +522,32 @@ index e69de29..4b825dc 100644
     fn parse_unified_diff_malformed_hunk_header(#[case] input: &str) {
         let actual = parse_unified_diff(input);
         assert!(matches!(actual, Err(ParseError::MalformedHunkHeader(_))));
+    }
+
+    // Regression test for a bug where a hunk header's declared new_count was
+    // larger than the actual hunk body, causing the parser to walk past the
+    // end of the hunk and swallow the next file's `diff --git` line as a
+    // context line. This made the second file disappear from the result
+    // entirely instead of surfacing a parse error.
+    #[test]
+    fn should_return_err_when_hunk_body_is_shorter_than_declared_new_count() {
+        let input = "\
+diff --git a/src/a.rs b/src/a.rs
+index e69de29..4b825dc 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,3 +1,100 @@
+ fn a() {}
++fn a2() {}
+diff --git a/src/b.rs b/src/b.rs
+index e69de29..4b825dc 100644
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -1,1 +1,2 @@
+ fn b() {}
++fn b2() {}
+";
+        let actual = parse_unified_diff(input);
+        assert!(matches!(actual, Err(ParseError::HunkBodyMismatch(_))));
     }
 }
