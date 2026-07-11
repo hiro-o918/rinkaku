@@ -2,12 +2,11 @@
 //!
 //! `LanguageSupport` is the port through which the extraction pipeline
 //! (`extract.rs`) reaches into a concrete tree-sitter grammar. It is kept
-//! deliberately small: only the methods `extract.rs` actually calls are
-//! declared here. Anything speculative (e.g. a tags query for dependency
-//! resolution) belongs to a later change, once a consumer needs it.
+//! deliberately small: only the methods `extract.rs` (and, for
+//! `reference_query`, `deps.rs`) actually call are declared here.
 
-/// A language's tree-sitter-backed support: grammar plus the query used to
-/// locate definition nodes.
+/// A language's tree-sitter-backed support: grammar plus the queries used to
+/// locate definition nodes and the identifiers they reference.
 pub trait LanguageSupport {
     /// Human-readable language name, e.g. `"rust"`.
     fn name(&self) -> &'static str;
@@ -18,6 +17,25 @@ pub trait LanguageSupport {
     /// Tree-sitter query that captures definition nodes (functions,
     /// structs, enums, traits, ...) whose signatures should be extracted.
     fn definition_query(&self) -> &str;
+
+    /// Tree-sitter query that captures identifiers referenced from inside a
+    /// definition: called function/method names (capture name starting
+    /// with `reference.call`) and referenced type names (capture name
+    /// starting with `reference.type`). `extract.rs`'s
+    /// `collect_referenced_names` reads every capture under the
+    /// `reference.` prefix, not a single outer capture — unlike
+    /// `definition_query`, where the whole matched node is always the
+    /// definition, a reference query's outer node (e.g. a whole
+    /// `call_expression`) is not the identifier text callers want, only
+    /// its `function`/`type` sub-capture is.
+    ///
+    /// Deliberately syntactic: local variables, parameter names, and
+    /// built-in types (e.g. Rust `i32`, Go `string`, Python untyped names)
+    /// are not filtered out explicitly — they are captured the same as any
+    /// other identifier, but simply fail to resolve against the repo's
+    /// definition index later, which has the same net effect without
+    /// needing a per-language exclusion list.
+    fn reference_query(&self) -> &str;
 }
 
 /// Looks up the `LanguageSupport` registered for a file path, based on its

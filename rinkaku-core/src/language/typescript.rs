@@ -44,6 +44,34 @@ const DEFINITION_QUERY: &str = "\
   (enum_declaration) @definition.enum
 ] @definition";
 
+/// Tree-sitter query capturing identifiers referenced from inside a
+/// definition: called function names, constructed class names, and
+/// referenced type names.
+///
+/// - `call_expression function: (identifier)` captures free function
+///   calls (`helper(x)`). Method calls
+///   (`function: (member_expression ...)` for `x.bar()`) are
+///   intentionally not captured: their callee is not a bare identifier,
+///   and resolving the receiver's type would need type information v1
+///   does not have (ADR 0003).
+/// - `new_expression constructor: (identifier)` captures class
+///   instantiation (`new Foo()`), which is syntactically distinct from a
+///   call in this grammar and would otherwise be missed entirely.
+/// - `type_identifier` captures every named type reference (parameter
+///   types, return types, generic type arguments, ...), matched anywhere
+///   in the tree — including inside `type_arguments`, so
+///   `Array<Point>`'s inner `Point` is covered without a separate
+///   pattern. TypeScript's built-in types (`number`, `string`, `boolean`,
+///   ...) parse as the distinct `predefined_type` node kind, so they are
+///   already excluded by construction rather than needing an explicit
+///   exclusion list.
+const REFERENCE_QUERY: &str = "\
+[
+  (call_expression function: (identifier) @reference.call)
+  (new_expression constructor: (identifier) @reference.call)
+  (type_identifier) @reference.type
+]";
+
 pub struct TypeScriptSupport;
 
 impl LanguageSupport for TypeScriptSupport {
@@ -57,6 +85,10 @@ impl LanguageSupport for TypeScriptSupport {
 
     fn definition_query(&self) -> &str {
         DEFINITION_QUERY
+    }
+
+    fn reference_query(&self) -> &str {
+        REFERENCE_QUERY
     }
 }
 
@@ -77,6 +109,10 @@ impl LanguageSupport for TsxSupport {
 
     fn definition_query(&self) -> &str {
         DEFINITION_QUERY
+    }
+
+    fn reference_query(&self) -> &str {
+        REFERENCE_QUERY
     }
 }
 
@@ -142,5 +178,21 @@ mod tests {
 
         tree_sitter::Query::new(&support.grammar(), support.definition_query())
             .expect("DEFINITION_QUERY must be valid against the TSX grammar");
+    }
+
+    #[test]
+    fn should_compile_reference_query_against_the_typescript_grammar() {
+        let support = TypeScriptSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.reference_query())
+            .expect("REFERENCE_QUERY must be valid against the TypeScript grammar");
+    }
+
+    #[test]
+    fn should_compile_reference_query_against_the_tsx_grammar() {
+        let support = TsxSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.reference_query())
+            .expect("REFERENCE_QUERY must be valid against the TSX grammar");
     }
 }

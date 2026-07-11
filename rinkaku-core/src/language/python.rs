@@ -23,6 +23,30 @@ const DEFINITION_QUERY: &str = "\
   (class_definition) @definition.class
 ] @definition";
 
+/// Tree-sitter query capturing identifiers referenced from inside a
+/// definition: called function/class names and referenced type
+/// annotations.
+///
+/// - `call function: (identifier)` captures free function calls
+///   (`helper(x)`) and class instantiations (`Point()` parses identically
+///   to a call in this grammar, so it is covered for free). Method calls
+///   (`function: (attribute ...)` for `x.bit_length()`) are intentionally
+///   not captured: their callee is not a bare identifier, and resolving
+///   the receiver's type would need type information v1 does not have
+///   (ADR 0003).
+/// - `type: (identifier)` captures named type annotations (parameter and
+///   return type hints), matched anywhere in the tree. Python has no
+///   distinct node kind for built-in types (`int`, `str`, ... parse as
+///   plain `identifier` like any user-defined class), so they are
+///   captured the same way and simply fail to resolve later since the
+///   repo has no definition for them (see the trait doc comment on
+///   `reference_query`).
+const REFERENCE_QUERY: &str = "\
+[
+  (call function: (identifier) @reference.call)
+  (type (identifier) @reference.type)
+]";
+
 pub struct PythonSupport;
 
 impl LanguageSupport for PythonSupport {
@@ -36,6 +60,10 @@ impl LanguageSupport for PythonSupport {
 
     fn definition_query(&self) -> &str {
         DEFINITION_QUERY
+    }
+
+    fn reference_query(&self) -> &str {
+        REFERENCE_QUERY
     }
 }
 
@@ -71,5 +99,13 @@ mod tests {
 
         tree_sitter::Query::new(&support.grammar(), support.definition_query())
             .expect("DEFINITION_QUERY must be valid against the Python grammar");
+    }
+
+    #[test]
+    fn should_compile_reference_query_against_its_own_grammar() {
+        let support = PythonSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.reference_query())
+            .expect("REFERENCE_QUERY must be valid against the Python grammar");
     }
 }

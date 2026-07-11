@@ -57,6 +57,15 @@ pub struct ExtractedSymbol {
     /// method's receiver type name, if the definition belongs to one (e.g.
     /// `Some("impl Foo")`, `Some("class Point")`, `Some("Repo")`).
     pub container: Option<String>,
+    /// Names this definition references (called functions, referenced
+    /// types), as captured by [`LanguageSupport::reference_query`].
+    /// Deduplicated but otherwise unresolved — an intermediate pipeline
+    /// artifact, not part of rinkaku's output shape, so it is excluded
+    /// from serialization. [`crate::deps`] resolves these against a
+    /// repo-wide definition index to produce the `dependencies` reported
+    /// alongside a symbol.
+    #[serde(skip)]
+    pub referenced_names: Vec<String>,
 }
 
 /// Extracts the signatures of definitions that contain at least one
@@ -121,7 +130,7 @@ pub fn extract_changed_symbols(
                 .iter()
                 .any(|other| other != *node && is_descendant_of(*other, **node))
         })
-        .filter_map(|node| build_symbol(*node, source_bytes))
+        .filter_map(|node| build_symbol(*node, source_bytes, lang))
         .collect()
 }
 
@@ -158,11 +167,16 @@ fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
 /// `None` if the node kind isn't one this module knows how to report
 /// (defensive default for query/grammar drift, not expected in practice
 /// given `definition_query` only captures known kinds).
-fn build_symbol(node: tree_sitter::Node, source: &[u8]) -> Option<ExtractedSymbol> {
+fn build_symbol(
+    node: tree_sitter::Node,
+    source: &[u8],
+    lang: &dyn LanguageSupport,
+) -> Option<ExtractedSymbol> {
     let kind = symbol_kind(node)?;
     let name = definition_name(node, source)?;
     let signature = slice_signature(node, source);
     let container = find_container(node, source);
+    let referenced_names = collect_referenced_names(node, source, lang);
 
     Some(ExtractedSymbol {
         name,
@@ -170,7 +184,52 @@ fn build_symbol(node: tree_sitter::Node, source: &[u8]) -> Option<ExtractedSymbo
         signature,
         range: node_to_line_range(node),
         container,
+        referenced_names,
     })
+}
+
+/// Runs `lang`'s `reference_query` over the subtree rooted at `node`,
+/// returning the deduplicated names it captures (called function/method
+/// names, referenced type names). Sorted for determinism — tree-sitter's
+/// match order is not a meaningful signal here, and downstream consumers
+/// (`deps.rs`, rendering) benefit from a stable order.
+///
+/// Reads every capture whose name starts with `reference.` (see the doc
+/// comment on [`LanguageSupport::reference_query`]) rather than a single
+/// named capture, since each language's query alternation captures a
+/// different sub-node depending on which branch matched (the callee
+/// identifier for a call, the identifier itself for a type reference).
+fn collect_referenced_names(
+    node: tree_sitter::Node,
+    source: &[u8],
+    lang: &dyn LanguageSupport,
+) -> Vec<String> {
+    let query = tree_sitter::Query::new(&lang.grammar(), lang.reference_query())
+        .expect("LanguageSupport reference query must be valid");
+    let reference_capture_indices: std::collections::HashSet<u32> = query
+        .capture_names()
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.starts_with("reference."))
+        .map(|(index, _)| index as u32)
+        .collect();
+
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut matches = cursor.matches(&query, node, source);
+
+    let mut names = std::collections::BTreeSet::new();
+    while let Some(m) = matches.next() {
+        for capture in m.captures {
+            if !reference_capture_indices.contains(&capture.index) {
+                continue;
+            }
+            if let Ok(text) = capture.node.utf8_text(source) {
+                names.insert(text.to_string());
+            }
+        }
+    }
+
+    names.into_iter().collect()
 }
 
 /// Maps a captured definition node to a language-neutral [`SymbolKind`].
@@ -435,6 +494,7 @@ fn foo(a: i32) -> i32 {
             signature: "fn foo(a: i32) -> i32".to_string(),
             range: LineRange { start: 1, end: 4 },
             container: None,
+            referenced_names: vec![],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -458,6 +518,7 @@ fn foo(a: i32, c: i32) -> i32 {
             signature: "fn foo(a: i32, c: i32) -> i32".to_string(),
             range: LineRange { start: 1, end: 3 },
             container: None,
+            referenced_names: vec![],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -482,6 +543,11 @@ struct Point {
             signature: "struct Point { x: i32, y: i32, }".to_string(),
             range: LineRange { start: 1, end: 4 },
             container: None,
+            // The struct's own name appears as a `type_identifier` too
+            // (it is the definition's declared name), so it is captured
+            // as a reference the same as any other type mention. `deps.rs`
+            // filters self-references before resolving.
+            referenced_names: vec!["Point".to_string()],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -509,6 +575,7 @@ impl Foo {
             signature: "fn bar(&self) -> i32".to_string(),
             range: LineRange { start: 4, end: 6 },
             container: Some("impl Foo".to_string()),
+            referenced_names: vec![],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -536,6 +603,7 @@ impl Foo {
             signature: "fn bar(&self, extra: i32) -> i32".to_string(),
             range: LineRange { start: 4, end: 6 },
             container: Some("impl Foo".to_string()),
+            referenced_names: vec![],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -561,6 +629,9 @@ enum Color {
             signature: "enum Color { Red, Green, Blue, }".to_string(),
             range: LineRange { start: 1, end: 5 },
             container: None,
+            // Same self-reference note as the struct case above: the
+            // enum's own name is a `type_identifier`.
+            referenced_names: vec!["Color".to_string()],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -587,6 +658,7 @@ trait Greeter {
             signature: "fn greet(&self) -> String;".to_string(),
             range: LineRange { start: 2, end: 2 },
             container: Some("trait Greeter".to_string()),
+            referenced_names: vec!["String".to_string()],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -611,6 +683,9 @@ trait Greeter {
             signature: "trait Greeter { fn greet(&self) -> String; }".to_string(),
             range: LineRange { start: 1, end: 3 },
             container: None,
+            // The trait's own name plus the referenced `String` return
+            // type of its method signature.
+            referenced_names: vec!["Greeter".to_string(), "String".to_string()],
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -643,6 +718,7 @@ const X: i32 = 1;
             signature: "fn first()".to_string(),
             range: LineRange { start: 1, end: 3 },
             container: None,
+            referenced_names: vec![],
         }],
     )]
     fn extract_changed_symbols_selective_cases(
@@ -699,6 +775,7 @@ fn foo(a: i32) -> i32 {
             signature: "fn foo(a: i32) -> i32".to_string(),
             range: LineRange { start: 1, end: 3 },
             container: None,
+            referenced_names: vec![],
         }];
         let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -742,6 +819,11 @@ func foo(a int) int {
                 signature: "func foo(a int) int".to_string(),
                 range: LineRange { start: 3, end: 6 },
                 container: None,
+                // Go has no distinct node kind for built-in types: `int`
+                // parses as `type_identifier`, same as a user-defined
+                // type, and is captured the same way (see the doc comment
+                // on `REFERENCE_QUERY` in language/go.rs).
+                referenced_names: vec!["int".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -766,6 +848,7 @@ func foo(a int, c int) int {
                 signature: "func foo(a int, c int) int".to_string(),
                 range: LineRange { start: 3, end: 5 },
                 container: None,
+                referenced_names: vec!["int".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -792,6 +875,12 @@ type Repo struct {
                 signature: "Repo struct { Name string Size int }".to_string(),
                 range: LineRange { start: 3, end: 6 },
                 container: None,
+                // "Repo" is the struct's own name (self-reference,
+                // filtered later by deps.rs); "string"/"int" are field
+                // types, built-in but syntactically indistinguishable
+                // from user types in Go (see REFERENCE_QUERY's doc
+                // comment).
+                referenced_names: vec!["Repo".to_string(), "int".to_string(), "string".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -816,6 +905,11 @@ type Fetcher interface {
                 signature: "Fetcher interface { Fetch(id string) (string, error) }".to_string(),
                 range: LineRange { start: 3, end: 5 },
                 container: None,
+                referenced_names: vec![
+                    "Fetcher".to_string(),
+                    "error".to_string(),
+                    "string".to_string(),
+                ],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -866,6 +960,15 @@ func (r *Repo) Save(id string) error {
                 signature: "func (r *Repo) Save(id string) error".to_string(),
                 range: LineRange { start: 7, end: 9 },
                 container: Some("Repo".to_string()),
+                // "Repo" comes from the pointer receiver's type
+                // (`*Repo`); the `*` prefix is not part of the
+                // `type_identifier` node, so the reference query captures
+                // the bare type name.
+                referenced_names: vec![
+                    "Repo".to_string(),
+                    "error".to_string(),
+                    "string".to_string(),
+                ],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -895,6 +998,7 @@ func (r Repo) Label() string {
                 signature: "func (r Repo) Label() string".to_string(),
                 range: LineRange { start: 7, end: 9 },
                 container: Some("Repo".to_string()),
+                referenced_names: vec!["Repo".to_string(), "string".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -961,6 +1065,11 @@ func (r *Repo) Save(id string) error {
                 signature: "func (r *Repo) Save(id string) error".to_string(),
                 range: LineRange { start: 7, end: 9 },
                 container: Some("Repo".to_string()),
+                referenced_names: vec![
+                    "Repo".to_string(),
+                    "error".to_string(),
+                    "string".to_string(),
+                ],
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -990,6 +1099,7 @@ def foo(a):
                 signature: "def foo(a):".to_string(),
                 range: LineRange { start: 1, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1011,6 +1121,7 @@ def foo(a, c):
                 signature: "def foo(a, c):".to_string(),
                 range: LineRange { start: 1, end: 2 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1040,6 +1151,7 @@ def top_level(a, b):
                 signature: "def inner(c):".to_string(),
                 range: LineRange { start: 2, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1081,6 +1193,7 @@ def decorated(a):
                 signature: "def decorated(a):".to_string(),
                 range: LineRange { start: 2, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1109,6 +1222,9 @@ class Point:
                 signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
                 range: LineRange { start: 1, end: 7 },
                 container: None,
+                // "int" is the shared field-annotation type of both `x`
+                // and `y`, deduplicated to a single entry.
+                referenced_names: vec!["int".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1132,6 +1248,7 @@ class Point:
                 signature: "def __init__(self, x):".to_string(),
                 range: LineRange { start: 2, end: 3 },
                 container: Some("class Point".to_string()),
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1155,6 +1272,7 @@ class Point:
                 signature: "def __init__(self, x):".to_string(),
                 range: LineRange { start: 2, end: 3 },
                 container: Some("class Point".to_string()),
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1181,6 +1299,12 @@ class Point:
                 signature: "def label(self):".to_string(),
                 range: LineRange { start: 5, end: 6 },
                 container: Some("class Point".to_string()),
+                // `str(self.x)` is a call to the bare identifier `str`
+                // (Python has no distinct built-in-type node kind, so
+                // `str` is captured the same as any user-defined callable
+                // — see REFERENCE_QUERY's doc comment in
+                // language/python.rs).
+                referenced_names: vec!["str".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1240,6 +1364,7 @@ class Point:
                 signature: "def __init__(self, x):".to_string(),
                 range: LineRange { start: 2, end: 3 },
                 container: Some("class Point".to_string()),
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1269,6 +1394,7 @@ function foo(a: number): number {
                 signature: "function foo(a: number): number".to_string(),
                 range: LineRange { start: 1, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1291,6 +1417,7 @@ function foo(a: number, c: number): number {
                 signature: "function foo(a: number, c: number): number".to_string(),
                 range: LineRange { start: 1, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1314,6 +1441,7 @@ const arrow = (a: number): number => {
                 signature: "arrow = (a: number): number =>".to_string(),
                 range: LineRange { start: 1, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1357,6 +1485,11 @@ interface Shape {
                 signature: "interface Shape { area(): number; perimeter(): number; }".to_string(),
                 range: LineRange { start: 1, end: 4 },
                 container: None,
+                // The interface's own name is a `type_identifier` (self-
+                // reference, filtered later by deps.rs); `number` is
+                // TypeScript's built-in `predefined_type`, a distinct
+                // node kind the reference query does not capture.
+                referenced_names: vec!["Shape".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1381,6 +1514,7 @@ type Point = {
                 signature: "type Point = { x: number; y: number; };".to_string(),
                 range: LineRange { start: 1, end: 4 },
                 container: None,
+                referenced_names: vec!["Point".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1406,6 +1540,7 @@ enum Color {
                 signature: "enum Color { Red, Green, Blue, }".to_string(),
                 range: LineRange { start: 1, end: 5 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1434,6 +1569,7 @@ class Circle {
                 signature: "class Circle { radius: number; area(): number }".to_string(),
                 range: LineRange { start: 1, end: 7 },
                 container: None,
+                referenced_names: vec!["Circle".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1461,6 +1597,7 @@ class Circle {
                 signature: "area(): number".to_string(),
                 range: LineRange { start: 4, end: 6 },
                 container: Some("class Circle".to_string()),
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1488,6 +1625,7 @@ class Circle {
                 signature: "area(): number".to_string(),
                 range: LineRange { start: 4, end: 6 },
                 container: Some("class Circle".to_string()),
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1517,6 +1655,7 @@ class Circle {
                 signature: "area(): number".to_string(),
                 range: LineRange { start: 6, end: 8 },
                 container: Some("class Circle".to_string()),
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1576,6 +1715,7 @@ function foo(a: number): number {
                 signature: "function foo(a: number): number".to_string(),
                 range: LineRange { start: 1, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1605,6 +1745,7 @@ abstract class Shape {
                 signature: "abstract perimeter(): number".to_string(),
                 range: LineRange { start: 3, end: 3 },
                 container: Some("class Shape".to_string()),
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1632,6 +1773,7 @@ abstract class Shape {
                         .to_string(),
                 range: LineRange { start: 1, end: 4 },
                 container: None,
+                referenced_names: vec!["Shape".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1663,6 +1805,13 @@ class Circle {
                 signature: "class Circle { radius: number; area = (): number => ; }".to_string(),
                 range: LineRange { start: 1, end: 7 },
                 container: None,
+                // The reference query runs over the full node (including
+                // the arrow function's body, which is only stripped from
+                // the rendered *signature* text, not from the tree
+                // `collect_referenced_names` walks) but `this.radius` is
+                // a member expression, not a bare identifier, so it is
+                // not captured; only the class's own self-reference is.
+                referenced_names: vec!["Circle".to_string()],
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1688,6 +1837,7 @@ const Component = () => {
                 signature: "Component = () =>".to_string(),
                 range: LineRange { start: 1, end: 3 },
                 container: None,
+                referenced_names: vec![],
             }];
             let actual = extract_changed_symbols(source, lang, &changed_ranges);
 
