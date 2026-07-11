@@ -106,38 +106,22 @@ pub fn extract_changed_symbols(
     touched_nodes
         .iter()
         .filter(|node| {
-            // Impl/trait/class/interface blocks are captured so
-            // `find_container` can name nested members, but are only
-            // reported as symbols in their own right when none of their
-            // nested definitions were themselves touched — otherwise a
-            // changed method line would surface both the method and its
-            // enclosing block.
-            !is_container_only_node(node.kind())
-                || !touched_nodes
-                    .iter()
-                    .any(|other| other != *node && is_descendant_of(*other, **node))
+            // Prefer the narrowest enclosing definition: a touched node
+            // that itself contains another touched node (e.g. an
+            // `impl_item`/`class_definition` containing a touched method,
+            // or a Python function containing a touched nested function)
+            // is suppressed as a symbol in its own right — otherwise a
+            // single changed line would surface both the inner definition
+            // and every definition enclosing it. Go's `method_declaration`
+            // is exempt implicitly: it is never nested inside its receiver
+            // struct's node (see `find_container`'s doc comment), so this
+            // situation cannot arise for Go structs.
+            !touched_nodes
+                .iter()
+                .any(|other| other != *node && is_descendant_of(*other, **node))
         })
         .filter_map(|node| build_symbol(*node, source_bytes))
         .collect()
-}
-
-/// Node kinds that only ever contribute a `container` name to nested
-/// members, and are suppressed as symbols in their own right when one of
-/// those members was itself touched (see the filter in
-/// `extract_changed_symbols`).
-///
-/// Rust's `impl_item`/`trait_item` predate this helper (ADR 0002's initial
-/// Rust support); Python/TypeScript classes and TypeScript interfaces have
-/// the same "container that also holds its own reportable body" shape, so
-/// they share the rule. Go is absent here: Go methods are declared as
-/// sibling top-level `method_declaration`s linked to their struct only by
-/// receiver type name, not nested inside the struct's node, so there is no
-/// analogous swallow case for Go.
-fn is_container_only_node(node_kind: &str) -> bool {
-    matches!(
-        node_kind,
-        "impl_item" | "trait_item" | "class_definition" | "class_declaration"
-    )
 }
 
 /// Whether `node` is strictly nested inside `ancestor` in the syntax tree.
@@ -956,6 +940,285 @@ func (r *Repo) Save(id string) error {
                 signature: "func (r *Repo) Save(id string) error".to_string(),
                 range: LineRange { start: 7, end: 9 },
                 container: Some("Repo".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+    }
+
+    mod python {
+        use super::*;
+        use crate::language::python::PythonSupport;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_extract_function_signature_when_body_line_changed() {
+            let source = "\
+def foo(a):
+    b = a + 1
+    return b
+";
+            let lang = PythonSupport;
+            // Line 2 (`b = a + 1`) is inside the body only.
+            let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "foo".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def foo(a):".to_string(),
+                range: LineRange { start: 1, end: 3 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_function_signature_when_signature_line_changed() {
+            let source = "\
+def foo(a, c):
+    return a + c
+";
+            let lang = PythonSupport;
+            let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "foo".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def foo(a, c):".to_string(),
+                range: LineRange { start: 1, end: 2 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_only_the_inner_function_when_nested_function_body_changed() {
+            let source = "\
+def top_level(a, b):
+    def inner(c):
+        return c + 1
+    return inner(a) + b
+";
+            let lang = PythonSupport;
+            // Line 3 (`return c + 1`) is inside `inner`'s body only.
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            // A nested function is reported like any other function, with
+            // no container: its nearest ancestor definition is another
+            // `function_definition`, not a class, so `find_container`
+            // walks past it and finds nothing (see extract.rs doc comment
+            // on `find_container`).
+            let expected = vec![ExtractedSymbol {
+                name: "inner".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def inner(c):".to_string(),
+                range: LineRange { start: 2, end: 3 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_not_detect_change_when_only_decorator_line_changed() {
+            let source = "\
+@decorator_v2
+def decorated(a):
+    return a
+";
+            let lang = PythonSupport;
+            // Line 1 is the decorator, outside `function_definition`'s own
+            // row range (see the doc comment on `DEFINITION_QUERY` in
+            // language/python.rs) — a deliberate v1 simplification.
+            let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+            let expected: Vec<ExtractedSymbol> = Vec::new();
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_decorated_function_signature_when_body_changed() {
+            let source = "\
+@decorator
+def decorated(a):
+    return a
+";
+            let lang = PythonSupport;
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "decorated".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def decorated(a):".to_string(),
+                range: LineRange { start: 2, end: 3 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_class_signature_with_method_bodies_stripped_when_field_changed() {
+            let source = "\
+class Point:
+    x: int
+    y: int
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+";
+            let lang = PythonSupport;
+            // Line 3 (`y: int`) is a class-level field annotation, not
+            // inside any method.
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "Point".to_string(),
+                kind: SymbolKind::Class,
+                signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
+                range: LineRange { start: 1, end: 7 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_set_container_to_class_name_when_method_body_changed() {
+            let source = "\
+class Point:
+    def __init__(self, x):
+        self.x = x
+";
+            let lang = PythonSupport;
+            // Line 3 (`self.x = x`) is inside `__init__`'s body.
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "__init__".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def __init__(self, x):".to_string(),
+                range: LineRange { start: 2, end: 3 },
+                container: Some("class Point".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_set_container_to_class_name_when_method_signature_changed() {
+            let source = "\
+class Point:
+    def __init__(self, x):
+        self.x = x
+";
+            let lang = PythonSupport;
+            // Line 2 is the method's own signature line.
+            let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "__init__".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def __init__(self, x):".to_string(),
+                range: LineRange { start: 2, end: 3 },
+                container: Some("class Point".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_only_the_touched_method_when_class_has_two_methods() {
+            let source = "\
+class Point:
+    def __init__(self, x):
+        self.x = x
+
+    def label(self):
+        return str(self.x)
+";
+            let lang = PythonSupport;
+            // Line 6 is inside `label`'s body only.
+            let changed_ranges = vec![LineRange { start: 6, end: 6 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "label".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def label(self):".to_string(),
+                range: LineRange { start: 5, end: 6 },
+                container: Some("class Point".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_return_empty_vec_when_changed_line_is_outside_any_definition() {
+            let source = "\
+def foo():
+    pass
+
+X = 1
+";
+            let lang = PythonSupport;
+            // Line 4 is a top-level assignment, not covered by
+            // definition_query.
+            let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+            let expected: Vec<ExtractedSymbol> = Vec::new();
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_signatures_end_to_end_from_a_parsed_diff_of_a_python_file() {
+            use crate::diff::parse_unified_diff;
+            use crate::language::language_for_path;
+
+            let diff = "\
+diff --git a/point.py b/point.py
+index e69de29..4b825dc 100644
+--- a/point.py
++++ b/point.py
+@@ -2,2 +2,2 @@
+     def __init__(self, x):
+-        self.x = 0
++        self.x = x
+";
+            let source = "\
+class Point:
+    def __init__(self, x):
+        self.x = x
+";
+            let changed_file = parse_unified_diff(diff)
+                .expect("diff should parse")
+                .into_iter()
+                .next()
+                .expect("diff should contain one changed file");
+            let lang =
+                language_for_path(&changed_file.path).expect("*.py should resolve to Python");
+
+            let expected = vec![ExtractedSymbol {
+                name: "__init__".to_string(),
+                kind: SymbolKind::Function,
+                signature: "def __init__(self, x):".to_string(),
+                range: LineRange { start: 2, end: 3 },
+                container: Some("class Point".to_string()),
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 

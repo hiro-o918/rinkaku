@@ -66,9 +66,14 @@ static REGISTRY: &[RegistryEntry] = &[
         extensions: &["go"],
         support: || &go::GoSupport,
     },
+    RegistryEntry {
+        extensions: &["py"],
+        support: || &python::PythonSupport,
+    },
 ];
 
 pub mod go;
+pub mod python;
 pub mod rust;
 
 #[cfg(test)]
@@ -89,6 +94,14 @@ mod tests {
 
         let support = actual.expect("expected Some(&dyn LanguageSupport) for .go path");
         assert_eq!("go", support.name());
+    }
+
+    #[test]
+    fn should_return_python_support_when_path_has_py_extension() {
+        let actual = language_for_path("src/main.py");
+
+        let support = actual.expect("expected Some(&dyn LanguageSupport) for .py path");
+        assert_eq!("python", support.name());
     }
 
     #[test]
