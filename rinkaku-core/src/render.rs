@@ -590,4 +590,60 @@ fn foo()
 
         assert_eq!(expected, actual);
     }
+
+    #[test]
+    fn should_render_json_with_nonzero_omitted_matches_when_dependency_matches_were_capped() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    name: "foo".to_string(),
+                    kind: SymbolKind::Function,
+                    signature: "fn foo(p: Point) -> i32".to_string(),
+                    range: LineRange { start: 1, end: 3 },
+                    container: None,
+                    referenced_names: vec!["Point".to_string()],
+                    dependencies: vec![crate::deps::ResolvedSymbol {
+                        signature: "struct Point { x: i32 }".to_string(),
+                        path: "src/a.rs".to_string(),
+                    }],
+                    omitted_dependency_matches: 2,
+                }],
+            }],
+            skipped: vec![],
+        };
+
+        let expected = "\
+{
+  \"files\": [
+    {
+      \"path\": \"src/lib.rs\",
+      \"symbols\": [
+        {
+          \"name\": \"foo\",
+          \"kind\": \"Function\",
+          \"signature\": \"fn foo(p: Point) -> i32\",
+          \"range\": {
+            \"start\": 1,
+            \"end\": 3
+          },
+          \"container\": null,
+          \"dependencies\": [
+            {
+              \"signature\": \"struct Point { x: i32 }\",
+              \"path\": \"src/a.rs\"
+            }
+          ],
+          \"omitted_matches\": 2
+        }
+      ]
+    }
+  ],
+  \"skipped\": []
+}"
+        .to_string();
+        let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
+
+        assert_eq!(expected, actual);
+    }
 }

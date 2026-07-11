@@ -585,6 +585,7 @@ mod tests {
         use crate::extract::{ExtractedSymbol, SymbolKind};
         use crate::render::FileReport;
         use pretty_assertions::assert_eq;
+        use rstest::rstest;
 
         /// A fake `Resolver` backed by an in-memory map, for tests that
         /// exercise `resolve_dependencies`'s exclusion logic in isolation
@@ -844,6 +845,80 @@ mod tests {
                 symbols: vec![ExtractedSymbol {
                     dependencies: vec![candidate("src/pkg/b.rs"), candidate("src/pkg/c.rs")],
                     omitted_dependency_matches: 0,
+                    ..symbol("foo", vec!["helper"])
+                }],
+            }];
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
+
+        /// Boundary coverage around [`MAX_MATCHES_PER_NAME`] (3): 2 matches
+        /// (under the cap), exactly 3 (at the cap), and 4 (one over).
+        /// `should_keep_all_matches_when_at_or_under_the_cap` and
+        /// `should_rank_same_file_candidate_above_other_candidates` above
+        /// already cover 2-and-under and over-the-cap cases respectively
+        /// (the latter also exercising proximity ranking), but neither pins
+        /// down the exact-cap boundary (3 candidates, 0 omitted) — this
+        /// table adds that case alongside the other two so the boundary is
+        /// asserted explicitly rather than only implied.
+        #[rstest]
+        #[case::should_keep_all_and_omit_none_when_two_candidates_are_under_the_cap(
+            vec![candidate("src/pkg/b.rs"), candidate("src/pkg/c.rs")],
+            vec![candidate("src/pkg/b.rs"), candidate("src/pkg/c.rs")],
+            0,
+        )]
+        #[case::should_keep_all_and_omit_none_when_three_candidates_exactly_meet_the_cap(
+            vec![
+                candidate("src/pkg/b.rs"),
+                candidate("src/pkg/c.rs"),
+                candidate("src/pkg/d.rs"),
+            ],
+            vec![
+                candidate("src/pkg/b.rs"),
+                candidate("src/pkg/c.rs"),
+                candidate("src/pkg/d.rs"),
+            ],
+            0,
+        )]
+        #[case::should_truncate_to_cap_and_omit_one_when_four_candidates_exceed_the_cap(
+            vec![
+                candidate("src/pkg/b.rs"),
+                candidate("src/pkg/c.rs"),
+                candidate("src/pkg/d.rs"),
+                candidate("src/pkg/e.rs"),
+            ],
+            vec![
+                candidate("src/pkg/b.rs"),
+                candidate("src/pkg/c.rs"),
+                candidate("src/pkg/d.rs"),
+            ],
+            1,
+        )]
+        fn resolve_dependencies_cap_boundary_cases(
+            #[case] resolved_candidates: Vec<ResolvedSymbol>,
+            #[case] expected_dependencies: Vec<ResolvedSymbol>,
+            #[case] expected_omitted: usize,
+        ) {
+            // All candidates live in the same directory as the referencing
+            // symbol ("src/pkg/a.rs"), so they share proximity rank and are
+            // kept in the resolver's original (here: already-closest-first)
+            // order — this test is about the cap boundary, not ranking
+            // order, which `should_rank_same_file_candidate_above_other_candidates`
+            // already covers.
+            let files = vec![FileReport {
+                path: "src/pkg/a.rs".to_string(),
+                symbols: vec![symbol("foo", vec!["helper"])],
+            }];
+            let resolver = FakeResolver {
+                matches: HashMap::from([("helper", resolved_candidates)]),
+            };
+
+            let expected = vec![FileReport {
+                path: "src/pkg/a.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    dependencies: expected_dependencies,
+                    omitted_dependency_matches: expected_omitted,
                     ..symbol("foo", vec!["helper"])
                 }],
             }];
