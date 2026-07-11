@@ -7,6 +7,7 @@
 //! pure and testable: `main.rs` supplies a closure that reads the working
 //! tree, tests supply a closure backed by an in-memory map.
 
+use crate::deps::{Resolver, resolve_dependencies};
 use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::extract_changed_symbols;
 use crate::language::language_for_path;
@@ -41,9 +42,16 @@ pub enum AnalyzeError {
 /// empty `symbols` list, and — unlike every other case above — `read_file`
 /// is never called for them, since there is no content change to extract
 /// symbols from.
+///
+/// `resolver`, when `Some`, is used to populate each extracted symbol's
+/// `dependencies` (1-hop expansion, ADR 0003) via
+/// [`crate::deps::resolve_dependencies`]. `None` skips dependency
+/// resolution entirely — no `Resolver::resolve` calls are made — which is
+/// how the CLI's `--deps 0` is wired (`main.rs`).
 pub fn analyze_diff(
     diff_text: &str,
     read_file: impl Fn(&str) -> std::io::Result<String>,
+    resolver: Option<&dyn Resolver>,
 ) -> Result<Report, AnalyzeError> {
     let changed_files = parse_unified_diff(diff_text)?;
 
@@ -97,6 +105,11 @@ pub fn analyze_diff(
         });
     }
 
+    let files = match resolver {
+        Some(resolver) => resolve_dependencies(files, resolver),
+        None => files,
+    };
+
     Ok(Report { files, skipped })
 }
 
@@ -129,7 +142,7 @@ mod tests {
             files: vec![],
             skipped: vec![],
         };
-        let actual = analyze_diff("", read_file).expect("analyze should succeed");
+        let actual = analyze_diff("", read_file, None).expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -164,11 +177,12 @@ fn foo(a: i32) -> i32 {
                     range: LineRange { start: 1, end: 3 },
                     container: None,
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![],
         };
-        let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -196,7 +210,7 @@ index 4b825dc..0000000
                 reason: SkipReason::Deleted,
             }],
         };
-        let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -217,7 +231,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                 reason: SkipReason::Binary,
             }],
         };
-        let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -246,7 +260,7 @@ index e69de29..4b825dc 100644
                 reason: SkipReason::UnsupportedLanguage,
             }],
         };
-        let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -279,7 +293,7 @@ rename to src/new_name.rs
             }],
             skipped: vec![],
         };
-        let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -296,7 +310,7 @@ index e69de29..4b825dc 100644
 ";
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file);
+        let actual = analyze_diff(diff, read_file, None);
 
         assert!(matches!(actual, Err(AnalyzeError::Diff(_))));
     }
@@ -315,7 +329,7 @@ index e69de29..4b825dc 100644
         // Map has no entry for src/lib.rs, so the fake reader returns Err.
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file);
+        let actual = analyze_diff(diff, read_file, None);
 
         assert!(matches!(
             actual,
@@ -356,6 +370,7 @@ index e69de29..4b825dc 100644
                     range: LineRange { start: 1, end: 1 },
                     container: None,
                     referenced_names: vec![],
+                    dependencies: vec![],
                 }],
             }],
             skipped: vec![SkippedFile {
@@ -363,7 +378,92 @@ index e69de29..4b825dc 100644
                 reason: SkipReason::UnsupportedLanguage,
             }],
         };
-        let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+
+        assert_eq!(expected, actual);
+    }
+
+    /// A [`Resolver`] test double that records every name it was asked to
+    /// resolve, so `--deps 0`'s "resolver is never called" contract can be
+    /// verified directly rather than inferred from empty `dependencies`
+    /// (which could also mean "called but found nothing").
+    struct CountingResolver {
+        calls: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl CountingResolver {
+        fn new() -> Self {
+            Self {
+                calls: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl crate::deps::Resolver for CountingResolver {
+        fn resolve(&self, name: &str) -> Vec<crate::deps::ResolvedSymbol> {
+            self.calls.borrow_mut().push(name.to_string());
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn should_not_call_resolver_when_resolver_is_none() {
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(p: Point) -> i32 {
+-    0
++    helper(p)
+ }
+";
+        let source = "\
+fn foo(p: Point) -> i32 {
+    helper(p)
+}
+";
+        let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+        let report = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+
+        // No resolver was passed, so every symbol's dependencies must stay
+        // empty — this is `--deps 0`'s contract (main.rs), not merely "the
+        // resolver found nothing".
+        let expected: Vec<crate::deps::ResolvedSymbol> = Vec::new();
+        let actual = report.files[0].symbols[0].dependencies.clone();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_call_resolver_for_each_referenced_name_when_resolver_is_some() {
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(p: Point) -> i32 {
+-    0
++    helper(p)
+ }
+";
+        let source = "\
+fn foo(p: Point) -> i32 {
+    helper(p)
+}
+";
+        let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+        let resolver = CountingResolver::new();
+
+        analyze_diff(diff, read_file, Some(&resolver)).expect("analyze should succeed");
+
+        let mut expected = vec!["Point".to_string(), "helper".to_string()];
+        let mut actual = resolver.calls.borrow().clone();
+        expected.sort();
+        actual.sort();
 
         assert_eq!(expected, actual);
     }

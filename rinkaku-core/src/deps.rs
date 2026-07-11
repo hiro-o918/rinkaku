@@ -11,10 +11,14 @@
 
 use crate::extract::extract_all_symbols;
 use crate::language::LanguageSupport;
+use serde::Serialize;
 use std::collections::HashMap;
 
-/// A definition found by a [`Resolver`] for a referenced name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A definition found by a [`Resolver`] for a referenced name. Reported
+/// verbatim in [`crate::extract::ExtractedSymbol::dependencies`], so it is
+/// part of rinkaku's output shape (unlike `referenced_names`) and derives
+/// `Serialize`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedSymbol {
     pub signature: String,
     /// Path of the file the definition lives in, as provided to the
@@ -85,6 +89,64 @@ impl Resolver for TagsResolver {
     fn resolve(&self, name: &str) -> Vec<ResolvedSymbol> {
         self.index.get(name).cloned().unwrap_or_default()
     }
+}
+
+/// Populates every symbol's `dependencies` by resolving its
+/// `referenced_names` through `resolver`, across every file in the
+/// report — a symbol in one changed file may reference a symbol changed
+/// in another, so exclusion is computed over the whole diff, not
+/// per-file.
+///
+/// Two kinds of matches are deliberately excluded from the resulting
+/// `dependencies`, both to avoid redundant noise rather than because they
+/// are wrong:
+/// - **Self-references**: a symbol's own declared name often appears in
+///   its `referenced_names` (e.g. a struct's name is syntactically a type
+///   reference inside its own definition — see the doc comment on
+///   `LanguageSupport::reference_query`). Resolving it would just point
+///   the symbol back at itself.
+/// - **Diff-internal symbols**: if a referenced name matches another
+///   symbol already reported in this same diff, it is already shown in
+///   full elsewhere in the report; repeating it under "dependencies" adds
+///   noise without adding information.
+///
+/// Matching for both exclusions is by name only (not by path), the same
+/// precision `TagsResolver` itself operates at — this can over-exclude
+/// for a name that is legitimately defined both inside and outside the
+/// diff, which is accepted as consistent with v1's approximate,
+/// syntactic resolution (ADR 0003).
+pub fn resolve_dependencies(
+    files: Vec<crate::render::FileReport>,
+    resolver: &dyn Resolver,
+) -> Vec<crate::render::FileReport> {
+    let diff_symbol_names: std::collections::HashSet<String> = files
+        .iter()
+        .flat_map(|file| file.symbols.iter())
+        .map(|symbol| symbol.name.clone())
+        .collect();
+
+    files
+        .into_iter()
+        .map(|file| crate::render::FileReport {
+            path: file.path,
+            symbols: file
+                .symbols
+                .into_iter()
+                .map(|mut symbol| {
+                    let own_name = symbol.name.clone();
+                    symbol.dependencies = symbol
+                        .referenced_names
+                        .iter()
+                        .filter(|name| {
+                            **name != own_name && !diff_symbol_names.contains(name.as_str())
+                        })
+                        .flat_map(|name| resolver.resolve(name))
+                        .collect();
+                    symbol
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -233,5 +295,149 @@ mod tests {
         let actual = resolver.resolve("greet");
 
         assert_eq!(expected, actual);
+    }
+
+    mod resolve_dependencies_tests {
+        use super::*;
+        use crate::diff::LineRange;
+        use crate::extract::{ExtractedSymbol, SymbolKind};
+        use crate::render::FileReport;
+        use pretty_assertions::assert_eq;
+
+        /// A fake `Resolver` backed by an in-memory map, for tests that
+        /// exercise `resolve_dependencies`'s exclusion logic in isolation
+        /// from `TagsResolver`'s indexing behavior (already covered by the
+        /// tests above).
+        struct FakeResolver {
+            matches: HashMap<&'static str, Vec<ResolvedSymbol>>,
+        }
+
+        impl Resolver for FakeResolver {
+            fn resolve(&self, name: &str) -> Vec<ResolvedSymbol> {
+                self.matches.get(name).cloned().unwrap_or_default()
+            }
+        }
+
+        fn symbol(name: &str, referenced_names: Vec<&str>) -> ExtractedSymbol {
+            ExtractedSymbol {
+                name: name.to_string(),
+                kind: SymbolKind::Function,
+                signature: format!("fn {name}()"),
+                range: LineRange { start: 1, end: 1 },
+                container: None,
+                referenced_names: referenced_names.into_iter().map(str::to_string).collect(),
+                dependencies: vec![],
+            }
+        }
+
+        #[test]
+        fn should_populate_dependencies_when_referenced_name_resolves() {
+            let files = vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("foo", vec!["helper"])],
+            }];
+            let resolver = FakeResolver {
+                matches: HashMap::from([(
+                    "helper",
+                    vec![ResolvedSymbol {
+                        signature: "fn helper()".to_string(),
+                        path: "src/util.rs".to_string(),
+                    }],
+                )]),
+            };
+
+            let expected = vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    dependencies: vec![ResolvedSymbol {
+                        signature: "fn helper()".to_string(),
+                        path: "src/util.rs".to_string(),
+                    }],
+                    ..symbol("foo", vec!["helper"])
+                }],
+            }];
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_exclude_self_reference_from_dependencies() {
+            // "Point" resolves to a real definition (itself), but a
+            // symbol referencing its own name (see the doc comment on
+            // `LanguageSupport::reference_query`) must not list itself as
+            // a dependency.
+            let files = vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("Point", vec!["Point"])],
+            }];
+            let resolver = FakeResolver {
+                matches: HashMap::from([(
+                    "Point",
+                    vec![ResolvedSymbol {
+                        signature: "struct Point".to_string(),
+                        path: "src/lib.rs".to_string(),
+                    }],
+                )]),
+            };
+
+            let expected = vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("Point", vec!["Point"])],
+            }];
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_exclude_dependency_already_reported_elsewhere_in_the_diff() {
+            // "helper" is itself a changed symbol reported in this diff
+            // (a different file than "foo"), so it must not be repeated
+            // under "foo"'s dependencies even though it resolves.
+            let files = vec![
+                FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![symbol("foo", vec!["helper"])],
+                },
+                FileReport {
+                    path: "src/util.rs".to_string(),
+                    symbols: vec![symbol("helper", vec![])],
+                },
+            ];
+            let resolver = FakeResolver {
+                matches: HashMap::from([(
+                    "helper",
+                    vec![ResolvedSymbol {
+                        signature: "fn helper()".to_string(),
+                        path: "src/util.rs".to_string(),
+                    }],
+                )]),
+            };
+
+            let expected = files.clone();
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_leave_dependencies_empty_when_referenced_name_does_not_resolve() {
+            let files = vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("foo", vec!["i32"])],
+            }];
+            let resolver = FakeResolver {
+                matches: HashMap::new(),
+            };
+
+            let expected = vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("foo", vec!["i32"])],
+            }];
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
     }
 }

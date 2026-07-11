@@ -21,6 +21,8 @@
 //!   may not line up with the actual file content.
 
 use clap::Parser;
+use rinkaku_core::deps::TagsResolver;
+use rinkaku_core::language::language_for_path;
 use rinkaku_core::pipeline::analyze_diff;
 use rinkaku_core::render::{OutputFormat, render};
 use std::io::IsTerminal;
@@ -43,6 +45,14 @@ struct Cli {
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Md)]
     format: Format,
+
+    /// Whether to resolve each changed symbol's 1-hop dependencies
+    /// (ADR 0003). `1` (default) runs the tags-based `Resolver` over
+    /// every file tracked by `git ls-files`; `0` skips resolution
+    /// entirely (no `Resolver::resolve` calls), which is faster and
+    /// avoids the repo-wide indexing pass.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=1))]
+    deps: u8,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,16 +78,28 @@ fn main() -> anyhow::Result<()> {
         Some(base) => {
             let diff_text = run_git_diff(base, &cli.head)?;
             let head = cli.head.clone();
-            analyze_diff(&diff_text, move |path| {
-                read_git_show_file(None, &head, path)
-            })?
+            let resolver = build_resolver(&cli, Some(&head))?;
+            analyze_diff(
+                &diff_text,
+                move |path| read_git_show_file(None, &head, path),
+                resolver
+                    .as_ref()
+                    .map(|r| r as &dyn rinkaku_core::deps::Resolver),
+            )?
         }
         None => {
             let diff_text = read_stdin_diff()?;
             if diff_text.trim().is_empty() {
                 eprintln!("note: diff is empty, nothing to analyze");
             }
-            analyze_diff(&diff_text, read_working_tree_file)?
+            let resolver = build_resolver(&cli, None)?;
+            analyze_diff(
+                &diff_text,
+                read_working_tree_file,
+                resolver
+                    .as_ref()
+                    .map(|r| r as &dyn rinkaku_core::deps::Resolver),
+            )?
         }
     };
 
@@ -85,6 +107,59 @@ fn main() -> anyhow::Result<()> {
     print!("{output}");
 
     Ok(())
+}
+
+/// Builds the `TagsResolver` used for `--deps 1` (the default), or `None`
+/// when `--deps 0` skips dependency resolution entirely.
+///
+/// Indexes every file `git ls-files` reports as tracked — untracked files
+/// are excluded by construction (not merely `.gitignore`-filtered, since
+/// `ls-files` only ever lists tracked paths in the first place) — so the
+/// index only ever contains content the repository actually owns.
+///
+/// `head`, when `Some`, matches `--base` mode's read strategy: file
+/// content is read via `git show <head>:<path>` rather than the working
+/// tree, so the index and the diff being analyzed are consistent with the
+/// same commit regardless of the working tree's state (same rationale as
+/// `read_git_show_file`, applied here to the whole repo rather than just
+/// the changed files).
+fn build_resolver(cli: &Cli, head: Option<&str>) -> anyhow::Result<Option<TagsResolver>> {
+    if cli.deps == 0 {
+        return Ok(None);
+    }
+
+    let paths = list_git_files()?;
+    let files = paths.into_iter().filter_map(|path| {
+        let content = match head {
+            Some(head) => read_git_show_file(None, head, &path),
+            None => read_working_tree_file(&path),
+        };
+        // A file listed by `git ls-files` can still fail to read (e.g.
+        // deleted in the working tree but not yet staged, a submodule
+        // gitlink entry) — skipped rather than failing the whole run,
+        // since the resolver's index is a best-effort aid, not a
+        // correctness-critical input.
+        content.ok().map(|content| (path, content))
+    });
+    Ok(Some(TagsResolver::new(files, language_for_path)))
+}
+
+/// Lists every file tracked by git in the current repository via
+/// `git ls-files`.
+fn list_git_files() -> anyhow::Result<Vec<String>> {
+    let output = std::process::Command::new("git")
+        .args(["ls-files"])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?
+        .lines()
+        .map(str::to_string)
+        .collect())
 }
 
 /// Reads the diff from stdin. Errors with a clear message if stdin is a
@@ -163,6 +238,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             format: Format::Md,
+            deps: 1,
         };
         let actual = Cli::parse_from(["rinkaku"]);
 
@@ -175,6 +251,7 @@ mod tests {
             base: Some("main".to_string()),
             head: "HEAD".to_string(),
             format: Format::Md,
+            deps: 1,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main"]);
 
@@ -187,6 +264,7 @@ mod tests {
             base: Some("main".to_string()),
             head: "feature-branch".to_string(),
             format: Format::Md,
+            deps: 1,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main", "--head", "feature-branch"]);
 
@@ -199,6 +277,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             format: Format::Json,
+            deps: 1,
         };
         let actual = Cli::parse_from(["rinkaku", "--format", "json"]);
 
@@ -208,6 +287,26 @@ mod tests {
     #[test]
     fn should_reject_unknown_format_value() {
         let actual = Cli::try_parse_from(["rinkaku", "--format", "yaml"]);
+
+        assert!(actual.is_err());
+    }
+
+    #[test]
+    fn should_set_deps_zero_when_deps_flag_given() {
+        let expected = Cli {
+            base: None,
+            head: "HEAD".to_string(),
+            format: Format::Md,
+            deps: 0,
+        };
+        let actual = Cli::parse_from(["rinkaku", "--deps", "0"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_reject_deps_value_outside_zero_or_one() {
+        let actual = Cli::try_parse_from(["rinkaku", "--deps", "2"]);
 
         assert!(actual.is_err());
     }
