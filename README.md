@@ -33,10 +33,10 @@ See [`docs/adr/`](docs/adr) for the reasoning behind these choices.
 
 ## Status
 
-Early development. Diff parsing, tree-sitter extraction, and the CLI
-(stdin/`--base` input, Markdown/JSON output) are implemented. Dependency
-expansion (`--deps`, the tags-based `Resolver`) is not implemented yet.
-Not published to crates.io.
+Early development. Diff parsing, tree-sitter extraction, the CLI
+(stdin/`--base` input, Markdown/JSON output), and 1-hop dependency
+expansion (`--deps`, the tags-based `Resolver`) are implemented. Not
+published to crates.io.
 
 ## Installation
 
@@ -83,10 +83,9 @@ LSP/process boundaries isolated behind traits (`LanguageSupport`,
 
 ### Roadmap / not yet done
 
-- Diff parsing and tree-sitter-based signature extraction (the core
-  feature — not implemented yet).
-- `LanguageSupport` implementations for Rust, Go, Python, TypeScript.
-- Tags-based `Resolver` for 1-hop dependency expansion.
+- LSP-backed `Resolver` implementations (pyright, gopls, rust-analyzer,
+  ...) as a higher-precision, opt-in alternative to the v1 tags-based
+  `Resolver`.
 - Release automation (release-please, cross-compiled binary publishing)
   — intentionally deferred out of the bootstrap PR; tracked as a
   follow-up.
