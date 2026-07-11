@@ -8,6 +8,19 @@
 //! extraction, with no type information. LSP-backed resolvers (pyright,
 //! gopls, rust-analyzer, ...) are a future, opt-in `Resolver` impl that can
 //! be plugged in without reshaping the pipeline.
+//!
+//! Performance: `TagsResolver::new` indexes every file `main.rs` passes
+//! it (all of `git ls-files`, not just the diff), each parsed once via
+//! [`crate::extract::extract_all_symbols`] — this used to dominate
+//! `--deps 1`'s wall-clock time because query compilation (`Query::new`)
+//! ran once per *definition* rather than once per *file* (fixed; see
+//! `extract::with_definition_nodes`'s doc comment). With that fixed, the
+//! remaining `--deps 1` overhead in `--base` mode is mostly the
+//! `git show`/`git ls-files` subprocess cost of reading every indexed
+//! file's content, one `git` invocation per file — measured as
+//! significantly larger than the file-parsing cost itself on a
+//! ~100-file repository; not addressed here, since it is `main.rs`'s
+//! file-reading strategy rather than this module's indexing logic.
 
 use crate::extract::extract_all_symbols;
 use crate::language::LanguageSupport;
