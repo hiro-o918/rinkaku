@@ -156,7 +156,9 @@ fn extract_git_header_paths(line: &str) -> (String, String) {
 fn parse_hunk(lines: &[&str], start: usize) -> Result<(Vec<LineRange>, usize), ParseError> {
     let header = lines[start];
     let (mut new_line, new_count) = parse_hunk_header(header)?;
-    let hunk_end_new_line = new_line + new_count;
+    let hunk_end_new_line = new_line
+        .checked_add(new_count)
+        .ok_or_else(|| ParseError::MalformedHunkHeader(header.to_string()))?;
 
     let mut ranges = Vec::new();
     let mut run_start: Option<usize> = None;
@@ -549,5 +551,22 @@ index e69de29..4b825dc 100644
 ";
         let actual = parse_unified_diff(input);
         assert!(matches!(actual, Err(ParseError::HunkBodyMismatch(_))));
+    }
+
+    // Regression test for a panic (debug build) / silent wraparound (release
+    // build) when new_line + new_count overflows usize. A malformed but
+    // syntactically valid-looking header must be rejected, not crash.
+    #[test]
+    fn should_return_err_when_hunk_header_line_numbers_overflow() {
+        let input = "\
+diff --git a/src/a.rs b/src/a.rs
+index e69de29..4b825dc 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,3 +18446744073709551615,18446744073709551615 @@
+ fn a() {}
+";
+        let actual = parse_unified_diff(input);
+        assert!(matches!(actual, Err(ParseError::MalformedHunkHeader(_))));
     }
 }
