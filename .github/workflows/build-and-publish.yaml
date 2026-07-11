@@ -1,0 +1,115 @@
+name: Build and Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}--${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rust-test:
+    uses: ./.github/workflows/wc-rust-test.yaml
+    secrets: inherit
+
+  build:
+    needs: [rust-test]
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust toolchain
+        run: |
+          rustup target add ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          key: build-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} -p rinkaku
+
+      - name: Package binary
+        run: |
+          BINARY_NAME=rinkaku
+          ARCHIVE_NAME="${BINARY_NAME}-${{ matrix.target }}"
+          mkdir -p "${ARCHIVE_NAME}"
+          cp "target/${{ matrix.target }}/release/${BINARY_NAME}" "${ARCHIVE_NAME}/"
+          cp README.md LICENSE "${ARCHIVE_NAME}/" 2>/dev/null || true
+          tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          echo "ARCHIVE_NAME=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: binary-${{ matrix.target }}
+          path: ${{ env.ARCHIVE_NAME }}
+
+  publish-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: dist
+
+      - name: List distribution files
+        run: ls -lh dist/
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" dist/* \
+            --repo "${{ github.repository }}"
+
+  publish-crates:
+    needs: [rust-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          key: publish-crates
+
+      # rinkaku-core must publish first: rinkaku depends on it by version,
+      # and crates.io resolves that dependency from the registry, not the
+      # workspace's local path.
+      - name: Publish rinkaku-core
+        run: cargo publish -p rinkaku-core --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+
+      # crates.io needs a short window to index rinkaku-core before
+      # rinkaku's publish can resolve it as a dependency.
+      - name: Wait for rinkaku-core to be indexed
+        run: sleep 30
+
+      - name: Publish rinkaku
+        run: cargo publish -p rinkaku --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
