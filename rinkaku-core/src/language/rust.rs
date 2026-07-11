@@ -16,6 +16,30 @@ const DEFINITION_QUERY: &str = "\
   (impl_item) @definition.impl
 ] @definition";
 
+/// Tree-sitter query capturing identifiers referenced from inside a
+/// definition: called function names and referenced type names.
+///
+/// - `call_expression function: (identifier)` captures free function calls
+///   (`helper(x)`) and tuple-struct/enum-variant constructors used as
+///   calls. Method/UFCS calls (`function: (field_expression ...)` for
+///   `x.bar()`, `function: (scoped_identifier ...)` for `Type::method()`)
+///   are intentionally not captured: their callee is not a bare
+///   identifier, and resolving them would need type information v1 does
+///   not have (ADR 0003).
+/// - `type_identifier` captures every named type reference (parameter
+///   types, return types, struct field types, generic type arguments,
+///   ...), matched anywhere in the tree rather than only in specific
+///   fields — tree-sitter queries match regardless of nesting depth, so
+///   this also covers `Option<Point>`'s inner `Point` without a separate
+///   pattern. Rust's primitive types (`i32`, `str`, `bool`, ...) parse as
+///   the distinct `primitive_type` node kind, so they are already excluded
+///   by construction rather than needing an explicit exclusion list.
+const REFERENCE_QUERY: &str = "\
+[
+  (call_expression function: (identifier) @reference.call)
+  (type_identifier) @reference.type
+]";
+
 pub struct RustSupport;
 
 impl LanguageSupport for RustSupport {
@@ -29,6 +53,10 @@ impl LanguageSupport for RustSupport {
 
     fn definition_query(&self) -> &str {
         DEFINITION_QUERY
+    }
+
+    fn reference_query(&self) -> &str {
+        REFERENCE_QUERY
     }
 }
 
@@ -64,5 +92,13 @@ mod tests {
 
         tree_sitter::Query::new(&support.grammar(), support.definition_query())
             .expect("DEFINITION_QUERY must be valid against the Rust grammar");
+    }
+
+    #[test]
+    fn should_compile_reference_query_against_its_own_grammar() {
+        let support = RustSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.reference_query())
+            .expect("REFERENCE_QUERY must be valid against the Rust grammar");
     }
 }

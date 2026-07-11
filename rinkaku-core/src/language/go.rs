@@ -27,6 +27,29 @@ const DEFINITION_QUERY: &str = "\
   (type_spec type: (interface_type)) @definition.interface
 ] @definition";
 
+/// Tree-sitter query capturing identifiers referenced from inside a
+/// definition: called function names and referenced type names.
+///
+/// - `call_expression function: (identifier)` captures free function calls
+///   (`Helper(x)`). Method/selector calls
+///   (`function: (selector_expression ...)` for `r.Save()`) are
+///   intentionally not captured: their callee is not a bare identifier,
+///   and resolving the receiver's type would need type information v1
+///   does not have (ADR 0003).
+/// - `type_identifier` captures every named type reference (parameter
+///   types, return types, struct field types, ...), matched anywhere in
+///   the tree rather than only in specific fields. Go's built-in types
+///   (`int`, `string`, `error`, ...) are not syntactically distinct from
+///   user-defined type names in this grammar — both parse as
+///   `type_identifier` — so they are captured the same way and simply
+///   fail to resolve later since the repo has no definition for them
+///   (see the trait doc comment on `reference_query`).
+const REFERENCE_QUERY: &str = "\
+[
+  (call_expression function: (identifier) @reference.call)
+  (type_identifier) @reference.type
+]";
+
 pub struct GoSupport;
 
 impl LanguageSupport for GoSupport {
@@ -40,6 +63,10 @@ impl LanguageSupport for GoSupport {
 
     fn definition_query(&self) -> &str {
         DEFINITION_QUERY
+    }
+
+    fn reference_query(&self) -> &str {
+        REFERENCE_QUERY
     }
 }
 
@@ -75,5 +102,13 @@ mod tests {
 
         tree_sitter::Query::new(&support.grammar(), support.definition_query())
             .expect("DEFINITION_QUERY must be valid against the Go grammar");
+    }
+
+    #[test]
+    fn should_compile_reference_query_against_its_own_grammar() {
+        let support = GoSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.reference_query())
+            .expect("REFERENCE_QUERY must be valid against the Go grammar");
     }
 }

@@ -163,6 +163,7 @@ fn foo(a: i32) -> i32 {
                     signature: "fn foo(a: i32) -> i32".to_string(),
                     range: LineRange { start: 1, end: 3 },
                     container: None,
+                    referenced_names: vec![],
                 }],
             }],
             skipped: vec![],
@@ -354,6 +355,7 @@ index e69de29..4b825dc 100644
                     signature: "fn a() -> i32".to_string(),
                     range: LineRange { start: 1, end: 1 },
                     container: None,
+                    referenced_names: vec![],
                 }],
             }],
             skipped: vec![SkippedFile {
