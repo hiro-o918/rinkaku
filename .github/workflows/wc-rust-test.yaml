@@ -1,0 +1,40 @@
+name: Rust Tests
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    name: Test Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          key: rust-test-${{ matrix.os }}
+
+      - name: Run check
+        run: cargo check --all-targets --all-features
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  lints:
+    name: Lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          key: rust-lint
+
+      - name: Run fmt
+        run: cargo fmt --all --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
