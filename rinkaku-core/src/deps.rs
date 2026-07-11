@@ -118,46 +118,64 @@ impl Resolver for TagsResolver {
 ///   reference inside its own definition — see the doc comment on
 ///   `LanguageSupport::reference_query`). Resolving it would just point
 ///   the symbol back at itself.
-/// - **Diff-internal symbols**: if a referenced name matches another
+/// - **Diff-internal symbols**: if a resolved dependency matches another
 ///   symbol already reported in this same diff, it is already shown in
 ///   full elsewhere in the report; repeating it under "dependencies" adds
 ///   noise without adding information.
 ///
-/// Matching for both exclusions is by name only (not by path), the same
-/// precision `TagsResolver` itself operates at — this can over-exclude
-/// for a name that is legitimately defined both inside and outside the
-/// diff, which is accepted as consistent with v1's approximate,
-/// syntactic resolution (ADR 0003).
+/// Matching for both exclusions is keyed on `(name, path)`, not name
+/// alone: a `referenced_names` entry only carries a bare name, but each
+/// candidate it resolves to (`ResolvedSymbol`) carries its own `path`, so
+/// exclusion is checked per resolved candidate rather than by filtering
+/// `referenced_names` up front. Name-only matching would wrongly drop a
+/// dependency whenever the diff happens to also touch an unrelated,
+/// same-named symbol in a *different* file (e.g. a changed `a.rs::helper`
+/// coinciding with the actual dependency target `b.rs::helper`) — see
+/// ADR 0003 for why resolution itself stays name-based (no type info),
+/// but exclusion does not need to inherit that imprecision.
 pub fn resolve_dependencies(
     files: Vec<crate::render::FileReport>,
     resolver: &dyn Resolver,
 ) -> Vec<crate::render::FileReport> {
-    let diff_symbol_names: std::collections::HashSet<String> = files
+    let diff_symbols: std::collections::HashSet<(String, String)> = files
         .iter()
-        .flat_map(|file| file.symbols.iter())
-        .map(|symbol| symbol.name.clone())
+        .flat_map(|file| {
+            file.symbols
+                .iter()
+                .map(move |symbol| (symbol.name.clone(), file.path.clone()))
+        })
         .collect();
 
     files
         .into_iter()
-        .map(|file| crate::render::FileReport {
-            path: file.path,
-            symbols: file
-                .symbols
-                .into_iter()
-                .map(|mut symbol| {
-                    let own_name = symbol.name.clone();
-                    symbol.dependencies = symbol
-                        .referenced_names
-                        .iter()
-                        .filter(|name| {
-                            **name != own_name && !diff_symbol_names.contains(name.as_str())
-                        })
-                        .flat_map(|name| resolver.resolve(name))
-                        .collect();
-                    symbol
-                })
-                .collect(),
+        .map(|file| {
+            let file_path = file.path.clone();
+            crate::render::FileReport {
+                path: file.path,
+                symbols: file
+                    .symbols
+                    .into_iter()
+                    .map(|mut symbol| {
+                        let own_key = (symbol.name.clone(), file_path.clone());
+                        symbol.dependencies = symbol
+                            .referenced_names
+                            .iter()
+                            .flat_map(|name| {
+                                resolver
+                                    .resolve(name)
+                                    .into_iter()
+                                    .map(move |resolved| (name.clone(), resolved))
+                            })
+                            .filter(|(name, resolved)| {
+                                let key = (name.clone(), resolved.path.clone());
+                                key != own_key && !diff_symbols.contains(&key)
+                            })
+                            .map(|(_, resolved)| resolved)
+                            .collect();
+                        symbol
+                    })
+                    .collect(),
+            }
         })
         .collect()
 }
@@ -429,6 +447,58 @@ mod tests {
             };
 
             let expected = files.clone();
+            let actual = resolve_dependencies(files, &resolver);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_keep_dependency_when_a_same_named_symbol_exists_elsewhere_in_the_diff() {
+            // "helper" is changed in this diff, but at "src/a.rs::helper" —
+            // a different file from the actual dependency target,
+            // "src/b.rs::helper". Excluding by name alone would wrongly
+            // drop this dependency just because a same-named, unrelated
+            // symbol happens to also be part of the diff; exclusion must
+            // be keyed on (name, path), not name alone.
+            let files = vec![
+                FileReport {
+                    path: "src/a.rs".to_string(),
+                    symbols: vec![symbol("foo", vec!["helper"]), symbol("helper", vec![])],
+                },
+                FileReport {
+                    path: "src/b.rs".to_string(),
+                    symbols: vec![],
+                },
+            ];
+            let resolver = FakeResolver {
+                matches: HashMap::from([(
+                    "helper",
+                    vec![ResolvedSymbol {
+                        signature: "fn helper()".to_string(),
+                        path: "src/b.rs".to_string(),
+                    }],
+                )]),
+            };
+
+            let expected = vec![
+                FileReport {
+                    path: "src/a.rs".to_string(),
+                    symbols: vec![
+                        ExtractedSymbol {
+                            dependencies: vec![ResolvedSymbol {
+                                signature: "fn helper()".to_string(),
+                                path: "src/b.rs".to_string(),
+                            }],
+                            ..symbol("foo", vec!["helper"])
+                        },
+                        symbol("helper", vec![]),
+                    ],
+                },
+                FileReport {
+                    path: "src/b.rs".to_string(),
+                    symbols: vec![],
+                },
+            ];
             let actual = resolve_dependencies(files, &resolver);
 
             assert_eq!(expected, actual);
