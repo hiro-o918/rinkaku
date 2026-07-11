@@ -80,6 +80,13 @@ pub fn render(report: &Report, format: OutputFormat) -> Result<String, RenderErr
 /// Renders a [`Report`] as Markdown: one heading per file with its
 /// symbols' signatures in a fenced code block, followed by a list of
 /// skipped files.
+///
+/// Path headings (`## {path}`) do not escape Markdown special characters
+/// (`#`, `[`, `]`, `_`, ...). A path containing them can distort the
+/// rendered heading; this is accepted rather than escaped, since file
+/// paths with Markdown-significant characters are rare in practice and the
+/// fenced code blocks (the part that matters for correctness) are already
+/// hardened against content-driven breakage.
 fn render_markdown(report: &Report) -> Result<String, RenderError> {
     let mut out = String::new();
 
