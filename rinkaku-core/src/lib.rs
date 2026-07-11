@@ -6,6 +6,7 @@
 //! `git diff`, invoking LSP servers) stays at the boundary in `main.rs` and
 //! future adapter modules, never inside this pure core.
 
+pub mod deps;
 pub mod diff;
 pub mod extract;
 pub mod language;
