@@ -120,15 +120,20 @@ fn parse_file_entry(lines: &[&str], start: usize) -> Result<(ChangedFile, usize)
             i += 1;
             break;
         } else if line.starts_with("--- ") || line.starts_with("+++ ") {
-            // The path pair is authoritative once present; skip to hunks.
-        } else if line.starts_with("@@ ") {
+            // Neither path is used: the b/ path from `diff --git` is
+            // already authoritative, and old_path (when set) comes from
+            // `rename from`/`copy from`. Just skip ahead to the hunks.
+        } else if line.starts_with("@@") {
             break;
         }
         i += 1;
     }
 
     let mut changed_ranges = Vec::new();
-    while i < lines.len() && lines[i].starts_with("@@ ") {
+    while i < lines.len() && lines[i].starts_with("@@") {
+        if !lines[i].starts_with("@@ ") {
+            return Err(ParseError::MalformedHunkHeader(lines[i].to_string()));
+        }
         let (hunk_ranges, next) = parse_hunk(lines, i)?;
         changed_ranges.extend(hunk_ranges);
         i = next;
@@ -647,5 +652,26 @@ new mode 100755
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
         assert_eq!(expected, actual);
+    }
+
+    // Regression test: a line starting with `@@` but not matching the exact
+    // `@@ ` prefix (e.g. missing the space right after `@@`) used to be
+    // ignored entirely by the header-line scan, so the file was silently
+    // reported as an unchanged Modified file with empty changed_ranges
+    // instead of surfacing a parse error.
+    #[test]
+    fn should_return_err_when_hunk_marker_does_not_match_expected_prefix() {
+        let input = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@-1,2 +1,3 @@
+ fn a() {}
++fn b() {}
+ fn c() {}
+";
+        let actual = parse_unified_diff(input);
+        assert!(matches!(actual, Err(ParseError::MalformedHunkHeader(_))));
     }
 }
