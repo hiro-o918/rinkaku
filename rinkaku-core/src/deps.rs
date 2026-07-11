@@ -10,22 +10,33 @@
 //! be plugged in without reshaping the pipeline.
 //!
 //! Performance: `TagsResolver::new` indexes every file `main.rs` passes
-//! it (all of `git ls-files`, not just the diff), each parsed once via
-//! [`crate::extract::extract_all_symbols`] — this used to dominate
-//! `--deps 1`'s wall-clock time because query compilation (`Query::new`)
-//! ran once per *definition* rather than once per *file* (fixed; see
-//! `extract::with_definition_nodes`'s doc comment). With that fixed, the
-//! remaining `--deps 1` overhead in `--base` mode is mostly the
-//! `git show`/`git ls-files` subprocess cost of reading every indexed
-//! file's content, one `git` invocation per file — measured as
-//! significantly larger than the file-parsing cost itself on a
-//! ~100-file repository; not addressed here, since it is `main.rs`'s
-//! file-reading strategy rather than this module's indexing logic.
+//! it (all of `git ls-files`, not just the diff). Two costs used to
+//! dominate `--deps 1`'s wall-clock time:
+//! - Query compilation (`Query::new`) ran once per *definition* rather
+//!   than once per *file* (fixed; see `extract::with_definition_nodes`'s
+//!   doc comment).
+//! - Every indexed file was parsed
+//!   ([`crate::extract::extract_all_symbols`]) even though most files in
+//!   a real repository define nothing any changed symbol actually
+//!   references. `TagsResolver::new`'s `reference_names` parameter fixes
+//!   this: files are prefiltered by a substring search
+//!   (`aho-corasick`, run once over all reference names instead of once
+//!   per name) before parsing, skipping the ones that cannot contain a
+//!   match at all — see `should_parse_file` for why this cannot miss a
+//!   real match (no recall loss).
+//!
+//! Remaining `--deps 1` overhead in `--base` mode is mostly the
+//! `git show`/`git ls-files` subprocess cost of *reading* every indexed
+//! file's content (one `git` invocation per file), which the prefilter
+//! above does not reduce — it only skips parsing, not reading, since
+//! whether a file's content matches can only be known after reading it.
+//! Not addressed here, since it is `main.rs`'s file-reading strategy
+//! rather than this module's indexing logic.
 
 use crate::extract::extract_all_symbols;
 use crate::language::LanguageSupport;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A definition found by a [`Resolver`] for a referenced name. Reported
 /// verbatim in [`crate::extract::ExtractedSymbol::dependencies`], so it is
@@ -73,19 +84,34 @@ impl TagsResolver {
     /// supplies the real file list via `git ls-files`, tests supply an
     /// in-memory list.
     ///
+    /// `reference_names` is the full set of names any changed symbol in
+    /// the diff actually references (gathered by `main.rs` before calling
+    /// this). A file is only parsed if its content contains at least one
+    /// of these names as a substring — see `should_parse_file`'s doc
+    /// comment for why this prefilter cannot cause a real definition to
+    /// be missed. Passing an empty set (no diff, or `--deps 0`'s caller
+    /// never reaching this path) indexes nothing, which is correct: no
+    /// name is referenced, so no definition needs to be found.
+    ///
     /// Files with no registered [`LanguageSupport`] for their extension
     /// are silently skipped, matching the pipeline's handling of
     /// unsupported files elsewhere (`pipeline::analyze_diff`).
     pub fn new(
         files: impl IntoIterator<Item = (String, String)>,
         language_for_path: impl Fn(&str) -> Option<&'static dyn LanguageSupport>,
+        reference_names: &HashSet<String>,
     ) -> Self {
         let mut index: HashMap<String, Vec<ResolvedSymbol>> = HashMap::new();
+        let matcher = aho_corasick::AhoCorasick::new(reference_names)
+            .expect("reference_names must build a valid AhoCorasick matcher");
 
         for (path, content) in files {
             let Some(lang) = language_for_path(&path) else {
                 continue;
             };
+            if !should_parse_file(&matcher, &content) {
+                continue;
+            }
             for symbol in extract_all_symbols(&content, lang) {
                 index.entry(symbol.name).or_default().push(ResolvedSymbol {
                     signature: symbol.signature,
@@ -96,6 +122,26 @@ impl TagsResolver {
 
         Self { index }
     }
+}
+
+/// Whether `content` could plausibly define something a changed symbol
+/// references, based on a single `aho-corasick` pass over all reference
+/// names at once (rather than one `str::contains` scan per name).
+///
+/// This is a coarse substring test, not a symbol-aware one: it does not
+/// verify the match is an actual identifier (vs., say, a substring inside
+/// a comment or string literal) or that it is the file's *definition* of
+/// that name rather than some unrelated mention. That imprecision is
+/// deliberately accepted — the goal is only to decide whether parsing
+/// `content` is worth attempting, and `extract_all_symbols` (the real,
+/// syntax-aware definition finder) still runs afterward and is the only
+/// thing that actually populates the index. Skipping a file here can
+/// therefore never cause `resolve()` to miss a real definition, since any
+/// file containing the definition's own name as text necessarily passes
+/// this filter (a definition's name always appears literally in its own
+/// declaration) — the prefilter can only save work, not recall.
+fn should_parse_file(matcher: &aho_corasick::AhoCorasick, content: &str) -> bool {
+    matcher.is_match(content)
 }
 
 impl Resolver for TagsResolver {
@@ -287,13 +333,22 @@ mod tests {
         }
     }
 
+    /// Builds a `reference_names` set from string literals, for tests that
+    /// only care about exercising `TagsResolver`'s indexing/resolution
+    /// behavior rather than the prefilter itself (see `mod prefilter_tests`
+    /// for that). Every name the test resolves against must be included so
+    /// the prefilter never spuriously excludes the file under test.
+    fn names(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn should_resolve_function_call_when_callee_is_defined_in_repo() {
         let files = [(
             "src/lib.rs".to_string(),
             "fn helper(x: i32) -> i32 {\n    x\n}\n".to_string(),
         )];
-        let resolver = TagsResolver::new(files, lang_for_path);
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]));
 
         let expected = vec![ResolvedSymbol {
             signature: "fn helper(x: i32) -> i32".to_string(),
@@ -310,7 +365,7 @@ mod tests {
             "src/point.rs".to_string(),
             "struct Point {\n    x: i32,\n}\n".to_string(),
         )];
-        let resolver = TagsResolver::new(files, lang_for_path);
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["Point"]));
 
         let expected = vec![ResolvedSymbol {
             signature: "struct Point { x: i32, }".to_string(),
@@ -327,7 +382,12 @@ mod tests {
             "src/lib.rs".to_string(),
             "fn helper(x: i32) -> i32 {\n    x\n}\n".to_string(),
         )];
-        let resolver = TagsResolver::new(files, lang_for_path);
+        // "i32" is included in reference_names (unlike the prefilter tests)
+        // specifically so this exercises "no definition found", not "file
+        // excluded by the prefilter" — the file's content also contains
+        // "i32" as a parameter/return type, so it would pass the prefilter
+        // regardless, but being explicit keeps the test's intent clear.
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper", "i32"]));
 
         // Covers both a built-in type (`i32`, never indexed since it has
         // no definition anywhere) and a name from an external
@@ -352,7 +412,7 @@ mod tests {
                 "fn helper() -> i32 {\n    2\n}\n".to_string(),
             ),
         ];
-        let resolver = TagsResolver::new(files, lang_for_path);
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]));
 
         let mut expected = vec![
             ResolvedSymbol {
@@ -383,7 +443,7 @@ mod tests {
             "src/notes.txt".to_string(),
             "helper is defined here".to_string(),
         )];
-        let resolver = TagsResolver::new(files, lang_for_path);
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]));
 
         let expected: Vec<ResolvedSymbol> = Vec::new();
         let actual = resolver.resolve("helper");
@@ -403,7 +463,7 @@ mod tests {
                 "package main\n\nfunc greet() string {\n\treturn \"hi\"\n}\n".to_string(),
             ),
         ];
-        let resolver = TagsResolver::new(files, lang_for_path);
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper", "greet"]));
 
         let expected = vec![ResolvedSymbol {
             signature: "func greet() string".to_string(),
@@ -412,6 +472,96 @@ mod tests {
         let actual = resolver.resolve("greet");
 
         assert_eq!(expected, actual);
+    }
+
+    mod prefilter_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use std::collections::HashSet;
+
+        #[test]
+        fn should_index_definitions_from_file_containing_a_referenced_name() {
+            let files = [(
+                "src/lib.rs".to_string(),
+                "fn helper(x: i32) -> i32 {\n    x\n}\n".to_string(),
+            )];
+            let reference_names: HashSet<String> = ["helper".to_string()].into_iter().collect();
+
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+
+            let expected = vec![ResolvedSymbol {
+                signature: "fn helper(x: i32) -> i32".to_string(),
+                path: "src/lib.rs".to_string(),
+            }];
+            let actual = resolver.resolve("helper");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_skip_indexing_file_whose_content_contains_no_referenced_name() {
+            // "src/other.rs" defines `unrelated`, but nothing in
+            // `reference_names` appears anywhere in its content, so it is
+            // never parsed and its definitions never make it into the
+            // index — this is the whole point of the prefilter: skip
+            // parsing files that cannot possibly satisfy any reference.
+            let files = [(
+                "src/other.rs".to_string(),
+                "fn unrelated() -> i32 {\n    1\n}\n".to_string(),
+            )];
+            let reference_names: HashSet<String> = ["helper".to_string()].into_iter().collect();
+
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+
+            let expected: Vec<ResolvedSymbol> = Vec::new();
+            let actual = resolver.resolve("unrelated");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_still_index_file_when_referenced_name_appears_incidentally_in_content() {
+            // The prefilter is a coarse substring match, not a symbol-aware
+            // one: a file is indexed whenever a referenced name appears
+            // anywhere in its raw content (e.g. inside another
+            // definition's body, not just as the definition's own name).
+            // This deliberately never drops a file that could plausibly
+            // define something reachable — recall is never sacrificed, see
+            // the module-level doc comment on why substring matching is
+            // safe here.
+            let files = [(
+                "src/lib.rs".to_string(),
+                "fn wrapper() -> i32 {\n    helper()\n}\n\nfn helper() -> i32 {\n    1\n}\n"
+                    .to_string(),
+            )];
+            let reference_names: HashSet<String> = ["helper".to_string()].into_iter().collect();
+
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+
+            let expected = vec![ResolvedSymbol {
+                signature: "fn helper() -> i32".to_string(),
+                path: "src/lib.rs".to_string(),
+            }];
+            let actual = resolver.resolve("helper");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_index_nothing_when_reference_names_is_empty() {
+            let files = [(
+                "src/lib.rs".to_string(),
+                "fn helper() -> i32 {\n    1\n}\n".to_string(),
+            )];
+            let reference_names: HashSet<String> = HashSet::new();
+
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+
+            let expected: Vec<ResolvedSymbol> = Vec::new();
+            let actual = resolver.resolve("helper");
+
+            assert_eq!(expected, actual);
+        }
     }
 
     mod resolve_dependencies_tests {
