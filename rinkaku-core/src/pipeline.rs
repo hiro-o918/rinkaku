@@ -34,6 +34,13 @@ pub enum AnalyzeError {
 /// with no registered [`crate::language::LanguageSupport`] for their
 /// extension are skipped. All skips are recorded in the returned
 /// [`Report`], never silently dropped.
+///
+/// Files with no changed line ranges (a pure rename or a mode-change-only
+/// diff — no hunks) are *not* skipped, since they are supported and were
+/// looked at; they are reported as a [`crate::render::FileReport`] with an
+/// empty `symbols` list, and — unlike every other case above — `read_file`
+/// is never called for them, since there is no content change to extract
+/// symbols from.
 pub fn analyze_diff(
     diff_text: &str,
     read_file: impl Fn(&str) -> std::io::Result<String>,
@@ -65,6 +72,19 @@ pub fn analyze_diff(
             });
             continue;
         };
+
+        // No hunks means no content change (a pure rename or a
+        // mode-change-only diff): extract_changed_symbols would return no
+        // symbols for an empty changed_ranges anyway, so skip the read
+        // entirely rather than pay IO for a result already known to be
+        // empty.
+        if changed_file.changed_ranges.is_empty() {
+            files.push(FileReport {
+                path: changed_file.path,
+                symbols: Vec::new(),
+            });
+            continue;
+        }
 
         let source = read_file(&changed_file.path).map_err(|source| AnalyzeError::ReadFile {
             path: changed_file.path.clone(),
@@ -220,6 +240,39 @@ index e69de29..4b825dc 100644
                 path: "src/main.py".to_string(),
                 reason: SkipReason::UnsupportedLanguage,
             }],
+        };
+        let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
+
+        assert_eq!(expected, actual);
+    }
+
+    // Regression test: a pure rename (or a mode-change-only diff) has no
+    // hunks, so `changed_ranges` is empty and there is no content change to
+    // extract symbols from. The pipeline must not call `read_file` for such
+    // an entry — doing so is wasted IO for content that, by construction,
+    // yields no symbols (`extract_changed_symbols` already returns `[]` for
+    // an empty `changed_ranges`). Reported as a `FileReport` with empty
+    // `symbols` rather than a `SkippedFile`: the file *is* supported and
+    // was looked at, it just has nothing to report, which is a different
+    // situation from `SkipReason`'s "could not be analyzed" cases.
+    #[test]
+    fn should_skip_reading_pure_rename_with_no_changed_ranges() {
+        let diff = "\
+diff --git a/src/old_name.rs b/src/new_name.rs
+similarity index 100%
+rename from src/old_name.rs
+rename to src/new_name.rs
+";
+        // No entry in the map: if the pipeline tried to read the renamed
+        // file, this would return an Err and fail the test.
+        let read_file = fake_reader(HashMap::new());
+
+        let expected = Report {
+            files: vec![FileReport {
+                path: "src/new_name.rs".to_string(),
+                symbols: vec![],
+            }],
+            skipped: vec![],
         };
         let actual = analyze_diff(diff, read_file).expect("analyze should succeed");
 
