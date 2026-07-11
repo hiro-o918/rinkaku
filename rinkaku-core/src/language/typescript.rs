@@ -127,4 +127,20 @@ mod tests {
 
         assert!(!tree.root_node().has_error());
     }
+
+    #[test]
+    fn should_compile_definition_query_against_the_typescript_grammar() {
+        let support = TypeScriptSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.definition_query())
+            .expect("DEFINITION_QUERY must be valid against the TypeScript grammar");
+    }
+
+    #[test]
+    fn should_compile_definition_query_against_the_tsx_grammar() {
+        let support = TsxSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.definition_query())
+            .expect("DEFINITION_QUERY must be valid against the TSX grammar");
+    }
 }

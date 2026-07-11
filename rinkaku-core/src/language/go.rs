@@ -68,4 +68,12 @@ mod tests {
 
         assert!(!tree.root_node().has_error());
     }
+
+    #[test]
+    fn should_compile_definition_query_against_its_own_grammar() {
+        let support = GoSupport;
+
+        tree_sitter::Query::new(&support.grammar(), support.definition_query())
+            .expect("DEFINITION_QUERY must be valid against the Go grammar");
+    }
 }
