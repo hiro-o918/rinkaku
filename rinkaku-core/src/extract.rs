@@ -87,7 +87,7 @@ pub fn extract_changed_symbols(
         return Vec::new();
     }
 
-    with_definition_nodes(source, lang, |all_nodes, source_bytes| {
+    with_definition_nodes(source, lang, |all_nodes, source_bytes, reference_query| {
         let touched_nodes: Vec<tree_sitter::Node> = all_nodes
             .iter()
             .copied()
@@ -111,7 +111,7 @@ pub fn extract_changed_symbols(
                     .iter()
                     .any(|other| other != *node && is_descendant_of(*other, **node))
             })
-            .filter_map(|node| build_symbol(*node, source_bytes, lang))
+            .filter_map(|node| build_symbol(*node, source_bytes, reference_query))
             .collect()
     })
 }
@@ -129,26 +129,36 @@ pub fn extract_changed_symbols(
 /// `build_symbol`/`find_container`) already records its relationship to
 /// its enclosing block, so there is nothing to suppress.
 pub fn extract_all_symbols(source: &str, lang: &dyn LanguageSupport) -> Vec<ExtractedSymbol> {
-    with_definition_nodes(source, lang, |all_nodes, source_bytes| {
+    with_definition_nodes(source, lang, |all_nodes, source_bytes, reference_query| {
         all_nodes
             .iter()
-            .filter_map(|node| build_symbol(*node, source_bytes, lang))
+            .filter_map(|node| build_symbol(*node, source_bytes, reference_query))
             .collect()
     })
 }
 
 /// Parses `source`, runs `lang`'s `definition_query` to find every
 /// `@definition` node, and hands the resulting nodes (plus the source
-/// bytes they borrow from) to `f`. Node values borrow from the parsed
-/// tree, so this scoped-callback shape — rather than returning
-/// `Vec<Node>` directly — keeps the tree alive exactly as long as needed
-/// without leaking it or threading a `Tree` value out through every
-/// caller. Shared by `extract_changed_symbols` and `extract_all_symbols`,
-/// which differ only in how they filter/use the node list.
+/// bytes they borrow from, and a compiled `reference_query`) to `f`. Node
+/// values borrow from the parsed tree, so this scoped-callback shape —
+/// rather than returning `Vec<Node>` directly — keeps the tree alive
+/// exactly as long as needed without leaking it or threading a `Tree`
+/// value out through every caller. Shared by `extract_changed_symbols`
+/// and `extract_all_symbols`, which differ only in how they filter/use
+/// the node list.
+///
+/// `reference_query` is compiled once here (file granularity) rather than
+/// once per definition node: `Query::new` takes ~1ms, and a repo-wide
+/// index (`deps::TagsResolver::new`) calls into this path once per file
+/// but `build_symbol` used to be called once per *definition*, so
+/// compiling inside `build_symbol` multiplied that cost by the file's
+/// definition count — measured as several seconds of pure recompilation
+/// overhead on a mid-sized repo (see the `--deps` performance note in
+/// `deps.rs`).
 fn with_definition_nodes<T>(
     source: &str,
     lang: &dyn LanguageSupport,
-    f: impl FnOnce(&[tree_sitter::Node], &[u8]) -> T,
+    f: impl FnOnce(&[tree_sitter::Node], &[u8], &tree_sitter::Query) -> T,
 ) -> T {
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -163,6 +173,8 @@ fn with_definition_nodes<T>(
     let definition_capture_index = query
         .capture_index_for_name("definition")
         .expect("definition query must have a @definition capture");
+    let reference_query = tree_sitter::Query::new(&lang.grammar(), lang.reference_query())
+        .expect("LanguageSupport reference query must be valid");
 
     let mut cursor = tree_sitter::QueryCursor::new();
     let source_bytes = source.as_bytes();
@@ -176,7 +188,7 @@ fn with_definition_nodes<T>(
             }
         }
     }
-    f(&nodes, source_bytes)
+    f(&nodes, source_bytes, &reference_query)
 }
 
 /// Whether `node` is strictly nested inside `ancestor` in the syntax tree.
@@ -215,13 +227,13 @@ fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
 fn build_symbol(
     node: tree_sitter::Node,
     source: &[u8],
-    lang: &dyn LanguageSupport,
+    reference_query: &tree_sitter::Query,
 ) -> Option<ExtractedSymbol> {
     let kind = symbol_kind(node)?;
     let name = definition_name(node, source)?;
     let signature = slice_signature(node, source);
     let container = find_container(node, source);
-    let referenced_names = collect_referenced_names(node, source, lang);
+    let referenced_names = collect_referenced_names(node, source, reference_query);
 
     Some(ExtractedSymbol {
         name,
@@ -237,11 +249,13 @@ fn build_symbol(
     })
 }
 
-/// Runs `lang`'s `reference_query` over the subtree rooted at `node`,
-/// returning the deduplicated names it captures (called function/method
-/// names, referenced type names). Sorted for determinism — tree-sitter's
-/// match order is not a meaningful signal here, and downstream consumers
-/// (`deps.rs`, rendering) benefit from a stable order.
+/// Runs `reference_query` (already compiled by `with_definition_nodes`,
+/// once per file rather than once per definition) over the subtree rooted
+/// at `node`, returning the deduplicated names it captures (called
+/// function/method names, referenced type names). Sorted for determinism
+/// — tree-sitter's match order is not a meaningful signal here, and
+/// downstream consumers (`deps.rs`, rendering) benefit from a stable
+/// order.
 ///
 /// Reads every capture whose name starts with `reference.` (see the doc
 /// comment on [`LanguageSupport::reference_query`]) rather than a single
@@ -251,11 +265,9 @@ fn build_symbol(
 fn collect_referenced_names(
     node: tree_sitter::Node,
     source: &[u8],
-    lang: &dyn LanguageSupport,
+    reference_query: &tree_sitter::Query,
 ) -> Vec<String> {
-    let query = tree_sitter::Query::new(&lang.grammar(), lang.reference_query())
-        .expect("LanguageSupport reference query must be valid");
-    let reference_capture_indices: std::collections::HashSet<u32> = query
+    let reference_capture_indices: std::collections::HashSet<u32> = reference_query
         .capture_names()
         .iter()
         .enumerate()
@@ -264,7 +276,7 @@ fn collect_referenced_names(
         .collect();
 
     let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, node, source);
+    let mut matches = cursor.matches(reference_query, node, source);
 
     let mut names = std::collections::BTreeSet::new();
     while let Some(m) = matches.next() {
