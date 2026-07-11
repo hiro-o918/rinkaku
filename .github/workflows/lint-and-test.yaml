@@ -1,0 +1,9 @@
+name: Lint and Test
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-test:
+    uses: ./.github/workflows/wc-rust-test.yaml
