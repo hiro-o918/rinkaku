@@ -103,7 +103,7 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
             writeln!(out, "{}", symbol.signature)?;
             writeln!(out, "{fence}")?;
             writeln!(out)?;
-            if !symbol.dependencies.is_empty() {
+            if !symbol.dependencies.is_empty() || symbol.omitted_dependency_matches > 0 {
                 writeln!(out, "Depends on:")?;
                 for dependency in &symbol.dependencies {
                     // Inline code spans (not a fenced block): a
@@ -117,6 +117,13 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
                     // the fenced blocks, which without widening could
                     // make later content render as code).
                     writeln!(out, "- `{}`: `{}`", dependency.path, dependency.signature)?;
+                }
+                if symbol.omitted_dependency_matches > 0 {
+                    writeln!(
+                        out,
+                        "- (+{} more definitions matched by name)",
+                        symbol.omitted_dependency_matches
+                    )?;
                 }
                 writeln!(out)?;
             }
@@ -201,6 +208,7 @@ mod tests {
                     container: None,
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![],
@@ -233,6 +241,7 @@ fn foo(a: i32) -> i32
                     container: Some("impl Foo".to_string()),
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![],
@@ -269,6 +278,7 @@ fn bar(&self) -> i32
                         signature: "struct Point { x: i32, y: i32 }".to_string(),
                         path: "src/point.rs".to_string(),
                     }],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![],
@@ -313,6 +323,7 @@ Depends on:
                             path: "src/b.rs".to_string(),
                         },
                     ],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![],
@@ -328,6 +339,46 @@ fn foo(p: Point) -> i32
 Depends on:
 - `src/a.rs`: `struct Point { x: i32 }`
 - `src/b.rs`: `struct Point { y: i32 }`
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_omitted_matches_note_when_dependency_matches_were_capped() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    name: "foo".to_string(),
+                    kind: SymbolKind::Function,
+                    signature: "fn foo(p: Point) -> i32".to_string(),
+                    range: LineRange { start: 1, end: 3 },
+                    container: None,
+                    referenced_names: vec!["Point".to_string()],
+                    dependencies: vec![crate::deps::ResolvedSymbol {
+                        signature: "struct Point { x: i32 }".to_string(),
+                        path: "src/a.rs".to_string(),
+                    }],
+                    omitted_dependency_matches: 2,
+                }],
+            }],
+            skipped: vec![],
+        };
+
+        let expected = "\
+## src/lib.rs
+
+```
+fn foo(p: Point) -> i32
+```
+
+Depends on:
+- `src/a.rs`: `struct Point { x: i32 }`
+- (+2 more definitions matched by name)
 
 "
         .to_string();
@@ -355,6 +406,7 @@ Depends on:
                     container: None,
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![],
@@ -390,6 +442,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
                     container: Some("impl Foo /* ```` */".to_string()),
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![],
@@ -456,6 +509,7 @@ fn bar(&self) -> i32
                     container: None,
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![SkippedFile {
@@ -494,6 +548,7 @@ fn foo()
                     container: None,
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![SkippedFile {
@@ -517,7 +572,8 @@ fn foo()
             \"end\": 1
           },
           \"container\": null,
-          \"dependencies\": []
+          \"dependencies\": [],
+          \"omitted_matches\": 0
         }
       ]
     }

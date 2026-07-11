@@ -188,6 +188,7 @@ fn foo(a: i32) -> i32 {
                     container: None,
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![],
@@ -381,6 +382,7 @@ index e69de29..4b825dc 100644
                     container: None,
                     referenced_names: vec![],
                     dependencies: vec![],
+                    omitted_dependency_matches: 0,
                 }],
             }],
             skipped: vec![SkippedFile {
