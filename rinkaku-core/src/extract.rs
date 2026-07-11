@@ -14,15 +14,29 @@ use tree_sitter::StreamingIterator;
 /// language-neutral terms so callers don't need to match on
 /// language-specific tree-sitter node kinds.
 ///
-/// No `Impl` variant: impl blocks are never reported as symbols in their
-/// own right (see the filtering in `extract_changed_symbols`) — they only
+/// No `Impl` variant: impl/class/interface bodies are never reported as
+/// symbols in their own right when one of their nested members was itself
+/// touched (see the filtering in `extract_changed_symbols`) — they only
 /// contribute `container` names to the members nested inside them.
+///
+/// Methods (Go receiver methods, Python/TypeScript class methods, Rust
+/// impl/trait methods, TypeScript arrow functions bound to a `const`) are
+/// all reported as `Function`, matching the precedent already set by the
+/// Rust support: `container` is what distinguishes "a method of X" from a
+/// free function, so a separate `Method` variant would duplicate
+/// information already carried by `container` without adding any.
+/// Variants are named for the language-neutral concept they represent, not
+/// for a specific language's keyword (e.g. `Class` covers both Python
+/// `class` and TypeScript `class`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SymbolKind {
     Function,
     Struct,
     Enum,
     Trait,
+    Class,
+    Interface,
+    TypeAlias,
 }
 
 /// A definition whose signature was extracted because one of its lines
@@ -38,8 +52,9 @@ pub struct ExtractedSymbol {
     /// since this describes where the change lives, not the signature's
     /// own extent.
     pub range: LineRange,
-    /// The enclosing impl/trait block's descriptive name, if the
-    /// definition is nested inside one (e.g. `Some("impl Foo")`).
+    /// The enclosing impl/trait/class block's descriptive name, or a Go
+    /// method's receiver type name, if the definition belongs to one (e.g.
+    /// `Some("impl Foo")`, `Some("class Point")`, `Some("Repo")`).
     pub container: Option<String>,
 }
 
@@ -91,18 +106,38 @@ pub fn extract_changed_symbols(
     touched_nodes
         .iter()
         .filter(|node| {
-            // Impl/trait blocks are captured so `find_container` can name
-            // nested members, but are only reported as symbols in their
-            // own right when none of their nested definitions were
-            // themselves touched — otherwise a changed method line would
-            // surface both the method and its enclosing block.
-            !matches!(node.kind(), "impl_item" | "trait_item")
+            // Impl/trait/class/interface blocks are captured so
+            // `find_container` can name nested members, but are only
+            // reported as symbols in their own right when none of their
+            // nested definitions were themselves touched — otherwise a
+            // changed method line would surface both the method and its
+            // enclosing block.
+            !is_container_only_node(node.kind())
                 || !touched_nodes
                     .iter()
                     .any(|other| other != *node && is_descendant_of(*other, **node))
         })
         .filter_map(|node| build_symbol(*node, source_bytes))
         .collect()
+}
+
+/// Node kinds that only ever contribute a `container` name to nested
+/// members, and are suppressed as symbols in their own right when one of
+/// those members was itself touched (see the filter in
+/// `extract_changed_symbols`).
+///
+/// Rust's `impl_item`/`trait_item` predate this helper (ADR 0002's initial
+/// Rust support); Python/TypeScript classes and TypeScript interfaces have
+/// the same "container that also holds its own reportable body" shape, so
+/// they share the rule. Go is absent here: Go methods are declared as
+/// sibling top-level `method_declaration`s linked to their struct only by
+/// receiver type name, not nested inside the struct's node, so there is no
+/// analogous swallow case for Go.
+fn is_container_only_node(node_kind: &str) -> bool {
+    matches!(
+        node_kind,
+        "impl_item" | "trait_item" | "class_definition" | "class_declaration"
+    )
 }
 
 /// Whether `node` is strictly nested inside `ancestor` in the syntax tree.
@@ -139,7 +174,7 @@ fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
 /// (defensive default for query/grammar drift, not expected in practice
 /// given `definition_query` only captures known kinds).
 fn build_symbol(node: tree_sitter::Node, source: &[u8]) -> Option<ExtractedSymbol> {
-    let kind = symbol_kind(node.kind())?;
+    let kind = symbol_kind(node)?;
     let name = definition_name(node, source)?;
     let signature = slice_signature(node, source);
     let container = find_container(node, source);
@@ -153,39 +188,150 @@ fn build_symbol(node: tree_sitter::Node, source: &[u8]) -> Option<ExtractedSymbo
     })
 }
 
-fn symbol_kind(node_kind: &str) -> Option<SymbolKind> {
-    match node_kind {
+/// Maps a captured definition node to a language-neutral [`SymbolKind`].
+/// Node kind strings are unique across the grammars this module supports
+/// (Rust, Go, Python, TypeScript/TSX), so a single flat match is sufficient
+/// without needing to know which `LanguageSupport` a node came from.
+///
+/// Takes the node rather than just its kind string because Go's
+/// `type_spec` needs to inspect its `type` field to tell a struct from an
+/// interface — the definition query captures `type_spec` for both (see
+/// `language/go.rs`), so the node kind alone is ambiguous for Go.
+fn symbol_kind(node: tree_sitter::Node) -> Option<SymbolKind> {
+    match node.kind() {
+        // Rust.
         "function_item" | "function_signature_item" => Some(SymbolKind::Function),
         "struct_item" => Some(SymbolKind::Struct),
         "enum_item" => Some(SymbolKind::Enum),
         "trait_item" => Some(SymbolKind::Trait),
+        // Go.
+        "type_spec" => match node.child_by_field_name("type")?.kind() {
+            "struct_type" => Some(SymbolKind::Struct),
+            "interface_type" => Some(SymbolKind::Interface),
+            _ => None,
+        },
+        "function_declaration" => Some(SymbolKind::Function),
+        "method_declaration" => Some(SymbolKind::Function),
+        // Python.
+        "class_definition" => Some(SymbolKind::Class),
+        "function_definition" => Some(SymbolKind::Function),
+        // TypeScript.
+        "interface_declaration" => Some(SymbolKind::Interface),
+        "type_alias_declaration" => Some(SymbolKind::TypeAlias),
+        "class_declaration" => Some(SymbolKind::Class),
+        "method_definition" => Some(SymbolKind::Function),
+        "enum_declaration" => Some(SymbolKind::Enum),
+        // `variable_declarator` is captured only for `const f = () => {}`
+        // style arrow-function bindings (see the TypeScript definition
+        // query); other declarators are never captured.
+        "variable_declarator" => Some(SymbolKind::Function),
         _ => None,
     }
 }
 
-/// Extracts a definition's declared name from its `name`/`type_identifier`
-/// field, as exposed by tree-sitter-rust's grammar for all definition
-/// kinds this module handles.
+/// Extracts a definition's declared name.
+///
+/// Most kinds expose their name through a `name` field
+/// (`type_identifier`/`identifier`/`field_identifier`/...), which is
+/// uniform across all grammars this module supports. `type_spec` (Go) is
+/// the only kind that needs special handling: it is technically named via
+/// its own `name` field too, so the generic path already covers it — kept
+/// as a fallthrough rather than a special case.
 fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     node.child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .map(|s| s.to_string())
 }
 
-/// Slices a definition's signature: the declaration text with its body
-/// removed and internal whitespace normalized to single spaces.
+/// Slices a definition's signature: the declaration text with implementation
+/// detail removed and internal whitespace normalized to single spaces.
 ///
-/// Struct/enum/trait definitions have no separate "body" in the
-/// implementation sense — their fields/variants/method signatures *are*
-/// the API surface — so the whole node text is kept for those kinds.
-/// Only `function_item` has a `block` body to strip.
+/// - `function_item`, `function_declaration` (Go/TS), `method_declaration`
+///   (Go), `function_definition` (Python), `method_definition` (TS),
+///   `variable_declarator` (TS arrow function): body stripped, only the
+///   declaration up to (not including) the body is kept.
+/// - `struct_item`, `enum_item`, `trait_item`, `type_spec` (Go),
+///   `interface_declaration`, `type_alias_declaration`, `enum_declaration`
+///   (TS): no separate "body" in the implementation sense — their
+///   fields/variants/method signatures *are* the API surface — so the whole
+///   node text is kept.
+/// - `class_definition` (Python), `class_declaration` (TS): the whole class
+///   text is kept (field/method signatures are the API surface, same as
+///   struct/interface), but nested method *bodies* are stripped so a class
+///   reads as a list of member signatures rather than full implementations.
+///   A per-method signature listing (rather than "whole class minus method
+///   bodies") would be more precise but adds real complexity — e.g.
+///   reconciling which subset of members to show when only one changed —
+///   that v1 defers; see the module-level rationale in `language/python.rs`
+///   and `language/typescript.rs`.
 fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
-    let text_range = match node.child_by_field_name("body") {
-        Some(body) if node.kind() == "function_item" => node.start_byte()..body.start_byte(),
-        _ => node.start_byte()..node.end_byte(),
+    if matches!(node.kind(), "class_definition" | "class_declaration") {
+        return normalize_whitespace(&class_signature_text(node, source));
+    }
+
+    // `variable_declarator`'s body (a TS arrow function's `{ ... }`) is
+    // nested one level deeper, under its `value` field, rather than being a
+    // direct `body` field of the captured node itself.
+    let body = if node.kind() == "variable_declarator" {
+        node.child_by_field_name("value")
+            .and_then(|value| value.child_by_field_name("body"))
+    } else if matches!(
+        node.kind(),
+        "function_item"
+            | "function_declaration"
+            | "method_declaration"
+            | "function_definition"
+            | "method_definition"
+    ) {
+        node.child_by_field_name("body")
+    } else {
+        None
     };
+
+    let text_range = body
+        .map(|body| node.start_byte()..body.start_byte())
+        .unwrap_or(node.start_byte()..node.end_byte());
     let raw = std::str::from_utf8(&source[text_range]).unwrap_or("");
     normalize_whitespace(raw)
+}
+
+/// Builds a class/class-declaration's signature text: the full node text
+/// with every nested method body's byte range removed, leaving member
+/// signatures (fields, method declarations) intact. Byte ranges are
+/// collected first and removed back-to-front so earlier removals don't
+/// shift the offsets of ones still pending.
+fn class_signature_text(node: tree_sitter::Node, source: &[u8]) -> String {
+    let mut body_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    collect_method_body_ranges(node, &mut body_ranges);
+    body_ranges.sort_by_key(|r| r.start);
+
+    let mut result = Vec::with_capacity(source.len());
+    let mut cursor = node.start_byte();
+    for range in &body_ranges {
+        if range.start < cursor {
+            continue; // Defensive: overlapping ranges should not occur.
+        }
+        result.extend_from_slice(&source[cursor..range.start]);
+        cursor = range.end;
+    }
+    result.extend_from_slice(&source[cursor..node.end_byte()]);
+    String::from_utf8(result).unwrap_or_default()
+}
+
+/// Recursively collects the byte ranges of every nested method body inside
+/// a class node (`function_definition`/`method_definition`), without
+/// descending into a method's own body (a nested function *inside* a
+/// method body is implementation detail, not a member signature).
+fn collect_method_body_ranges(node: tree_sitter::Node, ranges: &mut Vec<std::ops::Range<usize>>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let is_method = matches!(child.kind(), "function_definition" | "method_definition");
+        if is_method && let Some(body) = child.child_by_field_name("body") {
+            ranges.push(body.start_byte()..child.end_byte());
+            continue; // Don't descend into the stripped body.
+        }
+        collect_method_body_ranges(child, ranges);
+    }
 }
 
 /// Collapses runs of whitespace (including newlines/indentation from the
@@ -194,10 +340,21 @@ fn normalize_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Walks up from `node` to find an enclosing `impl_item`/`trait_item`,
-/// returning a descriptive container name (e.g. `"impl Foo"`,
-/// `"trait Bar"`). Returns `None` for top-level definitions.
+/// Walks up from `node` to find an enclosing container (Rust
+/// `impl_item`/`trait_item`, Go method receiver type, Python/TypeScript
+/// `class_definition`/`class_declaration`), returning a descriptive
+/// container name (e.g. `"impl Foo"`, `"trait Bar"`, `"Repo"`, `"class
+/// Point"`). Returns `None` for top-level definitions.
+///
+/// Go is handled differently from the rest: a `method_declaration` is never
+/// nested inside its receiver type's node (see `is_container_only_node`),
+/// so its container is read directly off its own `receiver` field rather
+/// than by walking ancestors.
 fn find_container(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if node.kind() == "method_declaration" {
+        return go_receiver_type_name(node, source);
+    }
+
     let mut current = node.parent();
     while let Some(candidate) = current {
         match candidate.kind() {
@@ -211,10 +368,30 @@ fn find_container(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
                 let name = definition_name(candidate, source)?;
                 return Some(format!("trait {name}"));
             }
+            "class_definition" | "class_declaration" => {
+                let name = definition_name(candidate, source)?;
+                return Some(format!("class {name}"));
+            }
             _ => current = candidate.parent(),
         }
     }
     None
+}
+
+/// Extracts the receiver type name from a Go `method_declaration`'s
+/// `receiver` field (a `parameter_list` containing one
+/// `parameter_declaration`), stripping the leading `*` for pointer
+/// receivers so `func (r *Repo) Save(...)` and `func (r Repo) Save(...)`
+/// both report container `"Repo"`.
+fn go_receiver_type_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let receiver = node.child_by_field_name("receiver")?;
+    let mut cursor = receiver.walk();
+    let param = receiver
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "parameter_declaration")?;
+    let type_node = param.child_by_field_name("type")?;
+    let type_text = type_node.utf8_text(source).ok()?;
+    Some(type_text.trim_start_matches('*').to_string())
 }
 
 #[cfg(test)]
@@ -533,5 +710,256 @@ fn foo(a: i32) -> i32 {
         let actual = language_for_path("src/notes.txt");
 
         assert!(actual.is_none());
+    }
+
+    mod go {
+        use super::*;
+        use crate::language::go::GoSupport;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_extract_function_signature_when_body_line_changed() {
+            let source = "\
+package main
+
+func foo(a int) int {
+	b := a + 1
+	return b
+}
+";
+            let lang = GoSupport;
+            // Line 4 (`b := a + 1`) is inside the body only.
+            let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "foo".to_string(),
+                kind: SymbolKind::Function,
+                signature: "func foo(a int) int".to_string(),
+                range: LineRange { start: 3, end: 6 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_function_signature_when_signature_line_changed() {
+            let source = "\
+package main
+
+func foo(a int, c int) int {
+	return a + c
+}
+";
+            let lang = GoSupport;
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "foo".to_string(),
+                kind: SymbolKind::Function,
+                signature: "func foo(a int, c int) int".to_string(),
+                range: LineRange { start: 3, end: 5 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_full_struct_signature_when_field_changed() {
+            let source = "\
+package main
+
+type Repo struct {
+	Name string
+	Size int
+}
+";
+            let lang = GoSupport;
+            // Line 5 (`Size int`) is a field, not a separate body.
+            let changed_ranges = vec![LineRange { start: 5, end: 5 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "Repo".to_string(),
+                kind: SymbolKind::Struct,
+                signature: "Repo struct { Name string Size int }".to_string(),
+                range: LineRange { start: 3, end: 6 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_full_interface_signature_when_method_elem_changed() {
+            let source = "\
+package main
+
+type Fetcher interface {
+	Fetch(id string) (string, error)
+}
+";
+            let lang = GoSupport;
+            let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "Fetcher".to_string(),
+                kind: SymbolKind::Interface,
+                signature: "Fetcher interface { Fetch(id string) (string, error) }".to_string(),
+                range: LineRange { start: 3, end: 5 },
+                container: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_not_report_type_alias_as_a_symbol() {
+            let source = "\
+package main
+
+type Alias = string
+
+func useAlias(a Alias) Alias {
+	return a
+}
+";
+            let lang = GoSupport;
+            // Line 3 is the plain type alias declaration.
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected: Vec<ExtractedSymbol> = Vec::new();
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_set_container_to_receiver_type_when_pointer_receiver_method_body_changed() {
+            let source = "\
+package main
+
+type Repo struct {
+	Name string
+}
+
+func (r *Repo) Save(id string) error {
+	return nil
+}
+";
+            let lang = GoSupport;
+            // Line 8 (`return nil`) is inside `Save`'s body.
+            let changed_ranges = vec![LineRange { start: 8, end: 8 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "Save".to_string(),
+                kind: SymbolKind::Function,
+                signature: "func (r *Repo) Save(id string) error".to_string(),
+                range: LineRange { start: 7, end: 9 },
+                container: Some("Repo".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_set_container_to_receiver_type_when_value_receiver_method_signature_changed() {
+            let source = "\
+package main
+
+type Repo struct {
+	Name string
+}
+
+func (r Repo) Label() string {
+	return r.Name
+}
+";
+            let lang = GoSupport;
+            // Line 7 is the method's own signature line.
+            let changed_ranges = vec![LineRange { start: 7, end: 7 }];
+
+            let expected = vec![ExtractedSymbol {
+                name: "Label".to_string(),
+                kind: SymbolKind::Function,
+                signature: "func (r Repo) Label() string".to_string(),
+                range: LineRange { start: 7, end: 9 },
+                container: Some("Repo".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_return_empty_vec_when_changed_line_is_outside_any_definition() {
+            let source = "\
+package main
+
+func foo() {}
+
+var x = 1
+";
+            let lang = GoSupport;
+            // Line 5 is a top-level var declaration, not covered by
+            // definition_query.
+            let changed_ranges = vec![LineRange { start: 5, end: 5 }];
+
+            let expected: Vec<ExtractedSymbol> = Vec::new();
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_extract_signatures_end_to_end_from_a_parsed_diff_of_a_go_file() {
+            use crate::diff::parse_unified_diff;
+            use crate::language::language_for_path;
+
+            let diff = "\
+diff --git a/repo.go b/repo.go
+index e69de29..4b825dc 100644
+--- a/repo.go
++++ b/repo.go
+@@ -6,3 +6,3 @@
+ func (r *Repo) Save(id string) error {
+-	return errors.New(\"not implemented\")
++	return nil
+ }
+";
+            let source = "\
+package main
+
+type Repo struct {
+	Name string
+}
+
+func (r *Repo) Save(id string) error {
+	return nil
+}
+";
+            let changed_file = parse_unified_diff(diff)
+                .expect("diff should parse")
+                .into_iter()
+                .next()
+                .expect("diff should contain one changed file");
+            let lang = language_for_path(&changed_file.path).expect("*.go should resolve to Go");
+
+            let expected = vec![ExtractedSymbol {
+                name: "Save".to_string(),
+                kind: SymbolKind::Function,
+                signature: "func (r *Repo) Save(id string) error".to_string(),
+                range: LineRange { start: 7, end: 9 },
+                container: Some("Repo".to_string()),
+            }];
+            let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
     }
 }

@@ -51,11 +51,24 @@ impl RegistryEntry {
 /// Built-in languages, keyed by file extension. Adding a language means
 /// adding an entry here plus its `LanguageSupport` impl module — the
 /// extraction pipeline itself does not change (ADR 0002).
-static REGISTRY: &[RegistryEntry] = &[RegistryEntry {
-    extensions: &["rs"],
-    support: || &rust::RustSupport,
-}];
+///
+/// `.js`/`.jsx` are intentionally out of scope for v1: the TypeScript
+/// grammar only parses TypeScript syntax (type annotations etc.), and a
+/// separate JavaScript grammar/`LanguageSupport` impl would be needed to
+/// support plain JS files without misparsing or silently ignoring
+/// TS-specific constructs. Revisit once there's a concrete need.
+static REGISTRY: &[RegistryEntry] = &[
+    RegistryEntry {
+        extensions: &["rs"],
+        support: || &rust::RustSupport,
+    },
+    RegistryEntry {
+        extensions: &["go"],
+        support: || &go::GoSupport,
+    },
+];
 
+pub mod go;
 pub mod rust;
 
 #[cfg(test)]
@@ -68,6 +81,14 @@ mod tests {
 
         let support = actual.expect("expected Some(&dyn LanguageSupport) for .rs path");
         assert_eq!("rust", support.name());
+    }
+
+    #[test]
+    fn should_return_go_support_when_path_has_go_extension() {
+        let actual = language_for_path("src/main.go");
+
+        let support = actual.expect("expected Some(&dyn LanguageSupport) for .go path");
+        assert_eq!("go", support.name());
     }
 
     #[test]
