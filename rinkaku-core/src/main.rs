@@ -104,18 +104,8 @@ fn main() -> anyhow::Result<()> {
                     .as_ref()
                     .map(|r| r as &dyn rinkaku_core::deps::Resolver),
             )?;
-            // Garbage stdin input (not empty, but not a unified diff
-            // either — e.g. a plain text file piped in by mistake) parses
-            // to zero recognized file entries: `parse_unified_diff` never
-            // errors on unrecognized text, it simply finds nothing to
-            // report (see `diff.rs`), so this would otherwise exit 0 with
-            // an empty report and no indication anything went wrong. Only
-            // checked when the input wasn't already flagged as empty
-            // above, and only for non-whitespace input, so this note and
-            // the empty-diff note above are mutually exclusive.
-            if !diff_text.trim().is_empty() && report.files.is_empty() && report.skipped.is_empty()
-            {
-                eprintln!("note: no file changes recognized in input; expected a unified diff");
+            if let Some(note) = garbage_input_note(&diff_text, &report) {
+                eprintln!("{note}");
             }
             report
         }
@@ -125,6 +115,28 @@ fn main() -> anyhow::Result<()> {
     print!("{output}");
 
     Ok(())
+}
+
+/// Returns a warning note for stdin input that is garbage rather than a
+/// unified diff — non-empty input that nonetheless produced zero
+/// recognized file entries (`parse_unified_diff` never errors on
+/// unrecognized text, it simply finds nothing to report, see `diff.rs`),
+/// which would otherwise silently exit 0 with an empty report and no
+/// indication anything went wrong. `None` when `diff_text` is empty or
+/// whitespace-only (already covered by the separate "diff is empty" note
+/// at the call site — the two notes are mutually exclusive) or when the
+/// report has any file or skip entry at all.
+fn garbage_input_note(
+    diff_text: &str,
+    report: &rinkaku_core::render::Report,
+) -> Option<&'static str> {
+    if diff_text.trim().is_empty() {
+        return None;
+    }
+    if !report.files.is_empty() || !report.skipped.is_empty() {
+        return None;
+    }
+    Some("note: no file changes recognized in input; expected a unified diff")
 }
 
 /// Builds the `TagsResolver` used for `--deps 1` (the default), or `None`
@@ -473,5 +485,74 @@ mod tests {
         let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()));
 
         assert!(actual.is_err());
+    }
+
+    mod garbage_input_note_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use rinkaku_core::render::Report;
+
+        fn empty_report() -> Report {
+            Report {
+                files: vec![],
+                skipped: vec![],
+            }
+        }
+
+        fn non_empty_report() -> Report {
+            Report {
+                files: vec![rinkaku_core::render::FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![],
+                }],
+                skipped: vec![],
+            }
+        }
+
+        #[test]
+        fn should_return_note_when_input_is_non_empty_but_report_has_no_entries() {
+            let actual = garbage_input_note("this is not a diff at all\n", &empty_report());
+
+            assert_eq!(
+                Some("note: no file changes recognized in input; expected a unified diff"),
+                actual
+            );
+        }
+
+        #[test]
+        fn should_return_none_when_input_is_empty() {
+            let actual = garbage_input_note("", &empty_report());
+
+            assert_eq!(None, actual);
+        }
+
+        #[test]
+        fn should_return_none_when_input_is_whitespace_only() {
+            let actual = garbage_input_note("   \n\n  ", &empty_report());
+
+            assert_eq!(None, actual);
+        }
+
+        #[test]
+        fn should_return_none_when_report_has_file_entries() {
+            let actual = garbage_input_note("some diff text", &non_empty_report());
+
+            assert_eq!(None, actual);
+        }
+
+        #[test]
+        fn should_return_none_when_report_has_only_skipped_entries() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![rinkaku_core::render::SkippedFile {
+                    path: "assets/logo.png".to_string(),
+                    reason: rinkaku_core::render::SkipReason::Binary,
+                }],
+            };
+
+            let actual = garbage_input_note("some diff text", &report);
+
+            assert_eq!(None, actual);
+        }
     }
 }
