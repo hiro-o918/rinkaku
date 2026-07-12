@@ -93,6 +93,16 @@ replacing the running binary in place. If you installed via Homebrew or
 so your package manager's bookkeeping stays in sync — `self-update` works
 either way, but it bypasses those managers.
 
+By default this prompts for confirmation before installing. Pass `--yes`
+(or `-y`) to skip the prompt and proceed non-interactively:
+
+```sh
+rinkaku self-update --yes
+```
+
+When stdin is not a terminal (e.g. run from a script or CI) and `--yes` is
+not given, `self-update` refuses to run rather than silently proceeding.
+
 ## Usage
 
 ```sh
