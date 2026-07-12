@@ -117,6 +117,17 @@ not given, `self-update` refuses to run rather than silently proceeding.
 ## Usage
 
 ```sh
+# Bare invocation, run interactively inside a repository: no diff
+# involved, opens the TUI with a whole-repo outline — every symbol and
+# its dependency structure, for onboarding or architecture review
+# (see ADR 0017)
+rinkaku
+
+# Same whole-repo outline, printed as Markdown instead of opening the TUI
+# (this also happens automatically whenever stdout isn't a terminal, e.g.
+# `rinkaku > outline.md`)
+rinkaku --format md
+
 # From a GitHub PR (stdin, no local clone required)
 gh pr diff 123 | rinkaku
 
@@ -426,7 +437,11 @@ rinkaku --base main --tui
 
 `--tui` takes the same input flow as every other mode (stdin / `--base` /
 `--pr`) and only changes the output stage, so it conflicts with `--format`
-rather than combining with it.
+rather than combining with it. Bare `rinkaku`, run on an interactive
+terminal with no `--base`/`--pr`, opens the TUI automatically on a
+whole-repo outline instead of a diff ([ADR 0017](docs/adr/0017-whole-repo-outline-as-default-input-mode.md));
+its diff pane (`d`) has nothing to show in that case and renders a
+placeholder.
 
 ### What it shows
 

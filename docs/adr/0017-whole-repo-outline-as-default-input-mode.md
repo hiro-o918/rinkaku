@@ -1,6 +1,6 @@
 # 0017. Whole-repo outline as the default input mode
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-12
 
 ## Context
