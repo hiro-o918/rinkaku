@@ -470,6 +470,14 @@ placeholder.
   for a file row, or just the hunks intersecting a symbol's own line range
   for a symbol row (a directory row has no single diff to show, since it
   spans multiple files).
+- **Scrolling the right-hand pane:** `J`/`K` scroll the Detail/Diff pane
+  down/up by one line when its content is too long to fit — the pane's
+  title grows a `(first-last/total)` suffix (e.g. `Detail (1-17/43)`)
+  whenever there's more to see, so a long cycle-edge list or a large
+  file's diff doesn't quietly get cut off. The scroll position resets to
+  the top whenever the underlying content could have changed: moving the
+  cursor, toggling between the detail and diff views, or returning from
+  the source view.
 - **Source view:** `s` on a symbol row opens that file, scrolled to and
   highlighting the symbol's line range; `esc`/`q` returns to the entry
   view. Reads the working tree directly (not the historical commit a
@@ -489,6 +497,7 @@ placeholder.
 | `c` / `C` | Collapse every row |
 | `o` / `O` | Toggle topological / alphabetical ordering |
 | `d` / `D` | Toggle the right-hand pane between detail and diff |
+| `J` / `K` | Scroll the right-hand pane (Detail/Diff) down/up |
 | `s` / `S` | Open the source view for the symbol under the cursor |
 | `esc` / `q` | Return to the entry view (from the source view) |
 | `q` / `ctrl-c` | Quit (from the entry view) |

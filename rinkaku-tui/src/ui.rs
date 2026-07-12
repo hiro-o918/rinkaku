@@ -84,9 +84,8 @@ fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
-    let block = Block::bordered().title(" Detail ");
-
     let Some(detail) = app.selected_detail(report) else {
+        let block = Block::bordered().title(" Detail ");
         let paragraph = Paragraph::new("(select a row to see its detail)")
             .block(block)
             .wrap(ratatui::widgets::Wrap { trim: false });
@@ -99,10 +98,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
         SelectedDetail::Dir(detail) => dir_detail_lines(detail, report.origin),
         SelectedDetail::File(detail) => file_detail_lines(detail),
     };
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(ratatui::widgets::Wrap { trim: false });
-    frame.render_widget(paragraph, area);
+    render_scrollable_pane(frame, " Detail ", &lines, app.right_pane_scroll(), area);
 }
 
 /// Draws the diff pane (TUI iteration 2, [`RightPane::Diff`]): the raw
@@ -121,9 +117,8 @@ fn draw_diff_pane(
     diff_files: &[FileHunks],
     area: Rect,
 ) {
-    let block = Block::bordered().title(" Diff ");
-
     let Some(target) = app.selected_diff_target(report) else {
+        let block = Block::bordered().title(" Diff ");
         let paragraph = Paragraph::new("(select a symbol or file row to see its diff)")
             .block(block)
             .wrap(ratatui::widgets::Wrap { trim: false });
@@ -151,6 +146,7 @@ fn draw_diff_pane(
     };
 
     if hunks.is_empty() {
+        let block = Block::bordered().title(" Diff ");
         let paragraph = Paragraph::new(format!("(no diff hunks found for {path})"))
             .block(block)
             .wrap(ratatui::widgets::Wrap { trim: false });
@@ -159,10 +155,81 @@ fn draw_diff_pane(
     }
 
     let lines = diff_pane_lines(&hunks);
-    let paragraph = Paragraph::new(lines)
+    render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
+}
+
+/// Renders `lines` into a bordered pane titled `title`, scrolled to
+/// `requested_scroll` lines down and clamped to what actually fits
+/// (`clamp_scroll`'s own doc comment on why clamping only happens here,
+/// not in `crate::app`). When the content overflows the pane's inner
+/// height, the title grows a `(first-last/total)` suffix so the reviewer
+/// knows more content exists below/above without needing to scroll blind
+/// (this iteration's answer to "全部が見えているように見えて実は続きがある"
+/// — the same concern `crate::source`'s highlighted-window view sidesteps
+/// by auto-centering instead of paginating).
+///
+/// Both the Detail and Diff panes share this one function rather than each
+/// duplicating the clamp-then-scroll-then-indicator sequence, since the two
+/// panes' only difference is which `Vec<Line>` and title they pass in.
+fn render_scrollable_pane(
+    frame: &mut Frame,
+    title: &str,
+    lines: &[Line<'static>],
+    requested_scroll: usize,
+    area: Rect,
+) {
+    // 2 rows for the top/bottom border, matching `draw_source_screen`'s
+    // own `saturating_sub(2)` convention for a bordered pane's inner
+    // height.
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let scroll = clamp_scroll(lines.len(), viewport_height, requested_scroll);
+
+    // Callers pass a title already padded with a leading/trailing space
+    // (e.g. `" Detail "`, matching every other `Block` title in this
+    // module) — trim the trailing one before appending the indicator so
+    // the two don't produce a double space (`"Detail  (1-17/43)"`).
+    let title = match scroll_indicator(lines.len(), viewport_height, scroll) {
+        Some(indicator) => format!("{}{indicator} ", title.trim_end()),
+        None => title.to_string(),
+    };
+
+    let block = Block::bordered().title(title);
+    let paragraph = Paragraph::new(lines.to_vec())
         .block(block)
-        .wrap(ratatui::widgets::Wrap { trim: false });
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .scroll((scroll as u16, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// Clamps a requested scroll offset (lines) to `[0, content_len -
+/// viewport_height]` — the largest offset that still leaves the viewport
+/// full of content rather than trailing off into blank space below the
+/// last line. Returns 0 whenever the content already fits entirely
+/// (`content_len <= viewport_height`, including `viewport_height == 0`
+/// defensively), so a pane that has nothing to scroll can never report a
+/// nonzero offset.
+///
+/// Deliberately pure and free of any `ratatui`/ `Rect` type (just the three
+/// `usize`s a caller already has in hand) so it is unit-testable without a
+/// `TestBackend` — `crate::app::App` intentionally does not do this
+/// clamping itself (see `right_pane_scroll`'s own doc comment): only
+/// `crate::ui`, at draw time, knows the pane's actual rendered height.
+fn clamp_scroll(content_len: usize, viewport_height: usize, requested_scroll: usize) -> usize {
+    let max_scroll = content_len.saturating_sub(viewport_height);
+    requested_scroll.min(max_scroll)
+}
+
+/// Builds the `(first-last/total)` title suffix for a pane whose content
+/// overflows its viewport, or `None` when everything already fits (nothing
+/// to indicate). `scroll` must already be clamped (`clamp_scroll`) — this
+/// function does not re-clamp, it only formats.
+fn scroll_indicator(content_len: usize, viewport_height: usize, scroll: usize) -> Option<String> {
+    if content_len <= viewport_height {
+        return None;
+    }
+    let first_visible = scroll + 1;
+    let last_visible = (scroll + viewport_height).min(content_len);
+    Some(format!(" ({first_visible}-{last_visible}/{content_len})"))
 }
 
 /// Formats a list of [`Hunk`]s into styled lines: hunk headers dim, `+`
@@ -452,7 +519,7 @@ fn source_lines(source: &SourceView, start: usize, end: usize) -> Vec<Line<'stat
 fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
     let help = match app.screen() {
         Screen::Entry => {
-            "j/k: move  enter/space: expand  e/c: expand/collapse all  o: order  d: diff  s: source  q: quit"
+            "j/k: move  enter/space: expand  e/c: expand/collapse  o: order  d: diff  J/K: scroll  s: source  q: quit"
         }
         Screen::Source { .. } => "esc/q: back",
     };
@@ -698,10 +765,11 @@ index e69de29..4b825dc 100644
         let report = report_with_one_symbol();
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
-        // module: the full help text is ~86 columns and would otherwise
-        // be truncated (the status line intentionally does not wrap),
-        // hiding the "quit" fragment this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
+        // module: the full help text (now including the J/K scroll hint)
+        // is ~104 columns and would otherwise be truncated (the status
+        // line intentionally does not wrap), hiding the "quit" fragment
+        // this test checks for.
+        let mut terminal = Terminal::new(TestBackend::new(110, 20)).expect("terminal");
 
         terminal
             .draw(|frame| draw(frame, &app, &report, &[]))
@@ -730,5 +798,205 @@ index e69de29..4b825dc 100644
         assert!(text.contains("Source: lib.rs::foo"));
         assert!(text.contains("failed to read"));
         assert!(text.contains("back"));
+    }
+
+    // --- clamp_scroll / scroll_indicator (pure helpers) ---
+
+    #[test]
+    fn should_return_zero_scroll_when_content_fits_entirely() {
+        let actual = clamp_scroll(5, 10, 3);
+
+        assert_eq!(0, actual);
+    }
+
+    #[test]
+    fn should_clamp_requested_scroll_to_max_scroll_when_it_overshoots() {
+        // 20 lines of content in a 10-row viewport: max_scroll = 10, so a
+        // request of 15 clamps down to 10 (the last full page).
+        let actual = clamp_scroll(20, 10, 15);
+
+        assert_eq!(10, actual);
+    }
+
+    #[test]
+    fn should_pass_through_requested_scroll_when_within_bounds() {
+        let actual = clamp_scroll(20, 10, 4);
+
+        assert_eq!(4, actual);
+    }
+
+    #[test]
+    fn should_return_zero_scroll_when_viewport_height_is_zero() {
+        // A degenerate (zero-height) pane can never scroll — `max_scroll`
+        // saturates at `content_len` itself, but a requested scroll of 0
+        // (the only value `App` ever starts at) still clamps to 0.
+        let actual = clamp_scroll(20, 0, 0);
+
+        assert_eq!(0, actual);
+    }
+
+    #[test]
+    fn should_return_none_indicator_when_content_fits_entirely() {
+        let actual = scroll_indicator(5, 10, 0);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_indicator_at_top_when_content_overflows_and_scroll_is_zero() {
+        let actual = scroll_indicator(20, 10, 0);
+
+        assert_eq!(Some(" (1-10/20)".to_string()), actual);
+    }
+
+    #[test]
+    fn should_return_indicator_reflecting_scroll_position() {
+        let actual = scroll_indicator(20, 10, 4);
+
+        assert_eq!(Some(" (5-14/20)".to_string()), actual);
+    }
+
+    #[test]
+    fn should_clamp_last_visible_to_content_len_at_max_scroll() {
+        // scroll=10, viewport=10 would naively suggest last_visible=20,
+        // which happens to equal content_len here anyway; this pins the
+        // `.min(content_len)` clamp directly rather than relying on the
+        // coincidence.
+        let actual = scroll_indicator(20, 10, 10);
+
+        assert_eq!(Some(" (11-20/20)".to_string()), actual);
+    }
+
+    // --- rendered scroll behavior (TestBackend) ---
+
+    /// A report whose single file has `count` symbols, each referencing
+    /// `report_with_one_symbol`'s pattern but repeated enough times that
+    /// `file_detail_lines` produces more lines than a typical test
+    /// viewport's height — used to exercise `draw_detail_pane`'s scrolling
+    /// and overflow-indicator paths, which need content that does not fit
+    /// in one screen.
+    fn report_with_many_symbols(count: usize) -> Report {
+        let symbols: Vec<ExtractedSymbol> = (0..count)
+            .map(|i| symbol(&format!("lib.rs::sym{i}"), &format!("sym{i}")))
+            .collect();
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols,
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        }
+    }
+
+    #[test]
+    fn should_show_overflow_indicator_in_detail_pane_title_when_content_exceeds_viewport() {
+        // Row 0 is the "lib.rs" file row itself: `file_detail_lines` lists
+        // a "File lib.rs" header, a blank line, a "Symbols (40)" header,
+        // then all 40 symbols (43 lines total) — comfortably more than a
+        // 20-row terminal's inner pane height can show at once.
+        let report = report_with_many_symbols(40);
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // Exact bounds depend on the pane's inner height (20 - 2 for the
+        // status line/border layout), so this only pins the shape/start
+        // rather than the literal end number, keeping the test robust to
+        // an unrelated layout tweak elsewhere in this module.
+        assert!(text.contains("Detail (1-"));
+        assert!(text.contains("/43)"));
+    }
+
+    #[test]
+    fn should_not_show_overflow_indicator_when_content_fits_the_viewport() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains(" Detail "));
+        assert!(!text.contains("Detail ("));
+    }
+
+    #[test]
+    fn should_scroll_detail_pane_content_down_when_scroll_down_is_pressed() {
+        let report = report_with_many_symbols(40);
+        let app = App::new(&report).handle_key(crate::app::InputKey::ScrollDown);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // One line scrolled down: the first visible content line is now 2
+        // instead of 1, and the "File lib.rs" header line (the very first
+        // content line, before the two blank/"Symbols (40)" header lines
+        // that precede the actual symbol list) has scrolled out of view.
+        assert!(text.contains("Detail (2-"));
+        assert!(!text.contains("File lib.rs"));
+    }
+
+    #[test]
+    fn should_clamp_detail_pane_scroll_at_the_last_page() {
+        // Request an enormous scroll far past the end of a 40-symbol
+        // report; the pane must clamp to its last full page rather than
+        // showing a mostly-blank pane past the end of the content.
+        let report = report_with_many_symbols(40);
+        let mut app = App::new(&report);
+        for _ in 0..1000 {
+            app = app.handle_key(crate::app::InputKey::ScrollDown);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // The last symbol must be visible once clamped to the final page.
+        assert!(text.contains("sym39"));
+    }
+
+    #[test]
+    fn should_reset_scroll_indicator_when_cursor_moves_to_a_different_row() {
+        // Scroll down on the file row's detail, then move the cursor onto
+        // a symbol row: `App::handle_key`'s reset-on-cursor-move rule means
+        // the newly selected row's own (short) detail must render from the
+        // top, not carry over the file row's scroll offset.
+        let report = report_with_many_symbols(40);
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::ScrollDown)
+            .handle_key(crate::app::InputKey::ScrollDown)
+            .handle_key(crate::app::InputKey::Down);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // A single symbol's own detail (used-by/callees, both empty here)
+        // fits well within the viewport, so no overflow indicator should
+        // appear even though the file row's detail definitely overflowed.
+        assert!(text.contains(" Detail "));
+        assert!(!text.contains("Detail ("));
     }
 }
