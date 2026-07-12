@@ -449,7 +449,10 @@ rather than combining with it.
   highlighting the symbol's line range; `esc`/`q` returns to the entry
   view. Reads the working tree directly (not the historical commit a
   `--base`/`--pr` diff was computed against), so it always shows the
-  file's current content.
+  file's current content — note that the highlighted line range itself is
+  from analysis time, so it can drift (or, if the file has since shrunk,
+  get clamped to the end of the file) if you edit the file after opening
+  the TUI.
 
 ### Key bindings
 

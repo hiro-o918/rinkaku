@@ -46,6 +46,15 @@ pub struct SourceView {
 /// built from a historical diff (the alternative — plumbing the resolved
 /// head SHA all the way from `main.rs` into `rinkaku_tui::run` just for
 /// this one view — is deferred until a real user need for it shows up).
+///
+/// A consequence of reading live: a symbol's `range` in `report` reflects
+/// the file's content *at analysis time*. If the file is edited on disk
+/// afterward (including between opening the TUI and pressing `s` on a
+/// given row), the highlighted lines can drift from the symbol's actual
+/// current location, or — if the file shrank — extend past its current
+/// end entirely. [`visible_window`] clamps to the file's current length
+/// either way rather than producing an out-of-bounds window, but it makes
+/// no attempt to re-locate the symbol in the changed content.
 pub fn load_symbol_source(
     report: &rinkaku_core::render::Report,
     id: &str,
@@ -180,6 +189,21 @@ mod tests {
         let (start, _end) = visible_window(1000, 10, 20, 10);
 
         assert_eq!(9, start);
+    }
+
+    #[test]
+    fn should_clamp_to_end_of_file_when_highlight_range_exceeds_current_line_count() {
+        // The symbol's range (50-60) came from analysis time; the file has
+        // since shrunk to 10 lines (e.g. edited in the working tree after
+        // the diff was analyzed — `load_symbol_source`'s own doc comment
+        // notes the source view always reads the *current* working tree,
+        // not the analyzed commit). Neither endpoint of the highlight is a
+        // valid line any more, so this must degrade to "clamp to the end
+        // of the file" rather than producing an out-of-bounds or empty
+        // window.
+        let (start, end) = visible_window(10, 50, 60, 10);
+
+        assert_eq!((0, 10), (start, end));
     }
 
     use rinkaku_core::diff::LineRange;
