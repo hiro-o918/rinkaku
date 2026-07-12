@@ -81,6 +81,18 @@ Where `<target>` is one of `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, or
 `aarch64-apple-darwin`.
 
+### Updating
+
+```sh
+rinkaku self-update
+```
+
+Downloads and installs the latest GitHub release for your platform,
+replacing the running binary in place. If you installed via Homebrew or
+`cargo install`, prefer `brew upgrade` or `cargo install rinkaku` instead
+so your package manager's bookkeeping stays in sync — `self-update` works
+either way, but it bypasses those managers.
+
 ## Usage
 
 ```sh
