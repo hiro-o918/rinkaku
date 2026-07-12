@@ -587,6 +587,41 @@ mod tests {
     }
 
     #[test]
+    fn should_disambiguate_every_node_id_when_three_symbols_share_path_and_name() {
+        // Guards against an off-by-one in the "more than 2" case: a naive
+        // implementation could special-case pairs (e.g. compare only the
+        // first two) and mishandle a third or later duplicate. All three
+        // must get a distinct `@{start_line}`-suffixed id.
+        let files = vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![
+                ExtractedSymbol {
+                    range: LineRange { start: 1, end: 2 },
+                    ..symbol("foo", vec![])
+                },
+                ExtractedSymbol {
+                    range: LineRange { start: 10, end: 12 },
+                    ..symbol("foo", vec![])
+                },
+                ExtractedSymbol {
+                    range: LineRange { start: 20, end: 22 },
+                    ..symbol("foo", vec![])
+                },
+            ],
+        }];
+
+        let expected_ids = vec![
+            "src/lib.rs::foo@1".to_string(),
+            "src/lib.rs::foo@10".to_string(),
+            "src/lib.rs::foo@20".to_string(),
+        ];
+        let actual = build_graph(&files);
+        let actual_ids: Vec<NodeId> = actual.nodes.iter().map(|n| n.id.clone()).collect();
+
+        assert_eq!(expected_ids, actual_ids);
+    }
+
+    #[test]
     fn should_find_root_via_scc_representative_when_two_symbols_reference_each_other() {
         // `foo` and `bar` reference each other (mutual recursion): neither
         // has an in-degree-0 raw node, but their SCC as a whole has no
