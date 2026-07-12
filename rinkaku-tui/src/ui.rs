@@ -9,7 +9,7 @@
 //! is covered separately... kept few and coarse — enough to catch a broken
 //! layout, not to pin every pixel").
 
-use crate::app::{App, DiffTarget, RightPane, Screen, SelectedDetail};
+use crate::app::{App, DiffTarget, PivotSelection, RightPane, Screen, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
 use crate::diff_view::{DiffLine, DiffLineKind, FileHunks, Hunk, file_hunks, hunks_for_range};
 use crate::highlight::{self, HighlightedFile, PALETTE, TokenSpan};
@@ -32,20 +32,32 @@ use unicode_width::UnicodeWidthChar;
 /// outside the draw loop), and `diff_highlights` is that same diff's
 /// per-line syntax highlighting, computed once alongside it (ADR 0018) —
 /// both are only consulted when the right pane is in [`RightPane::Diff`]
-/// mode.
+/// mode. `pivot_selection` is likewise computed once per handled key by
+/// `crate::run_app` (not here) whenever the right pane is in
+/// [`RightPane::Pivot`] mode — see `App::selected_pivot_view`'s own doc
+/// comment on why this function must not call it itself.
 pub fn draw(
     frame: &mut Frame,
     app: &App,
     report: &Report,
     diff_files: &[FileHunks],
     diff_highlights: &[HighlightedFile],
+    pivot_selection: &PivotSelection,
 ) {
     let area = frame.area();
     let [body, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
     match app.screen() {
-        Screen::Entry => draw_entry_screen(frame, app, report, diff_files, diff_highlights, body),
+        Screen::Entry => draw_entry_screen(
+            frame,
+            app,
+            report,
+            diff_files,
+            diff_highlights,
+            pivot_selection,
+            body,
+        ),
         Screen::Source { symbol_id } => draw_source_screen(frame, report, symbol_id, body),
     }
 
@@ -64,6 +76,7 @@ fn draw_entry_screen(
     report: &Report,
     diff_files: &[FileHunks],
     diff_highlights: &[HighlightedFile],
+    pivot_selection: &PivotSelection,
     area: Rect,
 ) {
     let [tree_area, right_area] =
@@ -75,6 +88,7 @@ fn draw_entry_screen(
         RightPane::Diff => {
             draw_diff_pane(frame, app, report, diff_files, diff_highlights, right_area)
         }
+        RightPane::Pivot => draw_pivot_pane(frame, app, pivot_selection, right_area),
     }
 }
 
@@ -179,6 +193,73 @@ fn draw_diff_pane(
 
     let lines = diff_pane_lines(&hunks, source_file_hunks, highlighted_file);
     render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
+}
+
+/// Draws the pivot pane (ADR 0019, [`RightPane::Pivot`]): the entry-tree
+/// text rooted at the directory/file row under the cursor, following the
+/// cursor as it moves. `selection` is already computed by `crate::run_app`
+/// (via `App::selected_pivot_view`) once per handled key, not here — this
+/// function only lays it out, since `terminal.draw` itself runs on every
+/// ~100ms idle poll tick as well as on an actual key press, and re-deriving
+/// the pivot tree (an O(V+E) graph walk) on every one of those idle ticks
+/// was exactly the per-frame recompute this split avoids. A symbol row
+/// shows a placeholder asking for a directory/file row instead — pivoting
+/// on a single symbol has no directory-scoped meaning (ADR 0019's
+/// `path_prefix` is meant to carve out a layer, not re-derive what a single
+/// symbol's own detail pane already shows). A directory/file row whose path
+/// matches no symbol shows its own "no symbols under `<path>`" message,
+/// mirroring `main.rs`'s `--entry` CLI note.
+fn draw_pivot_pane(frame: &mut Frame, app: &App, selection: &PivotSelection, area: Rect) {
+    match selection {
+        PivotSelection::NotApplicable => {
+            let block = Block::bordered().title(" Pivot ");
+            let paragraph = Paragraph::new("(select a directory or file row to pivot)")
+                .block(block)
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+        }
+        PivotSelection::Empty { path } => {
+            let block = Block::bordered().title(" Pivot ");
+            let paragraph = Paragraph::new(format!("(no symbols under {path})"))
+                .block(block)
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+        }
+        PivotSelection::View(view) => {
+            let lines = pivot_pane_lines(view);
+            render_scrollable_pane(frame, " Pivot ", &lines, app.right_pane_scroll(), area);
+        }
+    }
+}
+
+/// Formats a [`crate::pivot::PivotView`]'s flattened [`crate::pivot::PivotLine`]s
+/// into styled [`Line`]s: indentation by depth (same `INDENT_WIDTH`-per-level
+/// convention as `crate::row_view::entry_row_line`), a dimmed style for
+/// `outside_prefix` lines (reached only by expanding a dependency edge past
+/// the pivoted path), a `(see above)` suffix for `already_printed` lines
+/// (matching `rinkaku-core::render`'s Markdown tree), and yellow/bold for a
+/// cycle-warning line (matching `entry_row_line`'s existing `(cycle)`
+/// marker styling).
+fn pivot_pane_lines(view: &crate::pivot::PivotView) -> Vec<Line<'static>> {
+    const INDENT_WIDTH: usize = 2;
+    view.lines
+        .iter()
+        .map(|line| {
+            let indent = " ".repeat(line.depth * INDENT_WIDTH);
+            let mut style = Style::default();
+            if line.is_cycle_warning {
+                style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+            } else if line.outside_prefix {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            let text = if line.already_printed {
+                format!("{indent}- {} (see above)", line.label)
+            } else {
+                format!("{indent}- {}", line.label)
+            };
+            Line::from(Span::styled(text, style))
+        })
+        .collect()
 }
 
 /// Renders `lines` into a bordered pane titled `title`, scrolled to
@@ -800,7 +881,7 @@ fn source_lines(source: &SourceView, start: usize, end: usize) -> Vec<Line<'stat
 fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
     let help = match app.screen() {
         Screen::Entry => {
-            "j/k: move  enter/space: expand  e/c: expand/collapse  o: order  d: diff  J/K: scroll  s: source  q: quit"
+            "j/k: move  enter/space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  J/K: scroll  s: source  q: quit"
         }
         Screen::Source { .. } => "esc/q: back",
     };
@@ -890,7 +971,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -924,7 +1014,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -953,7 +1052,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -990,7 +1098,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1019,12 +1136,83 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"));
         assert!(text.contains("+fn foo() {}"));
+    }
+
+    #[test]
+    fn should_draw_pivot_pane_with_tree_lines_when_toggled_on_a_file_row() {
+        // Same fixture shape as `report_with_one_symbol`, but with a graph
+        // actually populated (that fixture leaves `graph` empty since most
+        // of this module's tests don't need one) so pivoting on "lib.rs"
+        // yields a real `PivotSelection::View` instead of `Empty`.
+        let report = Report {
+            graph: SymbolGraph {
+                nodes: vec![rinkaku_core::graph::Node {
+                    id: "lib.rs::foo".to_string(),
+                    path: "lib.rs".to_string(),
+                    name: "foo".to_string(),
+                }],
+                edges: vec![],
+                roots: vec!["lib.rs::foo".to_string()],
+            },
+            ..report_with_one_symbol()
+        };
+        // Row 0 is the "lib.rs" file row itself (cursor starts there).
+        let app = App::new(&report).handle_key(crate::app::InputKey::TogglePivot);
+        // `crate::run_app` computes this once per handled key and hands it
+        // into `draw` (see `draw`'s own doc comment on why `draw` itself
+        // must not call `App::selected_pivot_view`) — this test recreates
+        // that same one-shot computation rather than a per-frame one.
+        let pivot_selection = app.selected_pivot_view(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[], &[], &pivot_selection))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Pivot"));
+        assert!(text.contains("fn foo (lib.rs)"));
+    }
+
+    #[test]
+    fn should_draw_pivot_placeholder_when_cursor_is_on_a_symbol_row() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::TogglePivot);
+        let pivot_selection = app.selected_pivot_view(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[], &[], &pivot_selection))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Pivot"));
+        // Not the full placeholder sentence: the pane is narrow enough
+        // (40% of an 80-column terminal) that `Paragraph`'s word-wrapping
+        // splits it across rows, and `buffer_text` joins rows with `\n` —
+        // a multi-row substring would never match. "directory" alone fits
+        // on one wrapped line and is unique enough to confirm the
+        // placeholder rendered, mirroring this module's other coarse
+        // fragment checks (e.g. `should_draw_entry_and_detail_panes_...`'s
+        // "Symbols" check).
+        assert!(text.contains("directory"));
     }
 
     /// Finds the buffer cell for `token`'s first character within the row
@@ -1094,7 +1282,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         // The added line's "fn" keyword: foreground colored by the keyword
@@ -1129,7 +1326,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let keyword_style = find_cell_style(&terminal, "-fn foo() {}", "fn");
@@ -1157,7 +1363,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         // Context line "fn a() {}" keeps its keyword token color but must
@@ -1192,7 +1407,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let header_style = find_cell_style(&terminal, "@@ -1,1 +1,2 @@", "@@");
@@ -1240,7 +1464,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1263,7 +1496,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1276,14 +1518,23 @@ index e69de29..4b825dc 100644
         let report = report_with_one_symbol();
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
-        // module: the full help text (now including the J/K scroll hint)
-        // is ~104 columns and would otherwise be truncated (the status
-        // line intentionally does not wrap), hiding the "quit" fragment
-        // this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(110, 20)).expect("terminal");
+        // module: the full help text (now including the J/K scroll hint and
+        // the `p: pivot` hint, ADR 0019) is ~114 columns and would
+        // otherwise be truncated (the status line intentionally does not
+        // wrap), hiding the "quit" fragment this test checks for.
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1299,7 +1550,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         // "lib.rs" does not exist relative to the test process's cwd, so
@@ -1419,7 +1679,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1438,7 +1707,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1453,7 +1731,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1478,7 +1765,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1500,7 +1796,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1649,7 +1954,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1687,7 +2001,16 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);

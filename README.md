@@ -424,6 +424,41 @@ Pass `--include-generated` to restore the previous behavior (generated
 files — by either detection method — are analyzed like any other file, in
 both output formats).
 
+### `--entry <path>`
+
+By default, "Change graph"/"Repository graph" is rooted at auto-detected
+entry points (ADR 0008): symbols nothing else in the graph depends on.
+`--entry <path>` re-roots the tree at a chosen path instead (ADR 0019) —
+entry points become the symbols under `path` that nothing else *under that
+same path* depends on, and dependency trees still expand outward through
+the whole graph as usual. This is a change of vantage point, not a filter:
+symbols outside `path` are neither hidden nor excluded from analysis, only
+no longer eligible to be roots themselves. Useful for carving a reviewable
+viewpoint out of a large or whole-repo graph — e.g. "what does this change
+look like from the API layer":
+
+```sh
+rinkaku --base main --entry src/api
+```
+
+Works with every input mode (stdin / `--base` / `--pr` / whole-repo) and
+combines with `--tui`: the TUI opens with the cursor already on the tree
+row matching `path` and the right-hand pane already in Pivot mode (the `p`
+pivot below) — the interactive session starts exactly where `--entry`
+would have rooted the Markdown/JSON tree, rather than requiring you to
+locate the row and press `p` yourself. If no tree row's path matches `path`
+exactly, the TUI opens normally (cursor on the first row, Detail pane) with
+a status-line note instead.
+
+Prints `note: no symbols under <path>` to stderr and renders an empty tree
+when no symbol's path falls under `path`. Fan-in counts (Hotspots, and the
+TUI tree's `^N` badge) stay whole-analysis under `--entry`/the TUI pivot —
+a pivot changes the vantage point (which symbols count as entry points),
+not the direction fan-in itself measures, so scoping it to the pivoted
+subset would misreport how much the rest of the repository actually
+depends on a symbol (see [ADR 0019](docs/adr/0019-entry-path-pivot-view.md)'s
+Consequences).
+
 ## Interactive TUI
 
 Markdown/JSON stay optimized for LLMs and CI ([ADR 0015](docs/adr/0015-tui-for-humans-markdown-for-machines.md));
@@ -474,14 +509,24 @@ placeholder.
   keep their green/red diff signal as a background tint so it doesn't
   compete with token colors, and any other file falls back to plain
   green/red text.
-- **Scrolling the right-hand pane:** `J`/`K` scroll the Detail/Diff pane
-  down/up by one line when its content is too long to fit — the pane's
-  title grows a `(first-last/total)` suffix (e.g. `Detail (1-17/43)`)
-  whenever there's more to see, so a long cycle-edge list or a large
-  file's diff doesn't quietly get cut off. The scroll position resets to
-  the top whenever the underlying content could have changed: moving the
-  cursor, toggling between the detail and diff views, or returning from
-  the source view.
+- **Pivot pane (right):** `p`/`P` toggles the right-hand pane to an
+  entry-tree view rooted at the directory or file row under the cursor
+  ([ADR 0019](docs/adr/0019-entry-path-pivot-view.md)) — the interactive
+  equivalent of `--entry <path>`. The tree follows the cursor: move to a
+  different directory/file row while pivoted and it re-renders rooted at
+  the new row's path; a symbol row shows a placeholder instead, since
+  pivoting only makes sense on a directory/file scope. Nodes reached only
+  by expanding a dependency edge outward past the pivoted path are dimmed
+  so you can tell "the layer I pivoted on" from "what it reaches into".
+  Press `p` again, or `d`, to leave pivot mode.
+- **Scrolling the right-hand pane:** `J`/`K` scroll the Detail/Diff/Pivot
+  pane down/up by one line when its content is too long to fit — the
+  pane's title grows a `(first-last/total)` suffix (e.g. `Detail
+  (1-17/43)`) whenever there's more to see, so a long cycle-edge list or a
+  large file's diff doesn't quietly get cut off. The scroll position
+  resets to the top whenever the underlying content could have changed:
+  moving the cursor, toggling between the detail/diff/pivot views, or
+  returning from the source view.
 - **Source view:** `s` on a symbol row opens that file, scrolled to and
   highlighting the symbol's line range; `esc`/`q` returns to the entry
   view. Reads the working tree directly (not the historical commit a
@@ -501,7 +546,8 @@ placeholder.
 | `c` / `C` | Collapse every row |
 | `o` / `O` | Toggle topological / alphabetical ordering |
 | `d` / `D` | Toggle the right-hand pane between detail and diff |
-| `J` / `K` | Scroll the right-hand pane (Detail/Diff) down/up |
+| `p` / `P` | Toggle the right-hand pane to the pivot tree rooted at the selected directory/file |
+| `J` / `K` | Scroll the right-hand pane (Detail/Diff/Pivot) down/up |
 | `s` / `S` | Open the source view for the symbol under the cursor |
 | `esc` / `q` | Return to the entry view (from the source view) |
 | `q` / `ctrl-c` | Quit (from the entry view) |

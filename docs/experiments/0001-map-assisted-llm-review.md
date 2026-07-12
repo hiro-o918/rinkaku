@@ -405,11 +405,91 @@ crossing into char/display-width code).
   unprompted. Worth adding an explicit cost-measurement note to the
   dynamic-verification instruction for changes that add per-run work.
 
+## Results (round 7)
+
+Same two-pass method, seventh subject: the entry-path pivot per ADR
+0019 (8 files, +1,493/−20 — a graph re-rooting function in core, a
+`--entry` CLI flag, and a third TUI right-pane mode). One protocol
+note up front: the orchestrator spot-checked the implementer's claim
+that pivot recomputation stays out of the idle draw path, measured
+double idle CPU, and **seeded that specific suspicion into both
+review prompts** — so the two arms' convergence on finding 1 below is
+not independent evidence, and the round's metrics should be read with
+that in mind.
+
+| Metric              | A (map)     | B (control) |
+| ------------------- | ----------- | ----------- |
+| Output tokens       | 139.8k      | 133.6k      |
+| Tool calls          | 64          | 69          |
+| Wall clock          | 518s        | 433s        |
+| Blocker findings    | 0           | 0           |
+| Should-fix findings | 2           | 2           |
+| Nit findings        | 1           | 2           |
+
+- The round's theme was **doc-versus-implementation drift**: four of
+  the seven distinct findings are cases of the code contradicting its
+  own doc comment, README, or ADR. (1) The pivot pane recomputes the
+  full O(V+E) re-rooting ~10×/sec on idle polls while its own doc
+  comments — and ADR 0019 itself — claim it doesn't (A instrumented
+  it: 57 calls in 6 idle seconds at the 100ms poll cadence; B and
+  the orchestrator each measured ~2× idle CPU). (2) `p`'s doc
+  comment promises returning to "whichever mode was active before,"
+  but `d → p → p` lands on Detail, silently discarding the Diff
+  pane (B, by key-sequence probing). (3) The README's claim that
+  `--entry` "combines with `--tui`" is a silent no-op — the TUI
+  never consults the re-rooted `graph.roots` (B, by checking a doc
+  claim against behavior). (4) Hotspots ignores `--entry` entirely,
+  an arguably-correct scoping choice that nothing documented (A, by
+  diffing pivoted and unpivoted Markdown sections).
+- Round 6 concluded that feeding lessons forward prevents defect
+  classes; round 7 adds the corrective: **the implementer *cited* the
+  once-per-run lesson while not implementing it** — the doc comments
+  say "not per frame" precisely because the spec demanded it. A
+  lesson encoded as prose in a spec can come back as a false
+  compliance claim; only verification (here, the orchestrator's CPU
+  spot-check escalated into both review prompts) catches that. Claims
+  of conformance to past lessons are review targets, not review
+  shortcuts.
+- Both arms again did their damage dynamically: instrumented call
+  counting, CPU sampling, README-claim probing, Markdown
+  section-diffing. The map's role matched rounds 4–6 — it routed A to
+  the busiest new cluster (`PivotView`/`pivot_graph`) and its
+  "Depends on" edges led to `run_app` and `apply_entry_pivot`, but
+  every actual defect needed reading beyond the flagged signatures or
+  executing the binary.
+- All four should-fix findings were fixed before merge (recompute
+  hoisted out of the draw path with the doc comments corrected;
+  prior-pane memory added; `--entry --tui` wired to open pivoted at
+  the entry path; the Hotspots scoping decision documented in ADR
+  0019 and the README), plus both nits.
+
+## Conclusions (after 7 rounds)
+
+- The protocol's value increasingly concentrates in **verifying
+  claims** — the implementer's, the doc comments', the README's —
+  rather than hunting for unclaimed behavior. Doc-impl drift was the
+  dominant defect shape in rounds 4 (dead-guard comment), and 7
+  (four separate instances), and it is exactly what adversarial
+  reading plus execution is good at.
+- Orchestrator spot-checks have graduated from redundant to
+  load-bearing twice in three rounds (round 6: the only perf
+  measurement; round 7: the seed that focused both arms on a real
+  should-fix). The third angle earns its place when it does what the
+  reviewers won't: quantitative measurement and distrust of
+  self-reported compliance.
+- Experiment hygiene note for future rounds: when the orchestrator
+  seeds a suspicion into both prompts, that finding's convergence
+  stops being an independent signal. Seed when correctness matters
+  more than the experiment (it usually does), but record it.
+
 ## Next
 
 - Consider a map feature flagging cross-crate duplicate-domain
   symbols (round 3 hypothesis, still open).
-- Round 5's second tool hypothesis (list unchanged symbols that
-  changed symbols newly depend on) also remains open.
-- Add an explicit performance-measurement step to the
-  dynamic-verification angle for changes introducing per-run work.
+- Round 5's tool hypothesis (list unchanged symbols that changed
+  symbols newly depend on) also remains open.
+- Consider an automated check (clippy lint or a draw-path assertion)
+  for the "no unbounded recompute inside the render loop" invariant —
+  it has now appeared three times (rounds 3, 7, and PR #55's spec
+  guarding against it), which is enough recurrence to justify
+  mechanizing it.
