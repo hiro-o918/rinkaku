@@ -13,18 +13,20 @@
 //!   working tree. This keeps the diff and the file content read from the
 //!   exact same commit by construction, regardless of what the working
 //!   tree currently holds (uncommitted changes, a dirty checkout, etc.).
-//! - `--pr` mode (ADR 0004, ADR 0005): the PR's base branch and head
-//!   commit are resolved via `gh pr view`, both are fetched with
+//! - `--pr` mode (ADR 0004, ADR 0005, ADR 0006): the PR's base branch and
+//!   head commit are resolved via `gh pr view`, both are fetched with
 //!   `git fetch`, and the resulting base/head SHAs are handed to exactly
 //!   the same `git show`-backed read strategy as `--base` mode — `--pr`
 //!   is a resolution step in front of the `--base` pipeline, not a
 //!   separate read strategy. A bare PR number requires running inside a
 //!   local clone of the target repository. A PR URL also uses the
 //!   current directory when its `origin` matches the URL's repository;
-//!   otherwise (ADR 0005) it auto-clones a blobless partial clone into a
-//!   per-repository cache directory and runs there instead, so URL input
-//!   works from any directory. `gh` must be installed and authenticated
-//!   either way.
+//!   otherwise it prefers an existing `ghq`-managed clone of the
+//!   repository when one is found (ADR 0006), and only falls back to
+//!   auto-cloning a blobless partial clone into a per-repository cache
+//!   directory (ADR 0005) if neither the cwd nor `ghq` has one — so URL
+//!   input works from any directory either way. `gh` must be installed
+//!   and authenticated either way.
 //! - stdin mode: the diff's provenance is unknown to rinkaku (it could be
 //!   `gh pr diff`, a saved patch file, anything). Files are read off the
 //!   working tree, under the assumption that **the diff is consistent
@@ -183,7 +185,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Determines which repository `--pr` mode should run its `git` commands
-/// in (ADR 0005), and clones one into the cache if needed.
+/// in, and clones one into the cache if needed. Probes in order (ADR
+/// 0006): (1) the current directory, (2) a ghq-managed clone, (3) the
+/// cache clone (ADR 0005).
 ///
 /// `PrArg::Number` always uses the process's current directory (`None`,
 /// meaning "no override" to the `cwd` parameters downstream) — a bare
@@ -194,10 +198,18 @@ fn main() -> anyhow::Result<()> {
 /// clone of that repository (`git remote get-url origin` matching
 /// `owner`/`repo`, case-insensitively via `github_remote_matches`); if so
 /// it also returns `None`, reusing the cwd exactly like `PrArg::Number`
-/// does today. Otherwise it resolves the per-repository cache directory
-/// (`cache_repo_dir`, reading the real environment here at the boundary)
-/// and clones into it if it doesn't exist yet — an existing cache entry
-/// is left alone here and refreshed by the `git fetch` calls `main` makes
+/// does today. Otherwise it asks `ghq list --full-path --exact
+/// <owner>/<repo>` for candidate clones (`ghq_candidate_clones`) and
+/// picks the first whose real origin matches (`select_matching_clone`,
+/// resolving each candidate's origin via `git_remote_origin_url`); ghq
+/// being absent, erroring, or returning only non-matching clones all
+/// fall through silently to this step returning `None` (per ADR 0006 —
+/// `ghq_candidate_clones` already logs the reason at debug level). Only
+/// if neither the cwd nor a ghq clone matches does it fall back to the
+/// per-repository cache directory (`cache_repo_dir`, reading the real
+/// environment here at the boundary) and clone into it if it doesn't
+/// exist yet — an existing cache entry, like a discovered ghq clone, is
+/// left alone here and refreshed by the `git fetch` calls `main` makes
 /// afterwards, not re-cloned.
 fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBuf>> {
     let PrArg::Url { owner, repo, .. } = parsed else {
@@ -208,6 +220,16 @@ fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBu
         && github_remote_matches(&origin, owner, repo)
     {
         return Ok(None);
+    }
+
+    let ghq_candidates = ghq_candidate_clones(owner, repo);
+    if let Some(discovered) = select_matching_clone(
+        &ghq_candidates,
+        |path| git_remote_origin_url(Some(path)).ok().flatten(),
+        owner,
+        repo,
+    ) {
+        return Ok(Some(discovered));
     }
 
     let dir = cache_repo_dir(
@@ -714,6 +736,86 @@ fn clone_repo_into_cache(owner: &str, repo: &str, dir: &std::path::Path) -> anyh
     Ok(())
 }
 
+/// Parses `ghq list --full-path --exact <owner>/<repo>`'s stdout into
+/// candidate clone paths: one per non-blank line, trimmed. `ghq` prints
+/// one absolute path per line and nothing else on success, but blank
+/// lines (a trailing newline, or possibly a stray empty line) are
+/// filtered out defensively rather than turned into a bogus empty-path
+/// candidate.
+fn parse_ghq_list_output(stdout: &str) -> Vec<std::path::PathBuf> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
+/// Runs `ghq list --full-path --exact <owner>/<repo>` and returns the
+/// candidate clone paths it reports (ADR 0006's ghq-discovery probe,
+/// step 2 between the cwd check and the cache fallback).
+///
+/// Always returns an empty `Vec` rather than an `Err` — never a fatal
+/// error for `--pr` mode — for every way this can fail to find a usable
+/// clone: `ghq` missing from `PATH` (`Command::output` fails with
+/// `io::ErrorKind::NotFound`), a non-zero exit (e.g. `ghq` installed but
+/// its own config is broken), or a zero exit with no matching clones.
+/// ADR 0006 is explicit that all of these "fall through silently to the
+/// cache"; a `log::debug!` records which case fired, for anyone who wants
+/// to know why a clone wasn't discovered without it being an error.
+fn ghq_candidate_clones(owner: &str, repo: &str) -> Vec<std::path::PathBuf> {
+    let slug = format!("{owner}/{repo}");
+    let output = match std::process::Command::new("ghq")
+        .args(["list", "--full-path", "--exact", &slug])
+        .output()
+    {
+        Ok(output) => output,
+        Err(source) => {
+            log::debug!("ghq not runnable, falling back to cache for {slug}: {source}");
+            return Vec::new();
+        }
+    };
+    if !output.status.success() {
+        log::debug!(
+            "ghq list {slug} exited non-zero, falling back to cache: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Vec::new();
+    }
+    match String::from_utf8(output.stdout) {
+        Ok(stdout) => parse_ghq_list_output(&stdout),
+        Err(source) => {
+            log::debug!(
+                "ghq list {slug} produced non-UTF-8 output, falling back to cache: {source}"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// Picks the first of `candidates` whose origin (resolved by the injected
+/// `origin_of` port) matches `owner`/`repo` per `github_remote_matches`.
+/// `None` if `candidates` is empty or none of them match.
+///
+/// `origin_of` is injected — production wires it to
+/// `|path| git_remote_origin_url(Some(path)).ok().flatten()`, tests wire
+/// it to an in-memory map — so this selection logic is unit-testable
+/// without shelling out to `git`, following the same read-file-port style
+/// as `analyze_diff`/`build_resolver` elsewhere in this file.
+fn select_matching_clone(
+    candidates: &[std::path::PathBuf],
+    origin_of: impl Fn(&std::path::Path) -> Option<String>,
+    owner: &str,
+    repo: &str,
+) -> Option<std::path::PathBuf> {
+    candidates
+        .iter()
+        .find(|candidate| {
+            origin_of(candidate).is_some_and(|origin| github_remote_matches(&origin, owner, repo))
+        })
+        .cloned()
+}
+
 /// Reads a changed file's new-side content off the working tree.
 fn read_working_tree_file(path: &str) -> std::io::Result<String> {
     std::fs::read_to_string(path)
@@ -1107,6 +1209,89 @@ mod tests {
         let actual = cache_repo_dir(None, None, None, "octocat", "hello-world");
 
         assert!(actual.is_err());
+    }
+
+    #[rstest]
+    #[case::should_parse_single_line(
+        "/home/user/ghq/github.com/octocat/hello-world\n",
+        vec![std::path::PathBuf::from("/home/user/ghq/github.com/octocat/hello-world")]
+    )]
+    #[case::should_parse_multiple_lines(
+        "/home/user/ghq/github.com/octocat/hello-world\n/home/user/work/hello-world\n",
+        vec![
+            std::path::PathBuf::from("/home/user/ghq/github.com/octocat/hello-world"),
+            std::path::PathBuf::from("/home/user/work/hello-world"),
+        ]
+    )]
+    #[case::should_skip_blank_lines_between_entries(
+        "/home/user/ghq/github.com/octocat/hello-world\n\n/home/user/work/hello-world\n",
+        vec![
+            std::path::PathBuf::from("/home/user/ghq/github.com/octocat/hello-world"),
+            std::path::PathBuf::from("/home/user/work/hello-world"),
+        ]
+    )]
+    #[case::should_trim_surrounding_whitespace_per_line(
+        "  /home/user/ghq/github.com/octocat/hello-world  \n",
+        vec![std::path::PathBuf::from("/home/user/ghq/github.com/octocat/hello-world")]
+    )]
+    #[case::should_return_empty_vec_for_empty_string("", vec![])]
+    #[case::should_return_empty_vec_for_whitespace_only_string("\n\n  \n", vec![])]
+    fn should_parse_ghq_list_output(
+        #[case] stdout: &str,
+        #[case] expected: Vec<std::path::PathBuf>,
+    ) {
+        let actual = parse_ghq_list_output(stdout);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[rstest]
+    #[case::should_return_first_candidate_when_it_matches(
+        vec!["/a", "/b"],
+        vec![("/a", "https://github.com/octocat/hello-world.git")],
+        Some(std::path::PathBuf::from("/a"))
+    )]
+    #[case::should_return_later_candidate_when_earlier_ones_mismatch(
+        vec!["/a", "/b", "/c"],
+        vec![
+            ("/a", "https://github.com/someone-else/other-repo.git"),
+            ("/b", "https://github.com/octocat/hello-world.git"),
+        ],
+        Some(std::path::PathBuf::from("/b"))
+    )]
+    #[case::should_return_none_when_no_candidate_matches(
+        vec!["/a", "/b"],
+        vec![
+            ("/a", "https://github.com/someone-else/other-repo.git"),
+            ("/b", "https://gitlab.com/octocat/hello-world.git"),
+        ],
+        None
+    )]
+    #[case::should_return_none_when_candidates_is_empty(vec![], vec![], None)]
+    #[case::should_return_none_when_origin_lookup_yields_nothing_for_any_candidate(
+        vec!["/a"],
+        vec![],
+        None
+    )]
+    fn should_select_matching_clone(
+        #[case] candidates: Vec<&str>,
+        #[case] origins: Vec<(&str, &str)>,
+        #[case] expected: Option<std::path::PathBuf>,
+    ) {
+        let candidates: Vec<std::path::PathBuf> = candidates
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let origin_of = |path: &std::path::Path| {
+            origins
+                .iter()
+                .find(|(candidate_path, _)| std::path::Path::new(candidate_path) == path)
+                .map(|(_, origin)| origin.to_string())
+        };
+
+        let actual = select_matching_clone(&candidates, origin_of, "octocat", "hello-world");
+
+        assert_eq!(expected, actual);
     }
 
     #[test]
