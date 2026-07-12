@@ -72,6 +72,17 @@ pub enum NodeKind {
 ///   because a directory containing several independently risky hotspots
 ///   should read as riskier than one containing a single hotspot with the
 ///   same peak fan-in — max would hide that difference.
+///
+///   This badge's `fan_in` is deliberately **not** the same computation
+///   `crate::detail::build_detail` uses for a single symbol's `used_by`:
+///   this badge only counts a symbol at all once it clears `Hotspot`'s own
+///   fan-in >= 2 threshold (see `symbol_badges`'s doc comment), while the
+///   detail pane's `used_by` reads `report.graph.edges` directly and so
+///   also surfaces a fan-in of 0 or 1. A symbol with exactly one referrer
+///   therefore shows up in its own detail view's `used_by` but contributes
+///   nothing to any ancestor directory's `fan_in` badge here — expected,
+///   not a bug, since the badge's whole purpose is to flag hotspots
+///   specifically, not fan-in in general.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Badges {
     pub changed_symbols: usize,
@@ -584,13 +595,35 @@ mod tests {
             ..empty_report()
         };
 
-        let tree = build_tree(&report);
+        let expected = Tree {
+            roots: vec![TreeNode {
+                kind: NodeKind::Dir,
+                path: "src".to_string(),
+                badges: Badges::default(),
+                children: vec![
+                    TreeNode {
+                        kind: NodeKind::File,
+                        path: "src/mod.rs".to_string(),
+                        badges: Badges::default(),
+                        children: vec![],
+                    },
+                    TreeNode {
+                        kind: NodeKind::Dir,
+                        path: "src/foo".to_string(),
+                        badges: Badges::default(),
+                        children: vec![TreeNode {
+                            kind: NodeKind::File,
+                            path: "src/foo/bar.rs".to_string(),
+                            badges: Badges::default(),
+                            children: vec![],
+                        }],
+                    },
+                ],
+            }],
+        };
+        let actual = build_tree(&report);
 
-        assert_eq!(1, tree.roots.len());
-        let src = &tree.roots[0];
-        assert_eq!(NodeKind::Dir, src.kind);
-        assert_eq!("src", src.path);
-        assert_eq!(2, src.children.len());
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -707,20 +740,64 @@ mod tests {
             ..empty_report()
         };
 
-        let tree = build_tree(&report);
-
-        assert_eq!(1, tree.roots.len());
-        let file_node = &tree.roots[0];
-        assert_eq!(NodeKind::File, file_node.kind);
-        assert_eq!(2, file_node.children.len());
-        let expected_badges = Badges {
-            changed_symbols: 1,
-            contract_changes: 1,
-            fan_in: 0,
+        let expected = Tree {
+            roots: vec![TreeNode {
+                kind: NodeKind::File,
+                path: "lib.rs".to_string(),
+                badges: Badges {
+                    changed_symbols: 1,
+                    contract_changes: 1,
+                    fan_in: 0,
+                },
+                children: vec![
+                    TreeNode {
+                        kind: NodeKind::Symbol(SymbolRef {
+                            id: "lib.rs::foo".to_string(),
+                            name: "foo".to_string(),
+                            kind: SymbolKind::Function,
+                            classification: None,
+                            removed: false,
+                        }),
+                        path: "lib.rs".to_string(),
+                        badges: Badges {
+                            changed_symbols: 1,
+                            contract_changes: 0,
+                            fan_in: 0,
+                        },
+                        children: vec![],
+                    },
+                    TreeNode {
+                        kind: NodeKind::Symbol(SymbolRef {
+                            id: "lib.rs::gone".to_string(),
+                            name: "gone".to_string(),
+                            kind: SymbolKind::Function,
+                            classification: None,
+                            removed: true,
+                        }),
+                        path: "lib.rs".to_string(),
+                        badges: Badges {
+                            changed_symbols: 0,
+                            contract_changes: 1,
+                            fan_in: 0,
+                        },
+                        children: vec![],
+                    },
+                ],
+            }],
         };
-        assert_eq!(expected_badges, file_node.badges);
+        let actual = build_tree(&report);
+
+        assert_eq!(expected, actual);
     }
 
+    // NOTE: partial assert (root count, path, then only the aggregated
+    // `Badges`) rather than a whole-`Tree` comparison — this test's only
+    // concern is that bottom-up aggregation reaches the top of a
+    // multi-level, multi-file subtree correctly; restating the full
+    // "src/a/one.rs" and "src/b/two.rs" node structure (already pinned down
+    // by other tests in this module, e.g.
+    // `should_build_flat_file_node_when_path_has_no_directory`) would just
+    // add noise without strengthening what this test is checking.
     #[test]
     fn should_aggregate_badges_bottom_up_across_nested_directories() {
         let report = Report {
