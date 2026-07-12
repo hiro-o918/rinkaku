@@ -1,6 +1,8 @@
 [package]
 name = "rinkaku"
-version.workspace = true
+# See rinkaku-core/Cargo.toml for why this is a literal version instead
+# of `version.workspace = true`.
+version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

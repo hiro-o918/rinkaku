@@ -3,7 +3,6 @@ resolver = "2"
 members = ["rinkaku-core", "rinkaku"]
 
 [workspace.package]
-version = "0.1.0"
 edition = "2024"
 authors = ["Hironori Yamamoto"]
 license = "MIT"
