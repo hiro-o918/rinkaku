@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/hiro-o918/rinkaku/compare/v0.3.0...v0.3.1) (2026-07-12)
+
+
+### Documentation
+
+* cross-reference README's Release section from self_update.rs ([fee4fce](https://github.com/hiro-o918/rinkaku/commit/fee4fce8cba488f1efbef34a34b35eddb2d590a2))
+
 ## [0.3.0](https://github.com/hiro-o918/rinkaku/compare/v0.2.0...v0.3.0) (2026-07-12)
 
 
