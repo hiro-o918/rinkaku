@@ -12,6 +12,7 @@
 use crate::app::{App, DiffTarget, RightPane, Screen, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
 use crate::diff_view::{DiffLine, DiffLineKind, FileHunks, Hunk, file_hunks, hunks_for_range};
+use crate::highlight::{self, HighlightedFile, PALETTE, TokenSpan};
 use crate::row_view::{entry_row_line, relative_labels};
 use crate::source::{SourceView, load_symbol_source, visible_window};
 use ratatui::Frame;
@@ -28,15 +29,23 @@ use unicode_width::UnicodeWidthChar;
 /// pinned to the bottom either way. `diff_files` is the whole diff already
 /// parsed into per-file hunks once by `crate::run_app` (not re-parsed here
 /// on every frame — see that function's doc comment on why parsing lives
-/// outside the draw loop) — only consulted when the right pane is in
-/// [`RightPane::Diff`] mode.
-pub fn draw(frame: &mut Frame, app: &App, report: &Report, diff_files: &[FileHunks]) {
+/// outside the draw loop), and `diff_highlights` is that same diff's
+/// per-line syntax highlighting, computed once alongside it (ADR 0018) —
+/// both are only consulted when the right pane is in [`RightPane::Diff`]
+/// mode.
+pub fn draw(
+    frame: &mut Frame,
+    app: &App,
+    report: &Report,
+    diff_files: &[FileHunks],
+    diff_highlights: &[HighlightedFile],
+) {
     let area = frame.area();
     let [body, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
     match app.screen() {
-        Screen::Entry => draw_entry_screen(frame, app, report, diff_files, body),
+        Screen::Entry => draw_entry_screen(frame, app, report, diff_files, diff_highlights, body),
         Screen::Source { symbol_id } => draw_source_screen(frame, report, symbol_id, body),
     }
 
@@ -54,6 +63,7 @@ fn draw_entry_screen(
     app: &App,
     report: &Report,
     diff_files: &[FileHunks],
+    diff_highlights: &[HighlightedFile],
     area: Rect,
 ) {
     let [tree_area, right_area] =
@@ -62,7 +72,9 @@ fn draw_entry_screen(
     draw_tree_pane(frame, app, tree_area);
     match app.right_pane() {
         RightPane::Detail => draw_detail_pane(frame, app, report, right_area),
-        RightPane::Diff => draw_diff_pane(frame, app, report, diff_files, right_area),
+        RightPane::Diff => {
+            draw_diff_pane(frame, app, report, diff_files, diff_highlights, right_area)
+        }
     }
 }
 
@@ -108,14 +120,15 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
 /// range for a symbol row (`App::selected_diff_target`'s own doc comment).
 /// A directory row, or a row with nothing to show (no hunks found, e.g. a
 /// mismatch between `report` and the diff), falls back to a placeholder
-/// message rather than an empty pane. `diff_files` is already parsed
-/// (`crate::run_app` parses the raw diff text once, up front, not on every
-/// call to this function).
+/// message rather than an empty pane. `diff_files` is already parsed and
+/// `diff_highlights` already highlighted (`crate::run_app` does both once,
+/// up front, not on every call to this function — ADR 0018).
 fn draw_diff_pane(
     frame: &mut Frame,
     app: &App,
     report: &Report,
     diff_files: &[FileHunks],
+    diff_highlights: &[HighlightedFile],
     area: Rect,
 ) {
     let Some(target) = app.selected_diff_target(report) else {
@@ -155,7 +168,16 @@ fn draw_diff_pane(
         return;
     }
 
-    let lines = diff_pane_lines(&hunks);
+    // `file_hunks` was already resolved above via `DiffTarget`'s match arm,
+    // but `hunks_for_range`/the file-row arm both return `&Hunk`s borrowed
+    // from it — re-resolving it here (rather than threading it out of the
+    // match above) keeps `highlight::lookup_hunk_highlight`'s pointer-
+    // identity lookup working against the exact same `FileHunks` the
+    // `&Hunk`s in `hunks` were borrowed from.
+    let source_file_hunks = file_hunks(diff_files, path);
+    let highlighted_file = highlight::highlighted_file(diff_highlights, path);
+
+    let lines = diff_pane_lines(&hunks, source_file_hunks, highlighted_file);
     render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
 }
 
@@ -329,12 +351,27 @@ fn scroll_indicator(content_len: usize, viewport_height: usize, scroll: usize) -
     Some(format!(" ({first_visible}-{last_visible}/{content_len})"))
 }
 
-/// Formats a list of [`Hunk`]s into styled lines: hunk headers dim, `+`
-/// lines green, `-` lines red, context lines unstyled — mirrors the
-/// existing signature-diff styling `detail_lines`' `SignatureView::Changed`
-/// arm already uses (`Color::Green`/`Color::Red`) so the two diff-styled
-/// panes in this crate read consistently.
-fn diff_pane_lines(hunks: &[&Hunk]) -> Vec<Line<'static>> {
+/// Formats a list of [`Hunk`]s into styled lines: hunk headers dim, `+`/`-`
+/// marker glyphs keep their existing bold green/red foreground, and each
+/// line's own code tokens are colored by [`highlight::lookup_hunk_highlight`]
+/// when available (ADR 0018) — falling back to the plain green/red/unstyled
+/// line style this pane always had when a hunk has no highlight (unknown
+/// extension, parse/query failure) so highlighting can never make a diff
+/// harder to read than before.
+///
+/// `source_file_hunks`/`highlighted_file` are `None` exactly when `hunks`
+/// itself would already be empty (`draw_diff_pane` returns before calling
+/// this function in that case), so in practice they are always `Some` here
+/// — kept as `Option`s anyway (rather than unwrapped) since `file_hunks`
+/// returning `None` is a defensive, not-supposed-to-happen case elsewhere
+/// in this module too, and threading the same shape through keeps this
+/// function's fallback path uniform with `highlight::lookup_hunk_highlight`'s
+/// own `None` handling.
+fn diff_pane_lines(
+    hunks: &[&Hunk],
+    source_file_hunks: Option<&FileHunks>,
+    highlighted_file: Option<&HighlightedFile>,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (index, hunk) in hunks.iter().enumerate() {
         if index > 0 {
@@ -346,14 +383,62 @@ fn diff_pane_lines(hunks: &[&Hunk]) -> Vec<Line<'static>> {
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::DIM),
         ));
-        for line in &hunk.lines {
-            lines.push(diff_line(line));
+
+        let hunk_highlight = source_file_hunks
+            .and_then(|fh| highlight::lookup_hunk_highlight(highlighted_file, fh, hunk));
+
+        for (line_index, line) in hunk.lines.iter().enumerate() {
+            // `hunk_highlight` is `Option<&[LineHighlight]>`, and
+            // `LineHighlight` is itself `Option<Vec<TokenSpan>>` (per-line
+            // fallback within an otherwise-highlighted hunk) — `flatten`
+            // collapses "no highlight data at all for this hunk" and
+            // "this specific line had no highlight" into the same `None`
+            // `diff_line` already treats as its fallback signal.
+            let token_spans = hunk_highlight
+                .and_then(|lines| lines.get(line_index).cloned())
+                .flatten();
+            lines.push(diff_line(line, token_spans));
         }
     }
     lines
 }
 
-fn diff_line(line: &DiffLine) -> Line<'static> {
+/// Background tint for an `Added`/`Removed` line (ADR 0018 decision: diff
+/// signal moves to the background so a token's own color can carry the
+/// foreground). 256-color indexed dark green/red rather than the named
+/// `Color::Green`/`Color::Red` used for the `+`/`-` marker itself — a
+/// named-color *background* at full saturation would fight with the
+/// foreground token colors for attention, whereas these dim indexed tones
+/// (in the xterm 256 palette's grayscale-adjacent dark green/red range)
+/// stay legible as "this line changed" without competing with the text.
+const ADDED_BG: Color = Color::Indexed(22);
+const REMOVED_BG: Color = Color::Indexed(52);
+
+/// Builds one display line for a hunk body line, coloring its code tokens
+/// per `token_spans` (`None` when highlighting is unavailable for this
+/// line — falls back to the pane's original plain style). The `+`/`-`
+/// marker glyph itself is always pushed as its own bold-colored span, kept
+/// outside of `line.content`'s token coloring so it is never masked by a
+/// token span that happens to start at byte 0.
+fn diff_line(line: &DiffLine, token_spans: Option<Vec<TokenSpan>>) -> Line<'static> {
+    match &token_spans {
+        Some(spans) => {
+            let bg = match line.kind {
+                DiffLineKind::Added => Some(ADDED_BG),
+                DiffLineKind::Removed => Some(REMOVED_BG),
+                DiffLineKind::Context => None,
+            };
+            let mut result_spans = vec![marker_span(line.kind, bg)];
+            result_spans.extend(styled_content_spans(&line.content, spans, bg));
+            Line::from(result_spans)
+        }
+        None => plain_diff_line(line),
+    }
+}
+
+/// The pane's original (pre-ADR-0018) plain green/red/unstyled line style —
+/// the fallback for a line highlighting could not cover.
+fn plain_diff_line(line: &DiffLine) -> Line<'static> {
     match line.kind {
         DiffLineKind::Added => Line::styled(
             format!("+{}", line.content),
@@ -364,6 +449,104 @@ fn diff_line(line: &DiffLine) -> Line<'static> {
             Style::default().fg(Color::Red),
         ),
         DiffLineKind::Context => Line::raw(format!(" {}", line.content)),
+    }
+}
+
+/// The leading `+`/`-`/` ` marker glyph as its own span: bold green/red for
+/// `+`/`-` (unchanged from the pane's original style) with the line's
+/// background tint applied so the marker doesn't visually break from the
+/// rest of a tinted line; a plain space (no bg) for a context line.
+fn marker_span(kind: DiffLineKind, bg: Option<Color>) -> Span<'static> {
+    let (glyph, fg) = match kind {
+        DiffLineKind::Added => ("+", Some(Color::Green)),
+        DiffLineKind::Removed => ("-", Some(Color::Red)),
+        DiffLineKind::Context => (" ", None),
+    };
+    let mut style = Style::default().add_modifier(Modifier::BOLD);
+    if let Some(fg) = fg {
+        style = style.fg(fg);
+    }
+    if let Some(bg) = bg {
+        style = style.bg(bg);
+    }
+    Span::styled(glyph, style)
+}
+
+/// Splits `content` into styled spans per `spans` (byte-offset [`TokenSpan`]s
+/// already rebased to `content`'s own coordinates by
+/// `highlight::spans_for_line`), coloring each token's foreground by its
+/// palette entry (`palette_style`) and applying `bg` uniformly (the diff
+/// signal) — any byte range `spans` doesn't cover (whitespace, punctuation
+/// the query didn't capture) becomes an unstyled-foreground span with just
+/// `bg` applied, so the line's background tint is always contiguous even
+/// where token coloring has gaps.
+fn styled_content_spans(
+    content: &str,
+    spans: &[TokenSpan],
+    bg: Option<Color>,
+) -> Vec<Span<'static>> {
+    let mut result = Vec::new();
+    let mut cursor = 0usize;
+
+    let mut sorted_spans = spans.to_vec();
+    sorted_spans.sort_by_key(|span| span.start);
+
+    for span in &sorted_spans {
+        if span.start > cursor {
+            result.push(gap_span(&content[cursor..span.start], bg));
+        }
+        let mut style = palette_style(span.palette_index);
+        if let Some(bg) = bg {
+            style = style.bg(bg);
+        }
+        result.push(Span::styled(
+            content[span.start..span.end].to_string(),
+            style,
+        ));
+        cursor = span.end;
+    }
+    if cursor < content.len() {
+        result.push(gap_span(&content[cursor..], bg));
+    }
+    if result.is_empty() {
+        // An empty `content` (blank line) still needs one span so the
+        // line's background tint renders across at least the marker
+        // column boundary consistently with non-empty lines.
+        result.push(gap_span("", bg));
+    }
+
+    result
+}
+
+fn gap_span(text: &str, bg: Option<Color>) -> Span<'static> {
+    let mut style = Style::default();
+    if let Some(bg) = bg {
+        style = style.bg(bg);
+    }
+    Span::styled(text.to_string(), style)
+}
+
+/// Maps a [`PALETTE`] index to its display style — the minimal token
+/// palette ADR 0018 asks for. Falls back to the default (unstyled)
+/// foreground for a palette index this match doesn't special-case (there
+/// are none today; `PALETTE`'s entries are all listed below, but keeping
+/// this a `match` with a wildcard rather than a same-length array means
+/// adding a `PALETTE` entry without a style here degrades to unstyled
+/// rather than panicking on an out-of-bounds array index).
+fn palette_style(palette_index: usize) -> Style {
+    match PALETTE.get(palette_index).copied() {
+        Some("keyword") => Style::default().fg(Color::Magenta),
+        Some("string") => Style::default().fg(Color::Yellow),
+        Some("comment") => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+        Some("function") => Style::default().fg(Color::Blue),
+        Some("type") => Style::default().fg(Color::Cyan),
+        Some("number") => Style::default().fg(Color::LightRed),
+        Some("constant") => Style::default().fg(Color::LightRed),
+        Some("property") => Style::default().fg(Color::LightBlue),
+        Some("variable") => Style::default(),
+        _ => Style::default(),
     }
 }
 
@@ -706,7 +889,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -740,7 +923,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -769,7 +952,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -806,7 +989,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -831,15 +1014,245 @@ index e69de29..4b825dc 100644
 +fn foo() {}
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &diff_files))
+            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
             .expect("draw");
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"));
         assert!(text.contains("+fn foo() {}"));
+    }
+
+    /// Finds the buffer cell for `token`'s first character within the row
+    /// that contains `line_needle`, scanning row by row — used by the
+    /// highlight tests below to inspect a specific token's actual `Style`
+    /// (`buffer_text` only exposes glyphs, not styling). `line_needle`
+    /// disambiguates which row to sample when `token` alone could match
+    /// more than one (e.g. the left tree pane's cursor row also happens to
+    /// render a truncated "fn foo" label for this test module's one-symbol
+    /// fixture).
+    ///
+    /// Deliberately indexes by *character* position, not `str::find`'s byte
+    /// offset: this pane's border glyphs (`│`) are multi-byte UTF-8, so a
+    /// byte offset into the flattened row string does not line up with the
+    /// buffer's `x` column once even one border character precedes the
+    /// match — using `char_indices`/`chars().count()` keeps this aligned
+    /// with the single-width-per-cell column space `TestBackend` itself
+    /// uses (every char in this test module's fixtures is single-width
+    /// ASCII, so column count and char count coincide).
+    fn find_cell_style(terminal: &Terminal<TestBackend>, line_needle: &str, token: &str) -> Style {
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area;
+        for y in 0..area.height {
+            let row: String = (0..area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect();
+            let Some(needle_byte_offset) = row.find(line_needle) else {
+                continue;
+            };
+            // Search for `token` starting from `line_needle`'s own match,
+            // not row-wide: this pane's two side-by-side panes can each
+            // contain `token` (e.g. the left tree pane's cursor row renders
+            // a truncated "fn foo" label that also contains "fn"), so a
+            // row-wide `find` could resolve to the wrong pane entirely.
+            let Some(token_byte_offset) = row[needle_byte_offset..].find(token) else {
+                continue;
+            };
+            let byte_offset = needle_byte_offset + token_byte_offset;
+            // Convert the byte offset `str::find` returned into a char
+            // (= column) index by counting chars before it — this pane's
+            // border glyphs (`│`) are multi-byte UTF-8, so the byte offset
+            // itself does not line up with the buffer's `x` column once
+            // even one border character precedes the match.
+            let column = row[..byte_offset].chars().count() as u16;
+            return buffer[(column, y)].style();
+        }
+        panic!("expected to find {token:?} within a row containing {line_needle:?}");
+    }
+
+    #[test]
+    fn should_apply_added_background_tint_and_keyword_foreground_in_diff_pane() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,2 @@
+ fn a() {}
++fn foo() {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .expect("draw");
+
+        // The added line's "fn" keyword: foreground colored by the keyword
+        // palette entry, background tinted with `ADDED_BG` — both signals
+        // present on the same cell, per ADR 0018's "fg is token color, bg is
+        // diff signal" decision. Disambiguated against the row via
+        // "+fn foo() {}" (the marker plus full added line): the left-hand
+        // tree pane's cursor row also happens to render a truncated "fn
+        // foo" label for this fixture's one symbol.
+        let keyword_style = find_cell_style(&terminal, "+fn foo() {}", "fn");
+        assert_eq!(Some(ADDED_BG), keyword_style.bg);
+        assert_eq!(Some(Color::Magenta), keyword_style.fg);
+    }
+
+    #[test]
+    fn should_apply_removed_background_tint_in_diff_pane() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,2 +1,1 @@
+ fn a() {}
+-fn foo() {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .expect("draw");
+
+        let keyword_style = find_cell_style(&terminal, "-fn foo() {}", "fn");
+        assert_eq!(Some(REMOVED_BG), keyword_style.bg);
+        assert_eq!(Some(Color::Magenta), keyword_style.fg);
+    }
+
+    #[test]
+    fn should_keep_context_line_unstyled_background_in_diff_pane() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,2 @@
+ fn a() {}
++fn foo() {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .expect("draw");
+
+        // Context line "fn a() {}" keeps its keyword token color but must
+        // not carry either diff background tint (`Style::bg` reports an
+        // unset background as `Some(Color::Reset)`, not `None` — ratatui's
+        // own `Cell` defaults every cell's `bg` field to `Color::Reset`
+        // rather than leaving it absent). Disambiguated the same way as
+        // the added-line test above (a leading space marker rather than
+        // `+`/`-`, matching `diff_line`'s context-line rendering).
+        let context_style = find_cell_style(&terminal, " fn a() {}", "fn");
+        assert_eq!(Some(Color::Reset), context_style.bg);
+        assert_eq!(Some(Color::Magenta), context_style.fg);
+    }
+
+    #[test]
+    fn should_keep_hunk_header_dim_when_diff_pane_is_highlighted() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,2 @@
+ fn a() {}
++fn foo() {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .expect("draw");
+
+        let header_style = find_cell_style(&terminal, "@@ -1,1 +1,2 @@", "@@");
+        assert_eq!(Some(Color::DarkGray), header_style.fg);
+        assert!(header_style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn should_fall_back_to_plain_diff_style_when_file_extension_is_unrecognized() {
+        // A symbol whose path has no known extension (mirrors an unbuilt
+        // language, e.g. YAML): `App::selected_diff_target` reads the path
+        // straight off the symbol/file row, so this only needs a report
+        // whose file path is unrecognized by `highlight::config_for_path`,
+        // not a real diff for an actual YAML grammar.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "config.yaml".to_string(),
+                symbols: vec![symbol("config.yaml::foo", "foo")],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/config.yaml b/config.yaml
+index e69de29..4b825dc 100644
+--- a/config.yaml
++++ b/config.yaml
+@@ -1,1 +1,2 @@
+ a: 1
++b: 2
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &diff_files, &diff_highlights))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("+b: 2"));
+
+        // Falls back to the pane's original plain green foreground with no
+        // background tint at all (`Some(Color::Reset)` is ratatui's
+        // "unset" — see the context-line test above for why this isn't
+        // `None`) — highlighting failing (or, here, never applying) must
+        // never break the pre-existing diff styling.
+        let added_style = find_cell_style(&terminal, "+b: 2", "b");
+        assert_eq!(Some(Color::Reset), added_style.bg);
+        assert_eq!(Some(Color::Green), added_style.fg);
     }
 
     #[test]
@@ -849,7 +1262,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -869,7 +1282,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(110, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -885,7 +1298,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         // "lib.rs" does not exist relative to the test process's cwd, so
@@ -1005,7 +1418,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1024,7 +1437,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1039,7 +1452,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1064,7 +1477,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1086,7 +1499,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1235,7 +1648,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1273,7 +1686,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[]))
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
