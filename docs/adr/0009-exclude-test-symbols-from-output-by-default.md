@@ -27,6 +27,13 @@ production code). Excluded symbols are summarized as per-file counts in a
 `## Tests` section so their existence stays visible. A `--include-tests`
 flag restores the previous behavior.
 
+The same exclusion applies to `TagsResolver`'s repo-wide dependency index
+(ADR 0003), not just the diff's own graph: by default it skips whole
+test-path files and drops AST-detected test symbols the same way, so a
+changed production symbol's "Depends on:" cannot resolve to a same-named
+test helper or fixture elsewhere in the repo. `--include-tests` restores
+the previous full-index behavior for this too.
+
 ## Alternatives
 
 - **Keep including test symbols**: the status quo; makes real-world
@@ -51,3 +58,8 @@ flag restores the previous behavior.
   acceptable pre-1.0 and before announcing the format.
 - Groundwork for architecture-review features (module-level graph views)
   that assume the graph contains production symbols only.
+- Dependency resolution (ADR 0003) is more precise as a side effect: since
+  `TagsResolver`'s index excludes test symbols by the same default, a
+  production symbol's "Depends on:" no longer surfaces coincidental
+  name-matches against test helpers/fixtures — a class of false positive
+  the name-only resolver was otherwise prone to.
