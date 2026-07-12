@@ -80,9 +80,16 @@ fn run_app(
     diff_text: &str,
 ) -> std::io::Result<()> {
     let mut app = App::new(report);
+    // Parsed once up front rather than inside the draw loop: `diff_text`
+    // does not change for the lifetime of this session, but the loop below
+    // redraws on every ~100ms poll timeout (not just on an actual key
+    // press), so re-running `parse_diff_hunks` inside `ui::draw` would
+    // re-walk the whole diff (unbounded in PR size) roughly ten times a
+    // second even while idle.
+    let diff_hunks = diff_view::parse_diff_hunks(diff_text);
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, &app, report, diff_text))?;
+        terminal.draw(|frame| ui::draw(frame, &app, report, &diff_hunks))?;
 
         if app.should_quit() {
             return Ok(());

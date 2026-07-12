@@ -24,17 +24,18 @@ use rinkaku_core::render::Report;
 
 /// Draws one full frame: the entry view (tree + right pane split) or the
 /// source drill-down, depending on `app.screen()`, with a status/help line
-/// pinned to the bottom either way. `diff_text` is the raw unified diff the
-/// caller built `report` from (threaded through from `main.rs`, same string
-/// for every input mode — see `crate::run`'s doc comment) — only consulted
-/// when the right pane is in [`RightPane::Diff`] mode.
-pub fn draw(frame: &mut Frame, app: &App, report: &Report, diff_text: &str) {
+/// pinned to the bottom either way. `diff_files` is the whole diff already
+/// parsed into per-file hunks once by `crate::run_app` (not re-parsed here
+/// on every frame — see that function's doc comment on why parsing lives
+/// outside the draw loop) — only consulted when the right pane is in
+/// [`RightPane::Diff`] mode.
+pub fn draw(frame: &mut Frame, app: &App, report: &Report, diff_files: &[FileHunks]) {
     let area = frame.area();
     let [body, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
     match app.screen() {
-        Screen::Entry => draw_entry_screen(frame, app, report, diff_text, body),
+        Screen::Entry => draw_entry_screen(frame, app, report, diff_files, body),
         Screen::Source { symbol_id } => draw_source_screen(frame, report, symbol_id, body),
     }
 
@@ -47,14 +48,20 @@ pub fn draw(frame: &mut Frame, app: &App, report: &Report, diff_text: &str) {
 /// than the right pane has fields, so it gets the larger share. The right
 /// pane itself shows either the detail view or the diff view depending on
 /// `app.right_pane()` (`d`/`D` toggles between them, TUI iteration 2).
-fn draw_entry_screen(frame: &mut Frame, app: &App, report: &Report, diff_text: &str, area: Rect) {
+fn draw_entry_screen(
+    frame: &mut Frame,
+    app: &App,
+    report: &Report,
+    diff_files: &[FileHunks],
+    area: Rect,
+) {
     let [tree_area, right_area] =
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
 
     draw_tree_pane(frame, app, tree_area);
     match app.right_pane() {
         RightPane::Detail => draw_detail_pane(frame, app, report, right_area),
-        RightPane::Diff => draw_diff_pane(frame, app, report, diff_text, right_area),
+        RightPane::Diff => draw_diff_pane(frame, app, report, diff_files, right_area),
     }
 }
 
@@ -103,9 +110,17 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
 /// file for a file row, or just the hunks intersecting a symbol's own line
 /// range for a symbol row (`App::selected_diff_target`'s own doc comment).
 /// A directory row, or a row with nothing to show (no hunks found, e.g. a
-/// mismatch between `report` and `diff_text`), falls back to a placeholder
-/// message rather than an empty pane.
-fn draw_diff_pane(frame: &mut Frame, app: &App, report: &Report, diff_text: &str, area: Rect) {
+/// mismatch between `report` and the diff), falls back to a placeholder
+/// message rather than an empty pane. `diff_files` is already parsed
+/// (`crate::run_app` parses the raw diff text once, up front, not on every
+/// call to this function).
+fn draw_diff_pane(
+    frame: &mut Frame,
+    app: &App,
+    report: &Report,
+    diff_files: &[FileHunks],
+    area: Rect,
+) {
     let block = Block::bordered().title(" Diff ");
 
     let Some(target) = app.selected_diff_target(report) else {
@@ -116,20 +131,19 @@ fn draw_diff_pane(frame: &mut Frame, app: &App, report: &Report, diff_text: &str
         return;
     };
 
-    let files = crate::diff_view::parse_diff_hunks(diff_text);
     let (path, hunks): (&str, Vec<&Hunk>) = match &target {
         DiffTarget::Symbol {
             path,
             range_start,
             range_end,
         } => {
-            let hunks = file_hunks(&files, path)
+            let hunks = file_hunks(diff_files, path)
                 .map(|fh| hunks_for_range(fh, *range_start, *range_end))
                 .unwrap_or_default();
             (path.as_str(), hunks)
         }
         DiffTarget::File { path } => {
-            let hunks = file_hunks(&files, path)
+            let hunks = file_hunks(diff_files, path)
                 .map(|fh: &FileHunks| fh.hunks.iter().collect())
                 .unwrap_or_default();
             (path.as_str(), hunks)
@@ -512,7 +526,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, ""))
+            .draw(|frame| draw(frame, &app, &report, &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -545,7 +559,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, ""))
+            .draw(|frame| draw(frame, &app, &report, &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -573,7 +587,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, ""))
+            .draw(|frame| draw(frame, &app, &report, &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -596,10 +610,11 @@ index e69de29..4b825dc 100644
  fn a() {}
 +fn foo() {}
 ";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, diff_text))
+            .draw(|frame| draw(frame, &app, &report, &diff_files))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -614,7 +629,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, ""))
+            .draw(|frame| draw(frame, &app, &report, &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -633,7 +648,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, ""))
+            .draw(|frame| draw(frame, &app, &report, &[]))
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -649,7 +664,7 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, ""))
+            .draw(|frame| draw(frame, &app, &report, &[]))
             .expect("draw");
 
         // "lib.rs" does not exist relative to the test process's cwd, so
