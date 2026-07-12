@@ -161,7 +161,20 @@ fn parse_one_hunk(lines: &[&str], start: usize) -> (Hunk, usize) {
         i += 1;
     }
 
-    let new_range = new_start_count.and_then(|(start, count)| {
+    // The header's declared new-side count is a claim, not a fact —
+    // `rinkaku_core::diff::parse_hunk` walks the body and errors out
+    // (`HunkBodyMismatch`) when it doesn't match, but this module's parser
+    // degrades instead of erroring (module doc comment), so an inflated
+    // header count must not silently propagate into `new_range`: it would
+    // let `hunks_for_range` match a symbol whose lines the hunk body never
+    // actually touched. `Added` and `Context` lines are exactly the ones
+    // that occupy a new-side line number; `Removed` lines don't.
+    let actual_new_line_count = body
+        .iter()
+        .filter(|line| line.kind != DiffLineKind::Removed)
+        .count();
+    let new_range = new_start_count.and_then(|(start, declared_count)| {
+        let count = declared_count.min(actual_new_line_count);
         if count == 0 {
             None
         } else {
@@ -247,7 +260,7 @@ diff --git a/src/lib.rs b/src/lib.rs
 index e69de29..4b825dc 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,3 @@
  fn a() {}
 +fn b() {}
 -fn old() {}
@@ -256,8 +269,8 @@ index e69de29..4b825dc 100644
         let expected = vec![FileHunks {
             path: "src/lib.rs".to_string(),
             hunks: vec![Hunk {
-                header: "@@ -1,3 +1,4 @@".to_string(),
-                new_range: Some((1, 4)),
+                header: "@@ -1,3 +1,3 @@".to_string(),
+                new_range: Some((1, 3)),
                 lines: vec![
                     DiffLine {
                         kind: DiffLineKind::Context,
@@ -408,6 +421,32 @@ index e69de29..4b825dc 100644
 
         assert_eq!(1, actual.len());
         assert_eq!(None, actual[0].hunks[0].new_range);
+    }
+
+    // SHOULD-FIX: the header's declared new-side count is untrustworthy on
+    // its own — this module's doc comment claims malformed input "degrades
+    // to no hunks shown", but before this fix a header declaring more lines
+    // than the body actually contains produced an inflated `new_range` that
+    // could wrongly match unrelated symbols further down the file (see
+    // `hunks_for_range`). The body's own actually-parsed new-side line count
+    // must cap whatever the header claims.
+    #[test]
+    fn should_cap_new_range_when_hunk_body_is_shorter_than_declared_count() {
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,100 @@
+ fn a() {}
++fn b() {}
+";
+        let actual = parse_diff_hunks(diff);
+
+        // The header claims 100 new-side lines starting at 1, but the body
+        // only actually contains 2 (one context, one added) — the range
+        // must reflect the body's real extent, not the header's claim.
+        assert_eq!(Some((1, 2)), actual[0].hunks[0].new_range);
     }
 
     #[test]
