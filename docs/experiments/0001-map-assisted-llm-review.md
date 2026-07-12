@@ -345,11 +345,71 @@ genuine blockers.
   Reviewer instructions should explicitly license reading beyond the
   diff (and the CLAUDE.md three-angle policy already does).
 
+## Results (round 6)
+
+Same two-pass method, sixth subject: diff-pane syntax highlighting per
+ADR 0018 (7 files, +1,266/−35 — a new pure highlight module, render
+wiring, two new dependencies). Both passes' prompts explicitly carried
+round 5's lesson (read beyond the diff at the wrap/offset seams) and
+named the highest-risk failure shape (tree-sitter's byte offsets
+crossing into char/display-width code).
+
+| Metric              | A (map)     | B (control) |
+| ------------------- | ----------- | ----------- |
+| Output tokens       | 125.0k      | 112.5k      |
+| Tool calls          | 51          | 53          |
+| Wall clock          | 352s        | 351s        |
+| Blocker findings    | 0           | 0           |
+| Should-fix findings | 0           | 0           |
+| Nit findings        | 2           | 2           |
+
+- **First fully clean round on a code subject** — and not for lack of
+  probing: both arms independently built multibyte fixtures (Japanese
+  comments, emoji), drove interleaved add/remove hunks through a live
+  TUI with ANSI capture, and traced the byte-offset → char-width
+  handoff line by line before concluding it safe. Convergent clean
+  verification of the same high-risk seam, reached by different
+  routes, is the round's real output: confidence, not findings.
+- Process lessons visibly compounded. The implementation had already
+  absorbed round 3's defect class — highlighting is precomputed once
+  per run because the spec said so, citing the earlier per-frame
+  re-parse finding — and both reviewers verified that guarantee
+  rather than discovering its absence. Encoding past rounds' lessons
+  into implementer and reviewer prompts converts them from findings
+  into non-events.
+- All four nits (two from each arm, no overlap) were
+  documentation-precision and test-coverage items (a doc comment
+  describing its own lookup backwards; four palette entries with no
+  pinned style test); all fixed before merge.
+- The orchestrator's third angle contributed the only quantitative
+  gap: highlighting adds ~2.8s of once-per-run startup on an
+  unusually large 4.5k-line diff (release build, ~2.4s → ~5.2s).
+  Both reviewers verified the once-per-run *placement* qualitatively;
+  neither measured its cost. Accepted for v1 — typical PR diffs are
+  an order of magnitude smaller — with lazy per-file highlighting as
+  the follow-up if it bites.
+
+## Conclusions (after 6 rounds)
+
+- The two-pass + mandatory-execution protocol now has both failure
+  and success calibration: it finds real blockers when they exist
+  (round 5, both arms) and comes back clean when the implementation
+  is sound (round 6, both arms probing the same worst-case inputs) —
+  the clean verdict is trustworthy *because* the probing was visible
+  and adversarial.
+- Feeding each round's lessons forward — into implementer specs and
+  reviewer prompts alike — measurably moves defect classes from
+  "found in review" to "prevented at implementation." The experiment
+  doc itself has become part of the quality mechanism.
+- Standing gap: none of the review angles measures performance
+  unprompted. Worth adding an explicit cost-measurement note to the
+  dynamic-verification instruction for changes that add per-run work.
+
 ## Next
 
 - Consider a map feature flagging cross-crate duplicate-domain
   symbols (round 3 hypothesis, still open).
-- The round-5 blockers suggest a second tool hypothesis: listing the
-  *unchanged* symbols that changed symbols newly depend on (the map
-  currently draws edges only among changed/1-hop symbols) might have
-  surfaced `retarget_cursor` as blast-radius context for `handle_key`.
+- Round 5's second tool hypothesis (list unchanged symbols that
+  changed symbols newly depend on) also remains open.
+- Add an explicit performance-measurement step to the
+  dynamic-verification angle for changes introducing per-run work.
