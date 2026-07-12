@@ -1,6 +1,6 @@
 # 0016. TUI crate and stack
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-12
 
 ## Context
