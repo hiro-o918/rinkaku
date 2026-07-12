@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rinkaku-core", "rinkaku"]
+members = ["rinkaku-core", "rinkaku-tui", "rinkaku"]
 
 [workspace.package]
 edition = "2024"

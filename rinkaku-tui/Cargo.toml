@@ -1,0 +1,24 @@
+[package]
+name = "rinkaku-tui"
+# See rinkaku-core/Cargo.toml for why this is a literal version instead
+# of `version.workspace = true`.
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Interactive terminal UI view-models for rinkaku (ADR 0015/0016): directory tree, navigation, and detail views over a Report"
+readme = "../README.md"
+keywords = ["diff", "tui", "code-review"]
+categories = ["development-tools"]
+
+[lib]
+name = "rinkaku_tui"
+path = "src/lib.rs"
+
+[dependencies]
+rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
+
+[dev-dependencies]
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }

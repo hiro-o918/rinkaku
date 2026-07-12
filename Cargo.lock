@@ -1320,6 +1320,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rinkaku-tui"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "rinkaku-core",
+ "rstest",
+]
+
+[[package]]
 name = "rstest"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
