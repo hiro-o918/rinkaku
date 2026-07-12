@@ -174,9 +174,8 @@ fn main() -> anyhow::Result<()> {
         let (base_sha, used_fallback) = resolve_pr_base_sha(
             &pr_info.base_ref_oid,
             |oid| object_exists_locally(cwd, oid),
-            || fetch_branch_head(&pr_info.base_ref_name, cwd).map(|_| ()),
-            |oid| fetch_oid(cwd, oid),
             || fetch_branch_head(&pr_info.base_ref_name, cwd),
+            |oid| fetch_oid(cwd, oid),
         )?;
         if used_fallback {
             log::warn!(
@@ -750,17 +749,25 @@ fn fetch_branch_head(name: &str, cwd: Option<&std::path::Path>) -> anyhow::Resul
 /// resolve `base_ref_oid` locally:
 ///
 /// 1. `object_exists` (`git cat-file -e <oid>^{commit}`) — already have it.
-/// 2. `fetch_base_branch` (`git fetch origin <base_ref_name>`) then
-///    re-check `object_exists` — an ordinary branch fetch usually retrieves
-///    it, since `base_ref_oid` is normally reachable from the base
-///    branch's history.
+/// 2. `fetch_base_branch` (`git fetch origin <base_ref_name>`, returning
+///    the fetched tip's SHA) then re-check `object_exists` — an ordinary
+///    branch fetch usually retrieves it, since `base_ref_oid` is normally
+///    reachable from the base branch's history. A failure here (e.g. the
+///    base branch was deleted after the PR merged, or renamed) is soft:
+///    `log::warn!` and fall through to step 3 rather than aborting the
+///    whole run — step 3 is exactly the recovery path for a base branch
+///    that no longer leads to `base_ref_oid`, so a step-2 failure must not
+///    short-circuit past it.
 /// 3. `fetch_oid` (`git fetch origin <oid>`) then re-check `object_exists`
-///    — covers a base branch that has since been force-pushed past it or
-///    deleted.
-/// 4. Fall back to `branch_tip` (today's pre-ADR-0007 behavior, e.g. an
-///    already-fetched `fetch_branch_head` result) with `used_fallback`
-///    signaling the caller should warn — the commit is unreachable by any
-///    means available, so this degrades rather than fails the whole run.
+///    — covers a base branch that has since been force-pushed past it,
+///    renamed, or deleted (including the case where step 2 itself failed
+///    to fetch at all).
+/// 4. Fall back to the base branch's tip with `used_fallback` signaling
+///    the caller should warn — the commit is unreachable by any means
+///    available, so this degrades rather than fails the whole run. Reuses
+///    step 2's fetched tip when step 2 succeeded, rather than fetching the
+///    same branch a second time; only calls `fetch_base_branch` again here
+///    if step 2 itself failed (so there is no tip yet to reuse).
 ///
 /// Every IO step is injected as a closure so this decision logic is
 /// unit-testable without shelling out to `git`, following the same
@@ -770,24 +777,38 @@ fn fetch_branch_head(name: &str, cwd: Option<&std::path::Path>) -> anyhow::Resul
 fn resolve_pr_base_sha(
     base_ref_oid: &str,
     mut object_exists: impl FnMut(&str) -> bool,
-    mut fetch_base_branch: impl FnMut() -> anyhow::Result<()>,
+    mut fetch_base_branch: impl FnMut() -> anyhow::Result<String>,
     mut fetch_oid: impl FnMut(&str) -> anyhow::Result<()>,
-    branch_tip: impl FnOnce() -> anyhow::Result<String>,
 ) -> anyhow::Result<(String, bool)> {
     if object_exists(base_ref_oid) {
         return Ok((base_ref_oid.to_string(), false));
     }
 
-    fetch_base_branch()?;
-    if object_exists(base_ref_oid) {
-        return Ok((base_ref_oid.to_string(), false));
-    }
+    let branch_tip = match fetch_base_branch() {
+        Ok(tip) => {
+            if object_exists(base_ref_oid) {
+                return Ok((base_ref_oid.to_string(), false));
+            }
+            Some(tip)
+        }
+        Err(source) => {
+            log::warn!(
+                "fetching the base branch failed, continuing the base-commit resolution \
+                 cascade: {source}"
+            );
+            None
+        }
+    };
 
     if fetch_oid(base_ref_oid).is_ok() && object_exists(base_ref_oid) {
         return Ok((base_ref_oid.to_string(), false));
     }
 
-    Ok((branch_tip()?, true))
+    let branch_tip = match branch_tip {
+        Some(tip) => tip,
+        None => fetch_base_branch()?,
+    };
+    Ok((branch_tip, true))
 }
 
 /// Runs `git cat-file -e <oid>^{commit}` in `cwd`, i.e. whether `oid`
@@ -1619,13 +1640,12 @@ mod tests {
                 |_oid| true,
                 || {
                     *fetch_base_branch_calls.borrow_mut() += 1;
-                    Ok(())
+                    Ok("branch-tip-sha".to_string())
                 },
                 |_oid| {
                     *fetch_oid_calls.borrow_mut() += 1;
                     Ok(())
                 },
-                || panic!("branch_tip must not be called when base_ref_oid already exists"),
             )
             .expect("should resolve without error");
 
@@ -1648,9 +1668,8 @@ mod tests {
             let actual = resolve_pr_base_sha(
                 "base789",
                 object_exists,
-                || Ok(()),
+                || Ok("branch-tip-sha".to_string()),
                 |_oid| panic!("fetch_oid must not be called when the base branch fetch sufficed"),
-                || panic!("branch_tip must not be called when the base branch fetch sufficed"),
             )
             .expect("should resolve without error");
 
@@ -1672,9 +1691,8 @@ mod tests {
             let actual = resolve_pr_base_sha(
                 "base789",
                 object_exists,
-                || Ok(()),
+                || Ok("branch-tip-sha".to_string()),
                 |_oid| Ok(()),
-                || panic!("branch_tip must not be called when fetch_oid sufficed"),
             )
             .expect("should resolve without error");
 
@@ -1686,9 +1704,8 @@ mod tests {
             let actual = resolve_pr_base_sha(
                 "base789",
                 |_oid| false,
-                || Ok(()),
-                |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
                 || Ok("branch-tip-sha".to_string()),
+                |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
             )
             .expect("should fall back rather than error");
 
@@ -1704,36 +1721,114 @@ mod tests {
             let actual = resolve_pr_base_sha(
                 "base789",
                 |_oid| false,
-                || Ok(()),
-                |_oid| Ok(()),
                 || Ok("branch-tip-sha".to_string()),
+                |_oid| Ok(()),
             )
             .expect("should fall back rather than error");
 
             assert_eq!(("branch-tip-sha".to_string(), true), actual);
         }
 
+        // Regression test for the must-fix correctness bug: a step-2
+        // fetch failure (e.g. the base branch was deleted or renamed after
+        // the PR merged) must not abort the whole cascade — step 3 (fetch
+        // the oid directly) is exactly the recovery path for this
+        // situation, so it must still run and can still resolve
+        // `base_ref_oid` even though step 2 failed.
         #[test]
-        fn should_propagate_error_when_fetching_the_base_branch_fails() {
+        fn should_fall_through_to_fetch_oid_when_fetching_the_base_branch_fails() {
+            let exists_calls = RefCell::new(0);
+            let object_exists = |_oid: &str| {
+                let mut calls = exists_calls.borrow_mut();
+                *calls += 1;
+                // Only the initial check happens before the failed branch
+                // fetch (which does not re-check); the check after
+                // `fetch_oid` (second call) succeeds.
+                *calls > 1
+            };
+
+            let actual = resolve_pr_base_sha(
+                "base789",
+                object_exists,
+                || anyhow::bail!("simulated: base branch was deleted"),
+                |_oid| Ok(()),
+            )
+            .expect("a step-2 failure must not abort the cascade");
+
+            assert_eq!(("base789".to_string(), false), actual);
+        }
+
+        // Sibling case: if step 3 also can't resolve the oid after a
+        // step-2 failure, the cascade must still fall back (step 4) rather
+        // than propagating the step-2 error — step 2's failure was already
+        // handled by falling through, not by failing the whole call.
+        #[test]
+        fn should_fetch_branch_tip_for_fallback_when_step_two_failed_and_fetch_oid_also_fails() {
+            let fetch_base_branch_calls = RefCell::new(0);
+
             let actual = resolve_pr_base_sha(
                 "base789",
                 |_oid| false,
-                || anyhow::bail!("simulated: git fetch origin main failed"),
-                |_oid| Ok(()),
-                || Ok("branch-tip-sha".to_string()),
-            );
+                || {
+                    let mut calls = fetch_base_branch_calls.borrow_mut();
+                    *calls += 1;
+                    if *calls == 1 {
+                        anyhow::bail!("simulated: base branch was deleted")
+                    } else {
+                        // Step 4 must re-fetch since step 2 never produced
+                        // a tip to reuse.
+                        Ok("branch-tip-sha".to_string())
+                    }
+                },
+                |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
+            )
+            .expect("should fall back rather than error");
 
-            assert!(actual.is_err());
+            assert_eq!(("branch-tip-sha".to_string(), true), actual);
+            assert_eq!(2, *fetch_base_branch_calls.borrow());
+        }
+
+        // Regression test for the must-fix cleanup: when step 2 succeeded
+        // (returned a tip) but didn't make `base_ref_oid` resolvable, and
+        // step 3 also fails, step 4's fallback must reuse step 2's tip
+        // rather than fetching the same base branch a second time.
+        #[test]
+        fn should_reuse_step_two_tip_for_fallback_without_refetching() {
+            let fetch_base_branch_calls = RefCell::new(0);
+
+            let actual = resolve_pr_base_sha(
+                "base789",
+                |_oid| false,
+                || {
+                    *fetch_base_branch_calls.borrow_mut() += 1;
+                    Ok("branch-tip-sha".to_string())
+                },
+                |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
+            )
+            .expect("should fall back rather than error");
+
+            assert_eq!(("branch-tip-sha".to_string(), true), actual);
+            assert_eq!(
+                1,
+                *fetch_base_branch_calls.borrow(),
+                "fetch_base_branch must only be called once (by step 2); step 4 must reuse its \
+                 result instead of fetching the base branch again"
+            );
         }
 
         #[test]
         fn should_propagate_error_when_the_branch_tip_fallback_itself_fails() {
+            let fetch_base_branch_calls = RefCell::new(0);
+
             let actual = resolve_pr_base_sha(
                 "base789",
                 |_oid| false,
-                || Ok(()),
+                || {
+                    let mut calls = fetch_base_branch_calls.borrow_mut();
+                    *calls += 1;
+                    anyhow::bail!("simulated: git fetch origin main failed")
+                },
                 |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
-                || anyhow::bail!("simulated: git fetch origin main failed"),
             );
 
             assert!(actual.is_err());

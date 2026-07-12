@@ -47,15 +47,23 @@ particular, ADR 0005/0006, may not have fetched recently):
    branch has been fetched at all.
 2. If not, fetch the base branch by name (as before) and re-check —
    `baseRefOid` is normally reachable from the base branch's history, so
-   an ordinary branch fetch usually retrieves it.
+   an ordinary branch fetch usually retrieves it. A failure at this step
+   (the base branch itself was renamed or deleted after the PR merged) is
+   treated as soft: log a warning and fall through to step 3 rather than
+   aborting, since step 3 is exactly the recovery path for a base branch
+   that no longer leads to the commit.
 3. If still not found (e.g. the base branch was force-pushed past that
-   commit, or deleted after merge), fetch the oid directly
-   (`git fetch origin <oid>`) — works against GitHub as long as the
-   commit hasn't been actually garbage-collected server-side.
-4. If that also fails, fall back to the fetched base branch tip (today's
-   behavior) and print a `log::warn!` — better a possibly-wrong-for-merged-
-   PRs diff with a warning than a hard failure, since this only degrades
-   back to the pre-fix behavior rather than introducing a new failure mode.
+   commit, deleted after merge, or step 2 itself failed to fetch),
+   fetch the oid directly (`git fetch origin <oid>`) — works against
+   GitHub as long as the commit hasn't been actually garbage-collected
+   server-side.
+4. If that also fails, fall back to the base branch's tip (today's
+   pre-ADR-0007 behavior) and print a `log::warn!` — better a
+   possibly-wrong-for-merged-PRs diff with a warning than a hard failure,
+   since this only degrades back to the pre-fix behavior rather than
+   introducing a new failure mode. Reuses step 2's fetched tip when step 2
+   succeeded, rather than fetching the base branch a second time; only
+   fetches again here if step 2 itself failed.
 
 ## Alternatives
 
