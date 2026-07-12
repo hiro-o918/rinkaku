@@ -62,14 +62,23 @@ pub struct DirRank {
 /// as foundations). Every directory inside one SCC shares that SCC's rank
 /// and is marked `in_cycle` when the SCC has more than one member.
 ///
-/// Returns only directories that appear in the condensed graph (i.e. own at
-/// least one node in `report.graph.nodes`, directly or via a descendant
-/// directory once nesting is accounted for by the caller). A directory
-/// whose only content is symbols absent from the graph (removed symbols,
-/// or files with no changed-symbol nodes at all) is not present in the
-/// returned map — `crate::tree`'s ordering step is expected to sort those
-/// after every ranked directory, A-Z (ADR 0016 decision 4), since this
-/// module has no graph data to rank them by.
+/// Returns an entry only for a *leaf* directory: one that is the direct
+/// parent of at least one `report.graph.nodes` path (e.g. `"src/api"` for
+/// a node at `"src/api/handler.rs"`). A branching/intermediate directory
+/// that owns no node directly — e.g. `"src"` itself, when only its
+/// subdirectories do — is deliberately **not** given an entry here; that
+/// would require walking the whole subtree per directory, which this
+/// function has no tree structure to do (it only sees `report.graph`, not
+/// `crate::tree::Tree`). [`effective_ranks`] is "the caller accounting for
+/// nesting" this comment used to gesture at without naming: it walks the
+/// built `Tree` bottom-up and gives every ancestor directory the minimum
+/// rank of its descendants, so `order_tree` (which calls it internally)
+/// still ranks intermediate directories correctly despite this function's
+/// leaf-only contract. A directory whose entire subtree has no graph
+/// presence at all (removed symbols only, or files with no changed-symbol
+/// nodes) still ends up with no effective rank either, and
+/// `order_tree`/`order_siblings` sort those after every ranked directory,
+/// A-Z (ADR 0016 decision 4).
 pub fn rank_directories(report: &Report) -> HashMap<String, DirRank> {
     let dir_of_node: HashMap<&str, &str> = report
         .graph
@@ -299,28 +308,105 @@ fn tarjan_sccs(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
 /// reordered; they stay in the extraction/graph order `crate::tree`
 /// already gave them, since ADR 0016 only asks for directory ordering.
 ///
-/// Within the directory group: [`OrderMode::Topological`] sorts by
-/// `ranks[dir.path]` ascending, with directories absent from `ranks` (no
-/// graph presence at all — e.g. a directory containing only removed
-/// symbols) sorted after every ranked directory, then A-Z among
-/// themselves and among ties on the same rank (a stable, readable
-/// tie-break absent from `rank_directories`' own contract, which only
-/// promises *a* deterministic rank, not a name-based tie-break).
+/// Within the directory group: [`OrderMode::Topological`] sorts by each
+/// directory's *effective* rank ascending (see [`effective_ranks`] — a
+/// branching/intermediate directory that owns no graph node directly,
+/// e.g. "src" when only "src/api"/"src/store" have nodes, inherits the
+/// minimum rank of its descendant directories rather than being treated
+/// as unranked), with directories that have no effective rank at all (no
+/// ranked directory anywhere in their subtree — e.g. a directory
+/// containing only removed symbols) sorted after every ranked directory,
+/// then A-Z among themselves and among ties on the same rank (a stable,
+/// readable tie-break absent from `rank_directories`' own contract, which
+/// only promises *a* deterministic rank, not a name-based tie-break).
 /// [`OrderMode::AlphaNumeric`] ignores `ranks` entirely and sorts every
 /// directory A-Z. Either way, the file group is always A-Z regardless of
 /// `mode` — files have no rank concept to toggle between.
 pub fn order_tree(tree: &mut crate::tree::Tree, ranks: &HashMap<String, DirRank>, mode: OrderMode) {
-    order_siblings(&mut tree.roots, ranks, mode);
+    // Computed once up front (rather than re-derived per sort comparison)
+    // since it requires a full bottom-up subtree walk per directory node —
+    // doing that inside the `Ord::cmp` closure `order_siblings` uses would
+    // recompute the same descendants' minimum rank on every comparison.
+    let effective = effective_ranks(tree, ranks);
+    order_siblings(&mut tree.roots, &effective, mode);
+}
+
+/// For every directory node in `tree`, its effective rank: the minimum
+/// (outermost/least-depended-on-first) [`DirRank::rank`] across the
+/// directory itself and every directory nested under it, or `None` when
+/// neither the directory nor any descendant directory has a `ranks` entry
+/// at all.
+///
+/// This is what makes `rank_directories`' contract true in practice: that
+/// function only promises ranks for *leaf* directories (the direct parent
+/// of a graph node's path, see its own doc comment), and this function is
+/// "the caller accounting for nesting" its doc comment refers to. Without
+/// this propagation, a branching intermediate directory that owns no node
+/// of its own (e.g. "src" when only its subdirectories do) would have no
+/// `ranks` entry and silently sort as unranked, degrading topological
+/// order back to alphabetical among top-level entries — exactly the bug
+/// this function exists to close.
+///
+/// Taking the *minimum* (rather than e.g. an average) is what preserves
+/// "entry points first": if any descendant is an entry point (rank 0),
+/// the ancestor directory containing it should show early too, since a
+/// reviewer scanning top-to-bottom expects to reach that entry point
+/// promptly rather than have it buried under unrelated higher-ranked
+/// siblings.
+fn effective_ranks(
+    tree: &crate::tree::Tree,
+    ranks: &HashMap<String, DirRank>,
+) -> HashMap<String, usize> {
+    let mut effective = HashMap::new();
+    for root in &tree.roots {
+        compute_effective_rank(root, ranks, &mut effective);
+    }
+    effective
+}
+
+/// Post-order walk: computes every descendant directory's effective rank
+/// first, then this node's own as `min(own direct rank, min of children's
+/// effective ranks)`. Returns this node's effective rank (`None` when
+/// nothing in its own subtree is ranked) so the caller (a parent
+/// directory) can fold it into its own minimum without re-reading the map.
+fn compute_effective_rank(
+    node: &crate::tree::TreeNode,
+    ranks: &HashMap<String, DirRank>,
+    effective: &mut HashMap<String, usize>,
+) -> Option<usize> {
+    if !matches!(node.kind, crate::tree::NodeKind::Dir) {
+        // Files/symbols never carry a rank; nothing to fold into a parent.
+        return None;
+    }
+
+    let own_rank = ranks.get(&node.path).map(|r| r.rank);
+    let min_child_rank = node
+        .children
+        .iter()
+        .filter_map(|child| compute_effective_rank(child, ranks, effective))
+        .min();
+
+    let resolved = match (own_rank, min_child_rank) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+
+    if let Some(rank) = resolved {
+        effective.insert(node.path.clone(), rank);
+    }
+    resolved
 }
 
 fn order_siblings(
     nodes: &mut [crate::tree::TreeNode],
-    ranks: &HashMap<String, DirRank>,
+    effective_ranks: &HashMap<String, usize>,
     mode: OrderMode,
 ) {
     for node in nodes.iter_mut() {
         if matches!(node.kind, crate::tree::NodeKind::Dir) {
-            order_siblings(&mut node.children, ranks, mode);
+            order_siblings(&mut node.children, effective_ranks, mode);
         }
     }
 
@@ -330,14 +416,15 @@ fn order_siblings(
         // Directories before files, regardless of mode.
         b_is_dir.cmp(&a_is_dir).then_with(|| match mode {
             OrderMode::Topological if a_is_dir && b_is_dir => {
-                // `None` (unranked: no graph presence at all) must sort
-                // after every `Some` rank — the opposite of
-                // `Option<usize>`'s derived `Ord`, which puts `None`
-                // first — so rank is compared via an explicit "unranked
-                // last" key (`usize::MAX` standing in for "no rank") rather
-                // than relying on `Option`'s own ordering. Ties (same
-                // rank, or both unranked) break A-Z on path.
-                let rank_key = |path: &str| ranks.get(path).map_or(usize::MAX, |r| r.rank);
+                // `None` (unranked: no ranked directory anywhere in this
+                // subtree) must sort after every `Some` rank — the
+                // opposite of `Option<usize>`'s derived `Ord`, which puts
+                // `None` first — so rank is compared via an explicit
+                // "unranked last" key (`usize::MAX` standing in for "no
+                // rank") rather than relying on `Option`'s own ordering.
+                // Ties (same rank, or both unranked) break A-Z on path.
+                let rank_key =
+                    |path: &str| effective_ranks.get(path).copied().unwrap_or(usize::MAX);
                 rank_key(&a.path)
                     .cmp(&rank_key(&b.path))
                     .then_with(|| a.path.cmp(&b.path))
@@ -733,5 +820,123 @@ mod tests {
             .map(|n| n.path.as_str())
             .collect();
         assert_eq!(vec!["src/api", "src/store"], paths);
+    }
+
+    // INTEGRATION test: rank_directories -> order_tree end to end, on a
+    // real 3-level branching tree — the shape the unit test above (which
+    // hand-builds the `ranks` map) cannot catch. `rank_directories` only
+    // emits an entry for a *leaf* directory (the direct parent of a graph
+    // node's path); an intermediate/branching directory like "zzz" here
+    // owns no node directly (only its descendants "zzz/api"/"zzz/service"
+    // do). Without effective-rank propagation up through ancestors, "zzz"
+    // would have no rank at all and sort A-Z against "aaa" (i.e. after
+    // it, since "aaa" < "zzz") regardless of dependency direction.
+    //
+    // The whole graph here is a single connected chain (zzz/api ->
+    // zzz/service -> aaa/store) precisely to avoid any ambiguity from
+    // independent/unrelated SCCs sharing in-degree 0 — this test's only
+    // job is to pin down propagation through a branching intermediate
+    // directory, not `topological_scc_order`'s tie-break among unrelated
+    // components (covered separately, see the `tarjan_sccs`/
+    // `topological_scc_order` unit tests below). Package names are chosen
+    // so the correct topological order ("zzz" first, "aaa" last) disagrees
+    // with alphabetical order, making a regression to A-Z observable.
+    #[test]
+    fn should_order_full_tree_by_effective_rank_through_branching_intermediate_directories() {
+        // zzz/api/handler.rs -> zzz/service/logic.rs -> aaa/store/db.rs:
+        // "zzz" contains both the entry point (api, rank 0) and a middle
+        // link (service, rank 1) — its effective rank must become 0 (the
+        // minimum of its descendants) so it still sorts first despite
+        // "aaa" < "zzz" alphabetically.
+        let report = report_with_graph(
+            vec![
+                node("zzz/api/handler.rs::handle", "zzz/api/handler.rs", "handle"),
+                node("zzz/service/logic.rs::run", "zzz/service/logic.rs", "run"),
+                node("aaa/store/db.rs::save", "aaa/store/db.rs", "save"),
+            ],
+            vec![
+                Edge {
+                    from: "zzz/api/handler.rs::handle".to_string(),
+                    to: "zzz/service/logic.rs::run".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "zzz/service/logic.rs::run".to_string(),
+                    to: "aaa/store/db.rs::save".to_string(),
+                    is_cycle: false,
+                },
+            ],
+        );
+        let ranks = rank_directories(&report);
+
+        // Build the corresponding tree by hand (mirrors what
+        // `tree::build_tree` would produce for this Report's files, minus
+        // badges which this test doesn't care about): two top-level
+        // packages, "zzz" branching into two subdirectories, "aaa" with
+        // one.
+        let mut tree = crate::tree::Tree {
+            roots: vec![
+                dir_node(
+                    "aaa",
+                    vec![dir_node(
+                        "aaa/store",
+                        vec![file_node_with_children("aaa/store/db.rs", vec![])],
+                    )],
+                ),
+                dir_node(
+                    "zzz",
+                    vec![
+                        dir_node(
+                            "zzz/service",
+                            vec![file_node_with_children("zzz/service/logic.rs", vec![])],
+                        ),
+                        dir_node(
+                            "zzz/api",
+                            vec![file_node_with_children("zzz/api/handler.rs", vec![])],
+                        ),
+                    ],
+                ),
+            ],
+        };
+
+        order_tree(&mut tree, &ranks, OrderMode::Topological);
+
+        let expected = crate::tree::Tree {
+            roots: vec![
+                dir_node(
+                    "zzz",
+                    vec![
+                        dir_node(
+                            "zzz/api",
+                            vec![file_node_with_children("zzz/api/handler.rs", vec![])],
+                        ),
+                        dir_node(
+                            "zzz/service",
+                            vec![file_node_with_children("zzz/service/logic.rs", vec![])],
+                        ),
+                    ],
+                ),
+                dir_node(
+                    "aaa",
+                    vec![dir_node(
+                        "aaa/store",
+                        vec![file_node_with_children("aaa/store/db.rs", vec![])],
+                    )],
+                ),
+            ],
+        };
+        assert_eq!(expected, tree);
+    }
+
+    fn file_node_with_children(
+        path: &str,
+        children: Vec<crate::tree::TreeNode>,
+    ) -> crate::tree::TreeNode {
+        crate::tree::TreeNode {
+            kind: crate::tree::NodeKind::File,
+            path: path.to_string(),
+            badges: crate::tree::Badges::default(),
+            children,
+        }
     }
 }
