@@ -42,13 +42,17 @@ pub struct DirRank {
     pub in_cycle: bool,
 }
 
-/// The directory-level condensation shared by [`rank_directories`] and
-/// [`cycle_partners`]/[`cycle_edges`]: every directory that owns at least
-/// one graph node, the inter-directory adjacency derived from
-/// `report.graph.edges`, and the Tarjan SCC grouping over that adjacency.
-/// Built once so the two public functions (ranking directories for display
-/// order, and explaining *which* directories cycle with a given one) don't
-/// each re-run Tarjan and re-derive the same directory index independently.
+/// The directory-level condensation used by [`rank_directories`],
+/// [`cycle_partners`], [`cycle_edges`], and [`cycle_explanation`]: every
+/// directory that owns at least one graph node, the inter-directory
+/// adjacency derived from `report.graph.edges`, and the Tarjan SCC grouping
+/// over that adjacency. Each of the four public functions above builds its
+/// own `DirCondensation` from a fresh `report` — the type itself doesn't
+/// cache across calls — but a single call that needs more than one piece of
+/// derived information (partners *and* edges, [`cycle_explanation`]'s case)
+/// builds exactly one `DirCondensation` and reads both off it, rather than
+/// re-running Tarjan and re-deriving the same directory index twice within
+/// that one call.
 struct DirCondensation<'a> {
     /// Directory paths, sorted, indexed by position — `dirs[i]` is the
     /// directory `scc_of[i]`/`adjacency[i]` refer to by index `i`.
@@ -197,18 +201,30 @@ pub fn rank_directories(report: &Report) -> HashMap<String, DirRank> {
 /// one-member cycle" (impossible, since Tarjan's own SCCs are only >1
 /// member when there's an actual back edge) are the same "nothing to
 /// report" case either way.
+///
+/// Builds its own [`DirCondensation`] — kept as its own public function
+/// (rather than folded away entirely) since it has independent unit test
+/// coverage and callers that only need partners, not edges too. A caller
+/// that needs both (`build_dir_detail`) should use [`cycle_explanation`]
+/// instead, which builds the condensation once rather than once per
+/// function.
 pub fn cycle_partners(report: &Report) -> HashMap<String, Vec<String>> {
     let condensation = DirCondensation::build(report);
-    let DirCondensation { dirs, sccs, .. } = condensation;
+    partners_from_condensation(&condensation)
+}
 
+fn partners_from_condensation(condensation: &DirCondensation) -> HashMap<String, Vec<String>> {
     let mut result = HashMap::new();
-    for scc in &sccs {
+    for scc in &condensation.sccs {
         if scc.len() < 2 {
             continue;
         }
-        let members: Vec<String> = scc.iter().map(|&i| dirs[i].to_string()).collect();
+        let members: Vec<String> = scc
+            .iter()
+            .map(|&i| condensation.dirs[i].to_string())
+            .collect();
         for &node_index in scc {
-            let this_dir = dirs[node_index];
+            let this_dir = condensation.dirs[node_index];
             let mut partners: Vec<String> = members
                 .iter()
                 .filter(|m| m.as_str() != this_dir)
@@ -241,7 +257,16 @@ pub struct CycleEdge {
 /// lines. An edge within a single directory, or between two directories
 /// that merely both happen to exist without forming a cycle together, is
 /// excluded — only edges between two SCC-mates count.
+///
+/// Builds its own [`DirCondensation`], same "kept as its own function"
+/// reasoning as [`cycle_partners`]'s doc comment — see [`cycle_explanation`]
+/// for the shared-build alternative.
 pub fn cycle_edges(report: &Report) -> Vec<CycleEdge> {
+    let condensation = DirCondensation::build(report);
+    edges_from_condensation(report, &condensation)
+}
+
+fn edges_from_condensation(report: &Report, condensation: &DirCondensation) -> Vec<CycleEdge> {
     let node_by_id: HashMap<&str, &rinkaku_core::graph::Node> = report
         .graph
         .nodes
@@ -249,7 +274,6 @@ pub fn cycle_edges(report: &Report) -> Vec<CycleEdge> {
         .map(|node| (node.id.as_str(), node))
         .collect();
 
-    let condensation = DirCondensation::build(report);
     let dir_index: HashMap<&str, usize> = condensation
         .dirs
         .iter()
@@ -285,6 +309,29 @@ pub fn cycle_edges(report: &Report) -> Vec<CycleEdge> {
         });
     }
     edges
+}
+
+/// One directory's cycle explanation: the other directories it cycles
+/// with, and the concrete cross-directory edges forming that cycle —
+/// exactly the two pieces [`crate::detail::build_dir_detail`] needs.
+/// Builds [`DirCondensation`] (a Tarjan SCC run over the whole directory
+/// graph) exactly once and derives both results from that single build,
+/// unlike calling [`cycle_partners`] and [`cycle_edges`] separately, which
+/// would each re-run the same condensation from scratch.
+pub fn cycle_explanation(report: &Report, path: &str) -> (Vec<String>, Vec<CycleEdge>) {
+    let condensation = DirCondensation::build(report);
+    let partners = partners_from_condensation(&condensation)
+        .remove(path)
+        .unwrap_or_default();
+    let edges = if partners.is_empty() {
+        Vec::new()
+    } else {
+        edges_from_condensation(report, &condensation)
+            .into_iter()
+            .filter(|edge| parent_dir(&edge.from_path) == path || parent_dir(&edge.to_path) == path)
+            .collect()
+    };
+    (partners, edges)
 }
 
 /// The parent directory of a slash-separated `path` — everything before

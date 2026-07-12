@@ -16,7 +16,7 @@
 //! the entry view's `(cycle)` marker on its own only says *that* a
 //! directory cycles, not *with what*.
 
-use crate::order::{CycleEdge, cycle_edges, cycle_partners};
+use crate::order::{CycleEdge, cycle_explanation};
 use crate::tree::{Badges, NodeKind, SymbolRef, Tree, TreeNode};
 use rinkaku_core::extract::{Classification, SymbolKind};
 use rinkaku_core::render::Report;
@@ -254,10 +254,11 @@ pub struct FileDetail {
 
 /// Builds a [`DirDetail`] for the directory at `path` in `tree`, or `None`
 /// when no such directory node exists. `report` supplies the cycle
-/// explanation (`crate::order::cycle_partners`/`cycle_edges`) and the
-/// hotspot lookup for `top_fan_in` — both computed fresh per call, same
-/// "recompute rather than cache" philosophy the rest of this view-model
-/// layer already follows (ADR 0016 decision 1).
+/// explanation (`crate::order::cycle_explanation`, which builds the
+/// directory-level SCC condensation exactly once rather than once per
+/// piece of information) and the hotspot lookup for `top_fan_in` — both
+/// computed fresh per call, same "recompute rather than cache" philosophy
+/// the rest of this view-model layer already follows (ADR 0016 decision 1).
 pub fn build_dir_detail(tree: &Tree, report: &Report, path: &str) -> Option<DirDetail> {
     let node = find_dir_node(tree, path)?;
 
@@ -298,16 +299,8 @@ pub fn build_dir_detail(tree: &Tree, report: &Report, path: &str) -> Option<DirD
     });
     top_fan_in.truncate(5);
 
-    let partners = cycle_partners(report).remove(path).unwrap_or_default();
-    let edges: Vec<CycleEdgeView> = if partners.is_empty() {
-        Vec::new()
-    } else {
-        cycle_edges(report)
-            .iter()
-            .filter(|edge| dir_of(&edge.from_path) == path || dir_of(&edge.to_path) == path)
-            .map(CycleEdgeView::from)
-            .collect()
-    };
+    let (partners, cycle_edges) = cycle_explanation(report, path);
+    let edges: Vec<CycleEdgeView> = cycle_edges.iter().map(CycleEdgeView::from).collect();
 
     Some(DirDetail {
         path: node.path.clone(),
@@ -358,14 +351,6 @@ fn file_symbol_summary(
             .copied()
             .unwrap_or(0),
     }
-}
-
-/// The parent directory of a slash-separated `path` — mirrors
-/// `crate::order`'s own private `parent_dir` (not reused directly since
-/// that one is private to `order.rs`; duplicating one small line here is
-/// cheaper than making it `pub(crate)` for a single call site).
-fn dir_of(path: &str) -> &str {
-    path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
 }
 
 fn find_dir_node<'a>(tree: &'a Tree, path: &str) -> Option<&'a TreeNode> {
