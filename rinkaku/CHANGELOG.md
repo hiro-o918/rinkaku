@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/hiro-o918/rinkaku/compare/v0.3.1...v0.4.0) (2026-07-12)
+
+
+### Features
+
+* auto-clone PR URL repos into a cache when outside a clone ([47993ce](https://github.com/hiro-o918/rinkaku/commit/47993ce3764949a567f1116bfc13db2cdb8d3072))
+* prefer existing ghq-managed clones over the cache clone ([faaf230](https://github.com/hiro-o918/rinkaku/commit/faaf2305a7d53a1538b444ab926b049450f10599))
+
 ## [0.3.1](https://github.com/hiro-o918/rinkaku/compare/v0.3.0...v0.3.1) (2026-07-12)
 
 

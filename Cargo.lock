@@ -1286,7 +1286,7 @@ dependencies = [
 
 [[package]]
 name = "rinkaku"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
