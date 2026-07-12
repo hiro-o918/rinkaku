@@ -352,9 +352,22 @@ fn dfs_pre_order(graph: &SymbolGraph) -> Vec<NodeId> {
 }
 
 /// Iterative pre-order DFS from `start`, appending every newly-visited node
-/// to `order` and following non-cycle edges only. Shared by `dfs_pre_order`
-/// for both its `roots` pass and its defensive fallback pass over every
-/// node.
+/// to `order` in true pre-order (a node is only appended once every node
+/// before it in DFS order has already been fully appended — i.e. the same
+/// order `render_tree_node`'s recursive walk visits nodes in) and following
+/// non-cycle edges only. Shared by `dfs_pre_order` for both its `roots` pass
+/// and its defensive fallback pass over every node.
+///
+/// Explicit work-stack of `(node, remaining children)` rather than a plain
+/// node stack: a plain node stack that appends to `order` when a node is
+/// *pushed* (rather than when it is fully descended into) produces the
+/// wrong order whenever a node has more than one child and the first child
+/// itself has children — e.g. `A -> B, A -> C, B -> D` would wrongly order
+/// `A, C, B, D` (C, pushed right after A, gets appended before B's subtree
+/// is even explored) instead of the correct `A, B, D, C`. Tracking each
+/// stack frame's own child cursor mirrors `render_tree_node`'s recursion
+/// without recursing (unbounded-depth walks in this module use an explicit
+/// stack, see `tarjan_sccs`/`dfs_mark_back_edges` in `graph.rs`).
 fn visit_from(
     start: &str,
     children: &HashMap<&str, Vec<(&str, bool)>>,
@@ -364,22 +377,24 @@ fn visit_from(
     if !visited.insert(start.to_string()) {
         return;
     }
-    // Explicit stack rather than recursion, to match the style used
-    // elsewhere in the graph/render modules for unbounded-depth walks.
-    let mut stack = vec![start];
     order.push(start.to_string());
-    while let Some(current) = stack.pop() {
-        if let Some(kids) = children.get(current) {
-            // Push in reverse so children are visited in edge order (a
-            // `Vec`-backed stack pops last-in-first-out).
-            for &(child, is_cycle) in kids.iter().rev() {
-                if is_cycle || !visited.insert(child.to_string()) {
-                    continue;
-                }
-                order.push(child.to_string());
-                stack.push(child);
-            }
+
+    // Each frame is (node, index of the next child to consider).
+    let mut stack: Vec<(&str, usize)> = vec![(start, 0)];
+    while let Some(frame) = stack.last_mut() {
+        let (node, child_i) = (frame.0, frame.1);
+        let kids = children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        let Some(&(child, is_cycle)) = kids.get(child_i) else {
+            stack.pop();
+            continue;
+        };
+        frame.1 += 1;
+
+        if is_cycle || !visited.insert(child.to_string()) {
+            continue;
         }
+        order.push(child.to_string());
+        stack.push((child, 0));
     }
 }
 
@@ -561,6 +576,97 @@ fn handle_pr(args: PrArgs) -> Result<()>
 
 ```
 fn resolve_pr_base_sha() -> Result<String>
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_order_definitions_in_true_pre_order_when_first_child_has_its_own_child() {
+        // A -> B, A -> C (B before C in edge order), B -> D. True pre-order
+        // DFS visits A, then descends fully into B's subtree (B, D) before
+        // moving on to C: A, B, D, C. A naive "append to order when a node
+        // is pushed onto the stack" (rather than when it is actually
+        // visited/popped) would instead produce A, C, B, D, because C gets
+        // pushed onto the stack right after A even though B is visited
+        // first — this test pins the correct DFS order down as the full
+        // rendered string so both the "Change graph" tree and "Definitions"
+        // order are asserted together.
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    symbol("src/lib.rs::a", "a", SymbolKind::Function, "fn a()"),
+                    symbol("src/lib.rs::b", "b", SymbolKind::Function, "fn b()"),
+                    symbol("src/lib.rs::c", "c", SymbolKind::Function, "fn c()"),
+                    symbol("src/lib.rs::d", "d", SymbolKind::Function, "fn d()"),
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::a", "src/lib.rs", "a"),
+                    node("src/lib.rs::b", "src/lib.rs", "b"),
+                    node("src/lib.rs::c", "src/lib.rs", "c"),
+                    node("src/lib.rs::d", "src/lib.rs", "d"),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "src/lib.rs::a".to_string(),
+                        to: "src/lib.rs::b".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "src/lib.rs::a".to_string(),
+                        to: "src/lib.rs::c".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "src/lib.rs::b".to_string(),
+                        to: "src/lib.rs::d".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec!["src/lib.rs::a".to_string()],
+            },
+        };
+
+        let expected = "\
+## Change graph
+
+- fn a (src/lib.rs)
+  - fn b (src/lib.rs)
+    - fn d (src/lib.rs)
+  - fn c (src/lib.rs)
+
+## Definitions
+
+### fn a (src/lib.rs)
+
+```
+fn a()
+```
+
+### fn b (src/lib.rs)
+
+```
+fn b()
+```
+
+### fn d (src/lib.rs)
+
+```
+fn d()
+```
+
+### fn c (src/lib.rs)
+
+```
+fn c()
 ```
 
 "
