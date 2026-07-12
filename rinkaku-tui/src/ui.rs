@@ -20,7 +20,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use rinkaku_core::extract::Classification;
 use rinkaku_core::render::{Report, ReportOrigin};
 use unicode_width::UnicodeWidthChar;
@@ -40,6 +40,13 @@ use unicode_width::UnicodeWidthChar;
 /// [`load_symbol_source`], see that function's doc comment for why
 /// `Report` paths need it) — it is threaded through here rather than
 /// resolved lazily so this stays the single frame-drawing entry point.
+///
+/// The `?` help overlay (ADR 0020) draws last, on top of whatever screen
+/// was already rendered underneath — `app.help_open()` never changes what
+/// `Screen`/`RightPane` themselves draw (`App::help_open`'s own doc
+/// comment), so the underlying frame is built exactly the same way whether
+/// the overlay is open or not, and the overlay is simply composited over
+/// it as a final step.
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -69,6 +76,80 @@ pub fn draw(
     }
 
     draw_status_line(frame, app, status_area);
+
+    if app.help_open() {
+        draw_help_overlay(frame, area);
+    }
+}
+
+/// Draws the `?` help overlay (ADR 0020) centered over `full_area`: a
+/// bordered box roughly 70% of the frame's width/height (capped so it
+/// never claims more than the frame itself on a small terminal), listing
+/// every [`crate::help::HELP_CONTENT`] keymap group followed by the
+/// glossary. [`Clear`] is rendered first so the overlay's background is
+/// opaque rather than letting the underlying frame's glyphs show through
+/// gaps in the overlay's own text.
+fn draw_help_overlay(frame: &mut Frame, full_area: Rect) {
+    let overlay_area = centered_rect(full_area, 80, 90);
+    frame.render_widget(Clear, overlay_area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for group in crate::help::HELP_CONTENT.keymap_groups {
+        lines.push(Line::styled(
+            group.title,
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        for binding in group.bindings {
+            lines.push(Line::raw(format!(
+                "  {:<16} {}",
+                binding.keys, binding.description
+            )));
+        }
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::styled(
+        "Glossary",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    for entry in crate::help::HELP_CONTENT.glossary {
+        lines.push(Line::raw(format!(
+            "  {:<16} {}",
+            entry.term, entry.explanation
+        )));
+    }
+
+    let block = Block::bordered().title(" Help (? to close) ");
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(paragraph, overlay_area);
+}
+
+/// A `Rect` centered within `area`, `percent_width`/`percent_height` of
+/// `area`'s own dimensions — the standard `ratatui` centered-popup layout
+/// recipe (two nested `Layout::vertical`/`horizontal` splits with a
+/// `Percentage` constraint sandwiched between two equal `Percentage`
+/// margins), extracted as its own pure function so the overlay's sizing
+/// rule is nameable and independent of `draw_help_overlay`'s own
+/// `Clear`/`Paragraph` concerns.
+fn centered_rect(area: Rect, percent_width: u16, percent_height: u16) -> Rect {
+    let vertical_margin = (100 - percent_height) / 2;
+    let [_, middle, _] = Layout::vertical([
+        Constraint::Percentage(vertical_margin),
+        Constraint::Percentage(percent_height),
+        Constraint::Percentage(vertical_margin),
+    ])
+    .areas(area);
+
+    let horizontal_margin = (100 - percent_width) / 2;
+    let [_, center, _] = Layout::horizontal([
+        Constraint::Percentage(horizontal_margin),
+        Constraint::Percentage(percent_width),
+        Constraint::Percentage(horizontal_margin),
+    ])
+    .areas(middle);
+
+    center
 }
 
 /// Left entry pane (directory tree) + right pane, split 60/40 — this
@@ -1104,6 +1185,59 @@ mod tests {
         // the detail pane actually rendered file-detail content rather than
         // asserting on the placeholder text that used to show here.
         assert!(text.contains("Symbols"));
+    }
+
+    #[test]
+    fn should_draw_help_overlay_with_keymap_and_glossary_when_help_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Help"));
+        assert!(text.contains("Tree focus"));
+        assert!(text.contains("Right focus"));
+        assert!(text.contains("Global"));
+        assert!(text.contains("Glossary"));
+        assert!(text.contains("pivot"));
+    }
+
+    #[test]
+    fn should_not_draw_help_overlay_when_help_is_closed() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("Glossary"));
     }
 
     #[test]

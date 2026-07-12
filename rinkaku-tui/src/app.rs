@@ -1487,6 +1487,82 @@ mod tests {
     }
 
     #[test]
+    fn should_start_with_help_overlay_closed() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        assert_eq!(false, app.help_open());
+    }
+
+    #[test]
+    fn should_open_help_overlay_when_toggle_help_is_pressed() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let app = app.handle_key(InputKey::ToggleHelp);
+
+        assert_eq!(true, app.help_open());
+    }
+
+    #[test]
+    fn should_close_help_overlay_when_toggle_help_is_pressed_again() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+        assert_eq!(true, app.help_open());
+
+        let app = app.handle_key(InputKey::ToggleHelp);
+
+        assert_eq!(false, app.help_open());
+    }
+
+    #[test]
+    fn should_ignore_quit_while_help_overlay_is_open() {
+        // ADR 0020: the overlay must be a safe, low-stakes action that
+        // cannot be short-circuited by an accidental app exit — `Quit`
+        // reaching `handle_key` while the overlay is open (e.g. via a
+        // translate_key bug) must still be swallowed defensively, not just
+        // rely on `translate_key` never producing it in the first place.
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+        assert_eq!(true, app.help_open());
+
+        let app = app.handle_key(InputKey::Quit);
+
+        assert_eq!(true, app.help_open());
+        assert_eq!(false, app.should_quit());
+    }
+
+    #[test]
+    fn should_ignore_navigation_keys_while_help_overlay_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+        let cursor_before = app.nav().cursor();
+
+        let app = app.handle_key(InputKey::Down);
+
+        assert_eq!(cursor_before, app.nav().cursor());
+        assert_eq!(true, app.help_open());
+    }
+
+    #[test]
+    fn should_leave_other_state_untouched_when_help_overlay_opens() {
+        // Opening the overlay must not disturb whatever was already showing
+        // underneath it (`Self::help_open`'s own doc comment: "nothing else
+        // about `App`'s state changes while the overlay is open").
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::ToggleDiff);
+        let right_pane_before = app.right_pane();
+        let cursor_before = app.nav().cursor();
+
+        let app = app.handle_key(InputKey::ToggleHelp);
+
+        assert_eq!(right_pane_before, app.right_pane());
+        assert_eq!(cursor_before, app.nav().cursor());
+    }
+
+    #[test]
     fn should_reset_right_pane_scroll_when_focus_returns_to_tree() {
         let report = report_with_one_symbol();
         let app = App::new(&report)

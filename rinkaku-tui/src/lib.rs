@@ -32,6 +32,7 @@ pub mod app;
 pub mod detail;
 pub mod diff_shape;
 pub mod diff_view;
+pub mod help;
 pub mod highlight;
 pub mod nav;
 pub mod order;
@@ -299,7 +300,24 @@ fn should_recompute_pivot_selection(app: &App) -> bool {
 /// `FocusLeft` on the entry view depending on focus, `Back` on the source
 /// view) and on `app.focus()` (ADR 0020) to route Esc between `FocusLeft`
 /// and its other meanings — every other mapping is context-free.
+///
+/// `app.help_open()` (ADR 0020) short-circuits every other rule: while the
+/// help overlay is open, `?`/Esc/`q` all translate to `ToggleHelp` (closing
+/// it) regardless of what they would otherwise mean, and this check runs
+/// before every other arm so none of them — especially `q`, which would
+/// otherwise mean `Quit` — can reach past the overlay. `App::handle_key`'s
+/// own `help_open` guard is a second, independent layer of the same rule
+/// (swallowing every non-`ToggleHelp` key while open) — belt and braces,
+/// since "the overlay is a safe action that can never accidentally quit
+/// the app" is exactly the property ADR 0020 asks this feature to hold.
 fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
+    if app.help_open() {
+        return match code {
+            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::ToggleHelp),
+            _ => None,
+        };
+    }
+
     let on_source_screen = matches!(app.screen(), Screen::Source { .. });
     let right_focused = app.focus() == app::Focus::Right;
 
@@ -483,6 +501,38 @@ mod tests {
         let actual = translate_key(KeyCode::Char('?'), KeyModifiers::NONE, &app);
 
         assert_eq!(Some(InputKey::ToggleHelp), actual);
+    }
+
+    #[test]
+    fn should_translate_esc_to_toggle_help_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Esc, KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleHelp), actual);
+    }
+
+    #[test]
+    fn should_translate_q_to_toggle_help_instead_of_quit_when_overlay_is_open() {
+        // ADR 0020: `q` must close the overlay, not fall through to its
+        // normal `Quit` meaning, while it is open.
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('q'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleHelp), actual);
+    }
+
+    #[test]
+    fn should_translate_arbitrary_key_to_none_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('j'), KeyModifiers::NONE, &app);
+
+        assert_eq!(None, actual);
     }
 
     #[test]
