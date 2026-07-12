@@ -30,9 +30,10 @@ use crate::diff_view::{DiffLine, DiffLineKind, Hunk};
 /// The token palette this module recognizes, in the order passed to
 /// `HighlightConfiguration::configure` — a capture's resolved `Highlight`
 /// index is a position into this slice, so `crate::ui`'s palette-to-style
-/// lookup and this list must stay in lockstep (matched by index, not by
-/// name, at the point where `crate::ui` turns a [`TokenSpan`] into a
-/// `ratatui::style::Style`). A deliberately small subset of the capture
+/// lookup and this list must stay in lockstep: `crate::ui` resolves a
+/// [`TokenSpan`]'s index back to its name via this slice before matching
+/// on the name, so reordering entries here silently re-colors tokens even
+/// though nothing fails to compile. A deliberately small subset of the capture
 /// names the four bundled grammars' `HIGHLIGHTS_QUERY` files actually
 /// emit that a reviewer benefits from distinguishing, not every capture
 /// name `tree_sitter_highlight::STANDARD_CAPTURE_NAMES` documents.

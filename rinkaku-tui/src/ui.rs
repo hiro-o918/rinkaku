@@ -509,9 +509,10 @@ fn styled_content_spans(
         result.push(gap_span(&content[cursor..], bg));
     }
     if result.is_empty() {
-        // An empty `content` (blank line) still needs one span so the
-        // line's background tint renders across at least the marker
-        // column boundary consistently with non-empty lines.
+        // Only reachable when `content` is empty AND no token spans exist
+        // (a blank added/removed line): non-empty content always yields at
+        // least one gap or token span above. The empty span keeps the
+        // line's background tint rendering on blank lines too.
         result.push(gap_span("", bg));
     }
 
@@ -1695,5 +1696,36 @@ index e69de29..4b825dc 100644
         // would have produced.
         assert!(text.contains("Detail (1-"));
         assert!(!text.contains("/2)"));
+    }
+
+    #[test]
+    fn should_map_every_palette_entry_to_its_pinned_style_when_resolved_by_index() {
+        // Pins the full palette-index → style table: `palette_style` falls
+        // back to unstyled on an unmapped name, so dropping one arm during
+        // a future palette edit would otherwise pass `make test` silently.
+        let expected = vec![
+            ("keyword", Style::default().fg(Color::Magenta)),
+            ("string", Style::default().fg(Color::Yellow)),
+            (
+                "comment",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+            ("function", Style::default().fg(Color::Blue)),
+            ("type", Style::default().fg(Color::Cyan)),
+            ("number", Style::default().fg(Color::LightRed)),
+            ("constant", Style::default().fg(Color::LightRed)),
+            ("property", Style::default().fg(Color::LightBlue)),
+            ("variable", Style::default()),
+        ];
+
+        let actual: Vec<(&str, Style)> = crate::highlight::PALETTE
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (*name, palette_style(index)))
+            .collect();
+
+        assert_eq!(expected, actual);
     }
 }
