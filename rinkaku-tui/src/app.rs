@@ -926,18 +926,49 @@ mod tests {
     }
 
     #[test]
-    fn should_return_empty_pivot_selection_when_directory_path_matches_no_symbol() {
-        // Defensive: `crate::pivot::build_pivot_view` only returns `None`
-        // when no node matches the prefix, which should not happen for a
-        // path the tree itself produced — but `selected_pivot_view`'s
-        // `Empty` branch must still exist and report something sane rather
-        // than silently falling through, in case tree/graph ever disagree.
+    fn should_return_not_applicable_pivot_selection_when_there_are_no_rows_at_all() {
+        // The cursor has no row to sit on when the tree itself is empty —
+        // distinct from `should_return_empty_pivot_selection_when_file_row_path_matches_no_graph_node`
+        // below, which pins the actual `PivotSelection::Empty` trigger
+        // (a real File row whose path matches no graph node).
         let report = empty_report();
         let app = App::new(&report);
 
         let actual = app.selected_pivot_view(&report);
 
         assert_eq!(PivotSelection::NotApplicable, actual);
+    }
+
+    #[test]
+    fn should_return_empty_pivot_selection_when_file_row_path_matches_no_graph_node() {
+        // The real-world trigger for `PivotSelection::Empty` (not the
+        // previous version of this test, which used an empty report and so
+        // only ever exercised `NotApplicable` — the cursor had no row at
+        // all): a `FileReport` with an empty `symbols` list (e.g. a file
+        // whose only changes are comments, or a pure rename) still produces
+        // a `File` tree row (`crate::tree::build_tree`'s own doc comment:
+        // "a pure rename, still shown as a `File` node with zero badges"),
+        // but contributes no node to `report.graph` at all — `graph` here
+        // is deliberately left at `empty_report`'s empty default, mirroring
+        // that mismatch. `App::new` starts fully expanded with the cursor
+        // on the tree's first (and only) row, this file itself.
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![],
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report);
+
+        let actual = app.selected_pivot_view(&report);
+
+        assert_eq!(
+            PivotSelection::Empty {
+                path: "lib.rs".to_string()
+            },
+            actual
+        );
     }
 
     /// Same shape as `report_with_two_directories`, but with a populated
