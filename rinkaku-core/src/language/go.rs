@@ -28,7 +28,8 @@ const DEFINITION_QUERY: &str = "\
 ] @definition";
 
 /// Tree-sitter query capturing identifiers referenced from inside a
-/// definition: called function names and referenced type names.
+/// definition: called function names, referenced type names, and (when
+/// the definition is an interface) its method spec names.
 ///
 /// - `call_expression function: (identifier)` captures free function calls
 ///   (`Helper(x)`). Method/selector calls
@@ -44,10 +45,25 @@ const DEFINITION_QUERY: &str = "\
 ///   `type_identifier` — so they are captured the same way and simply
 ///   fail to resolve later since the repo has no definition for them
 ///   (see the trait doc comment on `reference_query`).
+/// - `interface_type (method_elem name: (field_identifier))` captures each
+///   method spec's name inside an interface body (ADR 0012 decision 2):
+///   feeding these into the interface symbol's `referenced_names` makes
+///   `graph::collect_edges`'s existing name-based matching link the
+///   interface to a same-named changed receiver method, so the two stop
+///   appearing as independent roots in the change graph. Scoped to
+///   `interface_type`'s own `method_elem` children (rather than a bare
+///   `(method_elem name: (field_identifier) @reference.call)` pattern) so
+///   this cannot match anything else — `method_elem` only ever occurs
+///   inside an `interface_type` in this grammar, but the explicit parent
+///   keeps the intent legible. Captured under `reference.call` (not a new
+///   capture prefix) since a method spec name plays the same role here as
+///   a called function name: both are "a name this definition expects to
+///   find elsewhere."
 const REFERENCE_QUERY: &str = "\
 [
   (call_expression function: (identifier) @reference.call)
   (type_identifier) @reference.type
+  (interface_type (method_elem name: (field_identifier) @reference.call))
 ]";
 
 pub struct GoSupport;

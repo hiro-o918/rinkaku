@@ -17,7 +17,8 @@ const DEFINITION_QUERY: &str = "\
 ] @definition";
 
 /// Tree-sitter query capturing identifiers referenced from inside a
-/// definition: called function names and referenced type names.
+/// definition: called function names, referenced type names, and (when the
+/// definition is a trait) its method names.
 ///
 /// - `call_expression function: (identifier)` captures free function calls
 ///   (`helper(x)`) and tuple-struct/enum-variant constructors used as
@@ -34,10 +35,25 @@ const DEFINITION_QUERY: &str = "\
 ///   pattern. Rust's primitive types (`i32`, `str`, `bool`, ...) parse as
 ///   the distinct `primitive_type` node kind, so they are already excluded
 ///   by construction rather than needing an explicit exclusion list.
+/// - `trait_item body: (declaration_list (function_signature_item name:
+///   (identifier)))` and the same shape for `function_item` capture a
+///   trait's method names — both the common bodiless `fn name(...);` form
+///   and a default-body `fn name(...) { ... }` form (ADR 0012 decision 2):
+///   feeding these into the trait symbol's `referenced_names` makes
+///   `graph::collect_edges`'s existing name-based matching link the trait
+///   to a same-named changed impl method, so the two stop appearing as
+///   independent roots in the change graph. Scoped to a `trait_item`'s own
+///   `body` field (rather than matching `function_signature_item`/
+///   `function_item` anywhere) so an `impl_item`'s or free function's name
+///   is never captured this way — those are already covered by
+///   `definition_query` capturing the function/method itself, not via this
+///   path.
 const REFERENCE_QUERY: &str = "\
 [
   (call_expression function: (identifier) @reference.call)
   (type_identifier) @reference.type
+  (trait_item body: (declaration_list (function_signature_item name: (identifier) @reference.call)))
+  (trait_item body: (declaration_list (function_item name: (identifier) @reference.call)))
 ]";
 
 pub struct RustSupport;

@@ -30,7 +30,7 @@
 //! signatures are noise (ADR 0009).
 
 use crate::extract::{ExtractedSymbol, SymbolKind};
-use crate::graph::{NodeId, SymbolGraph};
+use crate::graph::{Node, NodeId, SymbolGraph};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -205,6 +205,8 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     if !report.graph.nodes.is_empty() {
         writeln!(out, "## Change graph")?;
         writeln!(out)?;
+        writeln!(out, "{}", change_graph_summary(&report.graph.nodes))?;
+        writeln!(out)?;
         render_change_graph(&mut out, &report.graph, &children, &lookup)?;
         writeln!(out)?;
 
@@ -261,6 +263,61 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     Ok(out)
 }
 
+/// Builds the one-line summary shown under the "## Change graph" heading,
+/// e.g. `16 changed symbols in 3 files — most in store/items.go (11)`
+/// (ADR 0012 decision 3). Computed from `nodes` alone (not `edges`/`roots`),
+/// so it stays meaningful even if graph-building changes independently.
+///
+/// The `— most in ...` suffix is dropped when every node lives in the same
+/// file: naming "the file with the most nodes" is redundant when there is
+/// only one file to begin with. Ties for "most" go to whichever path's node
+/// appears first in `nodes` (stable, diff-derived order), matching the
+/// tie-break `render_markdown` already relies on elsewhere (e.g. root
+/// order) rather than an arbitrary path-string sort.
+///
+/// Callers must not call this with an empty `nodes` — `render_markdown`
+/// only emits the "Change graph" section (and this summary) when
+/// `graph.nodes` is non-empty, matching pre-ADR-0012 behavior for an empty
+/// graph.
+fn change_graph_summary(nodes: &[Node]) -> String {
+    let total = nodes.len();
+    let symbol_noun = if total == 1 { "symbol" } else { "symbols" };
+
+    // First-seen order for paths, with per-path counts, so both the file
+    // count and the "most changed" tie-break can be read off in one pass.
+    let mut path_order: Vec<&str> = Vec::new();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for node in nodes {
+        let path = node.path.as_str();
+        if !counts.contains_key(path) {
+            path_order.push(path);
+        }
+        *counts.entry(path).or_insert(0) += 1;
+    }
+
+    let file_count = path_order.len();
+    let file_noun = if file_count == 1 { "file" } else { "files" };
+
+    if file_count <= 1 {
+        return format!("{total} changed {symbol_noun} in {file_count} {file_noun}");
+    }
+
+    // `max_by_key` keeps the *last* maximal element on ties, but the
+    // tie-break we want is "first in `nodes` order" — negate the position
+    // so an earlier path outranks a later one with the same count.
+    let (hotspot_path, hotspot_count) = path_order
+        .iter()
+        .enumerate()
+        .map(|(i, &path)| (path, counts[path], i))
+        .max_by_key(|&(_, count, i)| (count, std::cmp::Reverse(i)))
+        .map(|(path, count, _)| (path, count))
+        .expect("file_count > 1 implies path_order is non-empty");
+
+    format!(
+        "{total} changed {symbol_noun} in {file_count} {file_noun} — most in {hotspot_path} ({hotspot_count})"
+    )
+}
+
 /// Renders the "Change graph" section: an indented, names-only tree rooted
 /// at `graph.roots`, in root order. Each root starts its own top-level DFS;
 /// a node already printed earlier in the tree is re-shown by name only,
@@ -270,6 +327,14 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
 /// warning line instead of being walked into (walking into one would loop
 /// forever, since a cycle edge points back to an ancestor already on the
 /// current path).
+///
+/// A child that is both a non-function symbol and childless in the graph
+/// (see [`is_foldable`]) is not rendered as its own nested line — its name
+/// is folded into its parent's line instead, as an inline `— uses: ...`
+/// annotation (ADR 0012 decision 1). `roots` is passed alongside `children`
+/// so `render_tree_node` can exempt root nodes from folding even when they
+/// would otherwise qualify: a root is always its own top-level DFS, never
+/// "just a dependency" of something else.
 fn render_change_graph(
     out: &mut String,
     graph: &SymbolGraph,
@@ -277,11 +342,36 @@ fn render_change_graph(
     lookup: &SymbolLookup,
 ) -> Result<(), RenderError> {
     let mut printed: HashSet<String> = HashSet::new();
+    let roots: HashSet<&str> = graph.roots.iter().map(String::as_str).collect();
 
     for root in &graph.roots {
-        render_tree_node(out, root, children, lookup, &mut printed, 0)?;
+        render_tree_node(out, root, children, lookup, &roots, &mut printed, 0)?;
     }
     Ok(())
+}
+
+/// A node is foldable — eligible to be inlined into its parent's line
+/// rather than rendered as its own nested line (ADR 0012 decision 1) —
+/// when both hold:
+/// - its symbol's kind is not [`SymbolKind::Function`] (i.e. it is a data
+///   shape: struct/enum/trait/interface/class/type-alias), and
+/// - it has no outgoing edges at all in the graph, including cycle edges —
+///   a node whose only children are cycle edges is *not* foldable, so the
+///   cycle warning stays visible rather than being silently swallowed.
+///
+/// Root nodes are exempt from folding regardless of this check — see
+/// `render_change_graph`'s doc comment — so this function only answers "is
+/// this node structurally childless and non-function", leaving the root
+/// exemption to the caller.
+fn is_foldable(
+    id: &str,
+    lookup: &SymbolLookup,
+    children: &HashMap<&str, Vec<(&str, bool)>>,
+) -> bool {
+    let Some((_, symbol)) = lookup.get(id) else {
+        return false;
+    };
+    symbol.kind != SymbolKind::Function && !children.contains_key(id)
 }
 
 /// Groups `graph.edges` by their `from` node, each target annotated with
@@ -301,13 +391,25 @@ fn children_by_node(graph: &SymbolGraph) -> HashMap<&str, Vec<(&str, bool)>> {
 }
 
 /// Writes one tree line for `id` at `depth`, then recurses into its
-/// children (unless `id` was already printed earlier in the tree, in which
-/// case it is shown as a `(see above)` reference and not expanded).
+/// non-foldable children (unless `id` was already printed earlier in the
+/// tree, in which case it is shown as a `(see above)` reference and not
+/// expanded).
+///
+/// Foldable children (see [`is_foldable`]; roots are always exempt, per
+/// `render_change_graph`'s doc comment) are not visited recursively at
+/// all — they never enter `printed` and never get a `(see above)` line
+/// anywhere. Instead their names are collected and appended to *this*
+/// line as `— uses: A, B`, in the same order they appear in the edge
+/// list. Because folding is a per-call decision (not a global one), the
+/// same folded name legitimately repeats verbatim on every parent that
+/// references it — that repetition is intentional, not a duplicate-
+/// rendering bug.
 fn render_tree_node(
     out: &mut String,
     id: &str,
     children: &HashMap<&str, Vec<(&str, bool)>>,
     lookup: &SymbolLookup,
+    roots: &HashSet<&str>,
     printed: &mut HashSet<String>,
     depth: usize,
 ) -> Result<(), RenderError> {
@@ -321,24 +423,43 @@ fn render_tree_node(
         writeln!(out, "{indent}- {label} (see above)")?;
         return Ok(());
     }
-    writeln!(out, "{indent}- {label}")?;
 
-    if let Some(kids) = children.get(id) {
-        for &(child_id, is_cycle) in kids {
-            if is_cycle {
-                let Some((child_path, child_symbol)) = lookup.get(child_id) else {
-                    continue;
-                };
-                let child_label = tree_label(child_path, child_symbol);
-                writeln!(
-                    out,
-                    "{}  - ⚠️ {child_label} — dependency cycle, see above",
-                    indent
-                )?;
+    let kids = children.get(id).map(Vec::as_slice).unwrap_or(&[]);
+    let folded_names: Vec<String> = kids
+        .iter()
+        .filter(|&&(child_id, is_cycle)| {
+            !is_cycle && !roots.contains(child_id) && is_foldable(child_id, lookup, children)
+        })
+        .filter_map(|&(child_id, _)| {
+            lookup
+                .get(child_id)
+                .map(|(child_path, sym)| folded_name(child_path, sym))
+        })
+        .collect();
+
+    if folded_names.is_empty() {
+        writeln!(out, "{indent}- {label}")?;
+    } else {
+        writeln!(out, "{indent}- {label} — uses: {}", folded_names.join(", "))?;
+    }
+
+    for &(child_id, is_cycle) in kids {
+        if is_cycle {
+            let Some((child_path, child_symbol)) = lookup.get(child_id) else {
                 continue;
-            }
-            render_tree_node(out, child_id, children, lookup, printed, depth + 1)?;
+            };
+            let child_label = tree_label(child_path, child_symbol);
+            writeln!(
+                out,
+                "{}  - ⚠️ {child_label} — dependency cycle, see above",
+                indent
+            )?;
+            continue;
         }
+        if !roots.contains(child_id) && is_foldable(child_id, lookup, children) {
+            continue;
+        }
+        render_tree_node(out, child_id, children, lookup, roots, printed, depth + 1)?;
     }
     Ok(())
 }
@@ -396,28 +517,54 @@ fn render_definition(
 /// [`symbol_kind_prefix`], fixed per [`SymbolKind`] rather than derived
 /// from the signature text, so it stays stable across languages.
 ///
-/// When `symbol.id` was disambiguated by line number (`graph::collect_nodes`
-/// appends `@{start_line}` whenever a report contains more than one symbol
-/// sharing the same `(path, name)` pair, e.g. two overloaded free
-/// functions), the label includes that line number too —
+/// When `symbol.id` was disambiguated by line number (see
+/// [`symbol_location`]), the label includes that line number too —
 /// `{prefix} {name} ({path}:{start_line})` — so the otherwise-identical
-/// entries stay distinguishable in "Change graph"/"Definitions". Detected
-/// by comparing `symbol.id` against the plain (non-disambiguated) form
-/// rather than parsing the id string, since `symbol.range.start` is the
-/// exact same line number `collect_nodes` used to build it.
+/// entries stay distinguishable in "Change graph"/"Definitions".
 fn tree_label(path: &str, symbol: &ExtractedSymbol) -> String {
-    let plain_id = format!("{path}::{}", symbol.name);
-    let location = if symbol.id == plain_id {
-        path.to_string()
-    } else {
-        format!("{path}:{}", symbol.range.start)
-    };
     format!(
         "{} {} ({})",
         symbol_kind_prefix(symbol.kind),
         symbol.name,
-        location
+        symbol_location(path, symbol)
     )
+}
+
+/// The `(path)` or `(path:start_line)` portion shared by [`tree_label`] and
+/// folded `— uses: ...` annotations (see `render_tree_node`).
+///
+/// `graph::collect_nodes` appends `@{start_line}` to `symbol.id` whenever a
+/// report contains more than one symbol sharing the same `(path, name)`
+/// pair (e.g. two overloaded free functions, or two structs named the same
+/// in different scopes of one file) — comparing `symbol.id` against the
+/// plain (non-disambiguated) form detects that case without parsing the id
+/// string, since `symbol.range.start` is the exact same line number
+/// `collect_nodes` used to build it. Plain (non-disambiguated) symbols get
+/// just `path`.
+fn symbol_location(path: &str, symbol: &ExtractedSymbol) -> String {
+    let plain_id = format!("{path}::{}", symbol.name);
+    if symbol.id == plain_id {
+        path.to_string()
+    } else {
+        format!("{path}:{}", symbol.range.start)
+    }
+}
+
+/// The name shown for a folded child in a `— uses: ...` annotation (see
+/// `render_tree_node`): bare `symbol.name` normally, or `{name}
+/// ({path}:{start_line})` — the same disambiguation [`tree_label`] applies
+/// to tree lines and "Definitions" headers — when `collect_nodes` had to
+/// disambiguate this symbol's id. Without this, two distinct same-named
+/// symbols folded under the same parent would both render as the bare
+/// name (`— uses: Dup, Dup`), indistinguishable from each other even
+/// though "Definitions" shows two different headers for them.
+fn folded_name(path: &str, symbol: &ExtractedSymbol) -> String {
+    let plain_id = format!("{path}::{}", symbol.name);
+    if symbol.id == plain_id {
+        symbol.name.clone()
+    } else {
+        format!("{} ({})", symbol.name, symbol_location(path, symbol))
+    }
 }
 
 /// Maps a [`SymbolKind`] to the short, lowercase word used as a tree/heading
@@ -665,6 +812,8 @@ mod tests {
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -803,6 +952,8 @@ fn foo()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 
@@ -959,6 +1110,8 @@ fn foo()
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -968,6 +1121,125 @@ fn foo()
 ```
 fn foo(a: i32) -> i32
 ```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_summary_with_hotspot_when_report_has_multiple_symbols_and_files() {
+        // 5 nodes across store/items.go (3, the hotspot) and store/db.go (2)
+        // — pins the plural "changed symbols"/"files" wording together with
+        // the "— most in ..." suffix and its count.
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("store/items.go::A", "store/items.go", "A"),
+                    node("store/items.go::B", "store/items.go", "B"),
+                    node("store/items.go::C", "store/items.go", "C"),
+                    node("store/db.go::D", "store/db.go", "D"),
+                    node("store/db.go::E", "store/db.go", "E"),
+                ],
+                edges: vec![],
+                roots: vec![
+                    "store/items.go::A".to_string(),
+                    "store/items.go::B".to_string(),
+                    "store/items.go::C".to_string(),
+                    "store/db.go::D".to_string(),
+                    "store/db.go::E".to_string(),
+                ],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+5 changed symbols in 2 files — most in store/items.go (3)
+
+
+## Definitions
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_omit_hotspot_suffix_when_all_symbols_are_in_one_file() {
+        // Every node lives in the same file, so naming "the file with the
+        // most nodes" would be redundant — the suffix must be dropped
+        // entirely, not degenerate into e.g. "(2)".
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::a", "src/lib.rs", "a"),
+                    node("src/lib.rs::b", "src/lib.rs", "b"),
+                ],
+                edges: vec![],
+                roots: vec!["src/lib.rs::a".to_string(), "src/lib.rs::b".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+2 changed symbols in 1 file
+
+
+## Definitions
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_break_hotspot_tie_by_first_seen_path_order_when_counts_are_equal() {
+        // b.rs and a.rs both have 2 nodes each; b.rs's node appears first in
+        // `graph.nodes`, so it must win the tie over a.rs despite sorting
+        // after it alphabetically — the tie-break is source order, not a
+        // path-string comparison.
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("b.rs::x", "b.rs", "x"),
+                    node("a.rs::y", "a.rs", "y"),
+                    node("b.rs::z", "b.rs", "z"),
+                    node("a.rs::w", "a.rs", "w"),
+                ],
+                edges: vec![],
+                roots: vec![
+                    "b.rs::x".to_string(),
+                    "a.rs::y".to_string(),
+                    "b.rs::z".to_string(),
+                    "a.rs::w".to_string(),
+                ],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+4 changed symbols in 2 files — most in b.rs (2)
+
+
+## Definitions
 
 "
         .to_string();
@@ -1025,6 +1297,8 @@ fn foo(a: i32) -> i32
 
         let expected = "\
 ## Change graph
+
+2 changed symbols in 1 file
 
 - fn foo (src/lib.rs:1)
 - fn foo (src/lib.rs:10)
@@ -1092,6 +1366,8 @@ fn foo(a: i32, b: i32)
 
         let expected = "\
 ## Change graph
+
+2 changed symbols in 1 file
 
 - fn handle_pr (src/main.rs)
   - fn resolve_pr_base_sha (src/main.rs)
@@ -1170,6 +1446,8 @@ fn resolve_pr_base_sha() -> Result<String>
 
         let expected = "\
 ## Change graph
+
+4 changed symbols in 1 file
 
 - fn a (src/lib.rs)
   - fn b (src/lib.rs)
@@ -1255,6 +1533,8 @@ fn c()
         let expected = "\
 ## Change graph
 
+3 changed symbols in 1 file
+
 - fn foo (src/lib.rs)
   - fn shared (src/lib.rs)
 - fn bar (src/lib.rs)
@@ -1318,6 +1598,8 @@ fn bar()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn resolve_pr_base_sha (src/git.rs)
   - ⚠️ fn resolve_pr_base_sha (src/git.rs) — dependency cycle, see above
@@ -1425,6 +1707,8 @@ fn resolve_pr_base_sha()
         let expected = "\
 ## Change graph
 
+4 changed symbols in 3 files — most in src/git.rs (2)
+
 - fn handle_pr (src/main.rs)
   - fn resolve_pr_base_sha (src/git.rs)
     - fn fetch_base_branch (src/git.rs)
@@ -1465,6 +1749,489 @@ struct Config { path: String }
     }
 
     #[test]
+    fn should_inline_two_leaf_struct_children_as_uses_annotation_on_method_line() {
+        // A method referencing two childless, non-function structs (the
+        // request/response shape the ADR calls out): both fold into the
+        // parent's own line as `— uses: ...` instead of rendering as their
+        // own nested lines, but both still get full "### ..." entries
+        // under "Definitions" (ADR 0012 decision 1).
+        let report = Report {
+            files: vec![FileReport {
+                path: "store/items.go".to_string(),
+                symbols: vec![
+                    symbol(
+                        "store/items.go::UpsertItems",
+                        "UpsertItems",
+                        SymbolKind::Function,
+                        "func UpsertItems(req UpsertItemsRequest) (UpsertItemsResponse, error)",
+                    ),
+                    symbol(
+                        "store/items.go::UpsertItemsRequest",
+                        "UpsertItemsRequest",
+                        SymbolKind::Struct,
+                        "type UpsertItemsRequest struct { Items []Item }",
+                    ),
+                    symbol(
+                        "store/items.go::UpsertItemsResponse",
+                        "UpsertItemsResponse",
+                        SymbolKind::Struct,
+                        "type UpsertItemsResponse struct { Count int }",
+                    ),
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node(
+                        "store/items.go::UpsertItems",
+                        "store/items.go",
+                        "UpsertItems",
+                    ),
+                    node(
+                        "store/items.go::UpsertItemsRequest",
+                        "store/items.go",
+                        "UpsertItemsRequest",
+                    ),
+                    node(
+                        "store/items.go::UpsertItemsResponse",
+                        "store/items.go",
+                        "UpsertItemsResponse",
+                    ),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "store/items.go::UpsertItems".to_string(),
+                        to: "store/items.go::UpsertItemsRequest".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "store/items.go::UpsertItems".to_string(),
+                        to: "store/items.go::UpsertItemsResponse".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec!["store/items.go::UpsertItems".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn UpsertItems (store/items.go) — uses: UpsertItemsRequest, UpsertItemsResponse
+
+## Definitions
+
+### fn UpsertItems (store/items.go)
+
+```
+func UpsertItems(req UpsertItemsRequest) (UpsertItemsResponse, error)
+```
+
+### struct UpsertItemsRequest (store/items.go)
+
+```
+type UpsertItemsRequest struct { Items []Item }
+```
+
+### struct UpsertItemsResponse (store/items.go)
+
+```
+type UpsertItemsResponse struct { Count int }
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_disambiguate_folded_names_when_duplicate_symbols_fold_under_same_parent() {
+        // Two distinct `Dup` structs in the same file (mirroring an
+        // overloaded/shadowed-name scenario `graph::collect_nodes`
+        // disambiguates by appending `@{start_line}` to the node id) both
+        // fold under `foo`. Bare `Dup, Dup` would be ambiguous — Definitions
+        // shows two distinct `### struct Dup (src/lib.rs:5)` /
+        // `(src/lib.rs:10)` headers, so the folded annotation must use the
+        // same `Name (path:line)` form `tree_label` already uses for
+        // disambiguated symbols, not the bare name.
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()"),
+                    ExtractedSymbol {
+                        range: LineRange { start: 5, end: 6 },
+                        ..symbol(
+                            "src/lib.rs::Dup@5",
+                            "Dup",
+                            SymbolKind::Struct,
+                            "struct Dup { a: i32 }",
+                        )
+                    },
+                    ExtractedSymbol {
+                        range: LineRange { start: 10, end: 11 },
+                        ..symbol(
+                            "src/lib.rs::Dup@10",
+                            "Dup",
+                            SymbolKind::Struct,
+                            "struct Dup { b: i32 }",
+                        )
+                    },
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::foo", "src/lib.rs", "foo"),
+                    node("src/lib.rs::Dup@5", "src/lib.rs", "Dup"),
+                    node("src/lib.rs::Dup@10", "src/lib.rs", "Dup"),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "src/lib.rs::foo".to_string(),
+                        to: "src/lib.rs::Dup@5".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "src/lib.rs::foo".to_string(),
+                        to: "src/lib.rs::Dup@10".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn foo (src/lib.rs) — uses: Dup (src/lib.rs:5), Dup (src/lib.rs:10)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+### struct Dup (src/lib.rs:5)
+
+```
+struct Dup { a: i32 }
+```
+
+### struct Dup (src/lib.rs:10)
+
+```
+struct Dup { b: i32 }
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_repeat_folded_struct_annotation_on_every_referencing_parent() {
+        // Both `foo` and `bar` reference the same childless struct `Shared`
+        // — unlike function children (which get a single full render plus
+        // `(see above)` elsewhere, ADR 0008), a folded name has no
+        // "see above" tracking: it legitimately repeats verbatim in the
+        // `— uses: ...` annotation on every parent that references it, and
+        // it must never itself get a `(see above)` line.
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()"),
+                    symbol("src/lib.rs::bar", "bar", SymbolKind::Function, "fn bar()"),
+                    symbol(
+                        "src/lib.rs::Shared",
+                        "Shared",
+                        SymbolKind::Struct,
+                        "struct Shared { x: i32 }",
+                    ),
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::foo", "src/lib.rs", "foo"),
+                    node("src/lib.rs::bar", "src/lib.rs", "bar"),
+                    node("src/lib.rs::Shared", "src/lib.rs", "Shared"),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "src/lib.rs::foo".to_string(),
+                        to: "src/lib.rs::Shared".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "src/lib.rs::bar".to_string(),
+                        to: "src/lib.rs::Shared".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec!["src/lib.rs::foo".to_string(), "src/lib.rs::bar".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn foo (src/lib.rs) — uses: Shared
+- fn bar (src/lib.rs) — uses: Shared
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+### struct Shared (src/lib.rs)
+
+```
+struct Shared { x: i32 }
+```
+
+### fn bar (src/lib.rs)
+
+```
+fn bar()
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_childless_non_function_root_as_top_level_line_when_it_would_otherwise_be_foldable()
+     {
+        // `Config` is a childless struct — foldable by the structural
+        // criterion — but it is also a root, so it must still render as
+        // its own top-level tree line rather than being folded away
+        // entirely (roots are always their own top-level DFS start).
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/config.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/config.rs::Config",
+                    "Config",
+                    SymbolKind::Struct,
+                    "struct Config { path: String }",
+                )],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/config.rs::Config", "src/config.rs", "Config")],
+                edges: vec![],
+                roots: vec!["src/config.rs::Config".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- struct Config (src/config.rs)
+
+## Definitions
+
+### struct Config (src/config.rs)
+
+```
+struct Config { path: String }
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_nested_line_when_non_function_child_has_its_own_children() {
+        // `Wrapper` is a non-function child of `foo`, but it is not
+        // foldable because it has an outgoing edge of its own (to `Inner`)
+        // — the structural criterion is "childless", not "non-function",
+        // so `Wrapper` itself still renders as a nested line exactly as
+        // before this feature. `Inner`, in turn, *is* childless and
+        // non-function, so it folds into `Wrapper`'s own line instead of
+        // getting a third nesting level.
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()"),
+                    symbol(
+                        "src/lib.rs::Wrapper",
+                        "Wrapper",
+                        SymbolKind::Struct,
+                        "struct Wrapper { inner: Inner }",
+                    ),
+                    symbol(
+                        "src/lib.rs::Inner",
+                        "Inner",
+                        SymbolKind::Struct,
+                        "struct Inner { x: i32 }",
+                    ),
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::foo", "src/lib.rs", "foo"),
+                    node("src/lib.rs::Wrapper", "src/lib.rs", "Wrapper"),
+                    node("src/lib.rs::Inner", "src/lib.rs", "Inner"),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "src/lib.rs::foo".to_string(),
+                        to: "src/lib.rs::Wrapper".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "src/lib.rs::Wrapper".to_string(),
+                        to: "src/lib.rs::Inner".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn foo (src/lib.rs)
+  - struct Wrapper (src/lib.rs) — uses: Inner
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+### struct Wrapper (src/lib.rs)
+
+```
+struct Wrapper { inner: Inner }
+```
+
+### struct Inner (src/lib.rs)
+
+```
+struct Inner { x: i32 }
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_not_fold_non_function_child_when_its_only_children_are_cycle_edges() {
+        // `Node` is a non-function type whose only outgoing edge is a
+        // cycle edge back to itself — `children_by_node` still records an
+        // entry for it, so it is *not* foldable (folding requires no
+        // outgoing edges at all) and must render as its own nested line
+        // with the cycle warning still visible beneath it.
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()"),
+                    symbol(
+                        "src/lib.rs::Node",
+                        "Node",
+                        SymbolKind::Struct,
+                        "struct Node { next: Option<Box<Node>> }",
+                    ),
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::foo", "src/lib.rs", "foo"),
+                    node("src/lib.rs::Node", "src/lib.rs", "Node"),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "src/lib.rs::foo".to_string(),
+                        to: "src/lib.rs::Node".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "src/lib.rs::Node".to_string(),
+                        to: "src/lib.rs::Node".to_string(),
+                        is_cycle: true,
+                    },
+                ],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+2 changed symbols in 1 file
+
+- fn foo (src/lib.rs)
+  - struct Node (src/lib.rs)
+    - ⚠️ struct Node (src/lib.rs) — dependency cycle, see above
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+### struct Node (src/lib.rs)
+
+```
+struct Node { next: Option<Box<Node>> }
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn should_render_container_comment_when_symbol_has_container() {
         let report = Report {
             files: vec![FileReport {
@@ -1490,6 +2257,8 @@ struct Config { path: String }
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn bar (src/lib.rs)
 
@@ -1538,6 +2307,8 @@ fn bar(&self) -> i32
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 
@@ -1595,6 +2366,8 @@ Depends on:
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -1646,6 +2419,8 @@ Depends on:
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 
@@ -1701,6 +2476,8 @@ Depends on:
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn example_macro (src/lib.rs)
 
 ## Definitions
@@ -1747,6 +2524,8 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn bar (src/lib.rs)
 
@@ -1832,6 +2611,8 @@ fn bar(&self) -> i32
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -1881,6 +2662,8 @@ fn foo()
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 
 ## Definitions
 
@@ -1910,6 +2693,8 @@ fn foo()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 
 ## Definitions
@@ -1958,6 +2743,8 @@ fn foo()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 

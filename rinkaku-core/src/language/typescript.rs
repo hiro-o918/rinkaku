@@ -45,8 +45,9 @@ const DEFINITION_QUERY: &str = "\
 ] @definition";
 
 /// Tree-sitter query capturing identifiers referenced from inside a
-/// definition: called function names, constructed class names, and
-/// referenced type names.
+/// definition: called function names, constructed class names, referenced
+/// type names, and (when the definition is an interface) its method
+/// signature names.
 ///
 /// - `call_expression function: (identifier)` captures free function
 ///   calls (`helper(x)`). Method calls
@@ -65,11 +66,23 @@ const DEFINITION_QUERY: &str = "\
 ///   ...) parse as the distinct `predefined_type` node kind, so they are
 ///   already excluded by construction rather than needing an explicit
 ///   exclusion list.
+/// - `interface_declaration body: (interface_body (method_signature name:
+///   (property_identifier)))` captures an interface's method signature
+///   names (ADR 0012 decision 2): feeding these into the interface
+///   symbol's `referenced_names` makes `graph::collect_edges`'s existing
+///   name-based matching link the interface to a same-named changed class
+///   method, so the two stop appearing as independent roots in the change
+///   graph. Deliberately `method_signature` only, not `property_signature`
+///   — a plain data field is not a method spec, and including it would
+///   pull unrelated same-named symbols into the interface's edges without
+///   the "this is a method the interface declares" justification method
+///   specs have.
 const REFERENCE_QUERY: &str = "\
 [
   (call_expression function: (identifier) @reference.call)
   (new_expression constructor: (identifier) @reference.call)
   (type_identifier) @reference.type
+  (interface_declaration body: (interface_body (method_signature name: (property_identifier) @reference.call)))
 ]";
 
 pub struct TypeScriptSupport;

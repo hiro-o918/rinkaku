@@ -1016,9 +1016,62 @@ trait Greeter {
             signature: "trait Greeter { fn greet(&self) -> String; }".to_string(),
             range: LineRange { start: 1, end: 3 },
             container: None,
-            // The trait's own name plus the referenced `String` return
-            // type of its method signature.
-            referenced_names: vec!["Greeter".to_string(), "String".to_string()],
+            // The trait's own name, its "greet" method name (ADR 0012
+            // decision 2), and the referenced `String` return type of its
+            // method signature.
+            referenced_names: vec![
+                "Greeter".to_string(),
+                "String".to_string(),
+                "greet".to_string(),
+            ],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+        }];
+        let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_include_both_bodiless_and_default_body_method_names_in_trait_referenced_names() {
+        let source = "\
+trait Repo {
+    fn save(&self, id: &str);
+
+    fn label(&self) -> String {
+        String::new()
+    }
+}
+";
+        let lang = RustSupport;
+        // Line 1 (`trait Repo {`) belongs to the trait node but not to
+        // either method signature inside it, so the trait itself (not a
+        // narrower method) is the reported symbol — same rule as
+        // `should_extract_trait_signature_when_no_method_line_specifically_changed`.
+        let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+        let expected = vec![ExtractedSymbol {
+            id: String::new(),
+            name: "Repo".to_string(),
+            kind: SymbolKind::Trait,
+            signature:
+                "trait Repo { fn save(&self, id: &str); fn label(&self) -> String { String::new() } }"
+                    .to_string(),
+            range: LineRange { start: 1, end: 7 },
+            container: None,
+            // Both the bodiless `save` signature and the default-body
+            // `label` method contribute their names (ADR 0012 decision 2),
+            // alongside the trait's own name and referenced types. `str`
+            // is a `primitive_type` node in this grammar, not
+            // `type_identifier`, so it is not captured as a reference (see
+            // REFERENCE_QUERY's doc comment).
+            referenced_names: vec![
+                "Repo".to_string(),
+                "String".to_string(),
+                "label".to_string(),
+                "save".to_string(),
+            ],
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
@@ -1262,8 +1315,50 @@ type Fetcher interface {
                 signature: "Fetcher interface { Fetch(id string) (string, error) }".to_string(),
                 range: LineRange { start: 3, end: 5 },
                 container: None,
+                // "Fetch" is the interface's own method spec name (ADR
+                // 0012 decision 2), alongside the interface's own name and
+                // its referenced parameter/return types.
                 referenced_names: vec![
+                    "Fetch".to_string(),
                     "Fetcher".to_string(),
+                    "error".to_string(),
+                    "string".to_string(),
+                ],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_include_every_method_spec_name_in_referenced_names_when_interface_has_multiple_methods()
+         {
+            let source = "\
+package main
+
+type Repo interface {
+	Save(id string) error
+	Delete(id string) error
+}
+";
+            let lang = GoSupport;
+            let changed_ranges = vec![LineRange { start: 3, end: 6 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Repo".to_string(),
+                kind: SymbolKind::Interface,
+                signature: "Repo interface { Save(id string) error Delete(id string) error }"
+                    .to_string(),
+                range: LineRange { start: 3, end: 6 },
+                container: None,
+                referenced_names: vec![
+                    "Delete".to_string(),
+                    "Repo".to_string(),
+                    "Save".to_string(),
                     "error".to_string(),
                     "string".to_string(),
                 ],
@@ -1907,10 +2002,52 @@ interface Shape {
                 range: LineRange { start: 1, end: 4 },
                 container: None,
                 // The interface's own name is a `type_identifier` (self-
-                // reference, filtered later by deps.rs); `number` is
-                // TypeScript's built-in `predefined_type`, a distinct
-                // node kind the reference query does not capture.
-                referenced_names: vec!["Shape".to_string()],
+                // reference, filtered later by deps.rs); `area`/`perimeter`
+                // are its method signature names (ADR 0012 decision 2);
+                // `number` is TypeScript's built-in `predefined_type`, a
+                // distinct node kind the reference query does not capture.
+                referenced_names: vec![
+                    "Shape".to_string(),
+                    "area".to_string(),
+                    "perimeter".to_string(),
+                ],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_not_include_property_signature_names_in_interface_referenced_names() {
+            let source = "\
+interface Repo {
+    id: string;
+    save(item: string): void;
+}
+";
+            let lang = TypeScriptSupport;
+            // Line 2 (`id: string;`) is a plain data field, not a method
+            // signature; touching it (rather than the `save` line) still
+            // reports the whole interface since neither member line is
+            // itself the interface's own declaration line, but keeps this
+            // test focused on the `referenced_names` distinction between a
+            // property and a method signature.
+            let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Repo".to_string(),
+                kind: SymbolKind::Interface,
+                signature: "interface Repo { id: string; save(item: string): void; }".to_string(),
+                range: LineRange { start: 1, end: 4 },
+                container: None,
+                // "id" (a `property_signature` name) is deliberately
+                // excluded; only "save" (a `method_signature` name) is
+                // included alongside the interface's own name.
+                referenced_names: vec!["Repo".to_string(), "save".to_string()],
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
