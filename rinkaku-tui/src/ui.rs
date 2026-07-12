@@ -19,7 +19,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 use rinkaku_core::extract::Classification;
 use rinkaku_core::render::{Report, ReportOrigin};
 use unicode_width::UnicodeWidthChar;
@@ -35,7 +35,11 @@ use unicode_width::UnicodeWidthChar;
 /// mode. `pivot_selection` is likewise computed once per handled key by
 /// `crate::run_app` (not here) whenever the right pane is in
 /// [`RightPane::Pivot`] mode — see `App::selected_pivot_view`'s own doc
-/// comment on why this function must not call it itself.
+/// comment on why this function must not call it itself. `repo_root` is
+/// only consulted on [`Screen::Source`] (forwarded to
+/// [`load_symbol_source`], see that function's doc comment for why
+/// `Report` paths need it) — it is threaded through here rather than
+/// resolved lazily so this stays the single frame-drawing entry point.
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -43,6 +47,7 @@ pub fn draw(
     diff_files: &[FileHunks],
     diff_highlights: &[HighlightedFile],
     pivot_selection: &PivotSelection,
+    repo_root: &std::path::Path,
 ) {
     let area = frame.area();
     let [body, status_area] =
@@ -58,7 +63,9 @@ pub fn draw(
             pivot_selection,
             body,
         ),
-        Screen::Source { symbol_id } => draw_source_screen(frame, report, symbol_id, body),
+        Screen::Source { symbol_id } => {
+            draw_source_screen(frame, report, symbol_id, repo_root, body)
+        }
     }
 
     draw_status_line(frame, app, status_area);
@@ -834,14 +841,31 @@ fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
 /// status line (`App::set_status`) via that same code path, so a failure
 /// mid-session (e.g. the file was deleted after opening the view) is
 /// shown in the pane itself too, not just silently on the status line.
-fn draw_source_screen(frame: &mut Frame, report: &Report, symbol_id: &str, area: Rect) {
+fn draw_source_screen(
+    frame: &mut Frame,
+    report: &Report,
+    symbol_id: &str,
+    repo_root: &std::path::Path,
+    area: Rect,
+) {
     let title = format!(" Source: {symbol_id} ");
     let block = Block::bordered().title(title);
 
-    let source = match load_symbol_source(report, symbol_id) {
+    let source = match load_symbol_source(report, symbol_id, repo_root) {
         Ok(source) => source,
         Err(message) => {
-            let paragraph = Paragraph::new(message).block(block);
+            // `.wrap(Wrap { trim: false })`: the error message (full path +
+            // io error + the "not present in the working tree" hint added
+            // alongside repo-root resolution) routinely exceeds one line at
+            // ordinary pane widths. Without wrapping, `Paragraph` silently
+            // truncates instead of overflowing, cutting the hint off
+            // exactly where it explains the failure. `trim: false` keeps
+            // the message's own leading whitespace (there isn't any here,
+            // but matches this pane's other `Paragraph` usages that don't
+            // opt into trimming either).
+            let paragraph = Paragraph::new(message)
+                .block(block)
+                .wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
             return;
         }
@@ -947,6 +971,14 @@ mod tests {
         }
     }
 
+    /// A placeholder repo root for tests that don't exercise the source
+    /// drill-down's actual file read (every `draw` test except the two
+    /// `draw_source_screen` ones below) — `draw` still requires the
+    /// parameter, but nothing under this path is ever read.
+    fn test_repo_root() -> std::path::PathBuf {
+        std::path::PathBuf::from("/repo")
+    }
+
     /// Flattens a `TestBackend`'s buffer into one string (rows joined by
     /// `\n`), so a snapshot assertion can check for expected substrings
     /// (pane titles, row content) without pinning every cell — the coarse
@@ -979,6 +1011,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1022,6 +1055,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1060,6 +1094,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1106,6 +1141,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1144,6 +1180,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1181,7 +1218,17 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[], &pivot_selection))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &pivot_selection,
+                    &test_repo_root(),
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1199,7 +1246,17 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[], &pivot_selection))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &pivot_selection,
+                    &test_repo_root(),
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1290,6 +1347,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1334,6 +1392,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1371,6 +1430,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1415,6 +1475,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1472,6 +1533,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1504,6 +1566,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1533,6 +1596,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1558,17 +1622,65 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
 
-        // "lib.rs" does not exist relative to the test process's cwd, so
-        // this exercises `draw_source_screen`'s error-message fallback
-        // path rather than needing a real file on disk.
+        // "lib.rs" does not exist under `test_repo_root()`'s placeholder
+        // path, so this exercises `draw_source_screen`'s error-message
+        // fallback path rather than needing a real file on disk.
         let text = buffer_text(&terminal);
         assert!(text.contains("Source: lib.rs::foo"));
         assert!(text.contains("failed to read"));
         assert!(text.contains("back"));
+    }
+
+    #[test]
+    fn should_wrap_source_error_message_instead_of_truncating_it_in_a_narrow_pane() {
+        // Regression test: `source::load_symbol_source`'s error message
+        // (full path + io error + the "not present in the working tree"
+        // hint) routinely exceeds one line, and `Paragraph` without
+        // `.wrap(...)` silently truncates rather than overflowing — cutting
+        // the hint off exactly where it explains the failure. A narrow
+        // (40-column) pane makes the message wrap across multiple rows
+        // whether or not `.wrap(...)` is set, but only *with* it does the
+        // hint's text actually appear anywhere in the buffer; without it,
+        // the trailing text is simply dropped.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Source);
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        // `buffer_text` joins rows with `\n`, so a phrase that happens to
+        // wrap exactly at a row boundary (as "in the" / "present" do at
+        // this width) would not appear as one contiguous substring even
+        // though every word is visible — asserting on words rather than a
+        // multi-word phrase keeps this test robust to exactly where the
+        // wrap point falls, while still failing if `.wrap(...)` were
+        // removed (the words after "working tree" would be dropped
+        // entirely, not just split across rows).
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Source: lib.rs::foo"));
+        assert!(text.contains("present"));
+        assert!(text.contains("working tree"));
+        assert!(text.contains("historical commit not checked out"));
+        assert!(text.contains("locally)"));
     }
 
     // --- clamp_scroll / scroll_indicator (pure helpers) ---
@@ -1687,6 +1799,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1715,6 +1828,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1739,6 +1853,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1773,6 +1888,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1804,6 +1920,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1962,6 +2079,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -2009,6 +2127,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");

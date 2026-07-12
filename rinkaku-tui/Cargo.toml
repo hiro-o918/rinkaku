@@ -38,3 +38,4 @@ tree-sitter-typescript = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

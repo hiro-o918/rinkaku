@@ -9,6 +9,13 @@
 //! the rest of the crate. [`load_symbol_source`] is that one function;
 //! everything else here (locating the symbol, computing the visible
 //! window) is pure and takes the file content as a plain `&str`.
+//!
+//! `Report` paths are always repository-root-relative (every `main.rs`
+//! input mode — stdin, `--base`, `--pr` — derives them from `git diff`/
+//! `git ls-files` output, never from the process's current directory), so
+//! reading them off disk needs the repository root joined in first rather
+//! than treating them as relative to wherever `rinkaku` happens to be
+//! invoked from (e.g. a subdirectory) — see [`resolve_source_path`].
 
 /// A symbol's location in `Report`, resolved from its id — enough for
 /// [`load_symbol_source`] to know which file to read and
@@ -47,6 +54,13 @@ pub struct SourceView {
 /// head SHA all the way from `main.rs` into `rinkaku_tui::run` just for
 /// this one view — is deferred until a real user need for it shows up).
 ///
+/// `repo_root` anchors `location.path` (always repository-root-relative,
+/// see this module's doc comment) via [`resolve_source_path`] — callers
+/// pass the repository root `main.rs` resolves once at startup
+/// (`rinkaku_tui::run`'s own `repo_root` parameter), not the process's
+/// current directory, so this still works when `rinkaku` is invoked from a
+/// subdirectory of the repository.
+///
 /// A consequence of reading live: a symbol's `range` in `report` reflects
 /// the file's content *at analysis time*. If the file is edited on disk
 /// afterward (including between opening the TUI and pressing `s` on a
@@ -58,12 +72,19 @@ pub struct SourceView {
 pub fn load_symbol_source(
     report: &rinkaku_core::render::Report,
     id: &str,
+    repo_root: &std::path::Path,
 ) -> Result<SourceView, String> {
     let location = find_symbol_location(report, id)
         .ok_or_else(|| format!("symbol not found in report: {id}"))?;
 
-    let content = std::fs::read_to_string(&location.path)
-        .map_err(|source| format!("failed to read {}: {source}", location.path))?;
+    let full_path = resolve_source_path(repo_root, &location.path);
+    let content = std::fs::read_to_string(&full_path).map_err(|source| {
+        format!(
+            "failed to read {}: {source} (not present in the working tree — expected for a \
+             file diffed from a PR or historical commit not checked out locally)",
+            full_path.display()
+        )
+    })?;
 
     Ok(SourceView {
         path: location.path,
@@ -71,6 +92,28 @@ pub fn load_symbol_source(
         highlight_start: location.start_line,
         highlight_end: location.end_line,
     })
+}
+
+/// Joins a `Report`-relative path (always repository-root-relative, see
+/// this module's doc comment) onto `repo_root`, so [`load_symbol_source`]
+/// reads the right file regardless of the process's current directory.
+/// Split out as its own pure function so the join logic is unit-testable
+/// without touching disk.
+///
+/// Relies on `relative_path` genuinely being relative: `PathBuf::join`
+/// silently *discards* `repo_root` entirely and returns `relative_path`
+/// unchanged whenever it is itself absolute (`Path::join`'s documented
+/// behavior) — every producer of `Report` (`git diff`/`git ls-files`
+/// output, see this module's doc comment) upholds that today, so this
+/// isn't reachable in practice, but the `debug_assert!` below turns a
+/// future violation of that premise into a loud failure in tests/debug
+/// builds instead of a silent wrong-file read.
+fn resolve_source_path(repo_root: &std::path::Path, relative_path: &str) -> std::path::PathBuf {
+    debug_assert!(
+        std::path::Path::new(relative_path).is_relative(),
+        "Report paths are always repository-root-relative, got absolute path: {relative_path}"
+    );
+    repo_root.join(relative_path)
 }
 
 /// Finds `id`'s file path and line range in `report.files`. `None` when no
@@ -282,11 +325,93 @@ mod tests {
     fn should_return_error_message_when_load_symbol_source_finds_no_such_symbol() {
         let report = empty_report();
 
-        let actual = load_symbol_source(&report, "missing::id");
+        let actual = load_symbol_source(&report, "missing::id", std::path::Path::new("/repo"));
 
         assert_eq!(
             Err("symbol not found in report: missing::id".to_string()),
             actual
+        );
+    }
+
+    #[test]
+    fn should_join_repo_root_and_relative_path_when_resolving_source_path() {
+        let actual = resolve_source_path(std::path::Path::new("/repo/root"), "src/lib.rs");
+
+        assert_eq!(std::path::PathBuf::from("/repo/root/src/lib.rs"), actual);
+    }
+
+    #[test]
+    #[should_panic(expected = "Report paths are always repository-root-relative")]
+    fn should_panic_in_debug_builds_when_relative_path_is_actually_absolute() {
+        // Pins the `debug_assert!`'s intent: `PathBuf::join` silently
+        // *discards* `repo_root` and returns the absolute path unchanged
+        // when the "relative" argument isn't actually relative
+        // (`resolve_source_path`'s own doc comment) — every `Report`
+        // producer upholds relativity today, so this only guards against a
+        // future regression, but that regression must fail loudly in
+        // debug/test builds rather than silently reading the wrong file.
+        resolve_source_path(std::path::Path::new("/repo/root"), "/etc/passwd");
+    }
+
+    #[test]
+    fn should_read_file_relative_to_repo_root_when_process_cwd_differs() {
+        // Regression test for the TUI source view failing whenever
+        // `rinkaku` is launched from a subdirectory of the repository:
+        // `Report` paths are always repo-root-relative, so
+        // `load_symbol_source` must join them onto the repo root rather
+        // than reading them relative to the process's actual current
+        // directory (which this test never changes).
+        let dir = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+        std::fs::write(dir.path().join("src/lib.rs"), "fn foo() {}\n").expect("write file");
+
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    LineRange { start: 1, end: 1 },
+                )],
+            }],
+            ..empty_report()
+        };
+
+        let expected = Ok(SourceView {
+            path: "src/lib.rs".to_string(),
+            lines: vec!["fn foo() {}".to_string()],
+            highlight_start: 1,
+            highlight_end: 1,
+        });
+        let actual = load_symbol_source(&report, "src/lib.rs::foo", dir.path());
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_mention_working_tree_in_error_message_when_file_is_missing() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/missing.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/missing.rs::foo",
+                    "foo",
+                    LineRange { start: 1, end: 1 },
+                )],
+            }],
+            ..empty_report()
+        };
+
+        let actual = load_symbol_source(&report, "src/missing.rs::foo", dir.path());
+
+        let error = actual.expect_err("a missing file must fail rather than silently succeed");
+        assert!(
+            error.contains("not present in the working tree"),
+            "error message should explain the file may not be checked out locally, got: {error}"
         );
     }
 }

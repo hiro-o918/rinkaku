@@ -81,9 +81,22 @@ use std::time::Duration;
 /// same `Report` both the TUI and Markdown/JSON render from), so this
 /// parameter only drives where the TUI *starts*, not what the underlying
 /// graph looks like.
-pub fn run(report: &Report, diff_text: &str, entry_path: Option<&str>) -> std::io::Result<()> {
+///
+/// `repo_root` anchors `Report` paths (always repository-root-relative) for
+/// the source drill-down's file reads (`crate::source::load_symbol_source`)
+/// — `main.rs` resolves it once at startup (`git rev-parse --show-toplevel`,
+/// falling back to the process's current directory outside a git
+/// repository) rather than this crate ever shelling out to `git` itself
+/// (ADR 0016). Without it, the source view would only work when `rinkaku`
+/// happens to be invoked from the repository root.
+pub fn run(
+    report: &Report,
+    diff_text: &str,
+    entry_path: Option<&str>,
+    repo_root: &std::path::Path,
+) -> std::io::Result<()> {
     let mut terminal = ratatui::try_init()?;
-    let result = run_app(&mut terminal, report, diff_text, entry_path);
+    let result = run_app(&mut terminal, report, diff_text, entry_path, repo_root);
     ratatui::restore();
     result
 }
@@ -93,6 +106,7 @@ fn run_app(
     report: &Report,
     diff_text: &str,
     entry_path: Option<&str>,
+    repo_root: &std::path::Path,
 ) -> std::io::Result<()> {
     let mut app = App::new(report);
     if let Some(path) = entry_path {
@@ -140,6 +154,7 @@ fn run_app(
                 &diff_hunks,
                 &diff_highlights,
                 &pivot_selection,
+                repo_root,
             )
         })?;
 
@@ -162,7 +177,7 @@ fn run_app(
             if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id } = app.screen().clone() {
-                    match source::load_symbol_source(report, &symbol_id) {
+                    match source::load_symbol_source(report, &symbol_id, repo_root) {
                         // The `SourceView` itself is discarded here — only
                         // used to detect a failure early so it can be
                         // surfaced on the status line right away, rather
