@@ -322,12 +322,28 @@ fn render_definition(
 /// e.g. `fn handle_pr (src/main.rs)`. The prefix comes from
 /// [`symbol_kind_prefix`], fixed per [`SymbolKind`] rather than derived
 /// from the signature text, so it stays stable across languages.
+///
+/// When `symbol.id` was disambiguated by line number (`graph::collect_nodes`
+/// appends `@{start_line}` whenever a report contains more than one symbol
+/// sharing the same `(path, name)` pair, e.g. two overloaded free
+/// functions), the label includes that line number too —
+/// `{prefix} {name} ({path}:{start_line})` — so the otherwise-identical
+/// entries stay distinguishable in "Change graph"/"Definitions". Detected
+/// by comparing `symbol.id` against the plain (non-disambiguated) form
+/// rather than parsing the id string, since `symbol.range.start` is the
+/// exact same line number `collect_nodes` used to build it.
 fn tree_label(path: &str, symbol: &ExtractedSymbol) -> String {
+    let plain_id = format!("{path}::{}", symbol.name);
+    let location = if symbol.id == plain_id {
+        path.to_string()
+    } else {
+        format!("{path}:{}", symbol.range.start)
+    };
     format!(
         "{} {} ({})",
         symbol_kind_prefix(symbol.kind),
         symbol.name,
-        path
+        location
     )
 }
 
@@ -654,6 +670,79 @@ fn foo()
 
 ```
 fn foo(a: i32) -> i32
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_include_start_line_in_label_when_node_id_is_disambiguated_by_line() {
+        // `graph::collect_nodes` appends `@{start_line}` to a node's id only
+        // when its `(path, name)` pair is not unique in the report (e.g.
+        // two overloaded free functions sharing a name). Without a visible
+        // line number, "Change graph"/"Definitions" would show two
+        // identical-looking `fn foo (src/lib.rs)` entries with no way to
+        // tell them apart.
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    ExtractedSymbol {
+                        range: LineRange { start: 1, end: 3 },
+                        ..symbol(
+                            "src/lib.rs::foo@1",
+                            "foo",
+                            SymbolKind::Function,
+                            "fn foo(a: i32)",
+                        )
+                    },
+                    ExtractedSymbol {
+                        range: LineRange { start: 10, end: 12 },
+                        ..symbol(
+                            "src/lib.rs::foo@10",
+                            "foo",
+                            SymbolKind::Function,
+                            "fn foo(a: i32, b: i32)",
+                        )
+                    },
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::foo@1", "src/lib.rs", "foo"),
+                    node("src/lib.rs::foo@10", "src/lib.rs", "foo"),
+                ],
+                edges: vec![],
+                roots: vec![
+                    "src/lib.rs::foo@1".to_string(),
+                    "src/lib.rs::foo@10".to_string(),
+                ],
+            },
+        };
+
+        let expected = "\
+## Change graph
+
+- fn foo (src/lib.rs:1)
+- fn foo (src/lib.rs:10)
+
+## Definitions
+
+### fn foo (src/lib.rs:1)
+
+```
+fn foo(a: i32)
+```
+
+### fn foo (src/lib.rs:10)
+
+```
+fn foo(a: i32, b: i32)
 ```
 
 "
