@@ -745,13 +745,38 @@ fn should_add_two_numbers() {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "src/lib.rs::should_add_two_numbers".to_string(),
+                        name: "should_add_two_numbers".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "fn should_add_two_numbers()".to_string(),
+                        range: LineRange { start: 2, end: 4 },
+                        container: None,
+                        referenced_names: vec![],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: true,
+                    }],
+                }],
+                skipped: vec![],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "src/lib.rs::should_add_two_numbers".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        name: "should_add_two_numbers".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::should_add_two_numbers".to_string()],
+                },
+                tests: vec![],
+            };
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
                 .expect("analyze should succeed");
 
-            let expected_tests: Vec<TestFileSummary> = Vec::new();
-            assert_eq!(1, report.files.len());
-            assert_eq!(1, report.files[0].symbols.len());
-            assert_eq!(expected_tests, report.tests);
+            assert_eq!(expected, actual);
         }
 
         #[test]
@@ -861,17 +886,41 @@ mod tests {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "src/lib.rs::add".to_string(),
+                        name: "add".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "fn add(a: i32, b: i32) -> i32".to_string(),
+                        range: LineRange { start: 1, end: 3 },
+                        container: None,
+                        referenced_names: vec![],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                    }],
+                }],
+                skipped: vec![],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "src/lib.rs::add".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        name: "add".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::add".to_string()],
+                },
+                tests: vec![TestFileSummary {
+                    path: "src/lib.rs".to_string(),
+                    symbol_count: 1,
+                }],
+            };
+            let actual = analyze_diff(diff, read_file, None, false, &HashSet::new())
                 .expect("analyze should succeed");
 
-            let expected_tests = vec![TestFileSummary {
-                path: "src/lib.rs".to_string(),
-                symbol_count: 1,
-            }];
-            assert_eq!(1, report.files.len());
-            assert_eq!(1, report.files[0].symbols.len());
-            assert_eq!("add", report.files[0].symbols[0].name);
-            assert_eq!(expected_tests, report.tests);
+            assert_eq!(expected, actual);
         }
     }
 
