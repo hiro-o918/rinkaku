@@ -13,14 +13,18 @@
 //!   working tree. This keeps the diff and the file content read from the
 //!   exact same commit by construction, regardless of what the working
 //!   tree currently holds (uncommitted changes, a dirty checkout, etc.).
-//! - `--pr` mode (ADR 0004): the PR's base branch and head commit are
-//!   resolved via `gh pr view`, both are fetched into the local clone
-//!   with `git fetch`, and the resulting base/head SHAs are handed to
-//!   exactly the same `git show`-backed read strategy as `--base` mode —
-//!   `--pr` is a resolution step in front of the `--base` pipeline, not a
-//!   separate read strategy. Requires running inside a local clone whose
-//!   `origin` remote is the target repository, and requires `gh` to be
-//!   installed and authenticated.
+//! - `--pr` mode (ADR 0004, ADR 0005): the PR's base branch and head
+//!   commit are resolved via `gh pr view`, both are fetched with
+//!   `git fetch`, and the resulting base/head SHAs are handed to exactly
+//!   the same `git show`-backed read strategy as `--base` mode — `--pr`
+//!   is a resolution step in front of the `--base` pipeline, not a
+//!   separate read strategy. A bare PR number requires running inside a
+//!   local clone of the target repository. A PR URL also uses the
+//!   current directory when its `origin` matches the URL's repository;
+//!   otherwise (ADR 0005) it auto-clones a blobless partial clone into a
+//!   per-repository cache directory and runs there instead, so URL input
+//!   works from any directory. `gh` must be installed and authenticated
+//!   either way.
 //! - stdin mode: the diff's provenance is unknown to rinkaku (it could be
 //!   `gh pr diff`, a saved patch file, anything). Files are read off the
 //!   working tree, under the assumption that **the diff is consistent
@@ -67,9 +71,12 @@ struct Cli {
 
     /// GitHub PR to review, as a URL
     /// (`https://github.com/<owner>/<repo>/pull/<number>`) or a bare PR
-    /// number (`76`). Must be run inside a local clone of the target
-    /// repository, with `gh` installed and authenticated.
-    // See ADR 0004 for the resolve-then-fetch design this drives in `main`.
+    /// number (`76`). A bare number must be run inside a local clone of
+    /// the target repository; a URL also works from any other directory
+    /// by auto-cloning into a cache. Requires `gh` installed and
+    /// authenticated.
+    // See ADR 0004 for the resolve-then-fetch design and ADR 0005 for the
+    // auto-clone-into-cache behavior this drives in `main`.
     #[arg(long)]
     pr: Option<String>,
 
@@ -132,22 +139,24 @@ fn main() -> anyhow::Result<()> {
         // Validate the arg and derive the fetch refspec's PR number, but
         // pass the original (trimmed) value — not the parsed number — to
         // `gh pr view` (see that function's doc comment for why).
-        let number = parse_pr_arg(pr_arg)?;
+        let parsed = parse_pr_arg(pr_arg)?;
+        let number = parsed.number();
+        let workdir = resolve_pr_workdir(&parsed)?;
         let pr_info = fetch_pr_info(pr_arg.trim())?;
-        let head_sha = fetch_pr_head(number)?;
+        let head_sha = fetch_pr_head(number, workdir.as_deref())?;
         if head_sha != pr_info.head_ref_oid {
             anyhow::bail!(
                 "fetched PR #{number} head ({head_sha}) does not match `gh`'s reported head \
                  ({expected}); this usually means the PR belongs to a different repository than \
-                 this clone's `origin` remote, or the PR was updated between resolving it and \
-                 fetching it — verify `origin` points at the PR's repository and re-run",
+                 the target clone's `origin` remote, or the PR was updated between resolving it \
+                 and fetching it — verify `origin` points at the PR's repository and re-run",
                 expected = pr_info.head_ref_oid,
             );
         }
-        let base_sha = fetch_branch_head(&pr_info.base_ref_name)?;
-        run_base_pipeline(&cli, &base_sha, &head_sha)?
+        let base_sha = fetch_branch_head(&pr_info.base_ref_name, workdir.as_deref())?;
+        run_base_pipeline(&cli, &base_sha, &head_sha, workdir.as_deref())?
     } else if let Some(base) = &cli.base {
-        run_base_pipeline(&cli, base, &cli.head)?
+        run_base_pipeline(&cli, base, &cli.head, None)?
     } else {
         let diff_text = read_stdin_diff()?;
         if diff_text.trim().is_empty() {
@@ -173,6 +182,56 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Determines which repository `--pr` mode should run its `git` commands
+/// in (ADR 0005), and clones one into the cache if needed.
+///
+/// `PrArg::Number` always uses the process's current directory (`None`,
+/// meaning "no override" to the `cwd` parameters downstream) — a bare
+/// number carries no repository information, so ADR 0004's "run inside a
+/// local clone" requirement is unchanged for it.
+///
+/// `PrArg::Url` first checks whether the current directory is already a
+/// clone of that repository (`git remote get-url origin` matching
+/// `owner`/`repo`, case-insensitively via `github_remote_matches`); if so
+/// it also returns `None`, reusing the cwd exactly like `PrArg::Number`
+/// does today. Otherwise it resolves the per-repository cache directory
+/// (`cache_repo_dir`, reading the real environment here at the boundary)
+/// and clones into it if it doesn't exist yet — an existing cache entry
+/// is left alone here and refreshed by the `git fetch` calls `main` makes
+/// afterwards, not re-cloned.
+fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBuf>> {
+    let PrArg::Url { owner, repo, .. } = parsed else {
+        return Ok(None);
+    };
+
+    if let Some(origin) = git_remote_origin_url(None)?
+        && github_remote_matches(&origin, owner, repo)
+    {
+        return Ok(None);
+    }
+
+    let dir = cache_repo_dir(
+        std::env::var("RINKAKU_CACHE_DIR").ok().as_deref(),
+        std::env::var("XDG_CACHE_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        owner,
+        repo,
+    )?;
+    if !dir.exists() {
+        // Create the parent (`.../repos/github.com/<owner>/`) only, not
+        // `dir` itself: `gh repo clone` (like `git clone`) creates its
+        // destination directory and fails if it already exists.
+        std::fs::create_dir_all(dir.parent().unwrap_or(&dir)).map_err(|source| {
+            anyhow::anyhow!(
+                "failed to create cache directory for {}: {source}",
+                dir.display()
+            )
+        })?;
+        clone_repo_into_cache(owner, repo, &dir)?;
+    }
+    Ok(Some(dir))
+}
+
 /// Runs `git diff <base>...<head>` and analyzes the result, reading file
 /// content via `git show <head>:<path>` (ADR: keeps the diff and file
 /// reads pinned to the same commit regardless of the working tree's
@@ -180,17 +239,23 @@ fn main() -> anyhow::Result<()> {
 /// user passed) and `--pr` mode (`base`/`head` are the SHAs resolved and
 /// fetched from the PR, see ADR 0004) — `--pr` is a resolution step in
 /// front of this same pipeline, not a separate read strategy.
+///
+/// `cwd` selects which repository every subprocess in this call runs in
+/// (same rationale as `read_git_show_file`'s `cwd`: `None` uses the
+/// process's current directory for `--base` and cwd-clone `--pr` runs,
+/// `Some(dir)` targets a cache clone (ADR 0005) or a test fixture).
 fn run_base_pipeline(
     cli: &Cli,
     base: &str,
     head: &str,
+    cwd: Option<&std::path::Path>,
 ) -> anyhow::Result<rinkaku_core::render::Report> {
-    let diff_text = run_git_diff(base, head)?;
+    let diff_text = run_git_diff(base, head, cwd)?;
     let read_file = {
         let head = head.to_string();
-        move |path: &str| read_git_show_file(None, &head, path)
+        move |path: &str| read_git_show_file(cwd, &head, path)
     };
-    let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), None)?;
+    let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd)?;
     Ok(analyze_diff(
         &diff_text,
         read_file,
@@ -326,11 +391,18 @@ fn read_stdin_diff() -> anyhow::Result<String> {
 }
 
 /// Runs `git diff <base>...<head>` and returns its stdout.
-fn run_git_diff(base: &str, head: &str) -> anyhow::Result<String> {
+///
+/// `cwd` selects the repository to run `git` in; `None` uses the process's
+/// current directory (production `--base`/cwd-clone `--pr` callers),
+/// `Some(dir)` pins it (cache clones, tests).
+fn run_git_diff(base: &str, head: &str, cwd: Option<&std::path::Path>) -> anyhow::Result<String> {
     let range = format!("{base}...{head}");
-    let output = std::process::Command::new("git")
-        .args(["diff", &range])
-        .output()?;
+    let mut command = std::process::Command::new("git");
+    command.args(["diff", &range]);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command.output()?;
     if !output.status.success() {
         anyhow::bail!(
             "git diff {range} failed: {}",
@@ -354,37 +426,155 @@ struct PrInfo {
     head_ref_oid: String,
 }
 
-/// Extracts a PR number from `--pr`'s value: either a bare number
-/// (`"76"`) or a GitHub PR URL
+/// A validated `--pr` argument. `Url` carries `owner`/`repo` (not just the
+/// PR number) so callers can decide, per ADR 0005, whether the current
+/// directory's clone matches the PR's repository or a cache clone is
+/// needed — information a bare `Number` inherently cannot provide, which
+/// is exactly why `Number` still requires running inside a local clone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PrArg {
+    Number(u64),
+    Url {
+        owner: String,
+        repo: String,
+        number: u64,
+    },
+}
+
+impl PrArg {
+    /// The PR number, regardless of which variant this is. Used to build
+    /// the `refs/pull/<number>/head` fetch refspec, which only needs the
+    /// number even for `Url`.
+    fn number(&self) -> u64 {
+        match self {
+            PrArg::Number(number) => *number,
+            PrArg::Url { number, .. } => *number,
+        }
+    }
+}
+
+/// Extracts a validated `--pr` argument: either a bare number (`"76"`) or
+/// a GitHub PR URL
 /// (`https://github.com/<owner>/<repo>/pull/<number>`, tolerating a
 /// trailing slash or extra path segments like `/files`).
 ///
 /// `0` is rejected even though it parses as a `u64`: GitHub PR numbers
 /// are 1-indexed, so `0` can only be a typo, and failing fast here beats
 /// a confusing `gh pr view 0` error downstream.
-fn parse_pr_arg(value: &str) -> anyhow::Result<u64> {
-    let candidate = match value.trim().strip_prefix("https://github.com/") {
+fn parse_pr_arg(value: &str) -> anyhow::Result<PrArg> {
+    match value.trim().strip_prefix("https://github.com/") {
         Some(rest) => {
             // Expect `<owner>/<repo>/pull/<number>[/...]`.
             let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
             match segments.as_slice() {
-                [_owner, _repo, "pull", number, ..] => *number,
+                [owner, repo, "pull", number, ..] => Ok(PrArg::Url {
+                    owner: owner.to_string(),
+                    repo: repo.to_string(),
+                    number: parse_positive_pr_number(number, value)?,
+                }),
                 _ => anyhow::bail!(
                     "--pr URL must look like https://github.com/<owner>/<repo>/pull/<number>, \
                      got: {value}"
                 ),
             }
         }
-        None => value.trim(),
-    };
+        None => Ok(PrArg::Number(parse_positive_pr_number(
+            value.trim(),
+            value,
+        )?)),
+    }
+}
 
+/// Parses `candidate` as a positive `u64` PR number, reporting errors
+/// against the original (untrimmed/un-extracted) `--pr` value so the user
+/// sees what they actually typed.
+fn parse_positive_pr_number(candidate: &str, original_value: &str) -> anyhow::Result<u64> {
     let number: u64 = candidate.parse().map_err(|_| {
-        anyhow::anyhow!("--pr must be a PR number or a GitHub PR URL, got: {value}")
+        anyhow::anyhow!("--pr must be a PR number or a GitHub PR URL, got: {original_value}")
     })?;
     if number == 0 {
-        anyhow::bail!("--pr must be a positive PR number, got: {value}");
+        anyhow::bail!("--pr must be a positive PR number, got: {original_value}");
     }
     Ok(number)
+}
+
+/// Extracts `(owner, repo)` from a git remote URL, if it points at
+/// GitHub. Accepts the forms `git remote get-url` can return for a GitHub
+/// remote: `https://github.com/<owner>/<repo>`, the same with a `.git`
+/// suffix, the scp-like SSH form `git@github.com:<owner>/<repo>(.git)`,
+/// and the explicit `ssh://` form `ssh://git@github.com/<owner>/<repo>
+/// (.git)`. Any other host, or a string that doesn't parse as one of
+/// these forms, yields `None` — used by `main` to decide whether the
+/// current directory's `origin` matches a `--pr` URL's repository (ADR
+/// 0005), where "not GitHub" and "malformed" are both simply "no match".
+fn parse_github_remote(url: &str) -> Option<(String, String)> {
+    let url = url.trim();
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("git@github.com:"))?;
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+
+    let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+    match segments.as_slice() {
+        [owner, repo] => Some((owner.to_string(), repo.to_string())),
+        _ => None,
+    }
+}
+
+/// Whether `remote_url` (as returned by `git remote get-url origin`)
+/// points at the same GitHub repository as `owner`/`repo`. GitHub
+/// owner/repo names are case-insensitive, so the comparison is too — a
+/// clone whose `origin` is `.../Octocat/Hello-World` must still be
+/// recognized as matching a `--pr` URL spelled `.../octocat/hello-world`.
+/// A `remote_url` that isn't a GitHub remote at all (`parse_github_remote`
+/// returns `None`) never matches.
+fn github_remote_matches(remote_url: &str, owner: &str, repo: &str) -> bool {
+    match parse_github_remote(remote_url) {
+        Some((remote_owner, remote_repo)) => {
+            remote_owner.eq_ignore_ascii_case(owner) && remote_repo.eq_ignore_ascii_case(repo)
+        }
+        None => false,
+    }
+}
+
+/// Resolves the root cache directory for `--pr` URL auto-clones (ADR
+/// 0005), then the per-repository clone path under it.
+///
+/// Precedence for the root, evaluated in order: `rinkaku_cache_dir`
+/// (`$RINKAKU_CACHE_DIR`) if set, else `<xdg_cache_home>/rinkaku`
+/// (`$XDG_CACHE_HOME/rinkaku`) if set, else `<home>/.cache/rinkaku`. An
+/// error if none of the three inputs is available — there is then no
+/// sane place to put the cache. All three are taken as arguments rather
+/// than read from the environment here, so this stays a pure function the
+/// precedence order can be unit-tested against directly; `main` is the
+/// only place that reads the actual environment.
+///
+/// Repo layout under the root: `repos/github.com/<owner>/<repo>`, so
+/// different git hosts (a future extension) could share one cache root
+/// without path collisions, and so the cache directory's own contents
+/// read as self-explanatory if a user goes looking (`~/.cache/rinkaku/
+/// repos/github.com/octocat/hello-world`).
+fn cache_repo_dir(
+    rinkaku_cache_dir: Option<&str>,
+    xdg_cache_home: Option<&str>,
+    home: Option<&str>,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let root = if let Some(dir) = rinkaku_cache_dir {
+        std::path::PathBuf::from(dir)
+    } else if let Some(dir) = xdg_cache_home {
+        std::path::PathBuf::from(dir).join("rinkaku")
+    } else if let Some(dir) = home {
+        std::path::PathBuf::from(dir).join(".cache").join("rinkaku")
+    } else {
+        anyhow::bail!(
+            "cannot determine a cache directory for --pr: set $RINKAKU_CACHE_DIR, \
+             $XDG_CACHE_HOME, or $HOME"
+        );
+    };
+    Ok(root.join("repos").join("github.com").join(owner).join(repo))
 }
 
 /// Parses `gh pr view --json number,baseRefName,headRefOid`'s stdout.
@@ -423,27 +613,37 @@ fn fetch_pr_info(arg: &str) -> anyhow::Result<PrInfo> {
     parse_pr_view_json(&String::from_utf8(output.stdout)?)
 }
 
-/// Fetches PR `number`'s head ref into the local clone and returns the
-/// fetched commit's SHA, via `git fetch origin refs/pull/<number>/head`
-/// followed by `git rev-parse FETCH_HEAD`.
-fn fetch_pr_head(number: u64) -> anyhow::Result<String> {
-    run_git_fetch(&format!("refs/pull/{number}/head"))
+/// Fetches PR `number`'s head ref into the repository at `cwd` and
+/// returns the fetched commit's SHA, via
+/// `git fetch origin refs/pull/<number>/head` followed by
+/// `git rev-parse FETCH_HEAD`.
+fn fetch_pr_head(number: u64, cwd: Option<&std::path::Path>) -> anyhow::Result<String> {
+    run_git_fetch(&format!("refs/pull/{number}/head"), cwd)
 }
 
-/// Fetches branch `name` into the local clone and returns the fetched
-/// commit's SHA. Used to resolve `--pr` mode's base commit from the base
-/// branch name `gh pr view` reports.
-fn fetch_branch_head(name: &str) -> anyhow::Result<String> {
-    run_git_fetch(name)
+/// Fetches branch `name` into the repository at `cwd` and returns the
+/// fetched commit's SHA. Used to resolve `--pr` mode's base commit from
+/// the base branch name `gh pr view` reports.
+fn fetch_branch_head(name: &str, cwd: Option<&std::path::Path>) -> anyhow::Result<String> {
+    run_git_fetch(name, cwd)
 }
 
-/// Runs `git fetch origin <refspec>` then `git rev-parse FETCH_HEAD`,
-/// returning the resulting SHA. Shared by `fetch_pr_head` and
-/// `fetch_branch_head`, which differ only in what refspec they fetch.
-fn run_git_fetch(refspec: &str) -> anyhow::Result<String> {
-    let fetch_output = std::process::Command::new("git")
-        .args(["fetch", "origin", refspec])
-        .output()?;
+/// Runs `git fetch origin <refspec>` then `git rev-parse FETCH_HEAD` in
+/// the repository at `cwd`, returning the resulting SHA. Shared by
+/// `fetch_pr_head` and `fetch_branch_head`, which differ only in what
+/// refspec they fetch.
+///
+/// `cwd` selects the repository to run `git` in; `None` uses the
+/// process's current directory (production cwd-clone callers),
+/// `Some(dir)` pins it (cache clones, tests) — same rationale as
+/// `read_git_show_file`'s `cwd`.
+fn run_git_fetch(refspec: &str, cwd: Option<&std::path::Path>) -> anyhow::Result<String> {
+    let mut fetch_command = std::process::Command::new("git");
+    fetch_command.args(["fetch", "origin", refspec]);
+    if let Some(cwd) = cwd {
+        fetch_command.current_dir(cwd);
+    }
+    let fetch_output = fetch_command.output()?;
     if !fetch_output.status.success() {
         anyhow::bail!(
             "git fetch origin {refspec} failed: {}",
@@ -451,9 +651,12 @@ fn run_git_fetch(refspec: &str) -> anyhow::Result<String> {
         );
     }
 
-    let rev_parse_output = std::process::Command::new("git")
-        .args(["rev-parse", "FETCH_HEAD"])
-        .output()?;
+    let mut rev_parse_command = std::process::Command::new("git");
+    rev_parse_command.args(["rev-parse", "FETCH_HEAD"]);
+    if let Some(cwd) = cwd {
+        rev_parse_command.current_dir(cwd);
+    }
+    let rev_parse_output = rev_parse_command.output()?;
     if !rev_parse_output.status.success() {
         anyhow::bail!(
             "git rev-parse FETCH_HEAD failed after fetching {refspec}: {}",
@@ -463,6 +666,52 @@ fn run_git_fetch(refspec: &str) -> anyhow::Result<String> {
     Ok(String::from_utf8(rev_parse_output.stdout)?
         .trim()
         .to_string())
+}
+
+/// Runs `git remote get-url origin` in `cwd` (or the process's current
+/// directory when `None`) and returns its stdout, trimmed. `Ok(None)`
+/// (rather than an `Err`) when the command fails — not being inside a git
+/// repository, or a repository with no `origin` remote, are both
+/// expected, ordinary situations for `--pr` URL mode (ADR 0005): they
+/// simply mean "the current directory doesn't match, use the cache"
+/// rather than a fatal error worth surfacing to the user.
+fn git_remote_origin_url(cwd: Option<&std::path::Path>) -> anyhow::Result<Option<String>> {
+    let mut command = std::process::Command::new("git");
+    command.args(["remote", "get-url", "origin"]);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command.output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8(output.stdout)?.trim().to_string()))
+}
+
+/// Clones `owner/repo` as a blobless partial clone (`--filter=blob:none`,
+/// ADR 0005) into `dir` via `gh repo clone`, delegating authentication to
+/// `gh` (ADR 0004's stance, applied to cloning too). Only called when
+/// `dir` does not already exist — an existing cache entry is refreshed by
+/// the ordinary `git fetch` calls in `main` instead of being re-cloned.
+fn clone_repo_into_cache(owner: &str, repo: &str, dir: &std::path::Path) -> anyhow::Result<()> {
+    let slug = format!("{owner}/{repo}");
+    let output = std::process::Command::new("gh")
+        .args([
+            "repo",
+            "clone",
+            &slug,
+            &dir.to_string_lossy(),
+            "--",
+            "--filter=blob:none",
+        ])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "gh repo clone {slug} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
 }
 
 /// Reads a changed file's new-side content off the working tree.
@@ -686,19 +935,34 @@ mod tests {
     }
 
     #[rstest]
-    #[case::should_parse_bare_number("76", 76)]
-    #[case::should_parse_number_with_surrounding_whitespace(" 76 ", 76)]
-    #[case::should_parse_pull_url("https://github.com/octocat/hello-world/pull/123", 123)]
+    #[case::should_parse_bare_number("76", PrArg::Number(76))]
+    #[case::should_parse_number_with_surrounding_whitespace(" 76 ", PrArg::Number(76))]
+    #[case::should_parse_pull_url(
+        "https://github.com/octocat/hello-world/pull/123",
+        PrArg::Url {
+            owner: "octocat".to_string(),
+            repo: "hello-world".to_string(),
+            number: 123,
+        }
+    )]
     #[case::should_parse_pull_url_with_trailing_slash(
         "https://github.com/octocat/hello-world/pull/123/",
-        123
+        PrArg::Url {
+            owner: "octocat".to_string(),
+            repo: "hello-world".to_string(),
+            number: 123,
+        }
     )]
     #[case::should_parse_pull_url_with_extra_path_segment(
         "https://github.com/octocat/hello-world/pull/123/files",
-        123
+        PrArg::Url {
+            owner: "octocat".to_string(),
+            repo: "hello-world".to_string(),
+            number: 123,
+        }
     )]
-    fn should_parse_pr_arg_when_input_is_valid(#[case] input: &str, #[case] expected: u64) {
-        let actual = parse_pr_arg(input).expect("expected a valid PR number");
+    fn should_parse_pr_arg_when_input_is_valid(#[case] input: &str, #[case] expected: PrArg) {
+        let actual = parse_pr_arg(input).expect("expected a valid PR arg");
 
         assert_eq!(expected, actual);
     }
@@ -715,6 +979,134 @@ mod tests {
         let actual = parse_pr_arg(input);
 
         assert!(actual.is_err(), "expected an error for input: {input}");
+    }
+
+    #[rstest]
+    #[case::should_parse_https_url(
+        "https://github.com/octocat/hello-world",
+        Some(("octocat".to_string(), "hello-world".to_string()))
+    )]
+    #[case::should_parse_https_url_with_dot_git_suffix(
+        "https://github.com/octocat/hello-world.git",
+        Some(("octocat".to_string(), "hello-world".to_string()))
+    )]
+    #[case::should_parse_scp_like_ssh_url(
+        "git@github.com:octocat/hello-world.git",
+        Some(("octocat".to_string(), "hello-world".to_string()))
+    )]
+    #[case::should_parse_scp_like_ssh_url_without_dot_git_suffix(
+        "git@github.com:octocat/hello-world",
+        Some(("octocat".to_string(), "hello-world".to_string()))
+    )]
+    #[case::should_parse_explicit_ssh_url(
+        "ssh://git@github.com/octocat/hello-world.git",
+        Some(("octocat".to_string(), "hello-world".to_string()))
+    )]
+    #[case::should_parse_explicit_ssh_url_without_dot_git_suffix(
+        "ssh://git@github.com/octocat/hello-world",
+        Some(("octocat".to_string(), "hello-world".to_string()))
+    )]
+    #[case::should_trim_surrounding_whitespace(
+        " https://github.com/octocat/hello-world.git \n",
+        Some(("octocat".to_string(), "hello-world".to_string()))
+    )]
+    #[case::should_reject_non_github_host("https://gitlab.com/octocat/hello-world.git", None)]
+    #[case::should_reject_url_missing_repo_segment("https://github.com/octocat", None)]
+    #[case::should_reject_url_with_extra_path_segment(
+        "https://github.com/octocat/hello-world/extra",
+        None
+    )]
+    #[case::should_reject_empty_string("", None)]
+    fn should_parse_github_remote(#[case] url: &str, #[case] expected: Option<(String, String)>) {
+        let actual = parse_github_remote(url);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[rstest]
+    #[case::should_match_identical_owner_and_repo(
+        "https://github.com/octocat/hello-world.git",
+        "octocat",
+        "hello-world",
+        true
+    )]
+    #[case::should_match_case_insensitively(
+        "https://github.com/Octocat/Hello-World.git",
+        "octocat",
+        "hello-world",
+        true
+    )]
+    #[case::should_not_match_different_repo(
+        "https://github.com/octocat/hello-world.git",
+        "octocat",
+        "other-repo",
+        false
+    )]
+    #[case::should_not_match_different_owner(
+        "https://github.com/octocat/hello-world.git",
+        "someone-else",
+        "hello-world",
+        false
+    )]
+    #[case::should_not_match_non_github_remote(
+        "https://gitlab.com/octocat/hello-world.git",
+        "octocat",
+        "hello-world",
+        false
+    )]
+    fn should_check_github_remote_match(
+        #[case] remote_url: &str,
+        #[case] owner: &str,
+        #[case] repo: &str,
+        #[case] expected: bool,
+    ) {
+        let actual = github_remote_matches(remote_url, owner, repo);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[rstest]
+    #[case::should_prefer_rinkaku_cache_dir_when_set(
+        Some("/custom/cache"),
+        Some("/xdg/cache"),
+        Some("/home/user"),
+        "/custom/cache/repos/github.com/octocat/hello-world"
+    )]
+    #[case::should_fall_back_to_xdg_cache_home_when_rinkaku_cache_dir_unset(
+        None,
+        Some("/xdg/cache"),
+        Some("/home/user"),
+        "/xdg/cache/rinkaku/repos/github.com/octocat/hello-world"
+    )]
+    #[case::should_fall_back_to_home_when_neither_env_var_set(
+        None,
+        None,
+        Some("/home/user"),
+        "/home/user/.cache/rinkaku/repos/github.com/octocat/hello-world"
+    )]
+    fn should_build_cache_repo_dir(
+        #[case] rinkaku_cache_dir: Option<&str>,
+        #[case] xdg_cache_home: Option<&str>,
+        #[case] home: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let actual = cache_repo_dir(
+            rinkaku_cache_dir,
+            xdg_cache_home,
+            home,
+            "octocat",
+            "hello-world",
+        )
+        .expect("expected a cache directory to be resolved");
+
+        assert_eq!(std::path::PathBuf::from(expected), actual);
+    }
+
+    #[test]
+    fn should_fail_to_build_cache_repo_dir_when_no_env_source_is_available() {
+        let actual = cache_repo_dir(None, None, None, "octocat", "hello-world");
+
+        assert!(actual.is_err());
     }
 
     #[test]
@@ -793,6 +1185,64 @@ mod tests {
             .expect("git show should succeed for a committed file");
 
         assert_eq!(committed, actual);
+    }
+
+    // Integration test for `--pr` URL mode's cwd-vs-cache decision (ADR
+    // 0005): a real repository with an `origin` remote set must have that
+    // URL surfaced by `git_remote_origin_url` so `github_remote_matches`
+    // (already unit-tested above against arbitrary strings) can decide
+    // whether to reuse the cwd. Exercises the subprocess wrapper itself
+    // rather than `github_remote_matches`'s string logic, which is
+    // already covered directly.
+    #[test]
+    fn should_return_origin_url_when_repository_has_an_origin_remote() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(dir.path(), "fn foo() {}\n");
+        run_git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/octocat/hello-world.git",
+            ],
+        );
+
+        let actual =
+            git_remote_origin_url(Some(dir.path())).expect("git remote get-url should not error");
+
+        assert_eq!(
+            Some("https://github.com/octocat/hello-world.git".to_string()),
+            actual
+        );
+    }
+
+    // Sibling case: a repository with no `origin` remote at all (rather
+    // than a missing/misconfigured one) must come back as `Ok(None)`, not
+    // an `Err` — ADR 0005 treats "doesn't match" and "isn't even a clone"
+    // identically as "use the cache", so this must not be a fatal error.
+    #[test]
+    fn should_return_none_when_repository_has_no_origin_remote() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(dir.path(), "fn foo() {}\n");
+
+        let actual = git_remote_origin_url(Some(dir.path()))
+            .expect("missing origin remote should not error");
+
+        assert_eq!(None, actual);
+    }
+
+    // Sibling case: a directory that isn't a git repository at all must
+    // also come back as `Ok(None)`, matching the "run outside any clone"
+    // scenario ADR 0005's cache path exists to handle.
+    #[test]
+    fn should_return_none_when_directory_is_not_a_git_repository() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+
+        let actual = git_remote_origin_url(Some(dir.path()))
+            .expect("a non-repository directory should not error");
+
+        assert_eq!(None, actual);
     }
 
     // Regression test for the must-fix performance bug: `build_resolver`

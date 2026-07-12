@@ -15,10 +15,13 @@ every implementation line.
   file contents are read via `git show <head>:<path>` so extraction always
   matches the diffed commit, regardless of the working tree's state.
   `--pr` mode resolves the PR's base and head via `gh pr view`, fetches
-  both into the local clone, and reuses the same `git show`-backed read
-  strategy as `--base` — it requires running inside a local clone of the
-  target repository, and `gh` installed and authenticated (see
-  [ADR 0004](docs/adr/0004-pr-input-mode-via-gh-in-local-clone.md)). In
+  both, and reuses the same `git show`-backed read strategy as `--base`
+  (see [ADR 0004](docs/adr/0004-pr-input-mode-via-gh-in-local-clone.md)).
+  A bare PR number requires running inside a local clone of the target
+  repository; a URL also works from any directory by auto-cloning a
+  blobless copy into a cache (see
+  [ADR 0005](docs/adr/0005-auto-clone-into-cache-for-pr-urls.md)). `gh`
+  must be installed and authenticated either way. In
   stdin mode, file contents are read off the working tree, which assumes
   **the piped diff is consistent with the current working tree** (e.g. it
   was just produced by `git diff` or already applied); a stale or
@@ -115,9 +118,16 @@ not given, `self-update` refuses to run rather than silently proceeding.
 # From a GitHub PR (stdin, no local clone required)
 gh pr diff 123 | rinkaku
 
-# From a GitHub PR, run inside a local clone of the target repository
-# (fetches the PR via `gh`/`git`; requires `gh` installed and authenticated)
+# From a GitHub PR by number: run inside a local clone of the target
+# repository (fetches the PR via `gh`/`git`; requires `gh` installed and
+# authenticated)
 rinkaku --pr 123
+
+# From a GitHub PR URL: works from any directory. If the cwd isn't already
+# a clone of that repository, rinkaku auto-clones a blobless copy into
+# $RINKAKU_CACHE_DIR / $XDG_CACHE_HOME/rinkaku / ~/.cache/rinkaku and runs
+# there instead (see ADR 0005). Private repos need `gh auth setup-git` so
+# the cache clone's later `git fetch`s can authenticate too.
 rinkaku --pr https://github.com/octocat/hello-world/pull/123
 
 # From a local git diff against a base branch
