@@ -688,6 +688,20 @@ impl App {
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status = Some(message.into());
     }
+
+    /// Overwrites the right-hand pane's scroll offset directly to `scroll`
+    /// — used by `crate::run_app`'s `]c`/`[c` hunk-jump handling
+    /// (`InputKey::NextHunk`/`PrevHunk`) to set an exact target line rather
+    /// than the relative +/-1 [`Self::handle_key`] applies for plain `j`/`k`
+    /// scrolling. Not itself an [`InputKey`] variant/`handle_key` branch,
+    /// since the jump target depends on the diff pane's shaped content
+    /// (`crate::diff_shape`), which `App` has no access to — `crate::run_app`
+    /// computes the target and calls this setter once it has one (see that
+    /// function's own comment on why the computation lives there).
+    pub fn with_right_pane_scroll(mut self, scroll: usize) -> Self {
+        self.right_pane_scroll = scroll;
+        self
+    }
 }
 
 #[cfg(test)]

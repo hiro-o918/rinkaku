@@ -309,6 +309,24 @@ pub fn lookup_hunk_highlight<'a>(
     highlighted.hunks.get(index).map(|lines| lines.as_slice())
 }
 
+/// Looks up the precomputed highlight for the hunk at `source_index` in
+/// `highlighted.hunks` directly, without a pointer-identity search —
+/// [`lookup_hunk_highlight`]'s own doc comment explains why that search
+/// requires the exact `&Hunk` instance from the original `FileHunks`; this
+/// sibling function is for `crate::diff_shape::AttributedHunk`s instead,
+/// which are cloned out of the original `FileHunks` (ADR 0020) and so no
+/// longer carry that pointer identity, but do carry the `source_index`
+/// that pointer search was only ever recovering in the first place.
+pub fn lookup_hunk_highlight_by_index(
+    highlighted: Option<&HighlightedFile>,
+    source_index: usize,
+) -> Option<&[LineHighlight]> {
+    highlighted?
+        .hunks
+        .get(source_index)
+        .map(|lines| lines.as_slice())
+}
+
 /// Finds the [`HighlightedFile`] for `path` in the precomputed set, or
 /// `None` when the diff has no entry for it — mirrors
 /// `crate::diff_view::file_hunks`'s own lookup-by-path convention.

@@ -11,7 +11,8 @@
 
 use crate::app::{App, DiffTarget, PivotSelection, RightPane, Screen, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
-use crate::diff_view::{DiffLine, DiffLineKind, FileHunks, Hunk, file_hunks, hunks_for_range};
+use crate::diff_shape::DiffSection;
+use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, PALETTE, TokenSpan};
 use crate::row_view::{entry_row_line, relative_labels};
 use crate::source::{SourceView, load_symbol_source, visible_window};
@@ -26,16 +27,15 @@ use unicode_width::UnicodeWidthChar;
 
 /// Draws one full frame: the entry view (tree + right pane split) or the
 /// source drill-down, depending on `app.screen()`, with a status/help line
-/// pinned to the bottom either way. `diff_files` is the whole diff already
-/// parsed into per-file hunks once by `crate::run_app` (not re-parsed here
-/// on every frame — see that function's doc comment on why parsing lives
-/// outside the draw loop), and `diff_highlights` is that same diff's
-/// per-line syntax highlighting, computed once alongside it (ADR 0018) —
-/// both are only consulted when the right pane is in [`RightPane::Diff`]
-/// mode. `pivot_selection` is likewise computed once per handled key by
-/// `crate::run_app` (not here) whenever the right pane is in
-/// [`RightPane::Pivot`] mode — see `App::selected_pivot_view`'s own doc
-/// comment on why this function must not call it itself. `repo_root` is
+/// pinned to the bottom either way. `diff_highlights` is the whole diff's
+/// per-line syntax highlighting, computed once by `crate::run_app` (not
+/// re-parsed/re-highlighted here on every frame — see that function's doc
+/// comment on why that work lives outside the draw loop), consulted only
+/// when the right pane is in [`RightPane::Diff`] mode. `diff_content` and
+/// `pivot_selection` are likewise computed once per handled key by
+/// `crate::run_app` (not here), for [`RightPane::Diff`]/[`RightPane::Pivot`]
+/// respectively — see `App::selected_pivot_view`'s own doc comment on why
+/// this function must not call either computation itself. `repo_root` is
 /// only consulted on [`Screen::Source`] (forwarded to
 /// [`load_symbol_source`], see that function's doc comment for why
 /// `Report` paths need it) — it is threaded through here rather than
@@ -44,7 +44,7 @@ pub fn draw(
     frame: &mut Frame,
     app: &App,
     report: &Report,
-    diff_files: &[FileHunks],
+    diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     pivot_selection: &PivotSelection,
     repo_root: &std::path::Path,
@@ -58,7 +58,7 @@ pub fn draw(
             frame,
             app,
             report,
-            diff_files,
+            diff_content,
             diff_highlights,
             pivot_selection,
             body,
@@ -81,7 +81,7 @@ fn draw_entry_screen(
     frame: &mut Frame,
     app: &App,
     report: &Report,
-    diff_files: &[FileHunks],
+    diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     pivot_selection: &PivotSelection,
     area: Rect,
@@ -92,9 +92,14 @@ fn draw_entry_screen(
     draw_tree_pane(frame, app, tree_area);
     match app.right_pane() {
         RightPane::Detail => draw_detail_pane(frame, app, report, right_area),
-        RightPane::Diff => {
-            draw_diff_pane(frame, app, report, diff_files, diff_highlights, right_area)
-        }
+        RightPane::Diff => draw_diff_pane(
+            frame,
+            app,
+            report,
+            diff_content,
+            diff_highlights,
+            right_area,
+        ),
         RightPane::Pivot => draw_pivot_pane(frame, app, pivot_selection, right_area),
     }
 }
@@ -135,70 +140,60 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
     render_scrollable_pane(frame, " Detail ", &lines, app.right_pane_scroll(), area);
 }
 
-/// Draws the diff pane (TUI iteration 2, [`RightPane::Diff`]): the raw
-/// unified-diff hunks touching the row under the cursor — every hunk of the
-/// file for a file row, or just the hunks intersecting a symbol's own line
-/// range for a symbol row (`App::selected_diff_target`'s own doc comment).
+/// Draws the diff pane (TUI iteration 2, [`RightPane::Diff`]; ADR 0020
+/// reshapes its content): the raw unified-diff hunks touching the row under
+/// the cursor, clipped to a symbol's own line range for a symbol row, or
+/// grouped into per-symbol sections (plus a trailing "(module level)"
+/// section) for a file row — `diff_content` is already shaped by
+/// `crate::diff_shape::build_diff_pane_content`, computed once per handled
+/// key by `crate::run_app` (this function must not call it itself, mirroring
+/// `App::selected_pivot_view`'s own "must not call from `ui::draw`"
+/// constraint and the reason it exists — see that method's doc comment).
 /// A directory row, or a row with nothing to show (no hunks found, e.g. a
 /// mismatch between `report` and the diff), falls back to a placeholder
-/// message rather than an empty pane. `diff_files` is already parsed and
-/// `diff_highlights` already highlighted (`crate::run_app` does both once,
-/// up front, not on every call to this function — ADR 0018).
+/// message rather than an empty pane; `App::selected_diff_target` is called
+/// here (not cached) purely to pick which of the two placeholder messages
+/// applies — it is an O(rows) lookup, not the O(diff size) hunk-walk
+/// `diff_content` itself avoids recomputing. `diff_highlights` is looked up
+/// by `source_index` rather than pointer identity now that hunks are cloned
+/// into shaped sections (`crate::diff_shape::AttributedHunk`'s own doc
+/// comment).
 fn draw_diff_pane(
     frame: &mut Frame,
     app: &App,
     report: &Report,
-    diff_files: &[FileHunks],
+    diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     area: Rect,
 ) {
-    let Some(target) = app.selected_diff_target(report) else {
-        let block = Block::bordered().title(" Diff ");
-        let paragraph = Paragraph::new("(select a symbol or file row to see its diff)")
-            .block(block)
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(paragraph, area);
-        return;
+    use crate::diff_shape::DiffPaneContent;
+
+    let target = app.selected_diff_target(report);
+    let path: &str = match &target {
+        Some(DiffTarget::Symbol { path, .. }) | Some(DiffTarget::File { path }) => path.as_str(),
+        None => "",
     };
 
-    let (path, hunks): (&str, Vec<&Hunk>) = match &target {
-        DiffTarget::Symbol {
-            path,
-            range_start,
-            range_end,
-        } => {
-            let hunks = file_hunks(diff_files, path)
-                .map(|fh| hunks_for_range(fh, *range_start, *range_end))
-                .unwrap_or_default();
-            (path.as_str(), hunks)
+    let sections: Vec<&crate::diff_shape::DiffSection> = match diff_content {
+        DiffPaneContent::Empty => {
+            let message = match &target {
+                None => "(select a symbol or file row to see its diff)".to_string(),
+                Some(_) => format!("(no diff hunks found for {path})"),
+            };
+            let block = Block::bordered().title(" Diff ");
+            let paragraph = Paragraph::new(message)
+                .block(block)
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+            return;
         }
-        DiffTarget::File { path } => {
-            let hunks = file_hunks(diff_files, path)
-                .map(|fh: &FileHunks| fh.hunks.iter().collect())
-                .unwrap_or_default();
-            (path.as_str(), hunks)
-        }
+        DiffPaneContent::Symbol(section) => vec![section],
+        DiffPaneContent::File(sections) => sections.iter().collect(),
     };
 
-    if hunks.is_empty() {
-        let block = Block::bordered().title(" Diff ");
-        let paragraph = Paragraph::new(format!("(no diff hunks found for {path})"))
-            .block(block)
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(paragraph, area);
-        return;
-    }
-
-    // `file_hunks` was already resolved above via `DiffTarget`'s match arm,
-    // but `hunks_for_range`/the file-row arm both return `&Hunk`s borrowed
-    // from it — re-resolving it here (rather than threading it out of the
-    // match above) keeps `highlight::lookup_hunk_highlight`'s pointer-
-    // identity lookup working against the exact same `FileHunks` the
-    // `&Hunk`s in `hunks` were borrowed from.
-    let source_file_hunks = file_hunks(diff_files, path);
     let highlighted_file = highlight::highlighted_file(diff_highlights, path);
-
-    let lines = diff_pane_lines(&hunks, source_file_hunks, highlighted_file);
+    let is_file_selection = matches!(diff_content, DiffPaneContent::File(_));
+    let lines = diff_pane_lines(&sections, is_file_selection, highlighted_file);
     render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
 }
 
@@ -439,53 +434,82 @@ fn scroll_indicator(content_len: usize, viewport_height: usize, scroll: usize) -
     Some(format!(" ({first_visible}-{last_visible}/{content_len})"))
 }
 
-/// Formats a list of [`Hunk`]s into styled lines: hunk headers dim, `+`/`-`
-/// marker glyphs keep their existing bold green/red foreground, and each
-/// line's own code tokens are colored by [`highlight::lookup_hunk_highlight`]
-/// when available (ADR 0018) — falling back to the plain green/red/unstyled
-/// line style this pane always had when a hunk has no highlight (unknown
-/// extension, parse/query failure) so highlighting can never make a diff
-/// harder to read than before.
+/// Formats every [`DiffSection`] in `sections` into styled lines (ADR
+/// 0020): a section header (a symbol's own signature, styled bold, or the
+/// fixed "(module level)" label) only when `show_section_headers` is set —
+/// a single-section symbol selection has nothing to disambiguate a header
+/// would add value to, so it is omitted there and the pane opens straight
+/// on the (optional) contract header/hunks, matching this pane's pre-ADR-
+/// 0020 layout for a symbol row. A file selection (multiple sections, or
+/// one section that still benefits from being named) always shows headers.
+/// Each section's own `contract_header` (when present) renders as a 2-line
+/// red/green old/new pair before that section's hunks — the outline-before-
+/// implementation disclosure order ADR 0020 asks for.
 ///
-/// `source_file_hunks`/`highlighted_file` are `None` exactly when `hunks`
-/// itself would already be empty (`draw_diff_pane` returns before calling
-/// this function in that case), so in practice they are always `Some` here
-/// — kept as `Option`s anyway (rather than unwrapped) since `file_hunks`
-/// returning `None` is a defensive, not-supposed-to-happen case elsewhere
-/// in this module too, and threading the same shape through keeps this
-/// function's fallback path uniform with `highlight::lookup_hunk_highlight`'s
-/// own `None` handling.
+/// Within each section, hunk headers stay dim, `+`/`-` marker glyphs keep
+/// their existing bold green/red foreground, and each line's own code
+/// tokens are colored by [`highlight::lookup_hunk_highlight_by_index`] when
+/// available (ADR 0018/0020) — falling back to the plain green/red/
+/// unstyled line style this pane always had when a hunk has no highlight
+/// (unknown extension, parse/query failure, or `highlighted_file` itself
+/// being `None`) so highlighting can never make a diff harder to read than
+/// before.
 fn diff_pane_lines(
-    hunks: &[&Hunk],
-    source_file_hunks: Option<&FileHunks>,
+    sections: &[&DiffSection],
+    show_section_headers: bool,
     highlighted_file: Option<&HighlightedFile>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for (index, hunk) in hunks.iter().enumerate() {
-        if index > 0 {
+    for (section_index, section) in sections.iter().enumerate() {
+        if section_index > 0 {
             lines.push(Line::raw(""));
         }
-        lines.push(Line::styled(
-            hunk.header.clone(),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        ));
+        if show_section_headers {
+            lines.push(Line::styled(
+                section.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(contract) = &section.contract_header {
+            lines.push(Line::styled(
+                format!("- {}", contract.previous_signature),
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::styled(
+                format!("+ {}", contract.signature),
+                Style::default().fg(Color::Green),
+            ));
+        }
 
-        let hunk_highlight = source_file_hunks
-            .and_then(|fh| highlight::lookup_hunk_highlight(highlighted_file, fh, hunk));
+        for (hunk_index, attributed) in section.hunks.iter().enumerate() {
+            if hunk_index > 0 || show_section_headers || section.contract_header.is_some() {
+                lines.push(Line::raw(""));
+            }
+            lines.push(Line::styled(
+                attributed.hunk.header.clone(),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ));
 
-        for (line_index, line) in hunk.lines.iter().enumerate() {
-            // `hunk_highlight` is `Option<&[LineHighlight]>`, and
-            // `LineHighlight` is itself `Option<Vec<TokenSpan>>` (per-line
-            // fallback within an otherwise-highlighted hunk) — `flatten`
-            // collapses "no highlight data at all for this hunk" and
-            // "this specific line had no highlight" into the same `None`
-            // `diff_line` already treats as its fallback signal.
-            let token_spans = hunk_highlight
-                .and_then(|lines| lines.get(line_index).cloned())
-                .flatten();
-            lines.push(diff_line(line, token_spans));
+            let hunk_highlight = highlight::lookup_hunk_highlight_by_index(
+                highlighted_file,
+                attributed.source_index,
+            );
+
+            for (line_index, line) in attributed.hunk.lines.iter().enumerate() {
+                // `hunk_highlight` is `Option<&[LineHighlight]>`, and
+                // `LineHighlight` is itself `Option<Vec<TokenSpan>>`
+                // (per-line fallback within an otherwise-highlighted hunk)
+                // — `flatten` collapses "no highlight data at all for this
+                // hunk" and "this specific line had no highlight" into the
+                // same `None` `diff_line` already treats as its fallback
+                // signal.
+                let token_spans = hunk_highlight
+                    .and_then(|lines| lines.get(line_index).cloned())
+                    .flatten();
+                lines.push(diff_line(line, token_spans));
+            }
         }
     }
     lines
@@ -1012,6 +1036,25 @@ mod tests {
         std::path::PathBuf::from("/repo")
     }
 
+    /// Builds the [`crate::diff_shape::DiffPaneContent`] `crate::run_app`
+    /// would have cached for `app`'s current selection against `report`/
+    /// `diff_files` — this module's tests recreate that one-shot
+    /// computation by hand (mirroring how `should_draw_pivot_pane_...`
+    /// already recreates `App::selected_pivot_view`'s own one-shot
+    /// computation for `pivot_selection`), since `draw` itself must not
+    /// compute it (`draw_diff_pane`'s own doc comment).
+    fn diff_content_for(
+        report: &Report,
+        diff_files: &[crate::diff_view::FileHunks],
+        app: &App,
+    ) -> crate::diff_shape::DiffPaneContent {
+        crate::diff_shape::build_diff_pane_content(
+            report,
+            diff_files,
+            app.selected_diff_target(report).as_ref(),
+        )
+    }
+
     /// Flattens a `TestBackend`'s buffer into one string (rows joined by
     /// `\n`), so a snapshot assertion can check for expected substrings
     /// (pane titles, row content) without pinning every cell — the coarse
@@ -1043,7 +1086,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1090,7 +1133,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1134,7 +1177,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1183,7 +1226,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1234,7 +1277,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1282,7 +1325,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1316,6 +1359,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1324,7 +1368,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1376,6 +1420,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1384,7 +1429,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1442,6 +1487,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1450,7 +1496,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1461,6 +1507,135 @@ index e69de29..4b825dc 100644
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"));
         assert!(text.contains("+const b = 2;"));
+    }
+
+    #[test]
+    fn should_draw_per_symbol_section_headers_when_diff_pane_shows_a_file_selection() {
+        // Cursor stays on row 0, the "lib.rs" file row itself — a file
+        // selection (ADR 0020) groups hunks under each symbol's own
+        // signature as a section header, unlike a symbol selection (the
+        // sibling test above), which shows no header at all.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![
+                    symbol("lib.rs::foo", "foo"),
+                    ExtractedSymbol {
+                        range: LineRange { start: 10, end: 10 },
+                        ..symbol("lib.rs::bar", "bar")
+                    },
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let app = App::new(&report);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,1 @@
+-fn a() {}
++fn foo() {}
+@@ -9,1 +10,1 @@
+-fn old_bar() {}
++fn bar() {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_content,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("fn foo()"));
+        assert!(text.contains("fn bar()"));
+        assert!(text.contains("+fn foo() {}"));
+        assert!(text.contains("+fn bar() {}"));
+    }
+
+    #[test]
+    fn should_draw_contract_header_before_hunks_when_symbol_signature_changed() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    classification: Some(Classification::SignatureChanged),
+                    previous_signature: Some("fn foo(a: i32)".to_string()),
+                    signature: "fn foo(a: i32, b: i32)".to_string(),
+                    ..symbol("lib.rs::foo", "foo")
+                }],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,1 @@
+-fn foo(a: i32) {}
++fn foo(a: i32, b: i32) {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_content,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // The 2-line old/new contract header precedes the hunk body itself
+        // (ADR 0020's outline-before-implementation disclosure order).
+        assert!(text.contains("- fn foo(a: i32)"));
+        assert!(text.contains("+ fn foo(a: i32, b: i32)"));
+        assert!(text.contains("-fn foo(a: i32) {}"));
+        assert!(text.contains("+fn foo(a: i32, b: i32) {}"));
     }
 
     #[test]
@@ -1496,7 +1671,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &pivot_selection,
                     &test_repo_root(),
@@ -1524,7 +1699,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &pivot_selection,
                     &test_repo_root(),
@@ -1609,6 +1784,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1617,7 +1793,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1654,6 +1830,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1662,7 +1839,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1692,6 +1869,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1700,7 +1878,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1737,6 +1915,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1745,7 +1924,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1795,6 +1974,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1803,7 +1983,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1840,7 +2020,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1870,7 +2050,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1896,7 +2076,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1936,7 +2116,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2075,7 +2255,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2106,7 +2286,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2139,7 +2319,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2178,7 +2358,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2215,7 +2395,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2381,7 +2561,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2431,7 +2611,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),

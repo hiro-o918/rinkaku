@@ -30,6 +30,7 @@
 
 pub mod app;
 pub mod detail;
+pub mod diff_shape;
 pub mod diff_view;
 pub mod highlight;
 pub mod nav;
@@ -144,6 +145,24 @@ fn run_app(
     } else {
         PivotSelection::NotApplicable
     };
+    // Computed once up front then on demand below, once per handled key —
+    // same reasoning and cache-on-selection-change discipline as
+    // `pivot_selection` above (ADR 0020: `crate::diff_shape`'s own doc
+    // comment on why this must not be recomputed inside `ui::draw`, after
+    // the pivot pane's own past per-frame recompute bug). The up-front
+    // computation matters for the ordinary (non-`--entry`) startup path
+    // too now, since ADR 0020 also made Diff the default right pane: the
+    // very first frame must already show shaped diff content, not an
+    // empty placeholder until the first key press recomputes it.
+    let mut diff_pane_content = if should_recompute_diff_pane_content(&app) {
+        diff_shape::build_diff_pane_content(
+            report,
+            &diff_hunks,
+            app.selected_diff_target(report).as_ref(),
+        )
+    } else {
+        diff_shape::DiffPaneContent::Empty
+    };
 
     loop {
         terminal.draw(|frame| {
@@ -151,7 +170,7 @@ fn run_app(
                 frame,
                 &app,
                 report,
-                &diff_hunks,
+                &diff_pane_content,
                 &diff_highlights,
                 &pivot_selection,
                 repo_root,
@@ -190,6 +209,19 @@ fn run_app(
                         Err(message) => app.set_status(message),
                     }
                 }
+            } else if let InputKey::NextHunk | InputKey::PrevHunk = input_key {
+                // Hunk jumping needs the shaped diff content already
+                // cached above (`diff_pane_content`) to know where each
+                // hunk starts — `App::handle_key` itself has no notion of
+                // that content, so the jump target is computed here, at
+                // the one place both `app` and `diff_pane_content` are in
+                // scope, rather than threading the whole shaped content
+                // into `App` just for this.
+                let scroll = diff_shape::hunk_start_lines(&diff_pane_content);
+                let next = jump_scroll_target(&scroll, app.right_pane_scroll(), input_key);
+                if let Some(target) = next {
+                    app = app.handle_key(input_key).with_right_pane_scroll(target);
+                }
             } else {
                 app = app.handle_key(input_key);
             }
@@ -197,7 +229,53 @@ fn run_app(
             if should_recompute_pivot_selection(&app) {
                 pivot_selection = app.selected_pivot_view(report);
             }
+            if should_recompute_diff_pane_content(&app) {
+                diff_pane_content = diff_shape::build_diff_pane_content(
+                    report,
+                    &diff_hunks,
+                    app.selected_diff_target(report).as_ref(),
+                );
+            }
         }
+    }
+}
+
+/// Whether `crate::run_app`'s event loop should recompute the diff pane's
+/// shaped content this key, rather than keep showing the previously cached
+/// one — mirrors `should_recompute_pivot_selection`'s own contract and
+/// reasoning, just for [`RightPane::Diff`] instead of `RightPane::Pivot`.
+fn should_recompute_diff_pane_content(app: &App) -> bool {
+    matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Diff
+}
+
+/// The scroll offset [`InputKey::NextHunk`]/[`InputKey::PrevHunk`] should
+/// jump to, given `hunk_starts` (each hunk's starting logical-line offset
+/// within the diff pane's shaped content, `crate::diff_shape::hunk_start_lines`'s
+/// own doc comment) and the pane's `current_scroll`. `None` when there is
+/// nowhere to jump (`hunk_starts` is empty, or already at the first/last
+/// hunk in the requested direction) — a no-op, not a clamp to the nearest
+/// edge, since silently landing back on the same hunk would look like the
+/// keypress did nothing anyway.
+///
+/// Extracted as its own pure function (rather than inlined in `run_app`,
+/// which takes a live `ratatui::DefaultTerminal` and so cannot be driven
+/// directly in a test) so the jump direction/boundary logic is
+/// unit-testable without a terminal.
+fn jump_scroll_target(
+    hunk_starts: &[usize],
+    current_scroll: usize,
+    direction: InputKey,
+) -> Option<usize> {
+    match direction {
+        InputKey::NextHunk => hunk_starts
+            .iter()
+            .copied()
+            .find(|&start| start > current_scroll),
+        InputKey::PrevHunk => hunk_starts
+            .iter()
+            .copied()
+            .rfind(|&start| start < current_scroll),
+        _ => None,
     }
 }
 
@@ -497,5 +575,104 @@ mod tests {
             }],
             ..empty_report()
         }
+    }
+
+    #[test]
+    fn should_recompute_diff_pane_content_when_diff_pane_is_active_on_entry_screen() {
+        let report = empty_report();
+        let app = App::new(&report);
+        assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_not_recompute_diff_pane_content_when_right_pane_is_detail() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleDiff);
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_recompute_diff_pane_content_when_right_pane_is_pivot() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_recompute_diff_pane_content_while_source_screen_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_jump_to_the_next_hunk_start_strictly_after_current_scroll() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 5, InputKey::NextHunk);
+
+        assert_eq!(Some(12), actual);
+    }
+
+    #[test]
+    fn should_return_none_when_next_hunk_is_pressed_at_the_last_hunk() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 12, InputKey::NextHunk);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_jump_to_the_previous_hunk_start_strictly_before_current_scroll() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 12, InputKey::PrevHunk);
+
+        assert_eq!(Some(5), actual);
+    }
+
+    #[test]
+    fn should_return_none_when_prev_hunk_is_pressed_at_the_first_hunk() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 0, InputKey::PrevHunk);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_none_when_hunk_starts_is_empty() {
+        let hunk_starts: Vec<usize> = vec![];
+
+        let actual = jump_scroll_target(&hunk_starts, 0, InputKey::NextHunk);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_jump_to_the_first_hunk_after_scroll_lands_between_two_hunks() {
+        // Scroll sitting mid-hunk (not exactly on a hunk boundary) still
+        // finds the next hunk strictly after it, not the one it's inside.
+        let hunk_starts = vec![0, 10];
+
+        let actual = jump_scroll_target(&hunk_starts, 3, InputKey::NextHunk);
+
+        assert_eq!(Some(10), actual);
     }
 }
