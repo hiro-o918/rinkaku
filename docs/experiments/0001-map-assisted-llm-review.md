@@ -482,6 +482,81 @@ that in mind.
   stops being an independent signal. Seed when correctness matters
   more than the experiment (it usually does), but record it.
 
+## Results (round 8)
+
+Same two-pass method, eighth subject: this PR's own fix for the TUI
+source view's path resolution (2 commits — repo-root-relative reads for
+`load_symbol_source`, then a follow-up addressing review feedback on
+that first commit).
+
+| Metric               | A (map)     | B (control) |
+| -------------------- | ----------- | ----------- |
+| Blocker findings      | 1           | 1           |
+| Should-fix findings   | —           | 1           |
+
+- **Both arms independently converged on the same blocker**: `--pr`'s
+  resolved workdir (a ghq/cache clone that can live anywhere on disk,
+  `resolve_pr_workdir`) never reached `resolve_repo_root`, which was
+  called unconditionally with `None`. If the process's own current
+  directory happened to be a *different* git repository, the source
+  view would silently resolve *that* repository's root and, for any
+  relative path that happens to exist in both, show an unrelated
+  file — no error, just wrong content. Neither arm found this via the
+  map: `main`'s signature did not change, and "does the right variable
+  reach the right call" is not a relationship the map draws at all. It
+  came from actively cross-checking the README's description of `--pr`
+  against the new `resolve_repo_root(None)` call site — the same
+  doc-versus-implementation reading strategy that produced round 7's
+  four findings, applied here to code rather than a doc comment.
+- **Only the independent pass's live tmux verification** caught a
+  second, narrower defect: the read-failure error message this PR adds
+  (explaining that a missing file may simply not be checked out
+  locally, e.g. a PR/historical diff) was not wrapped, so `Paragraph`
+  silently truncated it in anything narrower than a very wide pane —
+  the very case the message exists to explain became unreadable in the
+  layout it was written for. A static read of the string literal gives
+  no signal that it will be cut off; only watching the rendered pane
+  does.
+- Dynamic verification also surfaced a defect entirely outside this
+  PR's scope: launching the TUI on stdin-piped diff input
+  (`git diff | rinkaku`) fails to start, because crossterm's raw-mode
+  input reader errors ("Failed to initialize input reader") when stdin
+  has already been consumed reading the diff. Not fixed here — recorded
+  as a backlog item, since stdin-diff mode piping straight into `--tui`
+  is a legitimate ADR 0016/0017 use case that currently cannot reach
+  the TUI at all.
+- Fixes shipped in response: the workdir-propagation blocker (with a
+  regression test constructing two independent repositories to prove
+  the fix resolves the passed-in workdir, not the process's own cwd
+  repository), the message-wrapping should-fix (with a regression test
+  in a 40-column `TestBackend` pane, confirmed to fail without
+  `.wrap(...)`), and a `debug_assert!` plus `#[should_panic]` test
+  pinning `resolve_source_path`'s pre-existing assumption that `Report`
+  paths stay relative (`PathBuf::join` silently discards the root
+  otherwise).
+
+## Conclusions (after 8 rounds)
+
+- Round 8 sharpens round 7's finding rather than adding a new one: the
+  map shows that a wire exists (`main` → `resolve_repo_root` →
+  `rinkaku_tui::run` → ... → `load_symbol_source`), not whether it
+  carries the *correct* value. A caller-side data-flow defect — the
+  right function called with the wrong variable — sits in exactly the
+  blind spot both round 7 and round 8 needed doc-versus-code
+  cross-checking, not the map, to see.
+- The narrow-pane wrapping bug is the same class experiment rounds 3–7
+  keep surfacing: a behavioral defect with zero footprint on any
+  signature, found only by watching the thing render. Reinforces (not
+  extends) round 6's standing conclusion that dynamic verification is
+  the review angle that does not get replaced by better static
+  tooling.
+- Unlike rounds 1–7, this round's map-assisted and independent passes
+  fully converged on the round's most important finding (the blocker)
+  rather than splitting territory — welcome as confidence, but a
+  reminder per round 5's caveat that convergence on an easy-to-spot
+  defect says less about the two passes' complementary value than
+  divergence does.
+
 ## Next
 
 - Consider a map feature flagging cross-crate duplicate-domain
@@ -493,3 +568,7 @@ that in mind.
   it has now appeared three times (rounds 3, 7, and PR #55's spec
   guarding against it), which is enough recurrence to justify
   mechanizing it.
+- Fix the stdin-diff + `--tui` startup failure found in round 8
+  (crossterm's input reader fails to initialize because stdin was
+  already consumed reading the diff) — a pre-existing gap in a
+  documented use case (ADR 0016/0017), not a regression of this PR.
