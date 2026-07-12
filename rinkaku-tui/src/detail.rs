@@ -423,6 +423,7 @@ mod tests {
 
     fn empty_report() -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -448,6 +449,7 @@ mod tests {
     #[test]
     fn should_build_current_signature_when_classification_is_not_signature_changed() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -478,6 +480,7 @@ mod tests {
     #[test]
     fn should_build_changed_signature_when_classification_is_signature_changed() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -505,6 +508,7 @@ mod tests {
         // not happen per `classify_symbols`'s contract) still renders
         // something sane rather than panicking.
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -530,6 +534,7 @@ mod tests {
         // `report.hotspots` has nothing for "callee" — used_by must still
         // show the one caller by reading `graph.edges` directly.
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![
@@ -566,6 +571,7 @@ mod tests {
     #[test]
     fn should_list_every_referrer_as_used_by_when_symbol_is_a_hotspot() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![
@@ -613,6 +619,7 @@ mod tests {
     #[test]
     fn should_list_outgoing_edges_as_callees() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::a", "a"), symbol("lib.rs::b", "b")],
@@ -646,6 +653,7 @@ mod tests {
     #[test]
     fn should_have_empty_callers_and_callees_when_symbol_has_no_edges() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::solo", "solo")],
@@ -675,6 +683,7 @@ mod tests {
     #[test]
     fn should_dedup_duplicate_edges_between_the_same_pair_of_symbols() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![
@@ -737,6 +746,7 @@ mod tests {
     #[test]
     fn should_exclude_self_edge_from_callers_callees_and_used_by() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::recursive", "recursive")],
@@ -775,6 +785,7 @@ mod tests {
     #[test]
     fn should_build_dir_detail_with_badges_and_no_cycle_when_directory_is_not_in_a_cycle() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -810,6 +821,7 @@ mod tests {
     #[test]
     fn should_list_top_fan_in_symbols_sorted_by_fan_in_descending() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -881,6 +893,7 @@ mod tests {
             })
             .collect();
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols,
@@ -905,6 +918,7 @@ mod tests {
         // api/ and store/ depend on each other — a directory-level cycle
         // (mirrors crate::order's own cycle test fixtures).
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![
                 FileReport {
                     path: "api/handler.rs".to_string(),
@@ -970,6 +984,7 @@ mod tests {
     #[test]
     fn should_build_file_detail_with_symbol_summaries_and_fan_in() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![
@@ -1025,6 +1040,7 @@ mod tests {
     #[test]
     fn should_include_removed_symbol_in_file_detail_summary() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             removed: vec![rinkaku_core::extract::RemovedSymbol {
                 name: "gone".to_string(),

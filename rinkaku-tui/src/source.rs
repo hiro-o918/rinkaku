@@ -230,6 +230,7 @@ mod tests {
 
     fn empty_report() -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -246,6 +247,7 @@ mod tests {
     #[test]
     fn should_find_symbol_location_from_matching_file() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(

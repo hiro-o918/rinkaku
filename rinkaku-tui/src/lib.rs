@@ -162,6 +162,7 @@ mod tests {
 
     fn empty_report() -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {

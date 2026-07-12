@@ -439,6 +439,7 @@ mod tests {
 
     fn empty_report() -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -465,6 +466,7 @@ mod tests {
     #[test]
     fn should_build_flat_file_node_when_path_has_no_directory() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::foo", "foo", SymbolKind::Function)],
@@ -509,6 +511,7 @@ mod tests {
         // src/foo/bar/lib.rs — src, foo, bar each have exactly one child,
         // so all three collapse into one Dir node labeled "src/foo/bar".
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/foo/bar/lib.rs".to_string(),
                 symbols: vec![],
@@ -537,6 +540,7 @@ mod tests {
     #[test]
     fn should_not_collapse_directory_with_two_children() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![
                 FileReport {
                     path: "src/a.rs".to_string(),
@@ -582,6 +586,7 @@ mod tests {
         // src is not "just a chain" to reach foo, so it must stay a
         // separate node rather than collapsing with foo.
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![
                 FileReport {
                     path: "src/mod.rs".to_string(),
@@ -629,6 +634,7 @@ mod tests {
     #[test]
     fn should_count_contract_change_for_signature_changed_symbol() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -654,6 +660,7 @@ mod tests {
     #[test]
     fn should_not_count_contract_change_for_body_only_symbol() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -679,6 +686,7 @@ mod tests {
     #[test]
     fn should_add_removed_symbol_as_marked_leaf_under_its_file_without_counting_as_changed() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             removed: vec![RemovedSymbol {
                 name: "gone".to_string(),
@@ -727,6 +735,7 @@ mod tests {
         // and one removed symbol must land under the same File node, not
         // create two separate entries for "lib.rs".
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::foo", "foo", SymbolKind::Function)],
@@ -801,6 +810,7 @@ mod tests {
     #[test]
     fn should_aggregate_badges_bottom_up_across_nested_directories() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![
                 FileReport {
                     path: "src/a/one.rs".to_string(),
@@ -835,6 +845,7 @@ mod tests {
         // A pure rename (FileReport with empty symbols) must still show up
         // as a File node with zero badges, not be dropped from the tree.
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/renamed.rs".to_string(),
                 symbols: vec![],
@@ -866,6 +877,7 @@ mod tests {
         // is a separate concern handled by `crate::order`), even though the
         // builder uses a BTreeMap internally.
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![
                 FileReport {
                     path: "z.rs".to_string(),
@@ -888,6 +900,7 @@ mod tests {
     #[test]
     fn should_set_fan_in_badge_from_matching_hotspot_and_aggregate_upward() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol("src/lib.rs::shared", "shared", SymbolKind::Function)],
@@ -917,6 +930,7 @@ mod tests {
     #[test]
     fn should_leave_fan_in_at_zero_when_symbol_has_no_matching_hotspot() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::solo", "solo", SymbolKind::Function)],

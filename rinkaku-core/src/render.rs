@@ -1,23 +1,30 @@
 //! Rendering the extraction pipeline's results into an output format.
 //!
-//! [`Report`] is the pipeline-wide result shape produced by
-//! [`crate::pipeline::analyze_diff`]: per-file extracted symbols plus the
-//! files that were skipped (unsupported language, binary, or deleted), plus
-//! the [`crate::graph::SymbolGraph`] built over those symbols (ADR 0008).
-//! This module turns a `Report` into either Markdown (the default, meant
-//! for humans and LLMs) or JSON (`serde`-derived, for machine consumption).
+//! [`Report`] is the pipeline-wide result shape produced by either
+//! [`crate::pipeline::analyze_diff`] (a diff, [`ReportOrigin::Diff`]) or
+//! [`crate::pipeline::analyze_repo`] (a whole-repo outline with no diff
+//! involved, [`ReportOrigin::RepoOutline`] — ADR 0017): per-file extracted
+//! symbols plus the files that were skipped (unsupported language, binary,
+//! or deleted; `analyze_repo` never populates this), plus the
+//! [`crate::graph::SymbolGraph`] built over those symbols (ADR 0008). This
+//! module turns a `Report` into either Markdown (the default, meant for
+//! humans and LLMs) or JSON (`serde`-derived, for machine consumption).
 //!
-//! Markdown renders in this order: a "Change graph" tree (names only,
-//! rooted at the graph's auto-detected entry points) giving the reader a
-//! call-hierarchy reading order, with an optional "Hotspots" sub-section
-//! (ADR 0013) right after it; "Definitions" — the full signature of every
-//! changed symbol, in the same tree order, each shown exactly once (ADR
-//! 0008's decision to avoid duplicating a symbol reachable from multiple
-//! roots); "Removed symbols" — base-side symbols with no head-side
-//! counterpart at all (ADR 0014), omitted when empty; "Tests" — a per-file
-//! count of changed test symbols excluded from the graph/definitions above
-//! by default (ADR 0009); "Other changed files" — files with no
-//! changed-symbol-level content (e.g. pure renames); and "Skipped files".
+//! Markdown renders in this order: a "Change graph" tree for a diff, or
+//! "Repository graph" for a whole-repo outline (names only, rooted at the
+//! graph's auto-detected entry points) giving the reader a call-hierarchy
+//! reading order, with an optional "Hotspots" sub-section (ADR 0013) right
+//! after it; "Definitions" — the full signature of every symbol, in the
+//! same tree order, each shown exactly once (ADR 0008's decision to avoid
+//! duplicating a symbol reachable from multiple roots); "Removed symbols" —
+//! base-side symbols with no head-side counterpart at all (ADR 0014,
+//! diff-only: `report.removed` is always empty for a whole-repo outline),
+//! omitted when empty; "Tests" — a per-file count of changed test symbols
+//! excluded from the graph/definitions above by default (ADR 0009); "Other
+//! changed files" — files with no changed-symbol-level content (e.g. pure
+//! renames); and "Skipped files". A whole-repo outline's wording drops every
+//! "changed" qualifier (`report.origin` picks the noun — see
+//! `change_graph_summary`), since nothing changed in that mode.
 //!
 //! ADR 0014 also marks each "Change graph"/"Hotspots"/"Definitions" line
 //! with its contract-impact classification (`— new` / `— signature
@@ -48,6 +55,22 @@ use thiserror::Error;
 /// The result of running the extraction pipeline over a whole diff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Report {
+    /// Which pipeline entry point produced this report (ADR 0017):
+    /// [`ReportOrigin::Diff`] (the default — `analyze_diff`, every existing
+    /// input mode) or [`ReportOrigin::RepoOutline`] (`analyze_repo`, the
+    /// whole-repo default with no diff involved at all). Rendering reads
+    /// this to pick change-oriented wording ("changed symbols") vs.
+    /// outline-oriented wording ("symbols") for the same underlying data
+    /// shape — see `render_markdown`'s "## Change graph"/"## Repository
+    /// graph" split.
+    ///
+    /// `#[serde(default, skip_serializing_if = ...)]` keeps every existing
+    /// `analyze_diff`-produced JSON report byte-for-byte unchanged: the
+    /// field is omitted entirely when it's the default `Diff`, and only
+    /// appears (as `"origin": "repo-outline"`) for the new whole-repo mode,
+    /// which has no prior JSON shape to stay compatible with.
+    #[serde(default, skip_serializing_if = "ReportOrigin::is_diff")]
+    pub origin: ReportOrigin,
     pub files: Vec<FileReport>,
     pub skipped: Vec<SkippedFile>,
     /// The dependency graph over `files`' symbols (ADR 0008): edges and
@@ -75,6 +98,28 @@ pub struct Report {
     /// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter),
     /// same as every symbol's `classification` staying `None` in that case.
     pub removed: Vec<crate::extract::RemovedSymbol>,
+}
+
+/// Which pipeline entry point produced a [`Report`] (ADR 0017). `Default`
+/// is `Diff` — every pre-ADR-0017 caller builds a `Report` via
+/// `analyze_diff`, so defaulting to it is what keeps those `Report { ... }`
+/// literals (and the JSON they serialize to) unchanged without having to
+/// touch every one of them to spell out `origin` explicitly.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReportOrigin {
+    #[default]
+    Diff,
+    RepoOutline,
+}
+
+impl ReportOrigin {
+    /// Predicate form of `matches!(self, ReportOrigin::Diff)`, for
+    /// `#[serde(skip_serializing_if = ...)]`, which needs a `fn(&T) -> bool`
+    /// path rather than an inline expression.
+    fn is_diff(&self) -> bool {
+        matches!(self, ReportOrigin::Diff)
+    }
 }
 
 /// Extracted symbols for a single changed file.
@@ -228,9 +273,17 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     let mut out = String::new();
 
     if !report.graph.nodes.is_empty() {
-        writeln!(out, "## Change graph")?;
+        let heading = match report.origin {
+            ReportOrigin::Diff => "## Change graph",
+            ReportOrigin::RepoOutline => "## Repository graph",
+        };
+        writeln!(out, "{heading}")?;
         writeln!(out)?;
-        writeln!(out, "{}", change_graph_summary(&report.graph.nodes))?;
+        writeln!(
+            out,
+            "{}",
+            change_graph_summary(&report.graph.nodes, report.origin)
+        )?;
         writeln!(out)?;
         render_change_graph(&mut out, &report.graph, &children, &lookup)?;
         writeln!(out)?;
@@ -325,10 +378,14 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     Ok(out)
 }
 
-/// Builds the one-line summary shown under the "## Change graph" heading,
-/// e.g. `16 changed symbols in 3 files — most in store/items.go (11)`
-/// (ADR 0012 decision 3). Computed from `nodes` alone (not `edges`/`roots`),
-/// so it stays meaningful even if graph-building changes independently.
+/// Builds the one-line summary shown under the "## Change graph"/
+/// "## Repository graph" heading, e.g. `16 changed symbols in 3 files —
+/// most in store/items.go (11)` for a diff, or `16 symbols in 3 files —
+/// most in store/items.go (11)` for a whole-repo outline (ADR 0017: nothing
+/// changed in that mode, so the "changed" qualifier would misdescribe it —
+/// see `origin`) (ADR 0012 decision 3). Computed from `nodes` alone (not
+/// `edges`/`roots`), so it stays meaningful even if graph-building changes
+/// independently.
 ///
 /// The `— most in ...` suffix is dropped when every node lives in the same
 /// file: naming "the file with the most nodes" is redundant when there is
@@ -338,12 +395,17 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
 /// order) rather than an arbitrary path-string sort.
 ///
 /// Callers must not call this with an empty `nodes` — `render_markdown`
-/// only emits the "Change graph" section (and this summary) when
-/// `graph.nodes` is non-empty, matching pre-ADR-0012 behavior for an empty
-/// graph.
-fn change_graph_summary(nodes: &[Node]) -> String {
+/// only emits the "Change graph"/"Repository graph" section (and this
+/// summary) when `graph.nodes` is non-empty, matching pre-ADR-0012 behavior
+/// for an empty graph.
+fn change_graph_summary(nodes: &[Node], origin: ReportOrigin) -> String {
     let total = nodes.len();
-    let symbol_noun = if total == 1 { "symbol" } else { "symbols" };
+    let symbol_noun = match (total, origin) {
+        (1, ReportOrigin::Diff) => "changed symbol",
+        (_, ReportOrigin::Diff) => "changed symbols",
+        (1, ReportOrigin::RepoOutline) => "symbol",
+        (_, ReportOrigin::RepoOutline) => "symbols",
+    };
 
     // First-seen order for paths, with per-path counts, so both the file
     // count and the "most changed" tie-break can be read off in one pass.
@@ -361,7 +423,7 @@ fn change_graph_summary(nodes: &[Node]) -> String {
     let file_noun = if file_count == 1 { "file" } else { "files" };
 
     if file_count <= 1 {
-        return format!("{total} changed {symbol_noun} in {file_count} {file_noun}");
+        return format!("{total} {symbol_noun} in {file_count} {file_noun}");
     }
 
     // `max_by_key` keeps the *last* maximal element on ties, but the
@@ -376,7 +438,7 @@ fn change_graph_summary(nodes: &[Node]) -> String {
         .expect("file_count > 1 implies path_order is non-empty");
 
     format!(
-        "{total} changed {symbol_noun} in {file_count} {file_noun} — most in {hotspot_path} ({hotspot_count})"
+        "{total} {symbol_noun} in {file_count} {file_noun} — most in {hotspot_path} ({hotspot_count})"
     )
 }
 
@@ -900,6 +962,7 @@ mod tests {
     #[test]
     fn should_render_empty_markdown_when_report_has_no_files_and_no_skips() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -930,6 +993,7 @@ mod tests {
     #[test]
     fn should_list_file_with_no_symbols_under_other_changed_files_when_report_has_no_graph_nodes() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/new_name.rs".to_string(),
                 symbols: vec![],
@@ -964,6 +1028,7 @@ mod tests {
         // file with no symbols at all — the pure rename must still show up,
         // in its own section after "Definitions".
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![
                 FileReport {
                     path: "src/lib.rs".to_string(),
@@ -1019,6 +1084,7 @@ fn foo()
     #[test]
     fn should_render_other_changed_files_before_skipped_files_when_report_has_both() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/new_name.rs".to_string(),
                 symbols: vec![],
@@ -1055,6 +1121,7 @@ fn foo()
     #[test]
     fn should_render_tests_section_with_singular_symbol_noun_when_count_is_one() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -1085,6 +1152,7 @@ fn foo()
     #[test]
     fn should_render_tests_section_with_plural_symbols_noun_when_count_is_greater_than_one() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -1116,6 +1184,7 @@ fn foo()
     fn should_render_tests_section_between_definitions_and_other_changed_files_when_report_has_all_sections()
      {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(
@@ -1176,6 +1245,7 @@ fn foo()
     #[test]
     fn should_omit_generated_skip_entry_from_markdown_output() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![SkippedFile {
                 path: "Cargo.lock".to_string(),
@@ -1203,6 +1273,7 @@ fn foo()
     #[test]
     fn should_omit_only_generated_entries_when_skipped_has_other_reasons_too() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![
                 SkippedFile {
@@ -1244,6 +1315,7 @@ fn foo()
     #[test]
     fn should_keep_generated_entry_in_json_output() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![SkippedFile {
                 path: "Cargo.lock".to_string(),
@@ -1283,9 +1355,53 @@ fn foo()
         assert_eq!(expected, actual);
     }
 
+    // ADR 0017: `origin` must stay invisible in JSON for every existing
+    // `analyze_diff`-produced report (see
+    // `should_keep_generated_entry_in_json_output` above, whose expected
+    // JSON has no `"origin"` key at all) — this is the flip side, pinning
+    // that a whole-repo outline's `RepoOutline` origin *does* serialize, as
+    // `"origin": "repo-outline"`, so JSON consumers can tell the two modes
+    // apart.
+    #[test]
+    fn should_serialize_origin_field_when_report_is_a_repo_outline() {
+        let report = Report {
+            origin: ReportOrigin::RepoOutline,
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+
+        let expected = "\
+{
+  \"origin\": \"repo-outline\",
+  \"files\": [],
+  \"skipped\": [],
+  \"graph\": {
+    \"nodes\": [],
+    \"edges\": [],
+    \"roots\": []
+  },
+  \"tests\": [],
+  \"hotspots\": [],
+  \"removed\": []
+}"
+        .to_string();
+        let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn should_render_change_graph_and_definitions_when_report_has_one_symbol() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(
@@ -1334,6 +1450,7 @@ fn foo(a: i32) -> i32
         // — pins the plural "changed symbols"/"files" wording together with
         // the "— most in ..." suffix and its count.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -1373,12 +1490,63 @@ fn foo(a: i32) -> i32
         assert_eq!(expected, actual);
     }
 
+    // ADR 0017: a whole-repo outline has no diff, so "Change graph"/
+    // "changed symbols" would misdescribe it — this pins the alternate
+    // heading and noun `ReportOrigin::RepoOutline` selects, using the same
+    // multi-file/hotspot shape as
+    // `should_render_summary_with_hotspot_when_report_has_multiple_symbols_and_files`
+    // so the two tests differ only in `origin` and its wording.
+    #[test]
+    fn should_render_repository_graph_heading_and_drop_changed_wording_when_origin_is_repo_outline()
+    {
+        let report = Report {
+            origin: ReportOrigin::RepoOutline,
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("store/items.go::A", "store/items.go", "A"),
+                    node("store/items.go::B", "store/items.go", "B"),
+                    node("store/items.go::C", "store/items.go", "C"),
+                    node("store/db.go::D", "store/db.go", "D"),
+                    node("store/db.go::E", "store/db.go", "E"),
+                ],
+                edges: vec![],
+                roots: vec![
+                    "store/items.go::A".to_string(),
+                    "store/items.go::B".to_string(),
+                    "store/items.go::C".to_string(),
+                    "store/db.go::D".to_string(),
+                    "store/db.go::E".to_string(),
+                ],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+
+        let expected = "\
+## Repository graph
+
+5 symbols in 2 files — most in store/items.go (3)
+
+
+## Definitions
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn should_omit_hotspot_suffix_when_all_symbols_are_in_one_file() {
         // Every node lives in the same file, so naming "the file with the
         // most nodes" would be redundant — the suffix must be dropped
         // entirely, not degenerate into e.g. "(2)".
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -1416,6 +1584,7 @@ fn foo(a: i32) -> i32
         // after it alphabetically — the tie-break is source order, not a
         // path-string comparison.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -1462,6 +1631,7 @@ fn foo(a: i32) -> i32
         // identical-looking `fn foo (src/lib.rs)` entries with no way to
         // tell them apart.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -1534,6 +1704,7 @@ fn foo(a: i32, b: i32)
     #[test]
     fn should_nest_callee_under_caller_in_change_graph_when_symbol_references_another() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/main.rs".to_string(),
                 symbols: vec![
@@ -1614,6 +1785,7 @@ fn resolve_pr_base_sha() -> Result<String>
         // rendered string so both the "Change graph" tree and "Definitions"
         // order are asserted together.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -1704,6 +1876,7 @@ fn c()
         // full once (under "foo", the first root in source order) and
         // referenced by name only under "bar" (ADR 0008).
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -1783,6 +1956,7 @@ fn bar()
     #[test]
     fn should_render_cycle_warning_when_edge_is_marked_as_cycle() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/git.rs".to_string(),
                 symbols: vec![symbol(
@@ -1841,6 +2015,7 @@ fn resolve_pr_base_sha()
         // (a design smell the tool should surface) calls back into
         // itself. `Config` is an unrelated, independent root.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![
                 FileReport {
                     path: "src/main.rs".to_string(),
@@ -1973,6 +2148,7 @@ struct Config { path: String }
         // own nested lines, but both still get full "### ..." entries
         // under "Definitions" (ADR 0012 decision 1).
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "store/items.go".to_string(),
                 symbols: vec![
@@ -2079,6 +2255,7 @@ type UpsertItemsResponse struct { Count int }
         // same `Name (path:line)` form `tree_label` already uses for
         // disambiguated symbols, not the bare name.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -2172,6 +2349,7 @@ struct Dup { b: i32 }
         // `— uses: ...` annotation on every parent that references it, and
         // it must never itself get a `(see above)` line.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -2254,6 +2432,7 @@ fn bar()
         // its own top-level tree line rather than being folded away
         // entirely (roots are always their own top-level DFS start).
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/config.rs".to_string(),
                 symbols: vec![symbol(
@@ -2306,6 +2485,7 @@ struct Config { path: String }
         // non-function, so it folds into `Wrapper`'s own line instead of
         // getting a third nesting level.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -2393,6 +2573,7 @@ struct Inner { x: i32 }
         // outgoing edges at all) and must render as its own nested line
         // with the cycle warning still visible beneath it.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![
@@ -2463,6 +2644,7 @@ struct Node { next: Option<Box<Node>> }
     #[test]
     fn should_render_container_comment_when_symbol_has_container() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -2512,6 +2694,7 @@ fn bar(&self) -> i32
     #[test]
     fn should_render_depends_on_list_when_symbol_has_dependencies() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -2566,6 +2749,7 @@ Depends on:
     #[test]
     fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencies() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -2627,6 +2811,7 @@ Depends on:
     #[test]
     fn should_render_omitted_matches_note_when_dependency_matches_were_capped() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -2688,6 +2873,7 @@ Depends on:
     #[test]
     fn should_widen_fence_when_signature_contains_a_backtick_run() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(
@@ -2740,6 +2926,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
     #[test]
     fn should_widen_fence_when_container_contains_a_backtick_run() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -2789,6 +2976,7 @@ fn bar(&self) -> i32
     #[test]
     fn should_render_skipped_files_section_when_report_has_skips() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![
                 SkippedFile {
@@ -2830,6 +3018,7 @@ fn bar(&self) -> i32
     #[test]
     fn should_render_change_graph_then_skipped_section_when_report_has_both() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(
@@ -2881,6 +3070,7 @@ fn foo()
     #[test]
     fn should_omit_hotspots_section_when_hotspots_is_empty() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(
@@ -2934,6 +3124,7 @@ fn foo()
         // in the order `compute_hotspots` already sorted them in (not
         // re-sorted here).
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "store/items.go".to_string(),
                 symbols: vec![
@@ -3048,6 +3239,7 @@ func HandleBar(req UpsertItemsRequest) error
         // `{name} ({path})` label with no kind prefix, rather than being
         // dropped outright.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -3100,6 +3292,7 @@ func HandleBar(req UpsertItemsRequest) error
         // "Definitions" loop; the malformed root must simply be skipped
         // rather than panicking or emitting a broken heading.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -3134,6 +3327,7 @@ func HandleBar(req UpsertItemsRequest) error
         // (the "Change graph" tree-line branch) rather than the
         // "Definitions" loop.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -3174,6 +3368,7 @@ func HandleBar(req UpsertItemsRequest) error
         // non-cycle-edge lookups) — the warning line is simply omitted
         // rather than rendering a broken label.
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(
@@ -3223,6 +3418,7 @@ fn foo()
     #[test]
     fn should_render_json_with_graph_files_and_skipped_when_report_has_all_three() {
         let report = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol(
@@ -3308,6 +3504,7 @@ fn foo()
             let mut foo = symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()");
             foo.classification = Some(Classification::Added);
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![foo],
@@ -3356,6 +3553,7 @@ fn foo()
             foo.classification = Some(Classification::SignatureChanged);
             foo.previous_signature = Some("fn foo(a: i32) -> i32".to_string());
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![foo],
@@ -3411,6 +3609,7 @@ fn foo()
             bar.classification = Some(Classification::SignatureChanged);
             bar.previous_signature = Some("fn bar(&self) -> i32".to_string());
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![bar],
@@ -3464,6 +3663,7 @@ fn foo()
             let mut foo = symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()");
             foo.classification = classification;
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![foo],
@@ -3512,6 +3712,7 @@ fn foo()
             shared.classification = Some(Classification::SignatureChanged);
             shared.previous_signature = Some("fn shared(a: i32)".to_string());
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![shared],
@@ -3554,6 +3755,7 @@ fn foo()
         #[test]
         fn should_render_removed_symbols_section_between_definitions_and_tests() {
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![symbol(
@@ -3622,6 +3824,7 @@ fn foo()
         #[test]
         fn should_render_removed_symbols_section_alone_when_graph_is_empty() {
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![],
                 skipped: vec![],
                 graph: SymbolGraph {
@@ -3661,6 +3864,7 @@ fn foo()
         #[test]
         fn should_deduplicate_identical_removed_symbol_lines() {
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![],
                 skipped: vec![],
                 graph: SymbolGraph {
@@ -3712,6 +3916,7 @@ fn foo()
         #[test]
         fn should_omit_removed_symbols_section_when_removed_is_empty() {
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![symbol(
@@ -3757,6 +3962,7 @@ fn foo()
             foo.previous_signature =
                 Some("fn foo() { let s = \"```rust\\nfn f() {}\\n```\"; }".to_string());
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![foo],
@@ -3806,6 +4012,7 @@ fn foo()
             foo.classification = Some(Classification::SignatureChanged);
             foo.previous_signature = Some("fn foo(a: i32) -> i32".to_string());
             let report = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![foo],
