@@ -7,7 +7,7 @@
 //! pure and testable: `main.rs` supplies a closure that reads the working
 //! tree, tests supply a closure backed by an in-memory map.
 
-use crate::deps::{Resolver, resolve_dependencies};
+use crate::deps::{Resolver, is_generated_content, resolve_dependencies};
 use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::{ExtractedSymbol, extract_changed_symbols};
 use crate::graph::{build_graph, stamp_ids};
@@ -71,10 +71,20 @@ pub enum AnalyzeError {
 /// unless it was also deleted, in which case `SkipReason::Deleted` wins
 /// (checked first): the fact that a file was removed is more important
 /// information for a reviewer than an attribute the file no longer carries
-/// any content for, and `read_file` is never called either way. Empty when
-/// `--include-generated` is given or no local repository was available to
-/// resolve attributes against (`main.rs` degrades to an empty set rather
-/// than erroring in that case).
+/// any content for, and `read_file` is never called either way.
+///
+/// `include_generated` gates both `generated_paths` (the caller passes an
+/// empty set when it's `false`, so this parameter does not duplicate that
+/// gating — see `main.rs`'s `resolve_generated_paths`) and, newly, content
+/// marker detection (ADR 0011): once a file's source is read (only reached
+/// when neither `generated_paths` nor any earlier check already skipped
+/// it), `false` runs [`is_generated_content`] over it before parsing and
+/// reports `SkipReason::Generated` on a match instead of calling
+/// `extract_changed_symbols`. `true` (`--include-generated`) skips this
+/// check entirely, matching attribute-based skipping's own opt-out. No
+/// local repository being available for `main.rs` to resolve
+/// `generated_paths` against does not affect this check, since it only
+/// needs file content, not `git check-attr`.
 ///
 /// Known inefficiency: a changed file is parsed here (via
 /// `extract_changed_symbols`) and, when `resolver` is `TagsResolver`,
@@ -91,6 +101,7 @@ pub fn analyze_diff(
     resolver: Option<&dyn Resolver>,
     include_tests: bool,
     generated_paths: &std::collections::HashSet<String>,
+    include_generated: bool,
 ) -> Result<Report, AnalyzeError> {
     let changed_files = parse_unified_diff(diff_text)?;
 
@@ -144,6 +155,17 @@ pub fn analyze_diff(
             path: changed_file.path.clone(),
             source,
         })?;
+        // ADR 0011: content-marker detection, checked after the read but
+        // before parsing — a file already excluded by an attribute
+        // (generated_paths, above) never reaches here, so this only ever
+        // adds coverage on top of ADR 0010, never duplicates it.
+        if !include_generated && is_generated_content(&source) {
+            skipped.push(SkippedFile {
+                path: changed_file.path,
+                reason: SkipReason::Generated,
+            });
+            continue;
+        }
         let symbols = extract_changed_symbols(&source, lang, &changed_file.changed_ranges);
         files.push(FileReport {
             path: changed_file.path,
@@ -315,7 +337,7 @@ mod tests {
             graph: empty_graph(),
             tests: vec![],
         };
-        let actual = analyze_diff("", read_file, None, true, &HashSet::new())
+        let actual = analyze_diff("", read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -369,7 +391,7 @@ fn foo(a: i32) -> i32 {
             },
             tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -400,7 +422,7 @@ index 4b825dc..0000000
             graph: empty_graph(),
             tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -424,7 +446,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             graph: empty_graph(),
             tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -456,7 +478,7 @@ index e69de29..4b825dc 100644
             graph: empty_graph(),
             tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -492,7 +514,7 @@ rename to src/new_name.rs
             graph: empty_graph(),
             tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -510,7 +532,7 @@ index e69de29..4b825dc 100644
 ";
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new());
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true);
 
         assert!(matches!(actual, Err(AnalyzeError::Diff(_))));
     }
@@ -529,7 +551,7 @@ index e69de29..4b825dc 100644
         // Map has no entry for src/lib.rs, so the fake reader returns Err.
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new());
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true);
 
         assert!(matches!(
             actual,
@@ -591,7 +613,7 @@ index e69de29..4b825dc 100644
             },
             tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -640,7 +662,7 @@ fn foo(p: Point) -> i32 {
 ";
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-        let report = analyze_diff(diff, read_file, None, true, &HashSet::new())
+        let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         // No resolver was passed, so every symbol's dependencies must stay
@@ -673,8 +695,15 @@ fn foo(p: Point) -> i32 {
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
         let resolver = CountingResolver::new();
 
-        analyze_diff(diff, read_file, Some(&resolver), true, &HashSet::new())
-            .expect("analyze should succeed");
+        analyze_diff(
+            diff,
+            read_file,
+            Some(&resolver),
+            true,
+            &HashSet::new(),
+            true,
+        )
+        .expect("analyze should succeed");
 
         let mut expected = vec!["Point".to_string(), "helper".to_string()];
         let mut actual = resolver.calls.borrow().clone();
@@ -682,6 +711,69 @@ fn foo(p: Point) -> i32 {
         actual.sort();
 
         assert_eq!(expected, actual);
+    }
+
+    mod is_generated_content_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use rstest::rstest;
+
+        #[rstest]
+        // Real-world SQLBoiler header (Go ORM code generator).
+        #[case::should_detect_sqlboiler_go_header(
+            "// Code generated by SQLBoiler 4.19.5 (https://github.com/aarondl/sqlboiler). DO NOT EDIT.\n\npackage models\n",
+            true
+        )]
+        // protobuf-generated Go, no tool URL.
+        #[case::should_detect_protobuf_style_header(
+            "// Code generated by protoc-gen-go. DO NOT EDIT.\n// versions:\n// \tprotoc-gen-go v1.28.0\n\npackage pb\n",
+            true
+        )]
+        // Shell/Python-style `#` comment instead of Go's `//`.
+        #[case::should_detect_hash_comment_header(
+            "#!/usr/bin/env python3\n# Code generated by codegen. DO NOT EDIT.\n\nimport sys\n",
+            true
+        )]
+        // Facebook-style bare marker, no "Code generated" wording at all.
+        #[case::should_detect_at_generated_marker("// @generated\n\npackage models\n", true)]
+        #[case::should_return_false_when_marker_is_on_line_six_or_later(
+            "line1\nline2\nline3\nline4\nline5\n// Code generated by tool. DO NOT EDIT.\n",
+            false
+        )]
+        #[case::should_return_false_when_code_generated_present_without_do_not_edit(
+            "// Code generated by tool.\n\npackage models\n",
+            false
+        )]
+        #[case::should_return_false_when_content_has_no_marker_at_all(
+            "fn foo() -> i32 {\n    1\n}\n",
+            false
+        )]
+        fn is_generated_content_cases(#[case] content: &str, #[case] expected: bool) {
+            let actual = is_generated_content(content);
+
+            assert_eq!(expected, actual);
+        }
+
+        // Regression case pinning down the exact case sensitivity ADR 0011
+        // specifies (matches linguist's own casing): a differently-cased
+        // marker must not match.
+        #[test]
+        fn should_return_false_when_do_not_edit_casing_does_not_match() {
+            let content = "// Code generated by tool. do not edit.\n";
+
+            let actual = is_generated_content(content);
+
+            assert!(!actual);
+        }
+
+        #[test]
+        fn should_return_true_when_marker_is_exactly_on_the_fifth_line() {
+            let content = "line1\nline2\nline3\nline4\n// @generated\n";
+
+            let actual = is_generated_content(content);
+
+            assert!(actual);
+        }
     }
 
     mod test_symbol_exclusion_tests {
@@ -711,7 +803,7 @@ fn should_add_two_numbers() {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+            let report = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected_files: Vec<FileReport> = Vec::new();
@@ -773,7 +865,7 @@ fn should_add_two_numbers() {
                 },
                 tests: vec![],
             };
-            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             assert_eq!(expected, actual);
@@ -803,7 +895,7 @@ func TestFoo(t *testing.T) {
 ";
             let read_file = fake_reader(HashMap::from([("repo_test.go", source)]));
 
-            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+            let report = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected_files: Vec<FileReport> = Vec::new();
@@ -832,7 +924,7 @@ rename to src/new_name.rs
 ";
             let read_file = fake_reader(HashMap::new());
 
-            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+            let report = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected_files = vec![FileReport {
@@ -917,7 +1009,7 @@ mod tests {
                     symbol_count: 1,
                 }],
             };
-            let actual = analyze_diff(diff, read_file, None, false, &HashSet::new())
+            let actual = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             assert_eq!(expected, actual);
@@ -945,7 +1037,7 @@ index e69de29..4b825dc 100644
             let read_file = fake_reader(HashMap::new());
             let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-            let report = analyze_diff(diff, read_file, None, true, &generated_paths)
+            let report = analyze_diff(diff, read_file, None, true, &generated_paths, true)
                 .expect("analyze should succeed");
 
             let expected = vec![SkippedFile {
@@ -978,7 +1070,7 @@ index 4b825dc..0000000
             let read_file = fake_reader(HashMap::new());
             let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-            let report = analyze_diff(diff, read_file, None, true, &generated_paths)
+            let report = analyze_diff(diff, read_file, None, true, &generated_paths, true)
                 .expect("analyze should succeed");
 
             let expected = vec![SkippedFile {
@@ -1008,10 +1100,250 @@ fn foo(a: i32) -> i32 {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected: Vec<SkippedFile> = Vec::new();
+            assert_eq!(expected, report.skipped);
+        }
+    }
+
+    mod generated_content_exclusion_tests {
+        use super::*;
+        use crate::render::{SkipReason, SkippedFile};
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_skip_file_as_generated_when_content_has_code_generated_do_not_edit_marker() {
+            let diff = "\
+diff --git a/models/user.go b/models/user.go
+index e69de29..4b825dc 100644
+--- a/models/user.go
++++ b/models/user.go
+@@ -1,1 +1,1 @@
+-package models
++package models // updated
+";
+            let source = "\
+// Code generated by SQLBoiler 4.19.5 (https://github.com/aarondl/sqlboiler). DO NOT EDIT.
+
+package models
+";
+            let read_file = fake_reader(HashMap::from([("models/user.go", source)]));
+
+            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+                .expect("analyze should succeed");
+
+            let expected_files: Vec<FileReport> = Vec::new();
+            let expected_skipped = vec![SkippedFile {
+                path: "models/user.go".to_string(),
+                reason: SkipReason::Generated,
+            }];
+            assert_eq!(expected_files, report.files);
+            assert_eq!(expected_skipped, report.skipped);
+        }
+
+        #[test]
+        fn should_not_skip_file_as_generated_when_include_generated_is_true() {
+            let diff = "\
+diff --git a/models/user.go b/models/user.go
+index e69de29..4b825dc 100644
+--- a/models/user.go
++++ b/models/user.go
+@@ -1,3 +1,3 @@
+ // Code generated by SQLBoiler 4.19.5. DO NOT EDIT.
+
+-func Foo() int { return 1 }
++func Foo() int { return 2 }
+";
+            let source = "\
+// Code generated by SQLBoiler 4.19.5. DO NOT EDIT.
+
+func Foo() int { return 2 }
+";
+            let read_file = fake_reader(HashMap::from([("models/user.go", source)]));
+
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "models/user.go".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "models/user.go::Foo".to_string(),
+                        name: "Foo".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "func Foo() int".to_string(),
+                        range: LineRange { start: 3, end: 3 },
+                        container: None,
+                        referenced_names: vec!["int".to_string()],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                    }],
+                }],
+                skipped: vec![],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "models/user.go::Foo".to_string(),
+                        path: "models/user.go".to_string(),
+                        name: "Foo".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["models/user.go::Foo".to_string()],
+                },
+                tests: vec![],
+            };
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+                .expect("analyze should succeed");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_not_skip_ordinary_file_with_no_generated_marker() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(a: i32) -> i32 {
+-    a
++    a + 1
+ }
+";
+            let source = "\
+fn foo(a: i32) -> i32 {
+    a + 1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "src/lib.rs::foo".to_string(),
+                        name: "foo".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "fn foo(a: i32) -> i32".to_string(),
+                        range: LineRange { start: 1, end: 3 },
+                        container: None,
+                        referenced_names: vec![],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                    }],
+                }],
+                skipped: vec![],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "src/lib.rs::foo".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        name: "foo".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+            };
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+                .expect("analyze should succeed");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_skip_only_the_generated_file_when_diff_touches_both_kinds() {
+            let diff = "\
+diff --git a/models/user.go b/models/user.go
+index e69de29..4b825dc 100644
+--- a/models/user.go
++++ b/models/user.go
+@@ -1,1 +1,1 @@
+-// stale
++// Code generated by tool. DO NOT EDIT.
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(a: i32) -> i32 {
+-    a
++    a + 1
+ }
+";
+            let generated_source = "// Code generated by tool. DO NOT EDIT.\n\npackage models\n";
+            let normal_source = "fn foo(a: i32) -> i32 {\n    a + 1\n}\n";
+            let read_file = fake_reader(HashMap::from([
+                ("models/user.go", generated_source),
+                ("src/lib.rs", normal_source),
+            ]));
+
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "src/lib.rs::foo".to_string(),
+                        name: "foo".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "fn foo(a: i32) -> i32".to_string(),
+                        range: LineRange { start: 1, end: 3 },
+                        container: None,
+                        referenced_names: vec![],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                    }],
+                }],
+                skipped: vec![SkippedFile {
+                    path: "models/user.go".to_string(),
+                    reason: SkipReason::Generated,
+                }],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "src/lib.rs::foo".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        name: "foo".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+            };
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+                .expect("analyze should succeed");
+
+            assert_eq!(expected, actual);
+        }
+
+        // Regression test: an attribute-based generated_paths match must
+        // take priority and skip the file before its content is ever read
+        // — content-marker detection is purely additive coverage on top of
+        // ADR 0010's attribute-based skipping, not a second independent
+        // check that could disagree with it.
+        #[test]
+        fn should_not_read_file_content_when_already_skipped_by_generated_paths() {
+            let diff = "\
+diff --git a/Cargo.lock b/Cargo.lock
+index e69de29..4b825dc 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1,1 +1,1 @@
+-version = 1
++version = 2
+";
+            // No entry in the map: if the pipeline tried to read this file
+            // (to run the content-marker check), this would return an Err
+            // and fail the test.
+            let read_file = fake_reader(HashMap::new());
+            let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
+
+            let report = analyze_diff(diff, read_file, None, true, &generated_paths, false)
+                .expect("analyze should succeed");
+
+            let expected = vec![SkippedFile {
+                path: "Cargo.lock".to_string(),
+                reason: SkipReason::Generated,
+            }];
             assert_eq!(expected, report.skipped);
         }
     }
