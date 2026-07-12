@@ -18,8 +18,11 @@ path = "src/lib.rs"
 
 [dependencies]
 rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
+# crossterm itself is not a direct dependency: every use goes through
+# ratatui's own `ratatui::crossterm` re-export, which pins the matching
+# version internally (see ratatui-crossterm) — declaring it here too would
+# just be a second, redundant version to keep in sync.
 ratatui = { workspace = true }
-crossterm = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

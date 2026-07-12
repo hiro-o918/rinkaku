@@ -2091,7 +2091,6 @@ dependencies = [
 name = "rinkaku-tui"
 version = "0.1.0"
 dependencies = [
- "crossterm",
  "pretty_assertions",
  "ratatui",
  "rinkaku-core",
