@@ -341,6 +341,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detail::FileSymbolSummary;
     use pretty_assertions::assert_eq;
     use rinkaku_core::diff::LineRange;
     use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
@@ -521,7 +522,17 @@ mod tests {
 
         let actual = app.selected_detail(&report);
 
-        assert!(matches!(actual, Some(SelectedDetail::File(_))));
+        let expected = SelectedDetail::File(FileDetail {
+            path: "lib.rs".to_string(),
+            symbols: vec![FileSymbolSummary {
+                name: "foo".to_string(),
+                kind: SymbolKind::Function,
+                classification: None,
+                removed: false,
+                fan_in: 0,
+            }],
+        });
+        assert_eq!(Some(expected), actual);
     }
 
     #[test]
@@ -550,7 +561,18 @@ mod tests {
 
         let actual = app.selected_detail(&report);
 
-        assert!(matches!(actual, Some(SelectedDetail::Dir(_))));
+        let expected = SelectedDetail::Dir(DirDetail {
+            path: "src".to_string(),
+            badges: crate::tree::Badges {
+                changed_symbols: 1,
+                contract_changes: 0,
+                fan_in: 0,
+            },
+            top_fan_in: vec![],
+            cycle_partners: vec![],
+            cycle_edges: vec![],
+        });
+        assert_eq!(Some(expected), actual);
     }
 
     #[test]
