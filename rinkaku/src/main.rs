@@ -412,7 +412,11 @@ fn resolve_generated_paths(
 /// indication anything went wrong. `None` when `diff_text` is empty or
 /// whitespace-only (already covered by the separate "diff is empty" note
 /// at the call site — the two notes are mutually exclusive) or when the
-/// report has any file or skip entry at all.
+/// report has any file, skip, or test-summary entry at all — a diff that
+/// touched only test symbols (ADR 0009's default exclusion moves them out
+/// of `files` into `tests`) is a fully-recognized, legitimate result, not
+/// garbage input, even though `files`/`skipped` are both empty in that
+/// case.
 fn garbage_input_note(
     diff_text: &str,
     report: &rinkaku_core::render::Report,
@@ -420,7 +424,7 @@ fn garbage_input_note(
     if diff_text.trim().is_empty() {
         return None;
     }
-    if !report.files.is_empty() || !report.skipped.is_empty() {
+    if !report.files.is_empty() || !report.skipped.is_empty() || !report.tests.is_empty() {
         return None;
     }
     Some("note: no file changes recognized in input; expected a unified diff")
@@ -2684,6 +2688,69 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
         );
     }
 
+    // Regression test (companion to garbage_input_note_tests below): a real
+    // `--base` run whose diff touches only a test function must produce a
+    // Report with a non-empty `tests` summary and empty `files`/`skipped` —
+    // the exact shape garbage_input_note must treat as "a legitimate
+    // result", not "garbage input". This exercises the run_base_pipeline
+    // route end to end (a real git repo, real analyze_diff call), while the
+    // garbage_input_note_tests module below exercises the function in
+    // isolation with the same report shape; together they cover both the
+    // stdin and --base/--pr code paths that call garbage_input_note (both
+    // funnel through analyze_diff, so run_base_pipeline's coverage extends
+    // to the stdin route too).
+    #[test]
+    fn should_produce_test_only_report_without_garbage_input_shape_when_diff_touches_only_a_test() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(
+            dir.path(),
+            "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(1, 1 + 0);
+}
+",
+        );
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(2, 1 + 1);
+}
+",
+        )
+        .expect("edit src/lib.rs");
+        run_git(dir.path(), &["add", "src/lib.rs"]);
+        run_git(dir.path(), &["commit", "-m", "fix test assertion"]);
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 0,
+            include_tests: false,
+            include_generated: false,
+        };
+        let actual = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
+            .expect("run_base_pipeline should succeed for a test-only diff");
+
+        let expected_files: Vec<rinkaku_core::render::FileReport> = Vec::new();
+        let expected_skipped: Vec<rinkaku_core::render::SkippedFile> = Vec::new();
+        assert_eq!(expected_files, actual.files);
+        assert_eq!(expected_skipped, actual.skipped);
+        assert_eq!(1, actual.tests.len());
+        // The Report shape actually produced is the exact input
+        // garbage_input_note must not flag — pin that contract down
+        // directly here rather than only trusting the isolated unit test.
+        assert_eq!(
+            None,
+            garbage_input_note("dummy non-empty diff text", &actual)
+        );
+    }
+
     mod garbage_input_note_tests {
         use super::*;
         use pretty_assertions::assert_eq;
@@ -2759,6 +2826,29 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
                 }],
                 graph: empty_graph(),
                 tests: vec![],
+            };
+
+            let actual = garbage_input_note("some diff text", &report);
+
+            assert_eq!(None, actual);
+        }
+
+        // Regression test: a diff that touches only test symbols produces a
+        // Report with empty files/skipped but a non-empty tests summary
+        // (ADR 0009's default exclusion) — a legitimate, fully-recognized
+        // diff, not garbage input. Before this fix, garbage_input_note only
+        // checked files/skipped, so it wrongly printed "no file changes
+        // recognized" for every test-only diff.
+        #[test]
+        fn should_return_none_when_report_has_only_test_summary_entries() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![],
+                graph: empty_graph(),
+                tests: vec![rinkaku_core::render::TestFileSummary {
+                    path: "src/lib.rs".to_string(),
+                    symbol_count: 1,
+                }],
             };
 
             let actual = garbage_input_note("some diff text", &report);
