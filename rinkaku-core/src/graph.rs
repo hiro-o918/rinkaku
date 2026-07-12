@@ -68,10 +68,12 @@ pub struct Hotspot {
     pub path: String,
     pub name: String,
     /// Names of every changed symbol referencing this node, sorted
-    /// ascending and deduplicated (see [`compute_hotspots`]'s doc comment).
-    /// Fan-in count is `used_by.len()` — no separate count field, since the
-    /// list already carries it and a reader who wants the number can just
-    /// count entries or check the (short) list itself.
+    /// ascending. Deduplication happens per referrer *node*, not per name,
+    /// so two distinct referrers sharing a name both appear (see
+    /// [`compute_hotspots`]'s doc comment). Fan-in count is
+    /// `used_by.len()` — no separate count field, since the list already
+    /// carries it and a reader who wants the number can just count entries
+    /// or check the (short) list itself.
     pub used_by: Vec<String>,
 }
 

@@ -1456,6 +1456,11 @@ index e69de29..4b825dc 100644
         // 2 qualifies "shared_helper" as a hotspot, and `analyze_diff` must
         // populate `Report::hotspots` from the graph it builds, not leave
         // it empty.
+        //
+        // NOTE: asserts only `report.hotspots` instead of the whole
+        // `Report` — files/graph/tests wiring is already covered by the
+        // surrounding analyze_diff tests, and this module's concern is
+        // solely that the hotspot aggregation is hooked up.
         #[test]
         fn should_populate_hotspots_when_diff_has_a_symbol_with_fan_in_of_two() {
             let diff = "\
@@ -1506,6 +1511,8 @@ fn caller_two() -> i32 {
             assert_eq!(expected, report.hotspots);
         }
 
+        // NOTE: partial assert on `report.hotspots` only, same rationale
+        // as the test above.
         #[test]
         fn should_return_empty_hotspots_when_no_node_has_fan_in_of_two() {
             let diff = "\
