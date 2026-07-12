@@ -31,6 +31,7 @@
 pub mod app;
 pub mod detail;
 pub mod diff_view;
+pub mod highlight;
 pub mod nav;
 pub mod order;
 pub mod row_view;
