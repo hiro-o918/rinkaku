@@ -119,12 +119,21 @@ pub fn build_detail(report: &Report, id: &str) -> Option<DetailView> {
     // endpoint's id before collecting mentions keeps a duplicate edge from
     // making the same caller/callee show up twice in the detail pane's
     // pivots, mirroring `compute_hotspots`'s own dedup-by-referrer-id.
+    //
+    // Self-edges (`from == to == id`) are filtered the same defensive way:
+    // `collect_edges` in `rinkaku-core::graph` explicitly excludes them
+    // (`if target.id != from.id`), so they cannot occur through the normal
+    // pipeline today, but — same reasoning as the dedup above — this
+    // function's own contract does not want to depend on that staying true
+    // forever. Without this filter, a hypothetical self-edge would make a
+    // symbol list itself as its own caller/callee/used-by, which is never
+    // a meaningful pivot to show a reviewer.
     let mut seen_callees = HashSet::new();
     let callees: Vec<SymbolMention> = report
         .graph
         .edges
         .iter()
-        .filter(|edge| edge.from == id)
+        .filter(|edge| edge.from == id && edge.to != id)
         .filter(|edge| seen_callees.insert(edge.to.as_str()))
         .filter_map(|edge| mentions_by_id(&edge.to))
         .collect();
@@ -134,7 +143,7 @@ pub fn build_detail(report: &Report, id: &str) -> Option<DetailView> {
         .graph
         .edges
         .iter()
-        .filter(|edge| edge.to == id)
+        .filter(|edge| edge.to == id && edge.from != id)
         .filter(|edge| seen_callers.insert(edge.from.as_str()))
         .filter_map(|edge| mentions_by_id(&edge.from))
         .collect();
@@ -502,5 +511,38 @@ mod tests {
         assert_eq!(expected_caller_mention, callee_detail.callers);
         assert_eq!(expected_caller_mention, callee_detail.used_by);
         assert_eq!(expected_callee_mention, caller_detail.callees);
+    }
+
+    // SHOULD-FIX 5: `rinkaku-core::graph::collect_edges` explicitly excludes
+    // self-edges (`if target.id != from.id`), so a self-edge cannot occur
+    // through the normal pipeline today — but `build_detail`'s own contract
+    // should not rely on that staying true forever, same reasoning as the
+    // duplicate-edge dedup above. This pins the defensive filter with a
+    // hand-built graph containing a self-edge no real `build_graph` call
+    // would currently produce.
+    #[test]
+    fn should_exclude_self_edge_from_callers_callees_and_used_by() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::recursive", "recursive")],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![node("lib.rs::recursive", "lib.rs", "recursive")],
+                edges: vec![Edge {
+                    from: "lib.rs::recursive".to_string(),
+                    to: "lib.rs::recursive".to_string(),
+                    is_cycle: false,
+                }],
+                roots: vec!["lib.rs::recursive".to_string()],
+            },
+            ..empty_report()
+        };
+
+        let actual = build_detail(&report, "lib.rs::recursive").expect("symbol found");
+
+        assert_eq!(Vec::<SymbolMention>::new(), actual.callees);
+        assert_eq!(Vec::<SymbolMention>::new(), actual.callers);
+        assert_eq!(Vec::<SymbolMention>::new(), actual.used_by);
     }
 }
