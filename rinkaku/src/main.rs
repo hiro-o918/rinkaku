@@ -99,6 +99,17 @@ struct Cli {
     /// avoids the repo-wide indexing pass.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=1))]
     deps: u8,
+
+    /// Include test symbols in the "Change graph"/"Definitions" output
+    /// instead of excluding them by default and summarizing counts under
+    /// "Tests" (ADR 0009).
+    #[arg(long, default_value_t = false)]
+    include_tests: bool,
+
+    /// Include files `.gitattributes` marks `-diff` or `linguist-generated`
+    /// instead of skipping them by default (ADR 0010).
+    #[arg(long, default_value_t = false)]
+    include_generated: bool,
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -195,6 +206,8 @@ fn main() -> anyhow::Result<()> {
             eprintln!("note: diff is empty, nothing to analyze");
         }
         let resolver = build_resolver(&cli, &diff_text, read_working_tree_file, None, None)?;
+        let changed_paths = changed_paths(&diff_text)?;
+        let generated_paths = resolve_generated_paths(&cli, &changed_paths, None);
         log::info!("analyzing diff");
         let report = analyze_diff(
             &diff_text,
@@ -202,6 +215,8 @@ fn main() -> anyhow::Result<()> {
             resolver
                 .as_ref()
                 .map(|r| r as &dyn rinkaku_core::deps::Resolver),
+            cli.include_tests,
+            &generated_paths,
         )?;
         if let Some(note) = garbage_input_note(&diff_text, &report) {
             eprintln!("{note}");
@@ -337,6 +352,7 @@ fn run_base_pipeline(
                 edges: Vec::new(),
                 roots: Vec::new(),
             },
+            tests: Vec::new(),
         });
     }
 
@@ -345,6 +361,8 @@ fn run_base_pipeline(
         move |path: &str| read_git_show_file(cwd, &head, path)
     };
     let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd)?;
+    let changed_paths = changed_paths(&diff_text)?;
+    let generated_paths = resolve_generated_paths(cli, &changed_paths, cwd);
     log::info!("analyzing diff");
     let report = analyze_diff(
         &diff_text,
@@ -352,11 +370,57 @@ fn run_base_pipeline(
         resolver
             .as_ref()
             .map(|r| r as &dyn rinkaku_core::deps::Resolver),
+        cli.include_tests,
+        &generated_paths,
     )?;
     if let Some(note) = garbage_input_note(&diff_text, &report) {
         eprintln!("{note}");
     }
     Ok(report)
+}
+
+/// Parses `diff_text` and extracts just the changed paths, for callers that
+/// only need path strings (currently only `resolve_generated_paths`) rather
+/// than the full `ChangedFile` data `analyze_diff` itself parses out.
+/// Sharing this single parse between `main`/`run_base_pipeline` and
+/// `resolve_generated_paths` is what lets `resolve_generated_paths` stay
+/// diff-text-free (see its own doc comment) — this function is the one
+/// place that still pays that specific parse's cost, once per run.
+fn changed_paths(diff_text: &str) -> anyhow::Result<Vec<String>> {
+    Ok(rinkaku_core::diff::parse_unified_diff(diff_text)?
+        .into_iter()
+        .map(|changed_file| changed_file.path)
+        .collect())
+}
+
+/// Resolves ADR 0010's generated-path set for `changed_paths`, or an empty
+/// set when `cli.include_generated` opts out.
+///
+/// Takes already-parsed changed paths rather than the raw diff text, so it
+/// never parses the diff itself: `main`/`run_base_pipeline` parse
+/// `diff_text` via `parse_unified_diff` exactly once per run and pass the
+/// resulting paths here, instead of this function re-parsing the same text
+/// a third time on top of `analyze_diff`'s own parse and
+/// `build_resolver`'s `collect_referenced_names` parse (both still
+/// separate, accepted the same way `collect_referenced_names`'s own doc
+/// comment already accepts that double-parse). Infallible now that there is
+/// no parse step of its own to fail — `check_generated_paths` never
+/// returns an `Err` either (see its own doc comment).
+///
+/// `cwd` is passed straight through to `check_generated_paths`, so it
+/// inherits that function's best-effort behavior: no local repository (or
+/// `git check-attr` failing for any reason) yields an empty set rather than
+/// an error, since attribute filtering is a nice-to-have on top of the
+/// primary diff-condensation flow, not a hard requirement of it (ADR 0010).
+fn resolve_generated_paths(
+    cli: &Cli,
+    changed_paths: &[String],
+    cwd: Option<&std::path::Path>,
+) -> std::collections::HashSet<String> {
+    if cli.include_generated {
+        return std::collections::HashSet::new();
+    }
+    check_generated_paths(cwd, changed_paths)
 }
 
 /// Returns a warning note for stdin input that is garbage rather than a
@@ -367,7 +431,11 @@ fn run_base_pipeline(
 /// indication anything went wrong. `None` when `diff_text` is empty or
 /// whitespace-only (already covered by the separate "diff is empty" note
 /// at the call site — the two notes are mutually exclusive) or when the
-/// report has any file or skip entry at all.
+/// report has any file, skip, or test-summary entry at all — a diff that
+/// touched only test symbols (ADR 0009's default exclusion moves them out
+/// of `files` into `tests`) is a fully-recognized, legitimate result, not
+/// garbage input, even though `files`/`skipped` are both empty in that
+/// case.
 fn garbage_input_note(
     diff_text: &str,
     report: &rinkaku_core::render::Report,
@@ -375,7 +443,7 @@ fn garbage_input_note(
     if diff_text.trim().is_empty() {
         return None;
     }
-    if !report.files.is_empty() || !report.skipped.is_empty() {
+    if !report.files.is_empty() || !report.skipped.is_empty() || !report.tests.is_empty() {
         return None;
     }
     Some("note: no file changes recognized in input; expected a unified diff")
@@ -416,6 +484,13 @@ fn garbage_input_note(
 /// `should_skip_git_ls_files_when_deps_is_zero` below (pointing `cwd` at
 /// a directory with no git repository would make `list_git_files` fail,
 /// so a passing `Ok(None)` there is proof the scan never ran).
+///
+/// `cli.include_tests` is threaded straight through to `TagsResolver::new`
+/// (ADR 0009), so the repo-wide index excludes test symbols by the same
+/// default `analyze_diff` uses for the diff's own symbols — without this, a
+/// changed production symbol's "Depends on:" could resolve to a same-named
+/// test helper/fixture elsewhere in the repo, which is almost always a
+/// false match rather than a real dependency.
 fn build_resolver(
     cli: &Cli,
     diff_text: &str,
@@ -463,6 +538,7 @@ fn build_resolver(
         files,
         language_for_path,
         &reference_names,
+        cli.include_tests,
     )))
 }
 
@@ -485,6 +561,88 @@ fn list_git_files(cwd: Option<&std::path::Path>) -> anyhow::Result<Vec<String>> 
         .lines()
         .map(str::to_string)
         .collect())
+}
+
+/// Resolves which of `paths` are marked "not worth diffing" in
+/// `.gitattributes` (ADR 0010): the `diff` attribute is unset (`-diff`,
+/// git renders it as binary) or `linguist-generated` is set. Runs
+/// `git check-attr -z diff linguist-generated -- <paths...>` in `cwd` (or
+/// the process's current directory when `None`) and parses its output with
+/// the pure [`parse_generated_paths`].
+///
+/// Returns an empty set (rather than an error) whenever `git check-attr`
+/// itself cannot run or fails — e.g. `paths` is empty (nothing to check,
+/// `git check-attr` would otherwise still run happily but there is no
+/// point), or `cwd` is not inside a git repository at all. ADR 0010 treats
+/// attribute filtering as best-effort: a repository with no
+/// `.gitattributes`, or input that isn't backed by a local repository at
+/// all (see `resolve_generated_paths_for_stdin`), must not turn into a hard
+/// error for the primary diff-condensation flow.
+fn check_generated_paths(
+    cwd: Option<&std::path::Path>,
+    paths: &[String],
+) -> std::collections::HashSet<String> {
+    if paths.is_empty() {
+        return std::collections::HashSet::new();
+    }
+
+    let mut command = std::process::Command::new("git");
+    command
+        .args(["check-attr", "-z", "diff", "linguist-generated", "--"])
+        .args(paths);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let Ok(output) = command.output() else {
+        return std::collections::HashSet::new();
+    };
+    if !output.status.success() {
+        return std::collections::HashSet::new();
+    }
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        return std::collections::HashSet::new();
+    };
+    parse_generated_paths(&stdout)
+}
+
+/// Parses `git check-attr -z diff linguist-generated -- <paths...>`'s
+/// NUL-separated stdout into the set of paths ADR 0010 considers
+/// "generated": the `diff` attribute is `unset` (a `.gitattributes` line
+/// with `-diff`) or `linguist-generated` is set to a truthy value.
+/// `git check-attr` reports two different value strings for
+/// `linguist-generated` depending on how `.gitattributes` spells the
+/// assignment (verified against a real `git check-attr -z` run): a bare
+/// `linguist-generated` (no `=...`) reports the boolean attribute value
+/// `set`, while `linguist-generated=true` — GitHub's own Linguist
+/// convention and the common real-world spelling — reports the literal
+/// string `true` instead. Both are treated as generated; any other value
+/// (`unspecified`, `unset`, or an explicit `linguist-generated=false`) is
+/// not.
+///
+/// Output shape (`git help check-attr`'s `-z` mode): a flat stream of
+/// `<path>\0<attribute>\0<value>\0` triples, one triple per
+/// `(path, attribute)` pair queried — so for two paths and two attributes,
+/// four triples in path-major order. Split out from `check_generated_paths`
+/// so the parsing logic is unit-testable without shelling out to `git`
+/// (CLAUDE.md's boundary-testing policy).
+fn parse_generated_paths(output: &str) -> std::collections::HashSet<String> {
+    let fields: Vec<&str> = output
+        .split('\0')
+        .filter(|field| !field.is_empty())
+        .collect();
+
+    let mut generated = std::collections::HashSet::new();
+    for triple in fields.chunks_exact(3) {
+        let [path, attribute, value] = triple else {
+            continue;
+        };
+        let is_generated = (*attribute == "diff" && *value == "unset")
+            || (*attribute == "linguist-generated" && matches!(*value, "set" | "true"));
+        if is_generated {
+            generated.insert((*path).to_string());
+        }
+    }
+    generated
 }
 
 /// Reads the diff from stdin. Errors with a clear message if stdin is a
@@ -1243,6 +1401,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
+    use std::collections::HashSet;
 
     #[test]
     fn should_default_to_markdown_head_and_no_base_when_no_args_given() {
@@ -1253,6 +1412,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku"]);
 
@@ -1268,6 +1429,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main"]);
 
@@ -1283,6 +1446,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main", "--head", "feature-branch"]);
 
@@ -1298,6 +1463,8 @@ mod tests {
             pr: None,
             format: Format::Json,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--format", "json"]);
 
@@ -1320,6 +1487,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 0,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--deps", "0"]);
 
@@ -1334,6 +1503,40 @@ mod tests {
     }
 
     #[test]
+    fn should_set_include_tests_when_include_tests_flag_given() {
+        let expected = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+            include_tests: true,
+            include_generated: false,
+        };
+        let actual = Cli::parse_from(["rinkaku", "--include-tests"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_set_include_generated_when_include_generated_flag_given() {
+        let expected = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+            include_tests: false,
+            include_generated: true,
+        };
+        let actual = Cli::parse_from(["rinkaku", "--include-generated"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn should_set_self_update_command_when_self_update_subcommand_given() {
         let expected = Cli {
             command: Some(Command::SelfUpdate { yes: false }),
@@ -1342,6 +1545,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update"]);
 
@@ -1357,6 +1562,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update", "--yes"]);
 
@@ -1372,6 +1579,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update", "-y"]);
 
@@ -1402,6 +1611,8 @@ mod tests {
             pr: Some("76".to_string()),
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--pr", "76"]);
 
@@ -1627,6 +1838,75 @@ mod tests {
         #[case] expected: Vec<std::path::PathBuf>,
     ) {
         let actual = parse_ghq_list_output(stdout);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_mark_path_generated_when_diff_attribute_is_unset() {
+        let output = "Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0";
+
+        let expected: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
+        let actual = parse_generated_paths(output);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_mark_path_generated_when_linguist_generated_attribute_value_is_true() {
+        // `.gitattributes` line: `gen/*.go linguist-generated=true` — the
+        // common GitHub Linguist spelling. Verified against a real
+        // `git check-attr -z` run: this assignment reports the *literal*
+        // string `true`, not the boolean attribute value `set` (see
+        // `should_mark_path_generated_when_linguist_generated_attribute_is_bare_set`
+        // for the other spelling).
+        let output = "gen/foo.go\0diff\0unspecified\0gen/foo.go\0linguist-generated\0true\0";
+
+        let expected: HashSet<String> = ["gen/foo.go".to_string()].into_iter().collect();
+        let actual = parse_generated_paths(output);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_mark_path_generated_when_linguist_generated_attribute_is_bare_set() {
+        // `.gitattributes` line: `gen/*.go linguist-generated` (no
+        // `=value`) — reports the boolean attribute value `set`, distinct
+        // from the `=true` spelling's literal `true` value (verified
+        // against a real `git check-attr -z` run).
+        let output = "gen/foo.go\0diff\0unspecified\0gen/foo.go\0linguist-generated\0set\0";
+
+        let expected: HashSet<String> = ["gen/foo.go".to_string()].into_iter().collect();
+        let actual = parse_generated_paths(output);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_not_mark_path_generated_when_both_attributes_are_unspecified() {
+        let output = "normal.rs\0diff\0unspecified\0normal.rs\0linguist-generated\0unspecified\0";
+
+        let expected: HashSet<String> = HashSet::new();
+        let actual = parse_generated_paths(output);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_mark_only_matching_path_when_multiple_paths_are_queried() {
+        let output = "\
+Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\0diff\0unspecified\0normal.rs\0linguist-generated\0unspecified\0";
+
+        let expected: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
+        let actual = parse_generated_paths(output);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_set_when_output_is_empty() {
+        let expected: HashSet<String> = HashSet::new();
+        let actual = parse_generated_paths("");
 
         assert_eq!(expected, actual);
     }
@@ -2000,6 +2280,118 @@ mod tests {
         );
     }
 
+    // Integration test for ADR 0010: `check_generated_paths` must shell out
+    // to a real `git check-attr` and report exactly the paths a
+    // `.gitattributes` file marks `-diff` or `linguist-generated`, leaving
+    // an ordinary tracked file out.
+    #[test]
+    fn should_report_paths_marked_generated_in_gitattributes() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            "Cargo.lock -diff\ngen/*.go linguist-generated=true\n",
+        )
+        .expect("write .gitattributes");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+        std::fs::write(dir.path().join("normal.rs"), "").expect("write normal.rs");
+        std::fs::create_dir_all(dir.path().join("gen")).expect("create gen dir");
+        std::fs::write(dir.path().join("gen/foo.go"), "").expect("write gen/foo.go");
+
+        let paths = vec![
+            "Cargo.lock".to_string(),
+            "normal.rs".to_string(),
+            "gen/foo.go".to_string(),
+        ];
+        let actual = check_generated_paths(Some(dir.path()), &paths);
+
+        let expected: HashSet<String> = ["Cargo.lock".to_string(), "gen/foo.go".to_string()]
+            .into_iter()
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    // Best-effort contract (ADR 0010): a directory that is not a git
+    // repository at all must not turn attribute resolution into a hard
+    // error — the caller degrades to "nothing is generated" instead.
+    #[test]
+    fn should_return_empty_set_when_cwd_is_not_a_git_repository() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+
+        let actual = check_generated_paths(Some(dir.path()), &["Cargo.lock".to_string()]);
+
+        let expected: HashSet<String> = HashSet::new();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_set_when_paths_is_empty() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+
+        let actual = check_generated_paths(Some(dir.path()), &[]);
+
+        let expected: HashSet<String> = HashSet::new();
+        assert_eq!(expected, actual);
+    }
+
+    // resolve_generated_paths takes already-parsed changed paths (a
+    // Vec<String>) rather than the raw diff text, so it cannot re-parse the
+    // diff itself — parsing happens exactly once at the call site and the
+    // resulting paths are shared with analyze_diff's own parse (still
+    // unavoidable, since analyze_diff needs the full ChangedFile data, not
+    // just paths).
+    #[test]
+    fn should_resolve_generated_paths_from_already_parsed_changed_paths() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(dir.path().join(".gitattributes"), "Cargo.lock -diff\n")
+            .expect("write .gitattributes");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+            include_tests: false,
+            include_generated: false,
+        };
+        let changed_paths = vec!["Cargo.lock".to_string()];
+        let actual = resolve_generated_paths(&cli, &changed_paths, Some(dir.path()));
+
+        let expected: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_set_when_include_generated_is_true() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(dir.path().join(".gitattributes"), "Cargo.lock -diff\n")
+            .expect("write .gitattributes");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+            include_tests: false,
+            include_generated: true,
+        };
+        let changed_paths = vec!["Cargo.lock".to_string()];
+        let actual = resolve_generated_paths(&cli, &changed_paths, Some(dir.path()));
+
+        let expected: HashSet<String> = HashSet::new();
+        assert_eq!(expected, actual);
+    }
+
     // Sibling case: a dirty working tree must not affect what the batch
     // read returns, same guarantee `read_git_show_file` already provides
     // per-file (`should_read_committed_content_when_working_tree_is_dirty`
@@ -2275,6 +2667,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 0,
+            include_tests: false,
+            include_generated: false,
         };
         // Never called if `deps == 0` truly short-circuits before doing
         // any work at all — deliberately panics so a regression that
@@ -2305,6 +2699,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let read_file = |_: &str| -> std::io::Result<String> { Ok(String::new()) };
 
@@ -2347,6 +2743,8 @@ mod tests {
             pr: None,
             format: Format::Md,
             deps: 1,
+            include_tests: false,
+            include_generated: false,
         };
         let actual = run_base_pipeline(&cli, "HEAD", "HEAD", Some(dir.path()));
 
@@ -2367,8 +2765,72 @@ mod tests {
                     edges: Vec::new(),
                     roots: Vec::new(),
                 },
+                tests: Vec::new(),
             },
             actual.expect("empty diff must not touch the repository-wide index scan")
+        );
+    }
+
+    // Regression test (companion to garbage_input_note_tests below): a real
+    // `--base` run whose diff touches only a test function must produce a
+    // Report with a non-empty `tests` summary and empty `files`/`skipped` —
+    // the exact shape garbage_input_note must treat as "a legitimate
+    // result", not "garbage input". This exercises the run_base_pipeline
+    // route end to end (a real git repo, real analyze_diff call), while the
+    // garbage_input_note_tests module below exercises the function in
+    // isolation with the same report shape; together they cover both the
+    // stdin and --base/--pr code paths that call garbage_input_note (both
+    // funnel through analyze_diff, so run_base_pipeline's coverage extends
+    // to the stdin route too).
+    #[test]
+    fn should_produce_test_only_report_without_garbage_input_shape_when_diff_touches_only_a_test() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(
+            dir.path(),
+            "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(1, 1 + 0);
+}
+",
+        );
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(2, 1 + 1);
+}
+",
+        )
+        .expect("edit src/lib.rs");
+        run_git(dir.path(), &["add", "src/lib.rs"]);
+        run_git(dir.path(), &["commit", "-m", "fix test assertion"]);
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 0,
+            include_tests: false,
+            include_generated: false,
+        };
+        let actual = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
+            .expect("run_base_pipeline should succeed for a test-only diff");
+
+        let expected_files: Vec<rinkaku_core::render::FileReport> = Vec::new();
+        let expected_skipped: Vec<rinkaku_core::render::SkippedFile> = Vec::new();
+        assert_eq!(expected_files, actual.files);
+        assert_eq!(expected_skipped, actual.skipped);
+        assert_eq!(1, actual.tests.len());
+        // The Report shape actually produced is the exact input
+        // garbage_input_note must not flag — pin that contract down
+        // directly here rather than only trusting the isolated unit test.
+        assert_eq!(
+            None,
+            garbage_input_note("dummy non-empty diff text", &actual)
         );
     }
 
@@ -2390,6 +2852,7 @@ mod tests {
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
+                tests: vec![],
             }
         }
 
@@ -2401,6 +2864,7 @@ mod tests {
                 }],
                 skipped: vec![],
                 graph: empty_graph(),
+                tests: vec![],
             }
         }
 
@@ -2444,6 +2908,30 @@ mod tests {
                     reason: rinkaku_core::render::SkipReason::Binary,
                 }],
                 graph: empty_graph(),
+                tests: vec![],
+            };
+
+            let actual = garbage_input_note("some diff text", &report);
+
+            assert_eq!(None, actual);
+        }
+
+        // Regression test: a diff that touches only test symbols produces a
+        // Report with empty files/skipped but a non-empty tests summary
+        // (ADR 0009's default exclusion) — a legitimate, fully-recognized
+        // diff, not garbage input. Before this fix, garbage_input_note only
+        // checked files/skipped, so it wrongly printed "no file changes
+        // recognized" for every test-only diff.
+        #[test]
+        fn should_return_none_when_report_has_only_test_summary_entries() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![],
+                graph: empty_graph(),
+                tests: vec![rinkaku_core::render::TestFileSummary {
+                    path: "src/lib.rs".to_string(),
+                    symbol_count: 1,
+                }],
             };
 
             let actual = garbage_input_note("some diff text", &report);

@@ -36,6 +36,27 @@ pub trait LanguageSupport {
     /// definition index later, which has the same net effect without
     /// needing a per-language exclusion list.
     fn reference_query(&self) -> &str;
+
+    /// Whether `path` is, by convention, a test file in its entirety (ADR
+    /// 0009), e.g. Go's `*_test.go`, Python's `test_*.py`/`*_test.py`, or
+    /// any language's `tests/`-directory convention. When `true`, every
+    /// definition in the file is a test symbol regardless of
+    /// [`is_test_definition`](LanguageSupport::is_test_definition) — the
+    /// pipeline does not bother parsing the file to check node-level
+    /// context in that case.
+    fn is_test_path(&self, path: &str) -> bool;
+
+    /// Whether `node` (a captured `@definition` node, or an ancestor of
+    /// one) is a test symbol by its AST context rather than its file path
+    /// — needed only for languages where test code is colocated with
+    /// production code in the same file (Rust's `#[cfg(test)]` modules and
+    /// `#[test]`/`#[rstest]`/`#[tokio::test]`-attributed functions).
+    /// Defaults to `false`: most languages' test conventions are fully
+    /// captured by [`is_test_path`](LanguageSupport::is_test_path), so
+    /// there is nothing more to check at the node level.
+    fn is_test_definition(&self, _node: tree_sitter::Node, _source: &[u8]) -> bool {
+        false
+    }
 }
 
 /// Looks up the `LanguageSupport` registered for a file path, based on its

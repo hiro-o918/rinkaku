@@ -108,6 +108,22 @@ impl TagsResolver {
     /// never reaching this path) indexes nothing, which is correct: no
     /// name is referenced, so no definition needs to be found.
     ///
+    /// `include_tests` mirrors `pipeline::analyze_diff`'s flag of the same
+    /// name (ADR 0009), extended to this repo-wide index: `false` (the CLI
+    /// default) excludes test symbols the same two ways `analyze_diff`
+    /// does — a whole file `language.is_test_path` considers a test file
+    /// is skipped entirely, and within every other file, only symbols
+    /// [`crate::extract::extract_all_symbols`] marked
+    /// `ExtractedSymbol::is_test` (AST context, e.g. Rust's `#[cfg(test)]`)
+    /// are dropped from indexing. Without this, a changed production
+    /// symbol's `referenced_names` could resolve to a same-named test
+    /// helper/fixture elsewhere in the repo — a name match a reviewer
+    /// would almost always read as coincidental noise in "Depends on:",
+    /// not a real dependency, since production code should not actually
+    /// depend on test-only definitions (see ADR 0009's Consequences).
+    /// `true` (`--include-tests`) indexes every symbol as before, matching
+    /// `analyze_diff`'s own `include_tests: true` behavior.
+    ///
     /// Files with no registered [`LanguageSupport`] for their extension
     /// are silently skipped, matching the pipeline's handling of
     /// unsupported files elsewhere (`pipeline::analyze_diff`).
@@ -115,6 +131,7 @@ impl TagsResolver {
         files: impl IntoIterator<Item = (String, String)>,
         language_for_path: impl Fn(&str) -> Option<&'static dyn LanguageSupport>,
         reference_names: &HashSet<String>,
+        include_tests: bool,
     ) -> Self {
         let mut index: HashMap<String, Vec<ResolvedSymbol>> = HashMap::new();
         // `AhoCorasick::new` only errors on pathological inputs this call
@@ -134,10 +151,16 @@ impl TagsResolver {
             let Some(lang) = language_for_path(&path) else {
                 continue;
             };
+            if !include_tests && lang.is_test_path(&path) {
+                continue;
+            }
             if !should_parse_file(&matcher, &content) {
                 continue;
             }
             for symbol in extract_all_symbols(&content, lang) {
+                if !include_tests && symbol.is_test {
+                    continue;
+                }
                 index.entry(symbol.name).or_default().push(ResolvedSymbol {
                     signature: symbol.signature,
                     path: path.clone(),
@@ -392,7 +415,7 @@ mod tests {
             "src/lib.rs".to_string(),
             "fn helper(x: i32) -> i32 {\n    x\n}\n".to_string(),
         )];
-        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]));
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]), false);
 
         let expected = vec![ResolvedSymbol {
             signature: "fn helper(x: i32) -> i32".to_string(),
@@ -409,7 +432,7 @@ mod tests {
             "src/point.rs".to_string(),
             "struct Point {\n    x: i32,\n}\n".to_string(),
         )];
-        let resolver = TagsResolver::new(files, lang_for_path, &names(&["Point"]));
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["Point"]), false);
 
         let expected = vec![ResolvedSymbol {
             signature: "struct Point { x: i32, }".to_string(),
@@ -431,7 +454,7 @@ mod tests {
         // excluded by the prefilter" — the file's content also contains
         // "i32" as a parameter/return type, so it would pass the prefilter
         // regardless, but being explicit keeps the test's intent clear.
-        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper", "i32"]));
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper", "i32"]), false);
 
         // Covers both a built-in type (`i32`, never indexed since it has
         // no definition anywhere) and a name from an external
@@ -456,7 +479,7 @@ mod tests {
                 "fn helper() -> i32 {\n    2\n}\n".to_string(),
             ),
         ];
-        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]));
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]), false);
 
         let mut expected = vec![
             ResolvedSymbol {
@@ -482,12 +505,102 @@ mod tests {
     }
 
     #[test]
+    fn should_exclude_test_path_file_from_index_by_default() {
+        let files = [(
+            "src/repo_test.go".to_string(),
+            "package main\n\nfunc TestFoo(t *testing.T) {}\n".to_string(),
+        )];
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["TestFoo"]), false);
+
+        let expected: Vec<ResolvedSymbol> = Vec::new();
+        let actual = resolver.resolve("TestFoo");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_include_test_path_file_in_index_when_include_tests_is_true() {
+        let files = [(
+            "src/repo_test.go".to_string(),
+            "package main\n\nfunc TestFoo(t *testing.T) {}\n".to_string(),
+        )];
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["TestFoo"]), true);
+
+        let expected = vec![ResolvedSymbol {
+            signature: "func TestFoo(t *testing.T)".to_string(),
+            path: "src/repo_test.go".to_string(),
+        }];
+        let actual = resolver.resolve("TestFoo");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_exclude_ast_test_definition_from_index_by_default() {
+        let files = [(
+            "src/lib.rs".to_string(),
+            "\
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn should_add_two_numbers() {}
+}
+"
+            .to_string(),
+        )];
+        let resolver = TagsResolver::new(
+            files,
+            lang_for_path,
+            &names(&["should_add_two_numbers"]),
+            false,
+        );
+
+        let expected: Vec<ResolvedSymbol> = Vec::new();
+        let actual = resolver.resolve("should_add_two_numbers");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_still_index_production_symbols_in_a_file_that_also_has_ast_test_definitions() {
+        // A file mixing production code and `#[cfg(test)] mod tests` must
+        // still index the production symbol, even with the default
+        // test-exclusion on — only the AST-detected test definitions are
+        // dropped, not the whole file (unlike a whole-file `is_test_path`
+        // match, e.g. `_test.go`).
+        let files = [(
+            "src/lib.rs".to_string(),
+            "\
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn should_add_two_numbers() {}
+}
+"
+            .to_string(),
+        )];
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["add"]), false);
+
+        let expected = vec![ResolvedSymbol {
+            signature: "fn add(a: i32, b: i32) -> i32".to_string(),
+            path: "src/lib.rs".to_string(),
+        }];
+        let actual = resolver.resolve("add");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn should_skip_file_with_unsupported_language_when_building_index() {
         let files = [(
             "src/notes.txt".to_string(),
             "helper is defined here".to_string(),
         )];
-        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]));
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper"]), false);
 
         let expected: Vec<ResolvedSymbol> = Vec::new();
         let actual = resolver.resolve("helper");
@@ -507,7 +620,7 @@ mod tests {
                 "package main\n\nfunc greet() string {\n\treturn \"hi\"\n}\n".to_string(),
             ),
         ];
-        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper", "greet"]));
+        let resolver = TagsResolver::new(files, lang_for_path, &names(&["helper", "greet"]), false);
 
         let expected = vec![ResolvedSymbol {
             signature: "func greet() string".to_string(),
@@ -531,7 +644,7 @@ mod tests {
             )];
             let reference_names: HashSet<String> = ["helper".to_string()].into_iter().collect();
 
-            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names, false);
 
             let expected = vec![ResolvedSymbol {
                 signature: "fn helper(x: i32) -> i32".to_string(),
@@ -555,7 +668,7 @@ mod tests {
             )];
             let reference_names: HashSet<String> = ["helper".to_string()].into_iter().collect();
 
-            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names, false);
 
             let expected: Vec<ResolvedSymbol> = Vec::new();
             let actual = resolver.resolve("unrelated");
@@ -580,7 +693,7 @@ mod tests {
             )];
             let reference_names: HashSet<String> = ["helper".to_string()].into_iter().collect();
 
-            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names, false);
 
             let expected = vec![ResolvedSymbol {
                 signature: "fn helper() -> i32".to_string(),
@@ -599,7 +712,7 @@ mod tests {
             )];
             let reference_names: HashSet<String> = HashSet::new();
 
-            let resolver = TagsResolver::new(files, lang_for_path, &reference_names);
+            let resolver = TagsResolver::new(files, lang_for_path, &reference_names, false);
 
             let expected: Vec<ResolvedSymbol> = Vec::new();
             let actual = resolver.resolve("helper");
@@ -641,6 +754,7 @@ mod tests {
                 referenced_names: referenced_names.into_iter().map(str::to_string).collect(),
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
+                is_test: false,
             }
         }
 

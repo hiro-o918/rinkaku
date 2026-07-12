@@ -7,15 +7,21 @@
 //! This module turns a `Report` into either Markdown (the default, meant
 //! for humans and LLMs) or JSON (`serde`-derived, for machine consumption).
 //!
-//! Markdown renders as two sections: a "Change graph" tree (names only,
-//! rooted at the graph's auto-detected entry points) giving the reader a
-//! call-hierarchy reading order, followed by "Definitions" — the full
+//! Markdown renders as four sections, in this order: a "Change graph" tree
+//! (names only, rooted at the graph's auto-detected entry points) giving
+//! the reader a call-hierarchy reading order; "Definitions" — the full
 //! signature of every changed symbol, in the same tree order, each shown
 //! exactly once (ADR 0008's decision to avoid duplicating a symbol
-//! reachable from multiple roots).
+//! reachable from multiple roots); "Tests" — a per-file count of changed
+//! test symbols excluded from the graph/definitions above by default (ADR
+//! 0009); "Other changed files" — files with no changed-symbol-level
+//! content (e.g. pure renames); and "Skipped files".
 //!
 //! Skipped files are always listed, never silently dropped — a reviewer
 //! or LLM consuming the output needs to know what rinkaku didn't look at.
+//! Test symbols are summarized rather than dropped outright for the same
+//! reason: a reviewer still wants to know "did this change come with
+//! tests?" even though the individual test signatures are noise (ADR 0009).
 
 use crate::extract::{ExtractedSymbol, SymbolKind};
 use crate::graph::{NodeId, SymbolGraph};
@@ -33,6 +39,12 @@ pub struct Report {
     /// entry points used to render "Change graph" in Markdown, exposed here
     /// too so JSON consumers get the same structure without recomputing it.
     pub graph: SymbolGraph,
+    /// Per-file counts of changed test symbols excluded from `files` by
+    /// default (ADR 0009) — empty when `--include-tests` is given, since
+    /// test symbols then stay in `files` like any other symbol instead of
+    /// being summarized here. Source order (the order files were first
+    /// encountered in the diff), same as `files`.
+    pub tests: Vec<TestFileSummary>,
 }
 
 /// Extracted symbols for a single changed file.
@@ -40,6 +52,17 @@ pub struct Report {
 pub struct FileReport {
     pub path: String,
     pub symbols: Vec<ExtractedSymbol>,
+}
+
+/// How many changed test symbols were excluded from a given file's
+/// `FileReport` (ADR 0009). Kept separate from `FileReport` rather than as
+/// an extra field on it, since a file that is *entirely* tests (e.g. a Go
+/// `*_test.go` file) would otherwise need an empty `FileReport` just to
+/// carry this count — `tests` covers that file on its own instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TestFileSummary {
+    pub path: String,
+    pub symbol_count: usize,
 }
 
 /// A file the pipeline did not extract symbols from, and why.
@@ -60,6 +83,9 @@ pub enum SkipReason {
     Binary,
     /// The file was deleted; there is no new-side content to extract from.
     Deleted,
+    /// `.gitattributes` marks this file `-diff` or `linguist-generated`
+    /// (ADR 0010).
+    Generated,
 }
 
 /// Supported output formats for a [`Report`].
@@ -115,11 +141,13 @@ impl<'a> SymbolLookup<'a> {
     }
 }
 
-/// Renders a [`Report`] as Markdown: a "Change graph" tree of entry points
-/// (ADR 0008), a "Definitions" section with each changed symbol's signature
-/// in the same tree order, an "Other changed files" section for files that
-/// were analyzed but contributed no symbol (e.g. a pure rename — see
-/// `pipeline::analyze_diff`'s doc comment), and a list of skipped files.
+/// Renders a [`Report`] as Markdown, in this order: a "Change graph" tree
+/// of entry points (ADR 0008); a "Definitions" section with each changed
+/// symbol's signature in the same tree order; a "Tests" section
+/// summarizing excluded test symbols per file (ADR 0009); an "Other changed
+/// files" section for files that were analyzed but contributed no symbol
+/// (e.g. a pure rename — see `pipeline::analyze_diff`'s doc comment); and a
+/// list of skipped files.
 ///
 /// Path headings and tree labels (`{prefix} {name} ({path})`) do not escape
 /// Markdown special characters (`#`, `[`, `]`, `_`, ...). A path containing
@@ -136,6 +164,7 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
         .collect();
 
     if report.graph.nodes.is_empty()
+        && report.tests.is_empty()
         && files_with_no_symbols.is_empty()
         && report.skipped.is_empty()
     {
@@ -162,6 +191,24 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
             };
             render_definition(&mut out, path, symbol)?;
         }
+    }
+
+    if !report.tests.is_empty() {
+        writeln!(out, "## Tests")?;
+        writeln!(out)?;
+        for test_file in &report.tests {
+            let noun = if test_file.symbol_count == 1 {
+                "symbol"
+            } else {
+                "symbols"
+            };
+            writeln!(
+                out,
+                "- {}: {} changed test {noun}",
+                test_file.path, test_file.symbol_count
+            )?;
+        }
+        writeln!(out)?;
     }
 
     if !files_with_no_symbols.is_empty() {
@@ -464,6 +511,7 @@ fn skip_reason_label(reason: SkipReason) -> &'static str {
         SkipReason::UnsupportedLanguage => "unsupported language",
         SkipReason::Binary => "binary",
         SkipReason::Deleted => "deleted",
+        SkipReason::Generated => "generated",
     }
 }
 
@@ -490,6 +538,7 @@ mod tests {
             referenced_names: vec![],
             dependencies: vec![],
             omitted_dependency_matches: 0,
+            is_test: false,
         }
     }
 
@@ -511,6 +560,7 @@ mod tests {
                 edges: vec![],
                 roots: vec![],
             },
+            tests: vec![],
         };
 
         let expected = "".to_string();
@@ -541,6 +591,7 @@ mod tests {
                 edges: vec![],
                 roots: vec![],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -583,6 +634,7 @@ mod tests {
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -625,6 +677,7 @@ fn foo()
                 edges: vec![],
                 roots: vec![],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -635,6 +688,138 @@ fn foo()
 ## Skipped files
 
 - assets/logo.png (binary)
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_tests_section_with_singular_symbol_noun_when_count_is_one() {
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![crate::render::TestFileSummary {
+                path: "src/lib.rs".to_string(),
+                symbol_count: 1,
+            }],
+        };
+
+        let expected = "\
+## Tests
+
+- src/lib.rs: 1 changed test symbol
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_tests_section_with_plural_symbols_noun_when_count_is_greater_than_one() {
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![crate::render::TestFileSummary {
+                path: "src/lib.rs".to_string(),
+                symbol_count: 3,
+            }],
+        };
+
+        let expected = "\
+## Tests
+
+- src/lib.rs: 3 changed test symbols
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_tests_section_between_definitions_and_other_changed_files_when_report_has_all_sections()
+     {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    SymbolKind::Function,
+                    "fn foo()",
+                )],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![crate::render::TestFileSummary {
+                path: "src/lib.rs".to_string(),
+                symbol_count: 2,
+            }],
+        };
+
+        let expected = "\
+## Change graph
+
+- fn foo (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+## Tests
+
+- src/lib.rs: 2 changed test symbols
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_generated_skip_reason_label() {
+        let report = Report {
+            files: vec![],
+            skipped: vec![SkippedFile {
+                path: "Cargo.lock".to_string(),
+                reason: SkipReason::Generated,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Skipped files
+
+- Cargo.lock (generated)
 "
         .to_string();
         let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
@@ -660,6 +845,7 @@ fn foo()
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -726,6 +912,7 @@ fn foo(a: i32) -> i32
                     "src/lib.rs::foo@10".to_string(),
                 ],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -792,6 +979,7 @@ fn foo(a: i32, b: i32)
                 }],
                 roots: vec!["src/main.rs::handle_pr".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -869,6 +1057,7 @@ fn resolve_pr_base_sha() -> Result<String>
                 ],
                 roots: vec!["src/lib.rs::a".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -952,6 +1141,7 @@ fn c()
                 ],
                 roots: vec!["src/lib.rs::foo".to_string(), "src/lib.rs::bar".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1015,6 +1205,7 @@ fn bar()
                 }],
                 roots: vec!["src/git.rs::resolve_pr_base_sha".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1120,6 +1311,7 @@ fn resolve_pr_base_sha()
                     "src/config.rs::Config".to_string(),
                 ],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1185,6 +1377,7 @@ struct Config { path: String }
                 edges: vec![],
                 roots: vec!["src/lib.rs::bar".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1232,6 +1425,7 @@ fn bar(&self) -> i32
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1287,6 +1481,7 @@ Depends on:
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1338,6 +1533,7 @@ Depends on:
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1391,6 +1587,7 @@ Depends on:
                 edges: vec![],
                 roots: vec!["src/lib.rs::example_macro".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1437,6 +1634,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
                 edges: vec![],
                 roots: vec!["src/lib.rs::bar".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1483,6 +1681,7 @@ fn bar(&self) -> i32
                 edges: vec![],
                 roots: vec![],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1519,6 +1718,7 @@ fn bar(&self) -> i32
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1567,6 +1767,7 @@ fn foo()
                 edges: vec![],
                 roots: vec!["src/lib.rs::ghost".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1596,6 +1797,7 @@ fn foo()
                 edges: vec![],
                 roots: vec!["src/lib.rs::ghost".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1643,6 +1845,7 @@ fn foo()
                 }],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1686,6 +1889,7 @@ fn foo()
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
 
         let expected = "\
@@ -1728,7 +1932,8 @@ fn foo()
     \"roots\": [
       \"src/lib.rs::foo\"
     ]
-  }
+  },
+  \"tests\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");

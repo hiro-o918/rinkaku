@@ -68,11 +68,21 @@ impl LanguageSupport for GoSupport {
     fn reference_query(&self) -> &str {
         REFERENCE_QUERY
     }
+
+    /// Go's own toolchain convention: a `_test.go`-suffixed file is
+    /// excluded from normal builds and only compiled when running tests
+    /// (`go help test`), so it is unambiguously test-only regardless of
+    /// what package or directory it lives in.
+    fn is_test_path(&self, path: &str) -> bool {
+        path.ends_with("_test.go")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[test]
     fn should_report_go_as_name() {
@@ -110,5 +120,17 @@ mod tests {
 
         tree_sitter::Query::new(&support.grammar(), support.reference_query())
             .expect("REFERENCE_QUERY must be valid against the Go grammar");
+    }
+
+    #[rstest]
+    #[case::should_return_true_when_path_ends_with_test_go("repo_test.go", true)]
+    #[case::should_return_false_when_path_is_ordinary_go_file("repo.go", false)]
+    #[case::should_return_false_when_path_merely_contains_test_substring("contest.go", false)]
+    fn is_test_path_cases(#[case] path: &str, #[case] expected: bool) {
+        let support = GoSupport;
+
+        let actual = support.is_test_path(path);
+
+        assert_eq!(expected, actual);
     }
 }

@@ -90,6 +90,23 @@ impl LanguageSupport for TypeScriptSupport {
     fn reference_query(&self) -> &str {
         REFERENCE_QUERY
     }
+
+    fn is_test_path(&self, path: &str) -> bool {
+        is_test_path(path)
+    }
+}
+
+/// Common test-file convention checked by both grammars: `.test.ts(x)` /
+/// `.spec.ts(x)` (Jest/Vitest/Jasmine's shared discovery pattern) or a
+/// `__tests__/` directory anywhere in the path (Jest's other default
+/// convention, for files that don't themselves match the suffix pattern,
+/// e.g. `__tests__/factories.ts`).
+fn is_test_path(path: &str) -> bool {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let has_test_suffix = [".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"]
+        .iter()
+        .any(|suffix| file_name.ends_with(suffix));
+    has_test_suffix || path.split('/').any(|segment| segment == "__tests__")
 }
 
 /// TSX (`.tsx`): TypeScript with JSX syntax. Reports the same `"typescript"`
@@ -114,11 +131,17 @@ impl LanguageSupport for TsxSupport {
     fn reference_query(&self) -> &str {
         REFERENCE_QUERY
     }
+
+    fn is_test_path(&self, path: &str) -> bool {
+        is_test_path(path)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[test]
     fn should_report_typescript_as_name() {
@@ -194,5 +217,27 @@ mod tests {
 
         tree_sitter::Query::new(&support.grammar(), support.reference_query())
             .expect("REFERENCE_QUERY must be valid against the TSX grammar");
+    }
+
+    #[rstest]
+    #[case::should_return_true_when_filename_has_test_ts_suffix("repo.test.ts", true)]
+    #[case::should_return_true_when_filename_has_test_tsx_suffix("Repo.test.tsx", true)]
+    #[case::should_return_true_when_filename_has_spec_ts_suffix("repo.spec.ts", true)]
+    #[case::should_return_true_when_filename_has_spec_tsx_suffix("Repo.spec.tsx", true)]
+    #[case::should_return_true_when_path_has_tests_directory_segment(
+        "src/__tests__/factories.ts",
+        true
+    )]
+    #[case::should_return_false_when_path_is_ordinary_module("src/repo.ts", false)]
+    #[case::should_return_false_when_filename_merely_contains_test_substring(
+        "src/contest.ts",
+        false
+    )]
+    fn is_test_path_cases(#[case] path: &str, #[case] expected: bool) {
+        let support = TypeScriptSupport;
+
+        let actual = support.is_test_path(path);
+
+        assert_eq!(expected, actual);
     }
 }
