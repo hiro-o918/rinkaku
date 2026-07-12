@@ -645,7 +645,10 @@ map has zero visibility into it beyond listing it as skipped
 assigned to arm B only** this round (per the current CLAUDE.md split),
 so the arm-to-arm finding counts below are not a pure map/no-map
 comparison the way rounds 3–9's mandatory-both-arms protocol gave —
-recorded as a caveat, not folded silently into the numbers.
+recorded as a caveat, not folded silently into the numbers. Metrics are
+the orchestrating session's harness-reported usage accounting for the
+two review subagent runs (output tokens, tool calls, wall clock), the
+same provenance every prior round's numbers share.
 
 | Metric               | A (map, no execution) | B (control + mandatory execution) |
 | --------------------- | ---------------------- | ---------------------------------- |
