@@ -20,7 +20,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use rinkaku_core::extract::Classification;
-use rinkaku_core::render::Report;
+use rinkaku_core::render::{Report, ReportOrigin};
 
 /// Draws one full frame: the entry view (tree + right pane split) or the
 /// source drill-down, depending on `app.screen()`, with a status/help line
@@ -96,7 +96,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
 
     let lines = match &detail {
         SelectedDetail::Symbol(detail) => detail_lines(detail),
-        SelectedDetail::Dir(detail) => dir_detail_lines(detail),
+        SelectedDetail::Dir(detail) => dir_detail_lines(detail, report.origin),
         SelectedDetail::File(detail) => file_detail_lines(detail),
     };
     let paragraph = Paragraph::new(lines)
@@ -208,7 +208,14 @@ fn diff_line(line: &DiffLine) -> Line<'static> {
 /// the partner directories and the concrete cross-directory edges forming
 /// it (TUI iteration 2's answer to "cycle と言われても何が cycle してるか
 /// 分からない").
-fn dir_detail_lines(detail: &DirDetail) -> Vec<Line<'static>> {
+///
+/// `origin` picks the first badge's label: `Report::files`' symbol count is
+/// exactly the same aggregation in both modes (`Badges::changed_symbols` is
+/// not renamed — ADR 0017 only asks for the label to stop implying a diff),
+/// but "changed symbols" would misdescribe a whole-repo outline the same
+/// way `render.rs`'s "## Change graph"/"## Repository graph" split avoids
+/// for Markdown.
+fn dir_detail_lines(detail: &DirDetail, origin: ReportOrigin) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     lines.push(Line::styled(
@@ -216,8 +223,12 @@ fn dir_detail_lines(detail: &DirDetail) -> Vec<Line<'static>> {
         Style::default().add_modifier(Modifier::BOLD),
     ));
     lines.push(Line::raw(""));
+    let symbols_label = match origin {
+        ReportOrigin::Diff => "changed symbols",
+        ReportOrigin::RepoOutline => "symbols",
+    };
     lines.push(Line::raw(format!(
-        "changed symbols: {}",
+        "{symbols_label}: {}",
         detail.badges.changed_symbols
     )));
     lines.push(Line::raw(format!(
@@ -262,9 +273,13 @@ fn dir_detail_lines(detail: &DirDetail) -> Vec<Line<'static>> {
     lines
 }
 
-/// Formats a [`FileDetail`] into displayable lines: every symbol changed
-/// in this file, with the same classification marker convention
-/// `crate::row_view::entry_row_line` uses on symbol rows, plus fan-in.
+/// Formats a [`FileDetail`] into displayable lines: every symbol in this
+/// file (changed symbols for a diff, every symbol for a whole-repo
+/// outline — ADR 0017), with the same classification marker convention
+/// `crate::row_view::entry_row_line` uses on symbol rows, plus fan-in. The
+/// "Symbols (N)" label itself is already origin-neutral, unlike
+/// `dir_detail_lines`'s first badge line, so no `origin` parameter is
+/// needed here.
 fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -486,6 +501,7 @@ mod tests {
 
     fn report_with_one_symbol() -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::foo", "foo")],
@@ -544,6 +560,7 @@ mod tests {
     #[test]
     fn should_draw_placeholder_message_when_there_are_no_rows_at_all() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -569,6 +586,7 @@ mod tests {
     #[test]
     fn should_draw_dir_detail_content_when_cursor_is_on_a_directory_row() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol("src/lib.rs::foo", "foo")],
@@ -592,7 +610,45 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Dir src"));
+        assert!(text.contains("changed symbols:"));
         assert!(text.contains("Top fan-in"));
+    }
+
+    // ADR 0017: a whole-repo outline's directory detail must not say
+    // "changed symbols" — nothing changed in that mode — so this pins
+    // `dir_detail_lines`'s label switching on `report.origin`, using the
+    // same report shape as
+    // `should_draw_dir_detail_content_when_cursor_is_on_a_directory_row`
+    // above (differing only in `origin`) so the two tests read as a pair.
+    #[test]
+    fn should_draw_symbols_label_without_changed_wording_when_origin_is_repo_outline() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::RepoOutline,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("src/lib.rs::foo", "foo")],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Dir src"));
+        assert!(text.contains("symbols:"));
+        assert!(!text.contains("changed symbols:"));
     }
 
     #[test]

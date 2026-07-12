@@ -367,6 +367,7 @@ mod tests {
 
     fn empty_report() -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {
@@ -382,6 +383,7 @@ mod tests {
 
     fn report_with_one_symbol() -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![symbol("lib.rs::foo", "foo")],
@@ -551,6 +553,7 @@ mod tests {
     #[test]
     fn should_return_dir_detail_when_cursor_is_on_a_directory_row() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol("src/lib.rs::foo", "foo")],
@@ -610,6 +613,7 @@ mod tests {
     #[test]
     fn should_return_none_diff_target_when_cursor_is_on_a_directory_row() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![symbol("src/lib.rs::foo", "foo")],
@@ -641,6 +645,7 @@ mod tests {
     #[test]
     fn should_return_symbol_diff_target_with_line_range_when_cursor_is_on_a_symbol_row() {
         let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {

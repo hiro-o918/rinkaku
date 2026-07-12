@@ -667,6 +667,7 @@ mod tests {
 
     fn report_with_graph(nodes: Vec<Node>, edges: Vec<Edge>) -> Report {
         Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: SymbolGraph {

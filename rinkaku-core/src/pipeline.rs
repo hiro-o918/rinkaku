@@ -14,7 +14,7 @@ use crate::extract::{
 };
 use crate::graph::{build_graph, compute_hotspots, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
-use crate::render::{FileReport, Report, SkipReason, SkippedFile, TestFileSummary};
+use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile, TestFileSummary};
 use thiserror::Error;
 
 /// A `read_file`-shaped port for fetching a changed file's *base*-side
@@ -268,6 +268,7 @@ pub fn analyze_diff(
     let hotspots = compute_hotspots(&graph);
 
     Ok(Report {
+        origin: ReportOrigin::Diff,
         files,
         skipped,
         graph,
@@ -398,6 +399,7 @@ pub fn analyze_repo(
     let hotspots = compute_hotspots(&graph);
 
     Report {
+        origin: ReportOrigin::RepoOutline,
         files,
         skipped: Vec::new(),
         graph,
@@ -608,6 +610,7 @@ mod tests {
         let read_file = fake_reader(HashMap::new());
 
         let expected = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![],
             graph: empty_graph(),
@@ -642,6 +645,7 @@ fn foo(a: i32) -> i32 {
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
         let expected = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -696,6 +700,7 @@ index 4b825dc..0000000
         let read_file = fake_reader(HashMap::new());
 
         let expected = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![SkippedFile {
                 path: "src/old.rs".to_string(),
@@ -722,6 +727,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
         let read_file = fake_reader(HashMap::new());
 
         let expected = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![SkippedFile {
                 path: "assets/logo.png".to_string(),
@@ -756,6 +762,7 @@ index e69de29..4b825dc 100644
         let read_file = fake_reader(HashMap::new());
 
         let expected = Report {
+            origin: ReportOrigin::Diff,
             files: vec![],
             skipped: vec![SkippedFile {
                 path: "src/main.rb".to_string(),
@@ -794,6 +801,7 @@ rename to src/new_name.rs
         let read_file = fake_reader(HashMap::new());
 
         let expected = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/new_name.rs".to_string(),
                 symbols: vec![],
@@ -873,6 +881,7 @@ index e69de29..4b825dc 100644
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
         let expected = Report {
+            origin: ReportOrigin::Diff,
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
@@ -1214,6 +1223,7 @@ fn should_add_two_numbers() {
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
             let expected = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![ExtractedSymbol {
@@ -1359,6 +1369,7 @@ mod tests {
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
             let expected = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![ExtractedSymbol {
@@ -1548,6 +1559,7 @@ func Foo() int { return 2 }
             let read_file = fake_reader(HashMap::from([("models/user.go", source)]));
 
             let expected = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "models/user.go".to_string(),
                     symbols: vec![ExtractedSymbol {
@@ -1606,6 +1618,7 @@ fn foo(a: i32) -> i32 {
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
             let expected = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![ExtractedSymbol {
@@ -1671,6 +1684,7 @@ index e69de29..4b825dc 100644
             ]));
 
             let expected = Report {
+                origin: ReportOrigin::Diff,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![ExtractedSymbol {
@@ -2400,6 +2414,7 @@ index e69de29..4b825dc 100644
             let read_file = fake_reader(HashMap::new());
 
             let expected = Report {
+                origin: ReportOrigin::RepoOutline,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
@@ -2431,6 +2446,7 @@ struct Point {
             let paths = vec!["src/lib.rs".to_string()];
 
             let expected = Report {
+                origin: ReportOrigin::RepoOutline,
                 files: vec![FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![
@@ -2520,6 +2536,7 @@ struct Point {
             let paths = vec!["src/main.rb".to_string()];
 
             let expected = Report {
+                origin: ReportOrigin::RepoOutline,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
@@ -2541,6 +2558,7 @@ struct Point {
             let paths = vec!["src/lib.rs".to_string()];
 
             let expected = Report {
+                origin: ReportOrigin::RepoOutline,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
@@ -2566,6 +2584,7 @@ struct Point {
             let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
             let expected = Report {
+                origin: ReportOrigin::RepoOutline,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
@@ -2586,6 +2605,7 @@ struct Point {
             let paths = vec!["models/user.rs".to_string()];
 
             let expected = Report {
+                origin: ReportOrigin::RepoOutline,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
@@ -2623,6 +2643,7 @@ func TestFoo(t *testing.T) {
             let paths = vec!["repo_test.go".to_string()];
 
             let expected = Report {
+                origin: ReportOrigin::RepoOutline,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
