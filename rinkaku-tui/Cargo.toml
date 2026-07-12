@@ -18,6 +18,8 @@ path = "src/lib.rs"
 
 [dependencies]
 rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
