@@ -131,10 +131,90 @@ carried 2 `signature changed` markers and a removed-symbols section).
 - Token efficiency is not a selling point of the map at PR scale;
   attention allocation is.
 
+## Results (round 3)
+
+Same two-pass method, third subject: TUI iteration 2 (the `d`-key diff
+pane and directory/file detail views; 8 files, +2,016/−118 — a
+brownfield diff layering a new pure module and view-models onto the
+iteration-1 TUI). One protocol change from rounds 1–2: dynamic
+verification was **mandatory for both arms** this round (per the
+CLAUDE.md rule adopted after round 2), so both agents built and
+executed the binary rather than leaving execution to chance.
+
+| Metric              | A (map)     | B (control) |
+| ------------------- | ----------- | ----------- |
+| Output tokens       | 173.4k      | 173.2k      |
+| Tool calls          | 38          | 51          |
+| Wall clock          | 301s        | 413s        |
+| Blocker findings    | 0           | 0           |
+| Should-fix findings | 0           | 2           |
+| Nit findings        | 2           | 1           |
+
+- **Only B** found both should-fix issues, and both are the same
+  *class*: line-level behavior invisible on the signature surface.
+  (1) The diff pane re-parsed the entire raw diff text inside the
+  render closure — roughly ten times per second on idle poll ticks —
+  found by reading the event-loop body. (2) The new hunk parser
+  trusted the `@@` header's declared line count without validating it
+  against the actual body, silently diverging from
+  `rinkaku-core::diff::parse_hunk`'s strict `HunkBodyMismatch`
+  contract on the same failure mode; found by *comparing the two
+  parsers side by side*, an association the map draws no edge for.
+- **Only A** found the self-consistency defect: `build_dir_detail`
+  called `cycle_partners` and `cycle_edges` as two independent entry
+  points, each rebuilding the Tarjan condensation that
+  `DirCondensation`'s own doc comment says exists to be built once.
+  The map's dependency arrows under `build_dir_detail` (two arrows
+  into `order.rs`) are what prompted reading both callees' bodies —
+  attention allocation working as designed, though the defect itself
+  still required reading past the signatures.
+- A's second unique finding (no scroll support in the detail/diff
+  panes, a pre-existing gap the new whole-file diff view makes easier
+  to hit) came from its **dynamic-verification step**, not the map —
+  evidence that making execution mandatory for both arms, rather than
+  a lucky extra, pays off. With both arms executing, round 2's
+  asymmetry (only the executing arm finding the runtime defect) did
+  not recur; neither arm found any runtime defect this round, and
+  their live checks independently confirmed the same behaviors.
+- A third angle outside both arms — the orchestrator's own fixture
+  testing during dynamic verification — surfaced a limitation neither
+  reviewer saw: name-match edge collection produces **no edges for
+  qualified cross-package references** (e.g. Go's `store.Save()`), so
+  the new cycle explanation can be silently empty for Go code. A
+  pre-existing core behavior, not a defect of this diff, but it
+  bounds the feature's usefulness per language and neither static
+  pass had a reason to test it.
+- Token costs converged this round (under 0.2% apart); B spent ~34%
+  more tool calls and wall clock, mostly on its parser-comparison and
+  convention sweeps.
+- All four findings were fixed before merge; fixing the hunk-count
+  finding immediately caught a miscounted header in one of the new
+  module's own test fixtures — small, direct evidence the defensive
+  check pays for itself.
+
+## Conclusions (after 3 rounds)
+
+- Three rounds, one stable pattern: the map arm keeps winning on
+  **self-consistency and cross-module contracts** (doc/impl drift in
+  round 2, a module contradicting its own stated rationale in round
+  3), while the unassisted arm keeps winning on **line-level and
+  behavioral findings** (conventions in round 1, the non-TTY panic in
+  round 2, the render-loop re-parse and parser divergence in round
+  3). Neither arm has ever produced a superset of the other; the
+  two-pass default stands.
+- Making dynamic verification mandatory for both arms removed round
+  2's luck factor without erasing the arms' complementary profiles —
+  the differentiation comes from *reading strategy*, not from who
+  executes.
+- New hypothesis for the tool itself (from round 3's should-fix #2):
+  duplicated responsibility between crates (two unified-diff parsers)
+  is a defect class the map could surface directly — e.g. by flagging
+  same-named or same-domain symbols appearing in multiple crates —
+  where today it needs a reviewer to happen to know both sides exist.
+
 ## Next
 
-- Optional round 3 with a review pass that combines the map with an
-  explicit "execute the binary" instruction, to test whether one
-  agent can cover both axes without losing either.
 - Document the map-first recipe in the README's LLM usage section
   (map from a trusted build, paired with an independent pass).
+- Consider a map feature flagging cross-crate duplicate-domain
+  symbols (see round 3's new hypothesis).
