@@ -282,6 +282,17 @@ fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBu
 /// fetched from the PR, see ADR 0004) — `--pr` is a resolution step in
 /// front of this same pipeline, not a separate read strategy.
 ///
+/// An empty (or whitespace-only) diff — most commonly a `--base`/`--pr`
+/// range with no actual changes, e.g. `base == head` — returns the empty
+/// `Report` immediately, printing the same "diff is empty" note the stdin
+/// path prints, and **without calling `build_resolver`**: indexing every
+/// tracked file for dependency resolution is pointless work when there is
+/// nothing to resolve dependencies for, and on a large repository it is
+/// also the single slowest part of a run (one `git show`/`cat-file` per
+/// tracked file). A non-empty diff that nonetheless yields zero entries
+/// (garbage input) still gets its own note via `garbage_input_note` after
+/// the full pipeline runs, same as stdin mode.
+///
 /// `cwd` selects which repository every subprocess in this call runs in
 /// (same rationale as `read_git_show_file`'s `cwd`: `None` uses the
 /// process's current directory for `--base` and cwd-clone `--pr` runs,
@@ -293,18 +304,30 @@ fn run_base_pipeline(
     cwd: Option<&std::path::Path>,
 ) -> anyhow::Result<rinkaku_core::render::Report> {
     let diff_text = run_git_diff(base, head, cwd)?;
+    if diff_text.trim().is_empty() {
+        eprintln!("note: diff is empty, nothing to analyze");
+        return Ok(rinkaku_core::render::Report {
+            files: Vec::new(),
+            skipped: Vec::new(),
+        });
+    }
+
     let read_file = {
         let head = head.to_string();
         move |path: &str| read_git_show_file(cwd, &head, path)
     };
     let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd)?;
-    Ok(analyze_diff(
+    let report = analyze_diff(
         &diff_text,
         read_file,
         resolver
             .as_ref()
             .map(|r| r as &dyn rinkaku_core::deps::Resolver),
-    )?)
+    )?;
+    if let Some(note) = garbage_input_note(&diff_text, &report) {
+        eprintln!("{note}");
+    }
+    Ok(report)
 }
 
 /// Returns a warning note for stdin input that is garbage rather than a
@@ -1740,6 +1763,60 @@ mod tests {
         let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()));
 
         assert!(actual.is_err());
+    }
+
+    // Regression test for the must-fix performance/correctness bug: an
+    // empty diff (base == head, e.g. `--pr` on an already-merged PR before
+    // ADR 0007's fix, or `--base main --head main`) must return the empty
+    // `Report` directly, without ever invoking `build_resolver`'s
+    // repository-wide `git ls-files` scan. Unlike `deps == 0`'s sibling
+    // tests above (which call `build_resolver` directly and can simply
+    // point `cwd` at a non-git directory), `run_base_pipeline` calls
+    // `run_git_diff` unconditionally first — a non-git `cwd` would make
+    // that fail too, before the empty-diff branch is ever reached. So this
+    // test instead uses a real repository (required for `run_git_diff` to
+    // succeed) and revokes read permission on `.git/index` specifically:
+    // `git diff <base>...<head>` (a tree-to-tree comparison between two
+    // commits) never opens the index, but `git ls-files` always does — so
+    // if `build_resolver` were reached, `list_git_files` would fail and
+    // this test would observe `Err` instead of the expected `Ok`.
+    #[test]
+    fn should_skip_repository_scan_when_diff_is_empty() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(dir.path(), "fn foo() {}\n");
+        let index_path = dir.path().join(".git/index");
+        let mut permissions = std::fs::metadata(&index_path)
+            .expect("read .git/index metadata")
+            .permissions();
+        let original_mode = std::os::unix::fs::PermissionsExt::mode(&permissions);
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o000);
+        std::fs::set_permissions(&index_path, permissions).expect("revoke .git/index read access");
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+        };
+        let actual = run_base_pipeline(&cli, "HEAD", "HEAD", Some(dir.path()));
+
+        // Restore permissions before asserting so a failed assertion
+        // doesn't leave an unreadable file behind for the tempdir cleanup.
+        let mut permissions = std::fs::metadata(&index_path)
+            .expect("re-read .git/index metadata")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, original_mode);
+        std::fs::set_permissions(&index_path, permissions).expect("restore .git/index permissions");
+
+        assert_eq!(
+            rinkaku_core::render::Report {
+                files: Vec::new(),
+                skipped: Vec::new(),
+            },
+            actual.expect("empty diff must not touch the repository-wide index scan")
+        );
     }
 
     mod garbage_input_note_tests {
