@@ -215,18 +215,24 @@ fn main() -> anyhow::Result<()> {
         run_base_pipeline(&cli, &base_sha, &head_sha, cwd)?
     } else if let Some(base) = &cli.base {
         run_base_pipeline(&cli, base, &cli.head, None)?
-    } else if cli.base.is_none() && cli.pr.is_none() && std::io::stdin().is_terminal() {
-        // ADR 0017: bare `rinkaku` on an interactive terminal, with no
-        // `--base`/`--pr` given, has no diff to read at all — rather than
-        // `read_stdin_diff`'s usual "no diff input" error (which fires
-        // below for every other stdin-is-a-TTY case, e.g. `--base` was
-        // meant but mistyped and this branch's own `cli.base.is_none()`
-        // guard didn't match for some other reason), build a whole-repo
-        // outline instead. `diff_text` is empty: the TUI's diff pane (`d`)
-        // has nothing to slice hunks out of in this mode and falls back to
-        // its placeholder (ADR 0017's Consequences).
+    } else if std::io::stdin().is_terminal() {
+        // ADR 0017: this is the third arm of an `if let Some(pr) ... else if
+        // let Some(base) ... else if <here>` chain, so reaching it already
+        // means `cli.pr` and `cli.base` are both `None` — no need to check
+        // again. With no `--base`/`--pr` and stdin attached to a terminal,
+        // there is no diff to read at all, so a whole-repo outline is built
+        // instead of falling through to `read_stdin_diff`'s "no diff input"
+        // error. `diff_text` is empty: the TUI's diff pane (`d`) has nothing
+        // to slice hunks out of in this mode and falls back to its
+        // placeholder (ADR 0017's Consequences).
+        //
+        // `read_stdin_diff`'s own `is_terminal()` bail is unreachable via
+        // this chain today (every stdin-is-a-TTY case is caught here first),
+        // but is kept as a defensive check in case this `if`/`else if` chain
+        // is ever restructured — e.g. a future flag added between this arm
+        // and the plain stdin-read fallback below.
         log::info!("no diff input and stdin is a terminal; building a whole-repo outline");
-        let paths = list_git_files(None)?;
+        let paths = list_repo_files_for_outline(None)?;
         // `check_generated_paths_batch`, not `resolve_generated_paths`
         // (which shells out via `check_generated_paths`'s CLI-argument
         // form): `paths` here is every tracked file, potentially far more
@@ -246,6 +252,9 @@ fn main() -> anyhow::Result<()> {
             &generated_paths,
             cli.include_generated,
         );
+        if let Some(note) = repo_outline_empty_note(&report) {
+            eprintln!("{note}");
+        }
         (report, String::new())
     } else {
         let diff_text = read_stdin_diff()?;
@@ -458,6 +467,7 @@ fn run_base_pipeline(
         eprintln!("note: diff is empty, nothing to analyze");
         return Ok((
             rinkaku_core::render::Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
                 files: Vec::new(),
                 skipped: Vec::new(),
                 graph: rinkaku_core::graph::SymbolGraph {
@@ -578,6 +588,25 @@ fn garbage_input_note(
         return None;
     }
     Some("note: no file changes recognized in input; expected a unified diff")
+}
+
+/// Returns a note for ADR 0017's whole-repo outline when it found nothing
+/// to show — every tracked file was either unsupported, a whole test file,
+/// generated, or unreadable (`analyze_repo`'s own doc comment: all of these
+/// are dropped silently, with no `SkippedFile`/`TestFileSummary` entry to
+/// record why, unlike diff mode) — so an empty `stdout` would otherwise
+/// look identical to "ran fine, nothing to say" with no indication that a
+/// git repository with zero recognizable source files is likely a
+/// misconfiguration (wrong directory, `.gitignore`-only repo, etc.).
+///
+/// Unlike `garbage_input_note`, only `files`/`removed` are checked:
+/// `analyze_repo` never populates `skipped`/`tests` at all, so those two
+/// fields carry no information in this mode to check against.
+fn repo_outline_empty_note(report: &rinkaku_core::render::Report) -> Option<&'static str> {
+    if !report.files.is_empty() || !report.removed.is_empty() {
+        return None;
+    }
+    Some("note: no supported source files found in the repository")
 }
 
 /// Builds the `TagsResolver` used for `--deps 1` (the default), or `None`
@@ -711,6 +740,25 @@ fn list_git_files(cwd: Option<&std::path::Path>) -> anyhow::Result<Vec<String>> 
         .lines()
         .map(str::to_string)
         .collect())
+}
+
+/// Lists tracked files for ADR 0017's whole-repo outline, same as
+/// `list_git_files(cwd)`, but with guidance attached to a failure via
+/// `anyhow::Context`: bare `rinkaku` (this mode's default, the first thing
+/// a new user is likely to try) run outside a git repository would
+/// otherwise surface only `list_git_files`'s raw `git ls-files` stderr
+/// (e.g. "fatal: not a git repository ..."), which does not tell the reader
+/// what rinkaku itself expects instead. Kept as its own function (rather
+/// than adding this message inside `list_git_files` itself) since that
+/// function's error is reused as-is by every other caller (`--base`/`--pr`'s
+/// own indexing pass in `build_resolver`) where this specific guidance
+/// would not apply.
+fn list_repo_files_for_outline(cwd: Option<&std::path::Path>) -> anyhow::Result<Vec<String>> {
+    use anyhow::Context;
+    list_git_files(cwd).context(
+        "run rinkaku inside a git repository, or pipe a diff (e.g. `gh pr diff 123 | rinkaku`) \
+         or pass --base <ref>",
+    )
 }
 
 /// Resolves which of `paths` are marked "not worth diffing" in
@@ -901,6 +949,12 @@ fn parse_generated_paths(output: &str) -> std::collections::HashSet<String> {
 /// Reads the diff from stdin. Errors with a clear message if stdin is a
 /// terminal (interactive), since there is nothing to read in that case and
 /// `--base` should be used instead.
+///
+/// In practice, `main`'s `if`/`else if` chain already routes every
+/// stdin-is-a-TTY, no-`--base`/`--pr` invocation to ADR 0017's whole-repo
+/// outline before this function is ever called, so this bail is currently
+/// unreachable from that chain. Kept anyway as a defensive check against
+/// future callers of this function or a restructured chain in `main`.
 fn read_stdin_diff() -> anyhow::Result<String> {
     if std::io::stdin().is_terminal() {
         anyhow::bail!(
@@ -3355,6 +3409,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             actual.expect("empty diff must not touch the repository-wide index scan");
         assert_eq!(
             rinkaku_core::render::Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
                 files: Vec::new(),
                 skipped: Vec::new(),
                 graph: rinkaku_core::graph::SymbolGraph {
@@ -3494,6 +3549,7 @@ fn should_add_two_numbers() {
 
         fn empty_report() -> Report {
             Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
@@ -3505,6 +3561,7 @@ fn should_add_two_numbers() {
 
         fn non_empty_report() -> Report {
             Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
                 files: vec![rinkaku_core::render::FileReport {
                     path: "src/lib.rs".to_string(),
                     symbols: vec![],
@@ -3551,6 +3608,7 @@ fn should_add_two_numbers() {
         #[test]
         fn should_return_none_when_report_has_only_skipped_entries() {
             let report = Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
                 files: vec![],
                 skipped: vec![rinkaku_core::render::SkippedFile {
                     path: "assets/logo.png".to_string(),
@@ -3576,6 +3634,7 @@ fn should_add_two_numbers() {
         #[test]
         fn should_return_none_when_report_has_only_test_summary_entries() {
             let report = Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
                 files: vec![],
                 skipped: vec![],
                 graph: empty_graph(),
@@ -3607,6 +3666,7 @@ fn should_add_two_numbers() {
         #[test]
         fn should_return_none_when_report_has_only_generated_skip_entries() {
             let report = Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
                 files: vec![],
                 skipped: vec![
                     rinkaku_core::render::SkippedFile {
@@ -3627,6 +3687,115 @@ fn should_add_two_numbers() {
             let actual = garbage_input_note("some diff text", &report);
 
             assert_eq!(None, actual);
+        }
+    }
+
+    mod repo_outline_empty_note_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use rinkaku_core::render::Report;
+
+        fn empty_graph() -> rinkaku_core::graph::SymbolGraph {
+            rinkaku_core::graph::SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            }
+        }
+
+        fn empty_report() -> Report {
+            Report {
+                origin: rinkaku_core::render::ReportOrigin::RepoOutline,
+                files: vec![],
+                skipped: vec![],
+                graph: empty_graph(),
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            }
+        }
+
+        #[test]
+        fn should_return_note_when_report_has_no_files_and_no_removed() {
+            let actual = repo_outline_empty_note(&empty_report());
+
+            assert_eq!(
+                Some("note: no supported source files found in the repository"),
+                actual
+            );
+        }
+
+        #[test]
+        fn should_return_none_when_report_has_file_entries() {
+            let report = Report {
+                files: vec![rinkaku_core::render::FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![],
+                }],
+                ..empty_report()
+            };
+
+            let actual = repo_outline_empty_note(&report);
+
+            assert_eq!(None, actual);
+        }
+
+        // Regression test: `analyze_repo` leaves `removed` empty on every
+        // path today (ADR 0017's whole point is that nothing changed, so
+        // there is no base side to diff against), but the check still
+        // covers it explicitly so a future extension to `analyze_repo`
+        // doesn't silently regress this note into firing on a report that
+        // does have something to show.
+        #[test]
+        fn should_return_none_when_report_has_removed_entries() {
+            let report = Report {
+                removed: vec![rinkaku_core::extract::RemovedSymbol {
+                    name: "old_helper".to_string(),
+                    kind: rinkaku_core::extract::SymbolKind::Function,
+                    path: "src/lib.rs".to_string(),
+                    signature: "fn old_helper()".to_string(),
+                }],
+                ..empty_report()
+            };
+
+            let actual = repo_outline_empty_note(&report);
+
+            assert_eq!(None, actual);
+        }
+    }
+
+    mod list_repo_files_for_outline_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        // Regression test for the unfriendly-error fix: running whole-repo
+        // mode outside a git repository must not surface only
+        // `list_git_files`'s raw `git ls-files` stderr — the wrapped
+        // message must guide the reader toward what rinkaku actually
+        // expects (a git repo, a piped diff, or `--base`).
+        #[test]
+        fn should_include_guidance_in_error_when_cwd_is_not_a_git_repository() {
+            let dir = tempfile::TempDir::new().expect("create tempdir");
+
+            let actual = list_repo_files_for_outline(Some(dir.path()));
+
+            let error = actual.expect_err("a non-git directory must fail");
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("run rinkaku inside a git repository"),
+                "error message did not contain the expected guidance: {message}"
+            );
+        }
+
+        #[test]
+        fn should_return_tracked_paths_when_cwd_is_a_git_repository() {
+            let dir = tempfile::TempDir::new().expect("create tempdir");
+            init_repo_with_committed_file(dir.path(), "fn foo() {}\n");
+
+            let actual = list_repo_files_for_outline(Some(dir.path()))
+                .expect("a git repository must succeed");
+
+            assert_eq!(vec!["src/lib.rs".to_string()], actual);
         }
     }
 }
