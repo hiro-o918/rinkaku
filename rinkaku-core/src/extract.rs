@@ -8,6 +8,7 @@
 use crate::diff::LineRange;
 use crate::language::LanguageSupport;
 use serde::Serialize;
+use std::collections::HashMap;
 use tree_sitter::StreamingIterator;
 
 /// The kind of symbol a definition node represents, expressed in
@@ -38,6 +39,33 @@ pub enum SymbolKind {
     Class,
     Interface,
     TypeAlias,
+}
+
+/// A changed symbol's contract impact (ADR 0014), classified by comparing
+/// its comment-stripped, normalized signature against the base side's:
+///
+/// - [`Classification::Added`]: no matching symbol on the base side at all
+///   (a brand-new definition).
+/// - [`Classification::SignatureChanged`]: a matching base-side symbol
+///   exists, but its signature text differs — the API surface itself
+///   changed, not just the implementation.
+/// - [`Classification::BodyOnly`]: a matching base-side symbol exists with
+///   an identical signature — only the body changed.
+///
+/// `None` (rather than a fourth "unknown" variant) is used when base-side
+/// content wasn't available to compare against at all (e.g. plain stdin
+/// input with no resolvable base commit) — see
+/// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter. Modeling
+/// "unknown" as the field's absence, rather than as a variant of this enum,
+/// keeps every variant here meaning "we know, and this is what we found"; a
+/// caller checking `symbol.classification.is_none()` reads unambiguously as
+/// "classification wasn't attempted" rather than "found nothing interesting".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Classification {
+    Added,
+    SignatureChanged,
+    BodyOnly,
 }
 
 /// A definition whose signature was extracted because one of its lines
@@ -110,6 +138,21 @@ pub struct ExtractedSymbol {
     /// serialization like `referenced_names`.
     #[serde(skip)]
     pub is_test: bool,
+    /// This symbol's contract impact (ADR 0014), or `None` when no base-side
+    /// content was available to classify against (see
+    /// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter).
+    /// Populated by [`crate::pipeline::classify_symbols`], a pipeline stage
+    /// that runs after extraction — `None` here at construction time, same
+    /// as `dependencies`/`id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<Classification>,
+    /// The base-side symbol's comment-stripped, normalized signature, only
+    /// when [`Classification::SignatureChanged`] — lets renderers show a
+    /// before/after diff of the signature text itself. `None` for every
+    /// other classification (including `None` classification) since there
+    /// is nothing meaningful to show otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_signature: Option<String>,
 }
 
 /// Extracts the signatures of definitions that contain at least one
@@ -173,6 +216,101 @@ pub fn extract_all_symbols(source: &str, lang: &dyn LanguageSupport) -> Vec<Extr
             .filter_map(|node| build_symbol(*node, source_bytes, reference_query, lang))
             .collect()
     })
+}
+
+/// A symbol present on the base side of a diff but absent (by name and
+/// container) from the head side — ADR 0014's `removed` classification,
+/// reported separately from `ExtractedSymbol` since a removed symbol has no
+/// head-side signature, range, or dependencies to speak of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RemovedSymbol {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub path: String,
+    /// The base-side symbol's comment-stripped, normalized signature —
+    /// the same text that would have been `previous_signature` on the head
+    /// symbol had one still existed to attach it to.
+    pub signature: String,
+}
+
+/// Classifies every symbol in `head_symbols` by contract impact (ADR 0014),
+/// setting its `classification`/`previous_signature` in place, and returns
+/// the base-side symbols this file had that no longer exist on the head
+/// side at all (`removed`).
+///
+/// Matches head and base symbols within the same file by `(name,
+/// container)` — the same identity `graph::collect_nodes` uses for a
+/// symbol's stable id, one file at a time rather than by any cross-file
+/// index, since ADR 0014 only classifies a *changed* file's own symbols
+/// against that same file's base content.
+///
+/// - A head symbol with no base-side match at all → [`Classification::Added`].
+/// - A head symbol with a base-side match whose comment-stripped,
+///   normalized signature differs → [`Classification::SignatureChanged`],
+///   with `previous_signature` set to the base signature.
+/// - A head symbol with a base-side match whose signature is identical →
+///   [`Classification::BodyOnly`].
+/// - A base symbol with no head-side match, whose base-side range overlaps
+///   `old_changed_ranges` (the diff's old-side hunk ranges for this file) →
+///   returned as a [`RemovedSymbol`]. A base-only symbol *outside* every
+///   changed range is not reported: nothing in the diff actually touched
+///   it, so it is unrelated to this change (e.g. a symbol that merely moved
+///   later in the file because of an unrelated edit above it) — restricting
+///   to overlapping ranges is what keeps this from flooding output on a
+///   diff that only touches a small part of a large file.
+///
+/// Pure: takes both sides' already-extracted symbol lists and matches them
+/// in memory, no IO. `lang` is not needed here — `head_symbols` and
+/// `base_symbols` are both already the output of `extract_changed_symbols`/
+/// `extract_all_symbols`, whose signatures are already comment-stripped and
+/// normalized (ADR 0014's first change) — so signature comparison is a
+/// plain string comparison, not a second parse.
+pub fn classify_symbols(
+    head_symbols: &mut [ExtractedSymbol],
+    base_symbols: &[ExtractedSymbol],
+    old_changed_ranges: &[LineRange],
+    path: &str,
+) -> Vec<RemovedSymbol> {
+    let base_by_identity: HashMap<(&str, Option<&str>), &ExtractedSymbol> = base_symbols
+        .iter()
+        .map(|s| ((s.name.as_str(), s.container.as_deref()), s))
+        .collect();
+
+    let mut matched_base_identities: std::collections::HashSet<(&str, Option<&str>)> =
+        std::collections::HashSet::new();
+
+    for symbol in head_symbols.iter_mut() {
+        let identity = (symbol.name.as_str(), symbol.container.as_deref());
+        match base_by_identity.get(&identity) {
+            None => {
+                symbol.classification = Some(Classification::Added);
+            }
+            Some(base_symbol) => {
+                matched_base_identities.insert(identity);
+                if base_symbol.signature == symbol.signature {
+                    symbol.classification = Some(Classification::BodyOnly);
+                } else {
+                    symbol.classification = Some(Classification::SignatureChanged);
+                    symbol.previous_signature = Some(base_symbol.signature.clone());
+                }
+            }
+        }
+    }
+
+    base_symbols
+        .iter()
+        .filter(|base_symbol| {
+            let identity = (base_symbol.name.as_str(), base_symbol.container.as_deref());
+            !matched_base_identities.contains(&identity)
+        })
+        .filter(|base_symbol| overlaps_any(base_symbol.range, old_changed_ranges))
+        .map(|base_symbol| RemovedSymbol {
+            name: base_symbol.name.clone(),
+            kind: base_symbol.kind,
+            path: path.to_string(),
+            signature: base_symbol.signature.clone(),
+        })
+        .collect()
 }
 
 /// Parses `source`, runs `lang`'s `definition_query` to find every
@@ -291,6 +429,10 @@ fn build_symbol(
         dependencies: Vec::new(),
         omitted_dependency_matches: 0,
         is_test,
+        // Populated later by `pipeline::classify_symbols`, which needs the
+        // base-side content this function has no access to.
+        classification: None,
+        previous_signature: None,
     })
 }
 
@@ -413,7 +555,7 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 }
 
 /// Slices a definition's signature: the declaration text with implementation
-/// detail removed and internal whitespace normalized to single spaces.
+/// detail and comment nodes removed, whitespace normalized to single spaces.
 ///
 /// - `function_item`, `function_declaration` (Go/TS), `method_declaration`
 ///   (Go), `function_definition` (Python), `method_definition` (TS),
@@ -435,12 +577,24 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 ///   but adds real complexity — e.g. reconciling which subset of members to
 ///   show when only one changed — that v1 defers; see the module-level
 ///   rationale in `language/python.rs` and `language/typescript.rs`.
+///
+/// Comment nodes (`line_comment`/`block_comment` in Rust, `comment` in
+/// Go/Python/TypeScript — see [`is_comment_node`]) inside the kept range are
+/// stripped in every case (ADR 0014): otherwise a comment-only edit inside a
+/// struct/interface/class body would change the reported signature string,
+/// making a `body_only`/`signature_changed` classification based on
+/// signature-string equality fire incorrectly. This is a pre-1.0 output
+/// change sanctioned by the ADR — some previously-reported signature strings
+/// that contained inline comments now omit them.
 fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     if matches!(
         node.kind(),
         "class_definition" | "class_declaration" | "abstract_class_declaration"
     ) {
-        return normalize_whitespace(&class_signature_text(node, source));
+        let mut removed_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+        collect_method_body_ranges(node, &mut removed_ranges);
+        collect_comment_ranges(node, &removed_ranges.clone(), &mut removed_ranges);
+        return normalize_whitespace(&text_with_ranges_removed(node, source, removed_ranges));
     }
 
     // `variable_declarator`'s body (a TS arrow function's `{ ... }`) is
@@ -462,33 +616,53 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
         None
     };
 
-    let text_range = body
-        .map(|body| node.start_byte()..body.start_byte())
-        .unwrap_or(node.start_byte()..node.end_byte());
-    let raw = std::str::from_utf8(&source[text_range]).unwrap_or("");
-    normalize_whitespace(raw)
+    let text_end = body
+        .map(|body| body.start_byte())
+        .unwrap_or(node.end_byte());
+    let mut comment_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    collect_comment_ranges(node, &[], &mut comment_ranges);
+    // Comments at/after `text_end` fall inside the body, which is dropped
+    // wholesale below anyway — only ones inside the kept declaration prefix
+    // need to be individually removed.
+    comment_ranges.retain(|range| range.start < text_end);
+
+    let mut removed_ranges = comment_ranges;
+    if let Some(body) = body {
+        removed_ranges.push(body.start_byte()..node.end_byte());
+    }
+
+    let raw = text_with_ranges_removed(node, source, removed_ranges);
+    normalize_whitespace(&raw)
 }
 
-/// Builds a class/class-declaration's signature text: the full node text
-/// with every nested method body's byte range removed, leaving member
-/// signatures (fields, method declarations) intact. Byte ranges are
-/// collected first and removed back-to-front so earlier removals don't
-/// shift the offsets of ones still pending.
-fn class_signature_text(node: tree_sitter::Node, source: &[u8]) -> String {
-    let mut body_ranges: Vec<std::ops::Range<usize>> = Vec::new();
-    collect_method_body_ranges(node, &mut body_ranges);
-    body_ranges.sort_by_key(|r| r.start);
+/// Removes every byte range in `ranges` from `node`'s own text (`node`'s
+/// full span, not just the declaration prefix — callers that only want a
+/// prefix pre-truncate `ranges` to stop at that boundary), returning the
+/// remainder as a `String`. Ranges are sorted and removed front-to-back,
+/// advancing a `cursor` past each removed range in turn, so earlier
+/// removals naturally narrow what later ones can still remove; if a range
+/// starts before the current `cursor` (overlapping ranges, defensively not
+/// expected in practice) *that one range's removal* is skipped — its own
+/// iteration does nothing and `cursor` is left wherever the previous
+/// iteration advanced it to — rather than the whole function panicking on
+/// an invalid slice.
+fn text_with_ranges_removed(
+    node: tree_sitter::Node,
+    source: &[u8],
+    mut ranges: Vec<std::ops::Range<usize>>,
+) -> String {
+    ranges.sort_by_key(|r| r.start);
 
     let mut result = Vec::with_capacity(source.len());
     let mut cursor = node.start_byte();
-    for range in &body_ranges {
+    for range in &ranges {
         if range.start < cursor {
             continue; // Defensive: overlapping ranges should not occur.
         }
-        result.extend_from_slice(&source[cursor..range.start]);
-        cursor = range.end;
+        result.extend_from_slice(&source[cursor..range.start.min(node.end_byte())]);
+        cursor = range.end.max(cursor);
     }
-    result.extend_from_slice(&source[cursor..node.end_byte()]);
+    result.extend_from_slice(&source[cursor.min(node.end_byte())..node.end_byte()]);
     String::from_utf8(result).unwrap_or_default()
 }
 
@@ -521,6 +695,46 @@ fn collect_method_body_ranges(node: tree_sitter::Node, ranges: &mut Vec<std::ops
         }
         collect_method_body_ranges(child, ranges);
     }
+}
+
+/// Recursively collects the byte ranges of every comment node
+/// ([`is_comment_node`]) inside `node`, skipping any range already covered
+/// by `already_removed` (e.g. a method body `collect_method_body_ranges`
+/// already sliced out) so a comment nested inside an already-removed range
+/// isn't redundantly appended a second time — `text_with_ranges_removed`
+/// would still handle an overlapping range correctly (it clamps against
+/// `cursor`), but skipping it here keeps `ranges` a non-overlapping set,
+/// matching that function's stated "not expected in practice" assumption.
+fn collect_comment_ranges(
+    node: tree_sitter::Node,
+    already_removed: &[std::ops::Range<usize>],
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) {
+    if is_comment_node(node) {
+        ranges.push(node.start_byte()..node.end_byte());
+        return; // A comment node has no children worth descending into.
+    }
+    if already_removed
+        .iter()
+        .any(|r| r.start <= node.start_byte() && node.end_byte() <= r.end)
+    {
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_comment_ranges(child, already_removed, ranges);
+    }
+}
+
+/// Whether `node` is a tree-sitter comment node under any of the four
+/// grammars this module supports: Rust splits line/block comments into two
+/// distinct kinds (`line_comment`, `block_comment`); Go, Python, and
+/// TypeScript each use a single `comment` kind for both forms (verified
+/// against each grammar directly — Go's grammar has no such split and
+/// Python/TypeScript comments are line-oriented `#`/`//`/`/* */` all
+/// captured under the same node kind).
+fn is_comment_node(node: tree_sitter::Node) -> bool {
+    matches!(node.kind(), "line_comment" | "block_comment" | "comment")
 }
 
 /// Collapses runs of whitespace (including newlines/indentation from the
@@ -626,6 +840,8 @@ struct Point {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             },
             ExtractedSymbol {
                 id: String::new(),
@@ -638,6 +854,8 @@ struct Point {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             },
         ];
         let actual = extract_all_symbols(source, &lang);
@@ -676,6 +894,8 @@ fn foo() -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -704,6 +924,8 @@ mod tests {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: true,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -736,6 +958,8 @@ fn should_add_two_numbers() {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: true,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -763,6 +987,8 @@ fn helper() -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -803,6 +1029,8 @@ fn foo(a: i32) -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -831,6 +1059,8 @@ fn foo(a: i32, c: i32) -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -864,6 +1094,75 @@ struct Point {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
+        }];
+        let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+        assert_eq!(expected, actual);
+    }
+
+    // ADR 0014: comment nodes inside a definition's kept signature text must
+    // be stripped, not just implementation bodies — otherwise a comment-only
+    // edit inside a struct would produce a different signature string and
+    // falsely register as a contract change.
+    #[test]
+    fn should_strip_line_and_block_comments_from_struct_signature() {
+        let source = "\
+struct Point {
+    // a line comment
+    x: i32, /* a block comment */
+    y: i32,
+}
+";
+        let lang = RustSupport;
+        let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+        let expected = vec![ExtractedSymbol {
+            id: String::new(),
+            name: "Point".to_string(),
+            kind: SymbolKind::Struct,
+            signature: "struct Point { x: i32, y: i32, }".to_string(),
+            range: LineRange { start: 1, end: 5 },
+            container: None,
+            referenced_names: vec!["Point".to_string()],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+            classification: None,
+            previous_signature: None,
+        }];
+        let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+        assert_eq!(expected, actual);
+    }
+
+    // Comments inside a function's declaration prefix (before the body)
+    // must also be stripped — this is the part of the signature that
+    // actually survives into the reported `signature` string.
+    #[test]
+    fn should_strip_comment_from_function_signature_line() {
+        let source = "\
+fn foo(/* count */ a: i32) -> i32 {
+    a
+}
+";
+        let lang = RustSupport;
+        let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+        let expected = vec![ExtractedSymbol {
+            id: String::new(),
+            name: "foo".to_string(),
+            kind: SymbolKind::Function,
+            signature: "fn foo( a: i32) -> i32".to_string(),
+            range: LineRange { start: 1, end: 3 },
+            container: None,
+            referenced_names: vec![],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -896,6 +1195,8 @@ impl Foo {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -928,6 +1229,8 @@ impl Foo {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -960,6 +1263,8 @@ enum Color {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -991,6 +1296,8 @@ trait Greeter {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1027,6 +1334,8 @@ trait Greeter {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1075,6 +1384,8 @@ trait Repo {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1112,6 +1423,8 @@ const X: i32 = 1;
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }],
     )]
     fn extract_changed_symbols_selective_cases(
@@ -1173,6 +1486,8 @@ fn foo(a: i32) -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1225,6 +1540,8 @@ func foo(a int) int {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1254,6 +1571,8 @@ func foo(a int, c int) int {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1290,6 +1609,43 @@ type Repo struct {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        // ADR 0014: Go uses a single `comment` node kind for `//` comments
+        // (no `block_comment` split, unlike Rust).
+        #[test]
+        fn should_strip_comment_from_struct_signature() {
+            let source = "\
+package main
+
+type Repo struct {
+	// a comment
+	Name string
+	Size int
+}
+";
+            let lang = GoSupport;
+            let changed_ranges = vec![LineRange { start: 6, end: 6 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Repo".to_string(),
+                kind: SymbolKind::Struct,
+                signature: "Repo struct { Name string Size int }".to_string(),
+                range: LineRange { start: 3, end: 7 },
+                container: None,
+                referenced_names: vec!["Repo".to_string(), "int".to_string(), "string".to_string()],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1327,6 +1683,8 @@ type Fetcher interface {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1365,6 +1723,8 @@ type Repo interface {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1428,6 +1788,8 @@ func (r *Repo) Save(id string) error {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1462,6 +1824,8 @@ func (r Repo) Label() string {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1537,6 +1901,8 @@ func (r *Repo) Save(id string) error {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1571,6 +1937,8 @@ def foo(a):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1597,6 +1965,8 @@ def foo(a, c):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1631,6 +2001,8 @@ def top_level(a, b):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1677,6 +2049,8 @@ def decorated(a):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1712,6 +2086,45 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        // ADR 0014: a `#` comment inside the class body, outside any method,
+        // must be stripped from the reported signature just like a method
+        // body is.
+        #[test]
+        fn should_strip_comment_from_class_signature() {
+            let source = "\
+class Point:
+    # a comment
+    x: int
+    y: int
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+";
+            let lang = PythonSupport;
+            let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Point".to_string(),
+                kind: SymbolKind::Class,
+                signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
+                range: LineRange { start: 1, end: 8 },
+                container: None,
+                referenced_names: vec!["int".to_string()],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1740,6 +2153,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1768,6 +2183,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1804,6 +2221,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1868,6 +2287,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1902,6 +2323,8 @@ function foo(a: number): number {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1929,6 +2352,8 @@ function foo(a: number, c: number): number {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1957,6 +2382,8 @@ const arrow = (a: number): number => {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2014,6 +2441,8 @@ interface Shape {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2051,6 +2480,8 @@ interface Repo {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2080,6 +2511,8 @@ type Point = {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2110,6 +2543,8 @@ enum Color {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2143,6 +2578,45 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        // ADR 0014: both `//` and `/* */` comments in this grammar parse
+        // under the same `comment` node kind (unlike Rust's split), and
+        // both must be stripped from a class signature.
+        #[test]
+        fn should_strip_line_and_block_comments_from_class_signature() {
+            let source = "\
+class Circle {
+    // a line comment
+    radius: number; /* a block comment */
+
+    area(): number {
+        return 3.14 * this.radius * this.radius;
+    }
+}
+";
+            let lang = TypeScriptSupport;
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Circle".to_string(),
+                kind: SymbolKind::Class,
+                signature: "class Circle { radius: number; area(): number }".to_string(),
+                range: LineRange { start: 1, end: 8 },
+                container: None,
+                referenced_names: vec!["Circle".to_string()],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2175,6 +2649,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2207,6 +2683,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2241,6 +2719,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2305,6 +2785,8 @@ function foo(a: number): number {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -2339,6 +2821,8 @@ abstract class Shape {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2371,6 +2855,8 @@ abstract class Shape {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2413,6 +2899,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2443,10 +2931,266 @@ const Component = () => {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_ranges);
 
             assert_eq!(expected, actual);
+        }
+    }
+
+    mod classification_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        /// Builds an `ExtractedSymbol` for classification tests: `id`,
+        /// `dependencies`, `omitted_dependency_matches`, `referenced_names`
+        /// stay at their inert defaults since matching/classification never
+        /// reads them — only `name`/`kind`/`signature`/`range`/`container`
+        /// matter here.
+        fn symbol(
+            name: &str,
+            container: Option<&str>,
+            signature: &str,
+            range: LineRange,
+        ) -> ExtractedSymbol {
+            ExtractedSymbol {
+                id: String::new(),
+                name: name.to_string(),
+                kind: SymbolKind::Function,
+                signature: signature.to_string(),
+                range,
+                container: container.map(str::to_string),
+                referenced_names: vec![],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+                classification: None,
+                previous_signature: None,
+            }
+        }
+
+        #[test]
+        fn should_classify_as_added_when_no_base_side_match_exists() {
+            let mut head = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base: Vec<ExtractedSymbol> = vec![];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected[0].classification = Some(Classification::Added);
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_classify_as_signature_changed_when_base_signature_differs() {
+            let mut head = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32, b: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32, b: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected[0].classification = Some(Classification::SignatureChanged);
+            expected[0].previous_signature = Some("fn foo(a: i32) -> i32".to_string());
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_classify_as_body_only_when_base_signature_is_identical() {
+            let mut head = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 4 },
+            )];
+            let base = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 4 },
+            )];
+            expected[0].classification = Some(Classification::BodyOnly);
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        // Matching is by (name, container), not name alone: a base-side
+        // method of a different container must not be treated as this
+        // head symbol's base counterpart, even though the bare name
+        // matches.
+        #[test]
+        fn should_classify_as_added_when_base_match_has_different_container() {
+            let mut head = vec![symbol(
+                "save",
+                Some("impl Foo"),
+                "fn save(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base = vec![symbol(
+                "save",
+                Some("impl Bar"),
+                "fn save(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "save",
+                Some("impl Foo"),
+                "fn save(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected[0].classification = Some(Classification::Added);
+            // The base's "save" (impl Bar) never matched any head symbol,
+            // and its range does overlap `old_changed_ranges` in this case
+            // — but this test passes an empty range set, so nothing
+            // qualifies as removed either. See the dedicated removed-symbol
+            // tests below for that path.
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_report_removed_when_base_only_symbol_overlaps_old_changed_ranges() {
+            let mut head: Vec<ExtractedSymbol> = vec![];
+            let base = vec![symbol(
+                "deprecated_helper",
+                None,
+                "fn deprecated_helper()",
+                LineRange { start: 5, end: 7 },
+            )];
+            let old_changed_ranges = vec![LineRange { start: 6, end: 6 }];
+
+            let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+
+            let expected_head: Vec<ExtractedSymbol> = vec![];
+            let expected_removed = vec![RemovedSymbol {
+                name: "deprecated_helper".to_string(),
+                kind: SymbolKind::Function,
+                path: "src/lib.rs".to_string(),
+                signature: "fn deprecated_helper()".to_string(),
+            }];
+
+            assert_eq!(expected_head, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_not_report_removed_when_base_only_symbol_does_not_overlap_old_changed_ranges() {
+            let mut head: Vec<ExtractedSymbol> = vec![];
+            let base = vec![symbol(
+                "unrelated_helper",
+                None,
+                "fn unrelated_helper()",
+                LineRange { start: 50, end: 52 },
+            )];
+            // The diff touched line 6 only, nowhere near this symbol's
+            // base-side range — an edit elsewhere in the file must not
+            // make every other base-only symbol show up as "removed".
+            let old_changed_ranges = vec![LineRange { start: 6, end: 6 }];
+
+            let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+            assert_eq!(expected_removed, removed);
+        }
+
+        // Regression: matching must key on (name, container), not name
+        // alone. Two base-side symbols share the bare name "helper" but
+        // have different containers; only one has a head-side match. If
+        // matching were name-only, the matched "impl Foo" head symbol
+        // could wrongly be treated as also covering "impl Bar"'s base
+        // symbol, silently dropping it instead of reporting it removed.
+        #[test]
+        fn should_report_removed_when_a_second_base_symbol_of_same_name_has_no_head_match() {
+            // Base has two distinct "helper" symbols distinguished by
+            // container; head only kept the "impl Foo" one.
+            let mut head = vec![symbol(
+                "helper",
+                Some("impl Foo"),
+                "fn helper(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base = vec![
+                symbol(
+                    "helper",
+                    Some("impl Foo"),
+                    "fn helper(&self)",
+                    LineRange { start: 1, end: 3 },
+                ),
+                symbol(
+                    "helper",
+                    Some("impl Bar"),
+                    "fn helper(&self)",
+                    LineRange { start: 10, end: 12 },
+                ),
+            ];
+            let old_changed_ranges = vec![LineRange { start: 11, end: 11 }];
+
+            let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+
+            let mut expected_head = vec![symbol(
+                "helper",
+                Some("impl Foo"),
+                "fn helper(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected_head[0].classification = Some(Classification::BodyOnly);
+            let expected_removed = vec![RemovedSymbol {
+                name: "helper".to_string(),
+                kind: SymbolKind::Function,
+                path: "src/lib.rs".to_string(),
+                signature: "fn helper(&self)".to_string(),
+            }];
+
+            assert_eq!(expected_head, head);
+            assert_eq!(expected_removed, removed);
         }
     }
 }

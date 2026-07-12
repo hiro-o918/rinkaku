@@ -7,15 +7,24 @@
 //! This module turns a `Report` into either Markdown (the default, meant
 //! for humans and LLMs) or JSON (`serde`-derived, for machine consumption).
 //!
-//! Markdown renders as four sections, in this order: a "Change graph" tree
-//! (names only, rooted at the graph's auto-detected entry points) giving
-//! the reader a call-hierarchy reading order; "Definitions" — the full
-//! signature of every changed symbol, in the same tree order, each shown
-//! exactly once (ADR 0008's decision to avoid duplicating a symbol
-//! reachable from multiple roots); "Tests" — a per-file count of changed
-//! test symbols excluded from the graph/definitions above by default (ADR
-//! 0009); "Other changed files" — files with no changed-symbol-level
-//! content (e.g. pure renames); and "Skipped files".
+//! Markdown renders in this order: a "Change graph" tree (names only,
+//! rooted at the graph's auto-detected entry points) giving the reader a
+//! call-hierarchy reading order, with an optional "Hotspots" sub-section
+//! (ADR 0013) right after it; "Definitions" — the full signature of every
+//! changed symbol, in the same tree order, each shown exactly once (ADR
+//! 0008's decision to avoid duplicating a symbol reachable from multiple
+//! roots); "Removed symbols" — base-side symbols with no head-side
+//! counterpart at all (ADR 0014), omitted when empty; "Tests" — a per-file
+//! count of changed test symbols excluded from the graph/definitions above
+//! by default (ADR 0009); "Other changed files" — files with no
+//! changed-symbol-level content (e.g. pure renames); and "Skipped files".
+//!
+//! ADR 0014 also marks each "Change graph"/"Hotspots"/"Definitions" line
+//! with its contract-impact classification (`— new` / `— signature
+//! changed`; `body_only` and not-attempted classifications render
+//! unmarked), and a `signature_changed` symbol's "Definitions" entry shows
+//! a ` ```diff ` block (base signature as `-`, head signature as `+`)
+//! instead of the plain fenced signature every other classification gets.
 //!
 //! Skipped files are listed, never silently dropped, with one exception:
 //! `SkipReason::Generated` entries are omitted from Markdown entirely (ADR
@@ -29,7 +38,7 @@
 //! know "did this change come with tests?" even though the individual test
 //! signatures are noise (ADR 0009).
 
-use crate::extract::{ExtractedSymbol, SymbolKind};
+use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
 use crate::graph::{Hotspot, Node, NodeId, SymbolGraph};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -58,6 +67,14 @@ pub struct Report {
     /// consumers get it without recomputing the aggregation themselves,
     /// matching how `graph` itself is already exposed alongside `files`.
     pub hotspots: Vec<Hotspot>,
+    /// Symbols present on the base side of a diff but absent from the head
+    /// side entirely (ADR 0014's `removed` classification) — reported
+    /// separately from `files` since a removed symbol has no head-side
+    /// signature/range/dependencies of its own. Always empty when no base
+    /// content was available to classify against (see
+    /// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter),
+    /// same as every symbol's `classification` staying `None` in that case.
+    pub removed: Vec<crate::extract::RemovedSymbol>,
 }
 
 /// Extracted symbols for a single changed file.
@@ -199,6 +216,7 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
         && report.tests.is_empty()
         && files_with_no_symbols.is_empty()
         && visible_skipped.is_empty()
+        && report.removed.is_empty()
     {
         return Ok(String::new());
     }
@@ -240,6 +258,28 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
             };
             render_definition(&mut out, path, symbol)?;
         }
+    }
+
+    if !report.removed.is_empty() {
+        writeln!(out, "## Removed symbols")?;
+        writeln!(out)?;
+        // `removed_symbol_label` omits `container` (see its own doc
+        // comment: `RemovedSymbol` carries no stable id to disambiguate
+        // with), so two distinct removed symbols that share name+kind but
+        // differ only by container — e.g. the same method name removed
+        // from two different impls/classes in one file — would otherwise
+        // render as identical duplicate lines. Deduplicated here (first
+        // occurrence kept, `report.removed`'s own order otherwise
+        // preserved) rather than by changing the label itself, since the
+        // label's job is display, not identity.
+        let mut printed_lines: HashSet<String> = HashSet::new();
+        for removed in &report.removed {
+            let line = removed_symbol_label(removed);
+            if printed_lines.insert(line.clone()) {
+                writeln!(out, "- {line}")?;
+            }
+        }
+        writeln!(out)?;
     }
 
     if !report.tests.is_empty() {
@@ -439,7 +479,7 @@ fn render_tree_node(
     let Some((path, symbol)) = lookup.get(id) else {
         return Ok(());
     };
-    let label = tree_label(path, symbol);
+    let label = labeled_with_marker(path, symbol);
 
     if !printed.insert(id.to_string()) {
         writeln!(out, "{indent}- {label} (see above)")?;
@@ -487,25 +527,53 @@ fn render_tree_node(
 }
 
 /// Renders one symbol's "Definitions" entry: a `###` heading using the same
-/// label as the tree, the fenced signature (container comment included, as
-/// in the pre-ADR-0008 rendering), and its unchanged 1-hop `dependencies`
-/// under "Depends on:".
+/// label as the tree (with ADR 0014's contract-impact marker, same as
+/// "Change graph"/"Hotspots"), the signature block, and its unchanged 1-hop
+/// `dependencies` under "Depends on:".
+///
+/// The signature block is a plain fence for every classification except
+/// [`Classification::SignatureChanged`] (or classification not attempted),
+/// which instead gets a ` ```diff ` block showing the base signature as a
+/// `-` line and the head signature as a `+` line — the same before/after
+/// shape a reviewer already reads diffs in, applied to just the signature
+/// rather than the whole file. The container comment line, when present, is
+/// unchanged either way (not part of the diff, since it never differs
+/// between base and head — `find_container`'s output depends only on
+/// enclosing-block structure, not on the signature text being compared).
 fn render_definition(
     out: &mut String,
     path: &str,
     symbol: &ExtractedSymbol,
 ) -> Result<(), RenderError> {
-    writeln!(out, "### {}", tree_label(path, symbol))?;
+    writeln!(out, "### {}", labeled_with_marker(path, symbol))?;
     writeln!(out)?;
 
     let container_line = symbol.container.as_deref().map(|c| format!("// {c}"));
-    let fence = fence_for(container_line.as_deref(), &symbol.signature);
-    writeln!(out, "{fence}")?;
-    if let Some(container_line) = &container_line {
-        writeln!(out, "{container_line}")?;
+    match (symbol.classification, &symbol.previous_signature) {
+        (Some(Classification::SignatureChanged), Some(previous_signature)) => {
+            let fence = fence_for_diff(
+                container_line.as_deref(),
+                previous_signature,
+                &symbol.signature,
+            );
+            writeln!(out, "{fence}diff")?;
+            if let Some(container_line) = &container_line {
+                writeln!(out, "{container_line}")?;
+            }
+            writeln!(out, "-{previous_signature}")?;
+            writeln!(out, "+{}", symbol.signature)?;
+            writeln!(out, "{fence}")?;
+        }
+        _ => {
+            let fence = fence_for(container_line.as_deref(), &symbol.signature);
+            writeln!(out, "{fence}")?;
+            if let Some(container_line) = &container_line {
+                writeln!(out, "{container_line}")?;
+            }
+            writeln!(out, "{}", symbol.signature)?;
+            writeln!(out, "{fence}")?;
+        }
     }
-    writeln!(out, "{}", symbol.signature)?;
-    writeln!(out, "{fence}")?;
     writeln!(out)?;
 
     if !symbol.dependencies.is_empty() || symbol.omitted_dependency_matches > 0 {
@@ -552,23 +620,55 @@ fn tree_label(path: &str, symbol: &ExtractedSymbol) -> String {
     )
 }
 
+/// [`tree_label`] with ADR 0014's `— <marker>` contract-impact annotation
+/// appended (`— new` / `— signature changed`), or the bare label unchanged
+/// when [`classification_marker`] has nothing to say for this symbol
+/// (`body_only` or classification not attempted). Shared by
+/// `render_tree_node`'s tree rows and [`hotspot_label`]'s "Hotspots" lines
+/// so the marker reads identically in both sections, same as `tree_label`
+/// itself already does.
+fn labeled_with_marker(path: &str, symbol: &ExtractedSymbol) -> String {
+    let label = tree_label(path, symbol);
+    match classification_marker(symbol.classification) {
+        Some(marker) => format!("{label} — {marker}"),
+        None => label,
+    }
+}
+
 /// Builds the "Hotspots" line label for a [`Hotspot`], reusing
-/// [`tree_label`] via `lookup` so a hotspot's label is identical to how the
-/// same symbol is labeled in "Change graph"/"Definitions" (ADR 0013's
-/// requirement that labels stay consistent across sections) — including
-/// the `:{start_line}` disambiguation suffix when applicable.
+/// [`labeled_with_marker`] via `lookup` so a hotspot's label (including its
+/// ADR 0014 marker) is identical to how the same symbol is labeled in
+/// "Change graph"/"Definitions" (ADR 0013's requirement that labels stay
+/// consistent across sections) — including the `:{start_line}`
+/// disambiguation suffix when applicable.
 ///
-/// Falls back to a bare `{name} ({path})` (no kind prefix) when `lookup` has
-/// no matching `ExtractedSymbol` for `hotspot.id` — defensive, since
-/// `pipeline::analyze_diff` always builds `hotspots` from the same `graph`
-/// whose node ids match `files`' stamped symbol ids (same invariant
+/// Falls back to a bare `{name} ({path})` (no kind prefix, no marker) when
+/// `lookup` has no matching `ExtractedSymbol` for `hotspot.id` — defensive,
+/// since `pipeline::analyze_diff` always builds `hotspots` from the same
+/// `graph` whose node ids match `files`' stamped symbol ids (same invariant
 /// `render_tree_node`'s own lookup-miss guards rely on), so this branch is
 /// not expected to trigger in practice.
 fn hotspot_label(hotspot: &Hotspot, lookup: &SymbolLookup) -> String {
     match lookup.get(&hotspot.id) {
-        Some((path, symbol)) => tree_label(path, symbol),
+        Some((path, symbol)) => labeled_with_marker(path, symbol),
         None => format!("{} ({})", hotspot.name, hotspot.path),
     }
+}
+
+/// Builds the "Removed symbols" line label for a [`RemovedSymbol`]:
+/// `{prefix} {name} ({path})`, the same form [`tree_label`] uses, minus the
+/// `:{start_line}` disambiguation suffix — `RemovedSymbol` carries no
+/// stable id the way `ExtractedSymbol` does (a removed symbol was never
+/// stamped into the graph, see `graph::collect_nodes`), so there is no
+/// signal to disambiguate two same-named removed symbols by, the same way
+/// there would be nothing to key a `(see above)` reference off of either.
+fn removed_symbol_label(removed: &RemovedSymbol) -> String {
+    format!(
+        "{} {} ({})",
+        symbol_kind_prefix(removed.kind),
+        removed.name,
+        removed.path
+    )
 }
 
 /// The `(path)` or `(path:start_line)` portion shared by [`tree_label`] and
@@ -621,6 +721,21 @@ fn symbol_kind_prefix(kind: SymbolKind) -> &'static str {
         SymbolKind::Class => "class",
         SymbolKind::Interface => "interface",
         SymbolKind::TypeAlias => "type",
+    }
+}
+
+/// The `— <marker>` annotation text for a symbol's contract impact (ADR
+/// 0014), reusing the existing `— ` idiom already used for `— uses:`/`—
+/// used by`/`— dependency cycle` annotations elsewhere in this module.
+/// `None` for [`Classification::BodyOnly`] (nothing contract-relevant to
+/// call out) and for `None` classification (never attempted — see
+/// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter): both
+/// render unmarked rather than guessing.
+fn classification_marker(classification: Option<Classification>) -> Option<&'static str> {
+    match classification {
+        Some(Classification::Added) => Some("new"),
+        Some(Classification::SignatureChanged) => Some("signature changed"),
+        Some(Classification::BodyOnly) | None => None,
     }
 }
 
@@ -711,6 +826,23 @@ fn fence_for(container_line: Option<&str>, signature: &str) -> String {
     "`".repeat((longest_run + 1).max(3))
 }
 
+/// [`fence_for`]'s sibling for a `signature_changed` symbol's ` ```diff `
+/// block (ADR 0014): widens against both the base and head signature text,
+/// not just the head signature `fence_for` alone considers, since the
+/// fenced block's content is now both lines.
+fn fence_for_diff(
+    container_line: Option<&str>,
+    previous_signature: &str,
+    signature: &str,
+) -> String {
+    let longest_run = [container_line.unwrap_or(""), previous_signature, signature]
+        .iter()
+        .flat_map(|text| longest_backtick_run(text))
+        .max()
+        .unwrap_or(0);
+    "`".repeat((longest_run + 1).max(3))
+}
+
 /// Length of the longest run of consecutive `` ` `` characters in `text`.
 fn longest_backtick_run(text: &str) -> Option<usize> {
     text.split(|c| c != '`')
@@ -752,6 +884,8 @@ mod tests {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }
     }
 
@@ -775,6 +909,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "".to_string();
@@ -807,6 +942,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -851,6 +987,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -897,6 +1034,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -929,6 +1067,7 @@ fn foo()
                 symbol_count: 1,
             }],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -958,6 +1097,7 @@ fn foo()
                 symbol_count: 3,
             }],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -996,6 +1136,7 @@ fn foo()
                 symbol_count: 2,
             }],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1047,6 +1188,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "".to_string();
@@ -1079,6 +1221,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1113,6 +1256,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1130,7 +1274,8 @@ fn foo()
     \"roots\": []
   },
   \"tests\": [],
-  \"hotspots\": []
+  \"hotspots\": [],
+  \"removed\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
@@ -1158,6 +1303,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1209,6 +1355,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1244,6 +1391,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1287,6 +1435,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1350,6 +1499,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1420,6 +1570,7 @@ fn foo(a: i32, b: i32)
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1501,6 +1652,7 @@ fn resolve_pr_base_sha() -> Result<String>
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1588,6 +1740,7 @@ fn c()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1655,6 +1808,7 @@ fn bar()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1764,6 +1918,7 @@ fn resolve_pr_base_sha()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1876,6 +2031,7 @@ struct Config { path: String }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1970,6 +2126,7 @@ type UpsertItemsResponse struct { Count int }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2051,6 +2208,7 @@ struct Dup { b: i32 }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2113,6 +2271,7 @@ fn bar()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2188,6 +2347,7 @@ struct Config { path: String }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2267,6 +2427,7 @@ struct Inner { x: i32 }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2322,6 +2483,7 @@ struct Node { next: Option<Box<Node>> }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2373,6 +2535,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2432,6 +2595,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2487,6 +2651,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2544,6 +2709,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2594,6 +2760,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2644,6 +2811,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2682,6 +2850,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2729,6 +2898,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2822,6 +2992,7 @@ fn foo()
                 name: "UpsertItemsRequest".to_string(),
                 used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
             }],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2891,6 +3062,7 @@ func HandleBar(req UpsertItemsRequest) error
                 name: "ghost".to_string(),
                 used_by: vec!["a".to_string(), "b".to_string()],
             }],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2937,6 +3109,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2970,6 +3143,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -3021,6 +3195,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -3068,6 +3243,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -3112,11 +3288,597 @@ fn foo()
     ]
   },
   \"tests\": [],
-  \"hotspots\": []
+  \"hotspots\": [],
+  \"removed\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
 
         assert_eq!(expected, actual);
+    }
+
+    mod classification_rendering_tests {
+        use super::*;
+        use crate::extract::{Classification, RemovedSymbol};
+        use pretty_assertions::assert_eq;
+        use rstest::rstest;
+
+        #[test]
+        fn should_append_new_marker_to_tree_and_definition_when_symbol_is_added() {
+            let mut foo = symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()");
+            foo.classification = Some(Classification::Added);
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![foo],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            };
+
+            let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs) — new
+
+## Definitions
+
+### fn foo (src/lib.rs) — new
+
+```
+fn foo()
+```
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_render_diff_block_and_marker_when_symbol_is_signature_changed() {
+            let mut foo = symbol(
+                "src/lib.rs::foo",
+                "foo",
+                SymbolKind::Function,
+                "fn foo(a: i32, b: i32) -> i32",
+            );
+            foo.classification = Some(Classification::SignatureChanged);
+            foo.previous_signature = Some("fn foo(a: i32) -> i32".to_string());
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![foo],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            };
+
+            let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs) — signature changed
+
+## Definitions
+
+### fn foo (src/lib.rs) — signature changed
+
+```diff
+-fn foo(a: i32) -> i32
++fn foo(a: i32, b: i32) -> i32
+```
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        // A signature-changed symbol with a container gets the container
+        // comment line rendered unchanged above the diff lines — it is not
+        // itself part of the base/head comparison (see `render_definition`'s
+        // doc comment).
+        #[test]
+        fn should_render_container_comment_above_diff_lines_when_signature_changed_symbol_has_container()
+         {
+            let mut bar = symbol(
+                "src/lib.rs::bar",
+                "bar",
+                SymbolKind::Function,
+                "fn bar(&self, extra: i32) -> i32",
+            );
+            bar.container = Some("impl Foo".to_string());
+            bar.classification = Some(Classification::SignatureChanged);
+            bar.previous_signature = Some("fn bar(&self) -> i32".to_string());
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![bar],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::bar", "src/lib.rs", "bar")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::bar".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            };
+
+            let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn bar (src/lib.rs) — signature changed
+
+## Definitions
+
+### fn bar (src/lib.rs) — signature changed
+
+```diff
+// impl Foo
+-fn bar(&self) -> i32
++fn bar(&self, extra: i32) -> i32
+```
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        // `body_only` and unattempted (`None`) classification both render
+        // completely unmarked — no `— <marker>` suffix anywhere, and a
+        // plain (non-diff) fenced signature block.
+        #[rstest]
+        #[case::should_render_unmarked_when_classification_is_body_only(Some(
+            Classification::BodyOnly
+        ))]
+        #[case::should_render_unmarked_when_classification_is_none(None)]
+        fn should_render_unmarked_tree_and_definition(
+            #[case] classification: Option<Classification>,
+        ) {
+            let mut foo = symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()");
+            foo.classification = classification;
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![foo],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            };
+
+            let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_append_marker_to_hotspot_line_before_used_by() {
+            let mut shared = symbol(
+                "src/lib.rs::shared",
+                "shared",
+                SymbolKind::Function,
+                "fn shared()",
+            );
+            shared.classification = Some(Classification::SignatureChanged);
+            shared.previous_signature = Some("fn shared(a: i32)".to_string());
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![shared],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::shared", "src/lib.rs", "shared")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::shared".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![Hotspot {
+                    id: "src/lib.rs::shared".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    name: "shared".to_string(),
+                    used_by: vec!["caller_one".to_string(), "caller_two".to_string()],
+                }],
+                removed: vec![],
+            };
+
+            let markdown =
+                render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+            // NOTE: partial assert (searching for one line) rather than a
+            // fully qualified comparison of the whole render — this test's
+            // concern is solely the "Hotspots" line's marker placement, and
+            // the "Change graph"/"Definitions" sections above it are
+            // already covered by other tests in this module (e.g.
+            // `should_render_diff_block_and_marker_when_symbol_is_signature_changed`).
+            let hotspots_line = markdown
+                .lines()
+                .find(|line| line.contains("used by"))
+                .expect("hotspots section must contain the shared symbol's line");
+
+            assert_eq!(
+                "- fn shared (src/lib.rs) — signature changed — used by 2: caller_one, caller_two",
+                hotspots_line
+            );
+        }
+
+        #[test]
+        fn should_render_removed_symbols_section_between_definitions_and_tests() {
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![symbol(
+                        "src/lib.rs::foo",
+                        "foo",
+                        SymbolKind::Function,
+                        "fn foo()",
+                    )],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![TestFileSummary {
+                    path: "src/lib.rs".to_string(),
+                    symbol_count: 1,
+                }],
+                hotspots: vec![],
+                removed: vec![RemovedSymbol {
+                    name: "old_helper".to_string(),
+                    kind: SymbolKind::Function,
+                    path: "src/lib.rs".to_string(),
+                    signature: "fn old_helper()".to_string(),
+                }],
+            };
+
+            let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+## Removed symbols
+
+- fn old_helper (src/lib.rs)
+
+## Tests
+
+- src/lib.rs: 1 changed test symbol
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        // A diff whose only changed-symbol-level content is a removal (no
+        // graph nodes at all, e.g. a whole function deleted with nothing
+        // added back — see `pipeline::tests::classification_wiring_tests`'s
+        // "hunk only removes lines" case) must still render "## Removed
+        // symbols" on its own — the empty-output guard at the top of
+        // `render_markdown` must not treat an empty `graph.nodes` as "there
+        // is nothing to say" when `removed` is non-empty.
+        #[test]
+        fn should_render_removed_symbols_section_alone_when_graph_is_empty() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                    roots: vec![],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![RemovedSymbol {
+                    name: "old_helper".to_string(),
+                    kind: SymbolKind::Function,
+                    path: "src/lib.rs".to_string(),
+                    signature: "fn old_helper()".to_string(),
+                }],
+            };
+
+            let expected = "\
+## Removed symbols
+
+- fn old_helper (src/lib.rs)
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        // Regression test: `removed_symbol_label` deliberately omits
+        // `container` (see its own doc comment), so two distinct removed
+        // symbols sharing name+kind but differing only by container (e.g.
+        // the same method name removed from two different impls in one
+        // file) render identical lines. Without deduplication this would
+        // print the same line twice; the section must show it once, in
+        // first-occurrence order.
+        #[test]
+        fn should_deduplicate_identical_removed_symbol_lines() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                    roots: vec![],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![
+                    RemovedSymbol {
+                        name: "save".to_string(),
+                        kind: SymbolKind::Function,
+                        path: "src/lib.rs".to_string(),
+                        signature: "fn save(&self)".to_string(),
+                    },
+                    RemovedSymbol {
+                        name: "other".to_string(),
+                        kind: SymbolKind::Function,
+                        path: "src/lib.rs".to_string(),
+                        signature: "fn other(&self)".to_string(),
+                    },
+                    // Same name+kind+path as the first entry, but a
+                    // different container/signature — the label is
+                    // identical to the first line even though this is a
+                    // genuinely distinct removed symbol (different impl).
+                    RemovedSymbol {
+                        name: "save".to_string(),
+                        kind: SymbolKind::Function,
+                        path: "src/lib.rs".to_string(),
+                        signature: "fn save(&self, id: &str)".to_string(),
+                    },
+                ],
+            };
+
+            let expected = "\
+## Removed symbols
+
+- fn save (src/lib.rs)
+- fn other (src/lib.rs)
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_omit_removed_symbols_section_when_removed_is_empty() {
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![symbol(
+                        "src/lib.rs::foo",
+                        "foo",
+                        SymbolKind::Function,
+                        "fn foo()",
+                    )],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            };
+
+            let markdown =
+                render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert!(!markdown.contains("## Removed symbols"));
+        }
+
+        // A diff isn't valid Markdown to embed unfenced — ensure the fence
+        // still widens against a backtick run appearing in either the base
+        // or head signature text, not just the head signature the way
+        // `fence_for` alone would check.
+        #[test]
+        fn should_widen_fence_when_previous_signature_contains_a_backtick_run() {
+            let mut foo = symbol(
+                "src/lib.rs::foo",
+                "foo",
+                SymbolKind::Function,
+                "fn foo() -> i32",
+            );
+            foo.classification = Some(Classification::SignatureChanged);
+            // Three consecutive backticks in the *base* signature only —
+            // proves the fence widens against `previous_signature`, not
+            // just the head `signature` the way plain `fence_for` would.
+            foo.previous_signature =
+                Some("fn foo() { let s = \"```rust\\nfn f() {}\\n```\"; }".to_string());
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![foo],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            };
+
+            let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs) — signature changed
+
+## Definitions
+
+### fn foo (src/lib.rs) — signature changed
+
+````diff
+-fn foo() { let s = \"```rust\\nfn f() {}\\n```\"; }
++fn foo() -> i32
+````
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_serialize_classification_and_previous_signature_and_removed_in_json() {
+            let mut foo = symbol(
+                "src/lib.rs::foo",
+                "foo",
+                SymbolKind::Function,
+                "fn foo(a: i32, b: i32) -> i32",
+            );
+            foo.classification = Some(Classification::SignatureChanged);
+            foo.previous_signature = Some("fn foo(a: i32) -> i32".to_string());
+            let report = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![foo],
+                }],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![RemovedSymbol {
+                    name: "old_helper".to_string(),
+                    kind: SymbolKind::Function,
+                    path: "src/lib.rs".to_string(),
+                    signature: "fn old_helper()".to_string(),
+                }],
+            };
+
+            let expected = "\
+{
+  \"files\": [
+    {
+      \"path\": \"src/lib.rs\",
+      \"symbols\": [
+        {
+          \"id\": \"src/lib.rs::foo\",
+          \"name\": \"foo\",
+          \"kind\": \"Function\",
+          \"signature\": \"fn foo(a: i32, b: i32) -> i32\",
+          \"range\": {
+            \"start\": 1,
+            \"end\": 1
+          },
+          \"container\": null,
+          \"dependencies\": [],
+          \"omitted_matches\": 0,
+          \"classification\": \"signature_changed\",
+          \"previous_signature\": \"fn foo(a: i32) -> i32\"
+        }
+      ]
+    }
+  ],
+  \"skipped\": [],
+  \"graph\": {
+    \"nodes\": [
+      {
+        \"id\": \"src/lib.rs::foo\",
+        \"path\": \"src/lib.rs\",
+        \"name\": \"foo\"
+      }
+    ],
+    \"edges\": [],
+    \"roots\": [
+      \"src/lib.rs::foo\"
+    ]
+  },
+  \"tests\": [],
+  \"hotspots\": [],
+  \"removed\": [
+    {
+      \"name\": \"old_helper\",
+      \"kind\": \"Function\",
+      \"path\": \"src/lib.rs\",
+      \"signature\": \"fn old_helper()\"
+    }
+  ]
+}"
+            .to_string();
+            let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
+
+            assert_eq!(expected, actual);
+        }
     }
 }
