@@ -20,7 +20,9 @@
 //!   that assumption doesn't hold, line numbers in the extracted symbols
 //!   may not line up with the actual file content.
 
-use clap::Parser;
+mod self_update;
+
+use clap::{Parser, Subcommand};
 use rinkaku_core::deps::TagsResolver;
 use rinkaku_core::language::language_for_path;
 use rinkaku_core::pipeline::analyze_diff;
@@ -32,6 +34,12 @@ use std::io::Read;
 #[derive(Parser, Debug, PartialEq, Eq)]
 #[command(name = "rinkaku", version, about, long_about = None)]
 struct Cli {
+    /// Subcommand to run. Omitted for the default diff-condensation flow
+    /// (stdin / `--base` / `--deps` / `--format` below), which stays the
+    /// primary, backward-compatible entry point.
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Base ref to diff against (runs `git diff <base>...<head>` instead
     /// of reading from stdin).
     #[arg(long)]
@@ -55,6 +63,16 @@ struct Cli {
     deps: u8,
 }
 
+#[derive(Subcommand, Debug, PartialEq, Eq)]
+enum Command {
+    /// Update rinkaku to the latest GitHub release in place. If you
+    /// installed via Homebrew or `cargo install`, prefer `brew upgrade`
+    /// or `cargo install rinkaku` instead so your package manager stays
+    /// in sync — self-update works either way, but it bypasses those
+    /// managers' bookkeeping.
+    SelfUpdate,
+}
+
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum Format {
     Md,
@@ -73,6 +91,10 @@ impl From<Format> for OutputFormat {
 fn main() -> anyhow::Result<()> {
     env_logger::init();
     let cli = Cli::parse();
+
+    if matches!(cli.command, Some(Command::SelfUpdate)) {
+        return self_update::run_self_update();
+    }
 
     let report = match &cli.base {
         Some(base) => {
@@ -301,6 +323,7 @@ mod tests {
     #[test]
     fn should_default_to_markdown_head_and_no_base_when_no_args_given() {
         let expected = Cli {
+            command: None,
             base: None,
             head: "HEAD".to_string(),
             format: Format::Md,
@@ -314,6 +337,7 @@ mod tests {
     #[test]
     fn should_set_base_when_base_flag_given() {
         let expected = Cli {
+            command: None,
             base: Some("main".to_string()),
             head: "HEAD".to_string(),
             format: Format::Md,
@@ -327,6 +351,7 @@ mod tests {
     #[test]
     fn should_set_base_and_head_when_both_flags_given() {
         let expected = Cli {
+            command: None,
             base: Some("main".to_string()),
             head: "feature-branch".to_string(),
             format: Format::Md,
@@ -340,6 +365,7 @@ mod tests {
     #[test]
     fn should_set_format_json_when_format_flag_given() {
         let expected = Cli {
+            command: None,
             base: None,
             head: "HEAD".to_string(),
             format: Format::Json,
@@ -360,6 +386,7 @@ mod tests {
     #[test]
     fn should_set_deps_zero_when_deps_flag_given() {
         let expected = Cli {
+            command: None,
             base: None,
             head: "HEAD".to_string(),
             format: Format::Md,
@@ -375,6 +402,29 @@ mod tests {
         let actual = Cli::try_parse_from(["rinkaku", "--deps", "2"]);
 
         assert!(actual.is_err());
+    }
+
+    #[test]
+    fn should_set_self_update_command_when_self_update_subcommand_given() {
+        let expected = Cli {
+            command: Some(Command::SelfUpdate),
+            base: None,
+            head: "HEAD".to_string(),
+            format: Format::Md,
+            deps: 1,
+        };
+        let actual = Cli::parse_from(["rinkaku", "self-update"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_verify_cli_definition() {
+        // clap's own consistency check (duplicate args, invalid
+        // configuration, etc.) — mirrors skem's `Cli::command().debug_assert()`
+        // convention for catching CLI wiring mistakes at test time.
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
     }
 
     /// Runs `git` inside `dir`, panicking with the captured stderr on
@@ -447,6 +497,7 @@ mod tests {
     fn should_skip_repository_scan_when_deps_is_zero() {
         let dir = tempfile::TempDir::new().expect("create tempdir");
         let cli = Cli {
+            command: None,
             base: None,
             head: "HEAD".to_string(),
             format: Format::Md,
@@ -475,6 +526,7 @@ mod tests {
     fn should_fail_when_deps_is_one_and_cwd_has_no_git_repository() {
         let dir = tempfile::TempDir::new().expect("create tempdir");
         let cli = Cli {
+            command: None,
             base: None,
             head: "HEAD".to_string(),
             format: Format::Md,
