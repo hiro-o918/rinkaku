@@ -1,6 +1,6 @@
 # Experiment 0001: rinkaku change maps as an entry point for LLM code review
 
-- Status: round 1 complete, round 2 planned
+- Status: rounds 1 and 2 complete
 - Date: 2026-07-12
 
 ## Hypothesis
@@ -87,10 +87,54 @@ Finding overlap and uniqueness:
 - Findings were adjudicated by the same orchestrator that designed the
   experiment.
 
+## Results (round 2)
+
+Same method, second subject: the full TUI branch after the shell stage
+(~6.3k added lines; new ratatui shell modules plus wiring into the
+existing binary crate — a mixed greenfield/brownfield diff whose map
+carried 2 `signature changed` markers and a removed-symbols section).
+
+| Metric              | A (map)     | B (control) |
+| ------------------- | ----------- | ----------- |
+| Output tokens       | 145.1k      | 103.0k      |
+| Tool calls          | 32          | 41          |
+| Wall clock          | 303s        | 420s        |
+| Critical findings   | 0           | 0           |
+| Should-fix findings | 3           | 3           |
+
+- **Only B** found the round's most actionable defect: the terminal
+  init call panics (raw panic, exit code 101) in non-TTY environments
+  instead of returning an error through the CLI's normal error path.
+  B found it by *executing the binary*, spending its extra tool calls
+  on dynamic verification — a class of defect the static map cannot
+  surface in principle.
+- **Only A** found documentation/contract drift: a doc comment
+  claiming an invariant ("every action re-targets the cursor") that
+  two code paths bypass, and an untested self-referencing-edge
+  boundary in the detail view — consistency findings of the kind the
+  map's structural framing keeps in view.
+- Token pattern reversed from round 1: the map-assisted agent spent
+  ~40% more tokens this round. The map neither reliably saves nor
+  costs tokens at these diff sizes; it redirects attention.
+
+## Conclusions (after 2 rounds)
+
+- The map is a **complement, not a substitute**, and the complement
+  axis is now clearer: map-assisted review is stronger on
+  integration seams, cross-module contracts, and doc/impl drift;
+  unassisted review left more budget for convention checks (round 1)
+  and dynamic execution (round 2), each of which produced the round's
+  best unique finding.
+- Neither arm dominated on any metric across both rounds; running
+  **both passes** is the defensible default, which CLAUDE.md's
+  "Reviewing changes" section now requires.
+- Token efficiency is not a selling point of the map at PR scale;
+  attention allocation is.
+
 ## Next
 
-- Round 2 on a brownfield diff (the TUI shell stage, which wires new
-  code into the existing binary crate) to test the contract-marker
-  side and re-check the convention-level regression.
-- If the complement pattern holds, document the map-first recipe in
-  the README's LLM usage section.
+- Optional round 3 with a review pass that combines the map with an
+  explicit "execute the binary" instruction, to test whether one
+  agent can cover both axes without losing either.
+- Document the map-first recipe in the README's LLM usage section
+  (map from a trusted build, paired with an independent pass).
