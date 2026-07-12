@@ -425,12 +425,16 @@ fn render_tree_node(
     }
 
     let kids = children.get(id).map(Vec::as_slice).unwrap_or(&[]);
-    let folded_names: Vec<&str> = kids
+    let folded_names: Vec<String> = kids
         .iter()
         .filter(|&&(child_id, is_cycle)| {
             !is_cycle && !roots.contains(child_id) && is_foldable(child_id, lookup, children)
         })
-        .filter_map(|&(child_id, _)| lookup.get(child_id).map(|(_, sym)| sym.name.as_str()))
+        .filter_map(|&(child_id, _)| {
+            lookup
+                .get(child_id)
+                .map(|(child_path, sym)| folded_name(child_path, sym))
+        })
         .collect();
 
     if folded_names.is_empty() {
@@ -513,28 +517,54 @@ fn render_definition(
 /// [`symbol_kind_prefix`], fixed per [`SymbolKind`] rather than derived
 /// from the signature text, so it stays stable across languages.
 ///
-/// When `symbol.id` was disambiguated by line number (`graph::collect_nodes`
-/// appends `@{start_line}` whenever a report contains more than one symbol
-/// sharing the same `(path, name)` pair, e.g. two overloaded free
-/// functions), the label includes that line number too —
+/// When `symbol.id` was disambiguated by line number (see
+/// [`symbol_location`]), the label includes that line number too —
 /// `{prefix} {name} ({path}:{start_line})` — so the otherwise-identical
-/// entries stay distinguishable in "Change graph"/"Definitions". Detected
-/// by comparing `symbol.id` against the plain (non-disambiguated) form
-/// rather than parsing the id string, since `symbol.range.start` is the
-/// exact same line number `collect_nodes` used to build it.
+/// entries stay distinguishable in "Change graph"/"Definitions".
 fn tree_label(path: &str, symbol: &ExtractedSymbol) -> String {
-    let plain_id = format!("{path}::{}", symbol.name);
-    let location = if symbol.id == plain_id {
-        path.to_string()
-    } else {
-        format!("{path}:{}", symbol.range.start)
-    };
     format!(
         "{} {} ({})",
         symbol_kind_prefix(symbol.kind),
         symbol.name,
-        location
+        symbol_location(path, symbol)
     )
+}
+
+/// The `(path)` or `(path:start_line)` portion shared by [`tree_label`] and
+/// folded `— uses: ...` annotations (see `render_tree_node`).
+///
+/// `graph::collect_nodes` appends `@{start_line}` to `symbol.id` whenever a
+/// report contains more than one symbol sharing the same `(path, name)`
+/// pair (e.g. two overloaded free functions, or two structs named the same
+/// in different scopes of one file) — comparing `symbol.id` against the
+/// plain (non-disambiguated) form detects that case without parsing the id
+/// string, since `symbol.range.start` is the exact same line number
+/// `collect_nodes` used to build it. Plain (non-disambiguated) symbols get
+/// just `path`.
+fn symbol_location(path: &str, symbol: &ExtractedSymbol) -> String {
+    let plain_id = format!("{path}::{}", symbol.name);
+    if symbol.id == plain_id {
+        path.to_string()
+    } else {
+        format!("{path}:{}", symbol.range.start)
+    }
+}
+
+/// The name shown for a folded child in a `— uses: ...` annotation (see
+/// `render_tree_node`): bare `symbol.name` normally, or `{name}
+/// ({path}:{start_line})` — the same disambiguation [`tree_label`] applies
+/// to tree lines and "Definitions" headers — when `collect_nodes` had to
+/// disambiguate this symbol's id. Without this, two distinct same-named
+/// symbols folded under the same parent would both render as the bare
+/// name (`— uses: Dup, Dup`), indistinguishable from each other even
+/// though "Definitions" shows two different headers for them.
+fn folded_name(path: &str, symbol: &ExtractedSymbol) -> String {
+    let plain_id = format!("{path}::{}", symbol.name);
+    if symbol.id == plain_id {
+        symbol.name.clone()
+    } else {
+        format!("{} ({})", symbol.name, symbol_location(path, symbol))
+    }
 }
 
 /// Maps a [`SymbolKind`] to the short, lowercase word used as a tree/heading
@@ -1810,6 +1840,99 @@ type UpsertItemsRequest struct { Items []Item }
 
 ```
 type UpsertItemsResponse struct { Count int }
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_disambiguate_folded_names_when_duplicate_symbols_fold_under_same_parent() {
+        // Two distinct `Dup` structs in the same file (mirroring an
+        // overloaded/shadowed-name scenario `graph::collect_nodes`
+        // disambiguates by appending `@{start_line}` to the node id) both
+        // fold under `foo`. Bare `Dup, Dup` would be ambiguous — Definitions
+        // shows two distinct `### struct Dup (src/lib.rs:5)` /
+        // `(src/lib.rs:10)` headers, so the folded annotation must use the
+        // same `Name (path:line)` form `tree_label` already uses for
+        // disambiguated symbols, not the bare name.
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    symbol("src/lib.rs::foo", "foo", SymbolKind::Function, "fn foo()"),
+                    ExtractedSymbol {
+                        range: LineRange { start: 5, end: 6 },
+                        ..symbol(
+                            "src/lib.rs::Dup@5",
+                            "Dup",
+                            SymbolKind::Struct,
+                            "struct Dup { a: i32 }",
+                        )
+                    },
+                    ExtractedSymbol {
+                        range: LineRange { start: 10, end: 11 },
+                        ..symbol(
+                            "src/lib.rs::Dup@10",
+                            "Dup",
+                            SymbolKind::Struct,
+                            "struct Dup { b: i32 }",
+                        )
+                    },
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::foo", "src/lib.rs", "foo"),
+                    node("src/lib.rs::Dup@5", "src/lib.rs", "Dup"),
+                    node("src/lib.rs::Dup@10", "src/lib.rs", "Dup"),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "src/lib.rs::foo".to_string(),
+                        to: "src/lib.rs::Dup@5".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "src/lib.rs::foo".to_string(),
+                        to: "src/lib.rs::Dup@10".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn foo (src/lib.rs) — uses: Dup (src/lib.rs:5), Dup (src/lib.rs:10)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+### struct Dup (src/lib.rs:5)
+
+```
+struct Dup { a: i32 }
+```
+
+### struct Dup (src/lib.rs:10)
+
+```
+struct Dup { b: i32 }
 ```
 
 "
