@@ -619,6 +619,87 @@ index e69de29..4b825dc 100644
         assert_eq!(expected, actual);
     }
 
+    /// End-to-end regression test for ADR 0012 decision 2: a Go interface
+    /// and a same-named receiver method that both change in one diff must
+    /// render as a single tree (the method nested under the interface) in
+    /// the "Change graph" section, not as two duplicate top-level roots —
+    /// see the ADR's "listed twice" problem statement. Runs through the
+    /// whole pipeline (`analyze_diff` then `render::render`) rather than
+    /// building a `Report`/`SymbolGraph` by hand, since the point is to
+    /// prove the real `Repo` interface's `referenced_names` (populated by
+    /// `GoSupport::reference_query`) actually produces the edge, not to
+    /// exercise `render.rs`'s formatting in isolation.
+    #[test]
+    fn should_nest_go_receiver_method_under_its_interface_when_both_change_in_one_diff() {
+        let diff = "\
+diff --git a/repo.go b/repo.go
+index e69de29..4b825dc 100644
+--- a/repo.go
++++ b/repo.go
+@@ -1,10 +1,10 @@
+ package main
+
+ type Repo interface {
+-	Save(id string) error
++	Save(id string) (err error)
+ }
+
+ type repoImpl struct{}
+
+ func (r *repoImpl) Save(id string) error {
+-	return errors.New(\"not implemented\")
++	return nil
+ }
+";
+        let source = "\
+package main
+
+type Repo interface {
+	Save(id string) (err error)
+}
+
+type repoImpl struct{}
+
+func (r *repoImpl) Save(id string) error {
+	return nil
+}
+";
+        let read_file = fake_reader(HashMap::from([("repo.go", source)]));
+
+        let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+            .expect("analyze should succeed");
+        let markdown = crate::render::render(&report, crate::render::OutputFormat::Markdown)
+            .expect("markdown render should succeed");
+
+        let expected = "\
+## Change graph
+
+2 changed symbols in 1 file
+
+- interface Repo (repo.go)
+  - fn Save (repo.go)
+
+## Definitions
+
+### interface Repo (repo.go)
+
+```
+Repo interface { Save(id string) (err error) }
+```
+
+### fn Save (repo.go)
+
+```
+// repoImpl
+func (r *repoImpl) Save(id string) error
+```
+
+"
+        .to_string();
+
+        assert_eq!(expected, markdown);
+    }
+
     /// A [`Resolver`] test double that records every name it was asked to
     /// resolve, so `--deps 0`'s "resolver is never called" contract can be
     /// verified directly rather than inferred from empty `dependencies`
