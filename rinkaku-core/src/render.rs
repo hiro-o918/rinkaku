@@ -30,7 +30,7 @@
 //! signatures are noise (ADR 0009).
 
 use crate::extract::{ExtractedSymbol, SymbolKind};
-use crate::graph::{NodeId, SymbolGraph};
+use crate::graph::{Node, NodeId, SymbolGraph};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -205,6 +205,8 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     if !report.graph.nodes.is_empty() {
         writeln!(out, "## Change graph")?;
         writeln!(out)?;
+        writeln!(out, "{}", change_graph_summary(&report.graph.nodes))?;
+        writeln!(out)?;
         render_change_graph(&mut out, &report.graph, &children, &lookup)?;
         writeln!(out)?;
 
@@ -259,6 +261,61 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     }
 
     Ok(out)
+}
+
+/// Builds the one-line summary shown under the "## Change graph" heading,
+/// e.g. `16 changed symbols in 3 files — most in store/items.go (11)`
+/// (ADR 0012 decision 3). Computed from `nodes` alone (not `edges`/`roots`),
+/// so it stays meaningful even if graph-building changes independently.
+///
+/// The `— most in ...` suffix is dropped when every node lives in the same
+/// file: naming "the file with the most nodes" is redundant when there is
+/// only one file to begin with. Ties for "most" go to whichever path's node
+/// appears first in `nodes` (stable, diff-derived order), matching the
+/// tie-break `render_markdown` already relies on elsewhere (e.g. root
+/// order) rather than an arbitrary path-string sort.
+///
+/// Callers must not call this with an empty `nodes` — `render_markdown`
+/// only emits the "Change graph" section (and this summary) when
+/// `graph.nodes` is non-empty, matching pre-ADR-0012 behavior for an empty
+/// graph.
+fn change_graph_summary(nodes: &[Node]) -> String {
+    let total = nodes.len();
+    let symbol_noun = if total == 1 { "symbol" } else { "symbols" };
+
+    // First-seen order for paths, with per-path counts, so both the file
+    // count and the "most changed" tie-break can be read off in one pass.
+    let mut path_order: Vec<&str> = Vec::new();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for node in nodes {
+        let path = node.path.as_str();
+        if !counts.contains_key(path) {
+            path_order.push(path);
+        }
+        *counts.entry(path).or_insert(0) += 1;
+    }
+
+    let file_count = path_order.len();
+    let file_noun = if file_count == 1 { "file" } else { "files" };
+
+    if file_count <= 1 {
+        return format!("{total} changed {symbol_noun} in {file_count} {file_noun}");
+    }
+
+    // `max_by_key` keeps the *last* maximal element on ties, but the
+    // tie-break we want is "first in `nodes` order" — negate the position
+    // so an earlier path outranks a later one with the same count.
+    let (hotspot_path, hotspot_count) = path_order
+        .iter()
+        .enumerate()
+        .map(|(i, &path)| (path, counts[path], i))
+        .max_by_key(|&(_, count, i)| (count, std::cmp::Reverse(i)))
+        .map(|(path, count, _)| (path, count))
+        .expect("file_count > 1 implies path_order is non-empty");
+
+    format!(
+        "{total} changed {symbol_noun} in {file_count} {file_noun} — most in {hotspot_path} ({hotspot_count})"
+    )
 }
 
 /// Renders the "Change graph" section: an indented, names-only tree rooted
@@ -665,6 +722,8 @@ mod tests {
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -803,6 +862,8 @@ fn foo()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 
@@ -959,6 +1020,8 @@ fn foo()
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -968,6 +1031,125 @@ fn foo()
 ```
 fn foo(a: i32) -> i32
 ```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_summary_with_hotspot_when_report_has_multiple_symbols_and_files() {
+        // 5 nodes across store/items.go (3, the hotspot) and store/db.go (2)
+        // — pins the plural "changed symbols"/"files" wording together with
+        // the "— most in ..." suffix and its count.
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("store/items.go::A", "store/items.go", "A"),
+                    node("store/items.go::B", "store/items.go", "B"),
+                    node("store/items.go::C", "store/items.go", "C"),
+                    node("store/db.go::D", "store/db.go", "D"),
+                    node("store/db.go::E", "store/db.go", "E"),
+                ],
+                edges: vec![],
+                roots: vec![
+                    "store/items.go::A".to_string(),
+                    "store/items.go::B".to_string(),
+                    "store/items.go::C".to_string(),
+                    "store/db.go::D".to_string(),
+                    "store/db.go::E".to_string(),
+                ],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+5 changed symbols in 2 files — most in store/items.go (3)
+
+
+## Definitions
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_omit_hotspot_suffix_when_all_symbols_are_in_one_file() {
+        // Every node lives in the same file, so naming "the file with the
+        // most nodes" would be redundant — the suffix must be dropped
+        // entirely, not degenerate into e.g. "(2)".
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::a", "src/lib.rs", "a"),
+                    node("src/lib.rs::b", "src/lib.rs", "b"),
+                ],
+                edges: vec![],
+                roots: vec!["src/lib.rs::a".to_string(), "src/lib.rs::b".to_string()],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+2 changed symbols in 1 file
+
+
+## Definitions
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_break_hotspot_tie_by_first_seen_path_order_when_counts_are_equal() {
+        // b.rs and a.rs both have 2 nodes each; b.rs's node appears first in
+        // `graph.nodes`, so it must win the tie over a.rs despite sorting
+        // after it alphabetically — the tie-break is source order, not a
+        // path-string comparison.
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("b.rs::x", "b.rs", "x"),
+                    node("a.rs::y", "a.rs", "y"),
+                    node("b.rs::z", "b.rs", "z"),
+                    node("a.rs::w", "a.rs", "w"),
+                ],
+                edges: vec![],
+                roots: vec![
+                    "b.rs::x".to_string(),
+                    "a.rs::y".to_string(),
+                    "b.rs::z".to_string(),
+                    "a.rs::w".to_string(),
+                ],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+4 changed symbols in 2 files — most in b.rs (2)
+
+
+## Definitions
 
 "
         .to_string();
@@ -1025,6 +1207,8 @@ fn foo(a: i32) -> i32
 
         let expected = "\
 ## Change graph
+
+2 changed symbols in 1 file
 
 - fn foo (src/lib.rs:1)
 - fn foo (src/lib.rs:10)
@@ -1092,6 +1276,8 @@ fn foo(a: i32, b: i32)
 
         let expected = "\
 ## Change graph
+
+2 changed symbols in 1 file
 
 - fn handle_pr (src/main.rs)
   - fn resolve_pr_base_sha (src/main.rs)
@@ -1170,6 +1356,8 @@ fn resolve_pr_base_sha() -> Result<String>
 
         let expected = "\
 ## Change graph
+
+4 changed symbols in 1 file
 
 - fn a (src/lib.rs)
   - fn b (src/lib.rs)
@@ -1255,6 +1443,8 @@ fn c()
         let expected = "\
 ## Change graph
 
+3 changed symbols in 1 file
+
 - fn foo (src/lib.rs)
   - fn shared (src/lib.rs)
 - fn bar (src/lib.rs)
@@ -1318,6 +1508,8 @@ fn bar()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn resolve_pr_base_sha (src/git.rs)
   - ⚠️ fn resolve_pr_base_sha (src/git.rs) — dependency cycle, see above
@@ -1425,6 +1617,8 @@ fn resolve_pr_base_sha()
         let expected = "\
 ## Change graph
 
+4 changed symbols in 3 files — most in src/git.rs (2)
+
 - fn handle_pr (src/main.rs)
   - fn resolve_pr_base_sha (src/git.rs)
     - fn fetch_base_branch (src/git.rs)
@@ -1491,6 +1685,8 @@ struct Config { path: String }
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn bar (src/lib.rs)
 
 ## Definitions
@@ -1538,6 +1734,8 @@ fn bar(&self) -> i32
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 
@@ -1595,6 +1793,8 @@ Depends on:
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -1646,6 +1846,8 @@ Depends on:
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 
@@ -1701,6 +1903,8 @@ Depends on:
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn example_macro (src/lib.rs)
 
 ## Definitions
@@ -1747,6 +1951,8 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn bar (src/lib.rs)
 
@@ -1832,6 +2038,8 @@ fn bar(&self) -> i32
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 - fn foo (src/lib.rs)
 
 ## Definitions
@@ -1881,6 +2089,8 @@ fn foo()
         let expected = "\
 ## Change graph
 
+1 changed symbol in 1 file
+
 
 ## Definitions
 
@@ -1910,6 +2120,8 @@ fn foo()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 
 ## Definitions
@@ -1958,6 +2170,8 @@ fn foo()
 
         let expected = "\
 ## Change graph
+
+1 changed symbol in 1 file
 
 - fn foo (src/lib.rs)
 
