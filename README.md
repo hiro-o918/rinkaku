@@ -147,7 +147,13 @@ rinkaku --base main --deps 0
 
 All examples below are captured from the `cargo build --release` binary
 against `main` post-[ADR 0008](docs/adr/0008-entry-point-tree-rendering-for-changed-symbols.md)
-(entry-point tree rendering), not fabricated.
+(entry-point tree rendering), not fabricated. The example diff below
+touches no test symbols and no generated files, so it renders the same
+with or without the defaults introduced in
+[ADR 0009](docs/adr/0009-exclude-test-symbols-from-output-by-default.md)
+and [ADR 0010](docs/adr/0010-skip-files-marked-no-diff-or-generated-in-gitattributes.md)
+— see `--include-tests`/`--include-generated` below for what changes when a
+diff does touch test symbols or generated files.
 
 Running `rinkaku` on
 [a real rinkaku commit](https://github.com/hiro-o918/rinkaku/commit/aa7ca34)
@@ -244,6 +250,11 @@ Each symbol in `files[].symbols` also carries an `id` field matching its
 to its position in the graph without recomputing the `{path}::{name}` id
 scheme itself.
 
+The top-level JSON report also carries `"tests": [{"path", "symbol_count"}]`
+(ADR 0009's per-file test-symbol counts, empty unless the diff touched any)
+and `skipped[].reason` can be `"generated"` (ADR 0010) alongside the
+existing `"unsupported_language"`/`"binary"`/`"deleted"` values.
+
 ### When same-name matches are capped
 
 On a repository with many same-named definitions, the same-name cap (see
@@ -295,6 +306,47 @@ resolution entirely (no "Depends on" sections, no repository scan) and
 remains dramatically faster since indexing cost does not depend on diff
 size. Prefer `--deps 0` for quick iteration or CI checks where the
 dependency context isn't needed.
+
+### `--include-tests`
+
+By default (see [ADR 0009](docs/adr/0009-exclude-test-symbols-from-output-by-default.md)),
+test symbols are excluded from "Change graph"/"Definitions" — detected per
+language (Go's `*_test.go`, Python's `test_*.py`/`*_test.py` and `tests/`
+directories, TypeScript's `*.test.ts(x)`/`*.spec.ts(x)` and `__tests__/`,
+and Rust's `tests/` directory plus `#[cfg(test)]` modules and
+`#[test]`/`#[rstest]`/`#[tokio::test]`-attributed functions) — and
+summarized instead as a per-file count under a `## Tests` section:
+
+```markdown
+## Tests
+
+- rinkaku-core/src/pipeline.rs: 3 changed test symbols
+```
+
+This keeps the primary output focused on implementation entry points while
+still surfacing "did this change come with tests?" as a signal. Pass
+`--include-tests` to restore the previous behavior (test symbols appear in
+the graph and definitions like any other symbol, and `## Tests` is omitted).
+
+### `--include-generated`
+
+By default (see [ADR 0010](docs/adr/0010-skip-files-marked-no-diff-or-generated-in-gitattributes.md)),
+rinkaku resolves each changed file's `diff`/`linguist-generated`
+`.gitattributes` attributes via `git check-attr` and skips files marked
+`-diff` or `linguist-generated` (lockfiles, generated code — content a
+repository has already declared uninteresting to diff-review), listing them
+under "Skipped files" with reason `generated`:
+
+```markdown
+## Skipped files
+
+- Cargo.lock (generated)
+```
+
+This only applies when a local git repository is available (`--base`,
+`--pr`, or stdin piped inside a repository); outside a repository, no
+attribute filtering happens. Pass `--include-generated` to restore the
+previous behavior.
 
 ## Development
 
