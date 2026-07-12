@@ -21,10 +21,16 @@
 //!
 //! [`run`] is the crate's single public entry point for the CLI binary:
 //! `rinkaku`'s `main.rs` hands it a [`rinkaku_core::render::Report`] once
-//! `--tui` is passed, in place of rendering Markdown/JSON.
+//! `--tui` is passed, in place of rendering Markdown/JSON. It also hands in
+//! the raw unified diff text `main.rs` already has in hand for every input
+//! mode (stdin / `--base` / `--pr`) — TUI iteration 2's diff pane
+//! (`d`/`D`, `crate::diff_view`) slices hunks straight out of that same
+//! string rather than reconstructing a diff from `Report` (which no longer
+//! carries hunk text once extraction has run).
 
 pub mod app;
 pub mod detail;
+pub mod diff_view;
 pub mod nav;
 pub mod order;
 pub mod row_view;
@@ -54,18 +60,36 @@ use std::time::Duration;
 /// blocks on input; everything it calls into (`App`, `row_view`, `ui`,
 /// `source`) is either pure or an isolated, narrowly-scoped IO call (a
 /// single source-file read).
-pub fn run(report: &Report) -> std::io::Result<()> {
+///
+/// `diff_text` is the exact same raw diff string every `main.rs` input mode
+/// already holds before handing it to `rinkaku_core::pipeline::analyze_diff`
+/// — passed through unchanged, not re-fetched or re-derived here, so this
+/// crate never runs `git` itself (ADR 0016: `rinkaku-core`/adapters own IO,
+/// not `rinkaku-tui`'s view layer beyond the one source-file read
+/// `crate::source` already makes).
+pub fn run(report: &Report, diff_text: &str) -> std::io::Result<()> {
     let mut terminal = ratatui::try_init()?;
-    let result = run_app(&mut terminal, report);
+    let result = run_app(&mut terminal, report, diff_text);
     ratatui::restore();
     result
 }
 
-fn run_app(terminal: &mut ratatui::DefaultTerminal, report: &Report) -> std::io::Result<()> {
+fn run_app(
+    terminal: &mut ratatui::DefaultTerminal,
+    report: &Report,
+    diff_text: &str,
+) -> std::io::Result<()> {
     let mut app = App::new(report);
+    // Parsed once up front rather than inside the draw loop: `diff_text`
+    // does not change for the lifetime of this session, but the loop below
+    // redraws on every ~100ms poll timeout (not just on an actual key
+    // press), so re-running `parse_diff_hunks` inside `ui::draw` would
+    // re-walk the whole diff (unbounded in PR size) roughly ten times a
+    // second even while idle.
+    let diff_hunks = diff_view::parse_diff_hunks(diff_text);
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, &app, report))?;
+        terminal.draw(|frame| ui::draw(frame, &app, report, &diff_hunks))?;
 
         if app.should_quit() {
             return Ok(());
@@ -122,6 +146,7 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::Quit),
         KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
+        KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),

@@ -442,9 +442,19 @@ rather than combining with it.
   alphabetical order. Symbol rows show a kind abbreviation (`fn`, `struct`,
   ...) and a classification marker: `+` added, `~` signature-changed, `x`
   removed (dimmed and crossed out).
-- **Detail pane (right):** the symbol under the cursor — its
+- **Detail pane (right):** what the cursor is on. A symbol row shows its
   classification, signature (an old/new diff when the contract changed),
-  who depends on it ("used by"), and its callees.
+  who depends on it ("used by"), and its callees. A file row shows every
+  symbol changed in that file with its classification marker and fan-in. A
+  directory row shows its badge breakdown and top fan-in symbols, plus —
+  when it participates in a dependency cycle — exactly which other
+  directories it cycles with and the concrete symbol-to-symbol edges
+  forming that cycle.
+- **Diff pane (right):** `d`/`D` toggles the right-hand pane to the raw
+  unified-diff hunks instead of the detail view — every hunk of the file
+  for a file row, or just the hunks intersecting a symbol's own line range
+  for a symbol row (a directory row has no single diff to show, since it
+  spans multiple files).
 - **Source view:** `s` on a symbol row opens that file, scrolled to and
   highlighting the symbol's line range; `esc`/`q` returns to the entry
   view. Reads the working tree directly (not the historical commit a
@@ -463,6 +473,7 @@ rather than combining with it.
 | `e` / `E` | Expand every row |
 | `c` / `C` | Collapse every row |
 | `o` / `O` | Toggle topological / alphabetical ordering |
+| `d` / `D` | Toggle the right-hand pane between detail and diff |
 | `s` / `S` | Open the source view for the symbol under the cursor |
 | `esc` / `q` | Return to the entry view (from the source view) |
 | `q` / `ctrl-c` | Quit (from the entry view) |

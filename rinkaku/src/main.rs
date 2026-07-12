@@ -168,7 +168,7 @@ fn main() -> anyhow::Result<()> {
         return self_update::run_self_update(yes);
     }
 
-    let report = if let Some(pr_arg) = &cli.pr {
+    let (report, diff_text) = if let Some(pr_arg) = &cli.pr {
         // Validate the arg and derive the fetch refspec's PR number, but
         // pass the original (trimmed) value — not the parsed number — to
         // `gh pr view` (see that function's doc comment for why).
@@ -235,11 +235,11 @@ fn main() -> anyhow::Result<()> {
         if let Some(note) = garbage_input_note(&diff_text, &report) {
             eprintln!("{note}");
         }
-        report
+        (report, diff_text)
     };
 
     if cli.tui {
-        rinkaku_tui::run(&report)?;
+        rinkaku_tui::run(&report, &diff_text)?;
         return Ok(());
     }
 
@@ -353,28 +353,37 @@ fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBu
 /// (same rationale as `read_git_show_file`'s `cwd`: `None` uses the
 /// process's current directory for `--base` and cwd-clone `--pr` runs,
 /// `Some(dir)` targets a cache clone (ADR 0005) or a test fixture).
+///
+/// Returns the raw diff text alongside the `Report` (TUI iteration 2): the
+/// `--tui` diff pane needs the same unified diff `analyze_diff` was built
+/// from to slice hunks out of, and this is the only place that owns it for
+/// `--base`/`--pr` mode — `main`'s stdin branch already has `diff_text` in
+/// a local variable, so it needs no such plumbing.
 fn run_base_pipeline(
     cli: &Cli,
     base: &str,
     head: &str,
     cwd: Option<&std::path::Path>,
-) -> anyhow::Result<rinkaku_core::render::Report> {
+) -> anyhow::Result<(rinkaku_core::render::Report, String)> {
     log::info!("diffing {base}...{head}");
     let diff_text = run_git_diff(base, head, cwd)?;
     if diff_text.trim().is_empty() {
         eprintln!("note: diff is empty, nothing to analyze");
-        return Ok(rinkaku_core::render::Report {
-            files: Vec::new(),
-            skipped: Vec::new(),
-            graph: rinkaku_core::graph::SymbolGraph {
-                nodes: Vec::new(),
-                edges: Vec::new(),
-                roots: Vec::new(),
+        return Ok((
+            rinkaku_core::render::Report {
+                files: Vec::new(),
+                skipped: Vec::new(),
+                graph: rinkaku_core::graph::SymbolGraph {
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                    roots: Vec::new(),
+                },
+                tests: Vec::new(),
+                hotspots: Vec::new(),
+                removed: Vec::new(),
             },
-            tests: Vec::new(),
-            hotspots: Vec::new(),
-            removed: Vec::new(),
-        });
+            diff_text,
+        ));
     }
 
     let read_file = {
@@ -411,7 +420,7 @@ fn run_base_pipeline(
     if let Some(note) = garbage_input_note(&diff_text, &report) {
         eprintln!("{note}");
     }
-    Ok(report)
+    Ok((report, diff_text))
 }
 
 /// Parses `diff_text` and extracts just the changed paths, for callers that
@@ -3207,6 +3216,8 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
         std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, original_mode);
         std::fs::set_permissions(&index_path, permissions).expect("restore .git/index permissions");
 
+        let (actual_report, _actual_diff_text) =
+            actual.expect("empty diff must not touch the repository-wide index scan");
         assert_eq!(
             rinkaku_core::render::Report {
                 files: Vec::new(),
@@ -3220,7 +3231,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
                 hotspots: Vec::new(),
                 removed: Vec::new(),
             },
-            actual.expect("empty diff must not touch the repository-wide index scan")
+            actual_report
         );
     }
 
@@ -3271,7 +3282,7 @@ fn should_add_two_numbers() {
             include_generated: false,
             tui: false,
         };
-        let actual = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
+        let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
             .expect("run_base_pipeline should succeed for a test-only diff");
 
         let expected_files: Vec<rinkaku_core::render::FileReport> = Vec::new();
@@ -3319,7 +3330,7 @@ fn should_add_two_numbers() {
             include_generated: false,
             tui: false,
         };
-        let actual = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
+        let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
             .expect("run_base_pipeline should succeed");
 
         let symbol = &actual.files[0].symbols[0];
