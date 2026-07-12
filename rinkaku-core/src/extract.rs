@@ -638,11 +638,14 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
 /// Removes every byte range in `ranges` from `node`'s own text (`node`'s
 /// full span, not just the declaration prefix — callers that only want a
 /// prefix pre-truncate `ranges` to stop at that boundary), returning the
-/// remainder as a `String`. Ranges are sorted and removed back-to-front so
-/// earlier removals don't shift the offsets of ones still pending; if a
-/// range comes back before the previous cursor position (overlapping
-/// ranges, defensively not expected in practice) it is skipped rather than
-/// panicking on an invalid slice.
+/// remainder as a `String`. Ranges are sorted and removed front-to-back,
+/// advancing a `cursor` past each removed range in turn, so earlier
+/// removals naturally narrow what later ones can still remove; if a range
+/// starts before the current `cursor` (overlapping ranges, defensively not
+/// expected in practice) *that one range's removal* is skipped — its own
+/// iteration does nothing and `cursor` is left wherever the previous
+/// iteration advanced it to — rather than the whole function panicking on
+/// an invalid slice.
 fn text_with_ranges_removed(
     node: tree_sitter::Node,
     source: &[u8],

@@ -263,8 +263,21 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     if !report.removed.is_empty() {
         writeln!(out, "## Removed symbols")?;
         writeln!(out)?;
+        // `removed_symbol_label` omits `container` (see its own doc
+        // comment: `RemovedSymbol` carries no stable id to disambiguate
+        // with), so two distinct removed symbols that share name+kind but
+        // differ only by container — e.g. the same method name removed
+        // from two different impls/classes in one file — would otherwise
+        // render as identical duplicate lines. Deduplicated here (first
+        // occurrence kept, `report.removed`'s own order otherwise
+        // preserved) rather than by changing the label itself, since the
+        // label's job is display, not identity.
+        let mut printed_lines: HashSet<String> = HashSet::new();
         for removed in &report.removed {
-            writeln!(out, "- {}", removed_symbol_label(removed))?;
+            let line = removed_symbol_label(removed);
+            if printed_lines.insert(line.clone()) {
+                writeln!(out, "- {line}")?;
+            }
         }
         writeln!(out)?;
     }
@@ -3591,6 +3604,103 @@ fn foo()
 ## Tests
 
 - src/lib.rs: 1 changed test symbol
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        // A diff whose only changed-symbol-level content is a removal (no
+        // graph nodes at all, e.g. a whole function deleted with nothing
+        // added back — see `pipeline::tests::classification_wiring_tests`'s
+        // "hunk only removes lines" case) must still render "## Removed
+        // symbols" on its own — the empty-output guard at the top of
+        // `render_markdown` must not treat an empty `graph.nodes` as "there
+        // is nothing to say" when `removed` is non-empty.
+        #[test]
+        fn should_render_removed_symbols_section_alone_when_graph_is_empty() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                    roots: vec![],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![RemovedSymbol {
+                    name: "old_helper".to_string(),
+                    kind: SymbolKind::Function,
+                    path: "src/lib.rs".to_string(),
+                    signature: "fn old_helper()".to_string(),
+                }],
+            };
+
+            let expected = "\
+## Removed symbols
+
+- fn old_helper (src/lib.rs)
+
+"
+            .to_string();
+            let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+            assert_eq!(expected, actual);
+        }
+
+        // Regression test: `removed_symbol_label` deliberately omits
+        // `container` (see its own doc comment), so two distinct removed
+        // symbols sharing name+kind but differing only by container (e.g.
+        // the same method name removed from two different impls in one
+        // file) render identical lines. Without deduplication this would
+        // print the same line twice; the section must show it once, in
+        // first-occurrence order.
+        #[test]
+        fn should_deduplicate_identical_removed_symbol_lines() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![],
+                graph: SymbolGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                    roots: vec![],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![
+                    RemovedSymbol {
+                        name: "save".to_string(),
+                        kind: SymbolKind::Function,
+                        path: "src/lib.rs".to_string(),
+                        signature: "fn save(&self)".to_string(),
+                    },
+                    RemovedSymbol {
+                        name: "other".to_string(),
+                        kind: SymbolKind::Function,
+                        path: "src/lib.rs".to_string(),
+                        signature: "fn other(&self)".to_string(),
+                    },
+                    // Same name+kind+path as the first entry, but a
+                    // different container/signature — the label is
+                    // identical to the first line even though this is a
+                    // genuinely distinct removed symbol (different impl).
+                    RemovedSymbol {
+                        name: "save".to_string(),
+                        kind: SymbolKind::Function,
+                        path: "src/lib.rs".to_string(),
+                        signature: "fn save(&self, id: &str)".to_string(),
+                    },
+                ],
+            };
+
+            let expected = "\
+## Removed symbols
+
+- fn save (src/lib.rs)
+- fn other (src/lib.rs)
 
 "
             .to_string();
