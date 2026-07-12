@@ -119,6 +119,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Scoped installation token for the tap repo, distinct from the
+      # release-please job's tibdex/github-app-token: this uses the
+      # official actions/create-github-app-token action instead, scoped
+      # to hiro-o918/homebrew-tap only (the App must be installed there).
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.THIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.THIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: hiro-o918
+          repositories: homebrew-tap
+
       # x86_64-apple-darwin is the tarball macOS Homebrew installs from
       # (see awsctx's homebrew-release.yml, same convention).
       - uses: mislav/bump-homebrew-formula-action@v3
@@ -130,4 +142,4 @@ jobs:
           tag-name: ${{ github.ref_name }}
           download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rinkaku-x86_64-apple-darwin.tar.gz
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          COMMITTER_TOKEN: ${{ steps.app-token.outputs.token }}
