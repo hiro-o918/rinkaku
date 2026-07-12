@@ -1225,6 +1225,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1272,6 +1273,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1373,6 +1375,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1438,6 +1441,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
