@@ -67,12 +67,14 @@ pub enum AnalyzeError {
 /// resolved as `-diff`/`linguist-generated` via `git check-attr` at the
 /// process boundary — this module stays pure and never runs `git` itself,
 /// so the set is computed by the caller and passed in as plain data, same
-/// as `read_file`. A path in this set is reported as
-/// `SkipReason::Generated` before any other check (deleted/binary/
-/// unsupported-language) runs for it, and `read_file` is never called for
-/// it. Empty when `--include-generated` is given or no local repository was
-/// available to resolve attributes against (`main.rs` degrades to an empty
-/// set rather than erroring in that case).
+/// as `read_file`. A path in this set is reported as `SkipReason::Generated`
+/// unless it was also deleted, in which case `SkipReason::Deleted` wins
+/// (checked first): the fact that a file was removed is more important
+/// information for a reviewer than an attribute the file no longer carries
+/// any content for, and `read_file` is never called either way. Empty when
+/// `--include-generated` is given or no local repository was available to
+/// resolve attributes against (`main.rs` degrades to an empty set rather
+/// than erroring in that case).
 ///
 /// Known inefficiency: a changed file is parsed here (via
 /// `extract_changed_symbols`) and, when `resolver` is `TagsResolver`,
@@ -96,17 +98,17 @@ pub fn analyze_diff(
     let mut skipped = Vec::new();
 
     for changed_file in changed_files {
-        if generated_paths.contains(&changed_file.path) {
-            skipped.push(SkippedFile {
-                path: changed_file.path,
-                reason: SkipReason::Generated,
-            });
-            continue;
-        }
         if changed_file.kind == ChangeKind::Deleted {
             skipped.push(SkippedFile {
                 path: changed_file.path,
                 reason: SkipReason::Deleted,
+            });
+            continue;
+        }
+        if generated_paths.contains(&changed_file.path) {
+            skipped.push(SkippedFile {
+                path: changed_file.path,
+                reason: SkipReason::Generated,
             });
             continue;
         }
@@ -900,6 +902,39 @@ index e69de29..4b825dc 100644
             let expected = vec![SkippedFile {
                 path: "Cargo.lock".to_string(),
                 reason: SkipReason::Generated,
+            }];
+            assert_eq!(expected, report.skipped);
+        }
+
+        // Regression test: a file that is both deleted and marked
+        // generated (e.g. a lockfile removed from a repo that also
+        // declares it `-diff`) must be reported as `Deleted`, not
+        // `Generated` — the fact that the file was removed is more
+        // important information for a reviewer than the (now moot)
+        // attribute it used to carry, and `Deleted` already carries no
+        // content to read either way.
+        #[test]
+        fn should_report_deleted_reason_when_a_deleted_path_is_also_marked_generated() {
+            let diff = "\
+diff --git a/Cargo.lock b/Cargo.lock
+deleted file mode 100644
+index 4b825dc..0000000
+--- a/Cargo.lock
++++ /dev/null
+@@ -1,1 +0,0 @@
+-version = 1
+";
+            // No entry in the map: if the pipeline tried to read a deleted
+            // file, this would return an Err and fail the test.
+            let read_file = fake_reader(HashMap::new());
+            let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
+
+            let report = analyze_diff(diff, read_file, None, true, &generated_paths)
+                .expect("analyze should succeed");
+
+            let expected = vec![SkippedFile {
+                path: "Cargo.lock".to_string(),
+                reason: SkipReason::Deleted,
             }];
             assert_eq!(expected, report.skipped);
         }
