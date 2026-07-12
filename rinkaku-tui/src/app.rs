@@ -9,7 +9,9 @@
 //! `crossterm::event::KeyEvent` into this module's [`InputKey`] and calls
 //! into `ratatui` to draw.
 
-use crate::detail::{DetailView, build_detail};
+use crate::detail::{
+    DetailView, DirDetail, FileDetail, build_detail, build_dir_detail, build_file_detail,
+};
 use crate::nav::{Action, Nav};
 use crate::order::{DirRank, OrderMode, rank_directories};
 use crate::tree::{NodeKind, Tree, build_tree};
@@ -36,6 +38,12 @@ pub enum InputKey {
     /// `s`: open the source view on the row under the cursor (a symbol
     /// row only — see `App::handle_key`).
     Source,
+    /// `d`/`D`: toggle the right-hand pane between [`RightPane::Detail`]
+    /// and [`RightPane::Diff`] (TUI iteration 2) — a per-`App` mode rather
+    /// than a per-row one, so switching to the diff pane on one row and
+    /// then moving the cursor keeps showing the diff pane for the newly
+    /// selected row instead of resetting on every cursor move.
+    ToggleDiff,
     /// Esc or `q` while in the source view: return to the entry view.
     /// A no-op on the entry view itself (`q`'s quit behavior on the entry
     /// view is `InputKey::Quit`, a separate variant, since Esc has no
@@ -62,6 +70,46 @@ pub enum Screen {
     },
 }
 
+/// Which content the right-hand pane shows on [`Screen::Entry`] (TUI
+/// iteration 2): the existing signature/used-by/callers detail, or the raw
+/// diff hunks touching the selected row. Independent of [`Screen`] — it is
+/// a display mode for the entry view's right pane, not a separate screen
+/// reached via drill-down the way [`Screen::Source`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RightPane {
+    #[default]
+    Detail,
+    Diff,
+}
+
+/// The right-hand pane's content for the row currently under the cursor
+/// (TUI iteration 2), unifying what used to be [`App::selected_detail`]'s
+/// symbol-only contract: a directory or file row now has its own detail
+/// too (`crate::detail::build_dir_detail`/`build_file_detail`), rather than
+/// falling through to the placeholder every non-symbol row used to show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectedDetail {
+    Symbol(DetailView),
+    Dir(DirDetail),
+    File(FileDetail),
+}
+
+/// What [`App::selected_diff_target`] resolved the cursor's row to — plain
+/// data describing which file (and, for a symbol, which 1-based inclusive
+/// line range) the diff pane should slice hunks from; `crate::ui` combines
+/// this with the raw diff text (via `crate::diff_view`) at draw time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffTarget {
+    Symbol {
+        path: String,
+        range_start: usize,
+        range_end: usize,
+    },
+    File {
+        path: String,
+    },
+}
+
 /// The whole interactive application's state: the stage-A view-models
 /// composed together, plus which screen is active and a status-line
 /// message for the caller to render. Rebuilt once per `Report` (in
@@ -74,6 +122,7 @@ pub struct App {
     ranks: HashMap<String, DirRank>,
     order_mode: OrderMode,
     screen: Screen,
+    right_pane: RightPane,
     /// A transient message for the status line (e.g. a source-read
     /// failure) — cleared on the next action that doesn't re-set it, so a
     /// stale error doesn't linger forever once the user has moved on.
@@ -101,6 +150,7 @@ impl App {
             ranks,
             order_mode,
             screen: Screen::Entry,
+            right_pane: RightPane::default(),
             status: None,
             should_quit: false,
         }
@@ -131,6 +181,10 @@ impl App {
         &self.screen
     }
 
+    pub fn right_pane(&self) -> RightPane {
+        self.right_pane
+    }
+
     pub fn status(&self) -> Option<&str> {
         self.status.as_deref()
     }
@@ -139,22 +193,69 @@ impl App {
         self.should_quit
     }
 
-    /// The detail view for the row currently under the cursor, or `None`
-    /// when the cursor is not on a present (non-removed) symbol row, there
-    /// are no rows at all, or `report` no longer contains that symbol
-    /// (defensive — `report` should be the same one `App::new` was built
-    /// from). `report` is threaded in per call rather than stored on `App`
-    /// itself, since `build_detail` is already a cheap pure lookup and
-    /// storing a whole `Report` on every `App` would duplicate data the
-    /// caller (`crate::run`) already owns for the process's lifetime.
-    pub fn selected_detail(&self, report: &Report) -> Option<DetailView> {
+    /// The detail-pane content for the row currently under the cursor
+    /// (TUI iteration 2): a symbol's [`DetailView`], or a directory/file
+    /// row's own [`DirDetail`]/[`FileDetail`] — `None` only when there are
+    /// no rows at all, the cursor sits on a *removed* symbol (no detail to
+    /// build, see `build_detail`'s doc comment), or `report`/`tree` no
+    /// longer agree with each other (defensive — both should come from the
+    /// same `App::new` call). `report` is threaded in per call rather than
+    /// stored on `App` itself, since every `build_*` function here is
+    /// already a cheap pure lookup and storing a whole `Report` on every
+    /// `App` would duplicate data the caller (`crate::run`) already owns
+    /// for the process's lifetime.
+    pub fn selected_detail(&self, report: &Report) -> Option<SelectedDetail> {
         let rows = self.nav.rows(&self.tree);
         let row = rows.get(self.nav.cursor())?;
         match &row.node.kind {
             NodeKind::Symbol(symbol_ref) if !symbol_ref.removed => {
-                build_detail(report, &symbol_ref.id)
+                build_detail(report, &symbol_ref.id).map(SelectedDetail::Symbol)
             }
-            _ => None,
+            NodeKind::Symbol(_) => None,
+            NodeKind::Dir => {
+                build_dir_detail(&self.tree, report, &row.node.path).map(SelectedDetail::Dir)
+            }
+            NodeKind::File => {
+                build_file_detail(&self.tree, report, &row.node.path).map(SelectedDetail::File)
+            }
+        }
+    }
+
+    /// What the diff pane (TUI iteration 2, [`RightPane::Diff`]) should
+    /// slice out of the raw diff text for the row currently under the
+    /// cursor: a symbol row scopes to just its own line range (looked up
+    /// from `report`, since `crate::tree::SymbolRef` itself carries no line
+    /// range — only `id`/`name`/`kind`/`classification`/`removed`), a file
+    /// row to the whole file, and a directory row has nothing diff-specific
+    /// to show (a directory spans multiple files with no single line range
+    /// to highlight — showing "every hunk under this directory" was
+    /// considered and deferred, since it would just be the concatenation
+    /// of every file's own diff, better browsed file by file). `None` when
+    /// there are no rows at all, the cursor sits on a removed symbol (no
+    /// line range to scope to, same as `selected_detail`'s handling), or
+    /// (defensively) `report` no longer contains the selected symbol.
+    pub fn selected_diff_target(&self, report: &Report) -> Option<DiffTarget> {
+        let rows = self.nav.rows(&self.tree);
+        let row = rows.get(self.nav.cursor())?;
+        match &row.node.kind {
+            NodeKind::Symbol(symbol_ref) if !symbol_ref.removed => {
+                let range = report
+                    .files
+                    .iter()
+                    .find(|file| file.path == row.node.path)
+                    .and_then(|file| file.symbols.iter().find(|s| s.id == symbol_ref.id))
+                    .map(|s| s.range)?;
+                Some(DiffTarget::Symbol {
+                    path: row.node.path.clone(),
+                    range_start: range.start,
+                    range_end: range.end,
+                })
+            }
+            NodeKind::Symbol(_) => None,
+            NodeKind::File => Some(DiffTarget::File {
+                path: row.node.path.clone(),
+            }),
+            NodeKind::Dir => None,
         }
     }
 
@@ -211,6 +312,12 @@ impl App {
                         symbol_id: symbol_ref.id.clone(),
                     };
                 }
+            }
+            (Screen::Entry, InputKey::ToggleDiff) => {
+                self.right_pane = match self.right_pane {
+                    RightPane::Detail => RightPane::Diff,
+                    RightPane::Diff => RightPane::Detail,
+                };
             }
             (Screen::Entry, InputKey::Back) => {
                 // No-op: Esc/q-as-back on the entry view has nowhere to
@@ -406,13 +513,15 @@ mod tests {
     }
 
     #[test]
-    fn should_return_none_detail_when_cursor_is_on_a_directory_row() {
+    fn should_return_file_detail_when_cursor_is_on_a_file_row() {
+        // Row 0 is the "lib.rs" file itself, not a symbol (TUI iteration
+        // 2: a file row now gets its own detail instead of `None`).
         let report = report_with_one_symbol();
         let app = App::new(&report);
 
         let actual = app.selected_detail(&report);
 
-        assert_eq!(None, actual);
+        assert!(matches!(actual, Some(SelectedDetail::File(_))));
     }
 
     #[test]
@@ -422,6 +531,114 @@ mod tests {
 
         let actual = app.selected_detail(&report);
 
-        assert_eq!("foo", actual.expect("detail for selected symbol").name);
+        match actual.expect("detail for selected symbol") {
+            SelectedDetail::Symbol(detail) => assert_eq!("foo", detail.name),
+            other => panic!("expected SelectedDetail::Symbol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn should_return_dir_detail_when_cursor_is_on_a_directory_row() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("src/lib.rs::foo", "foo")],
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report);
+
+        let actual = app.selected_detail(&report);
+
+        assert!(matches!(actual, Some(SelectedDetail::Dir(_))));
+    }
+
+    #[test]
+    fn should_toggle_right_pane_between_detail_and_diff() {
+        let report = empty_report();
+        let app = App::new(&report);
+        assert_eq!(RightPane::Detail, app.right_pane());
+
+        let app = app.handle_key(InputKey::ToggleDiff);
+        assert_eq!(RightPane::Diff, app.right_pane());
+
+        let app = app.handle_key(InputKey::ToggleDiff);
+        assert_eq!(RightPane::Detail, app.right_pane());
+    }
+
+    #[test]
+    fn should_ignore_toggle_diff_while_source_screen_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+        assert_eq!(RightPane::Detail, app.right_pane());
+
+        let app = app.handle_key(InputKey::ToggleDiff);
+
+        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string()
+            },
+            *app.screen()
+        );
+    }
+
+    #[test]
+    fn should_return_none_diff_target_when_cursor_is_on_a_directory_row() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("src/lib.rs::foo", "foo")],
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report);
+
+        let actual = app.selected_diff_target(&report);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_file_diff_target_when_cursor_is_on_a_file_row() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+
+        let actual = app.selected_diff_target(&report);
+
+        assert_eq!(
+            Some(DiffTarget::File {
+                path: "lib.rs".to_string()
+            }),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_symbol_diff_target_with_line_range_when_cursor_is_on_a_symbol_row() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    range: LineRange { start: 3, end: 7 },
+                    ..symbol("lib.rs::foo", "foo")
+                }],
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        let actual = app.selected_diff_target(&report);
+
+        assert_eq!(
+            Some(DiffTarget::Symbol {
+                path: "lib.rs".to_string(),
+                range_start: 3,
+                range_end: 7,
+            }),
+            actual
+        );
     }
 }
