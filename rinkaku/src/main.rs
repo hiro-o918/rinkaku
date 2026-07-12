@@ -217,6 +217,7 @@ fn main() -> anyhow::Result<()> {
                 .map(|r| r as &dyn rinkaku_core::deps::Resolver),
             cli.include_tests,
             &generated_paths,
+            cli.include_generated,
         )?;
         if let Some(note) = garbage_input_note(&diff_text, &report) {
             eprintln!("{note}");
@@ -372,6 +373,7 @@ fn run_base_pipeline(
             .map(|r| r as &dyn rinkaku_core::deps::Resolver),
         cli.include_tests,
         &generated_paths,
+        cli.include_generated,
     )?;
     if let Some(note) = garbage_input_note(&diff_text, &report) {
         eprintln!("{note}");
