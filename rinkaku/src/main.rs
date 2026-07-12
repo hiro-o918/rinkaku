@@ -125,6 +125,18 @@ struct Cli {
     /// instead of skipping them by default (ADR 0010).
     #[arg(long, default_value_t = false)]
     include_generated: bool,
+
+    /// Re-root the change graph at this path before rendering (ADR 0019):
+    /// entry points become the symbols under `path` that nothing else
+    /// under that same path depends on, and dependency trees still expand
+    /// outward through the full graph as usual. This is a viewpoint change,
+    /// not a filter — symbols outside `path` are neither hidden nor
+    /// excluded from analysis, only no longer eligible to be roots
+    /// themselves. Compatible with every input mode (stdin/`--base`/`--pr`/
+    /// whole-repo) and with `--tui` (the TUI's own `p` pivot is the
+    /// interactive equivalent of this flag, see `rinkaku-tui`).
+    #[arg(long)]
+    entry: Option<String>,
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -286,6 +298,15 @@ fn main() -> anyhow::Result<()> {
         (report, diff_text)
     };
 
+    let report = if let Some(entry) = &cli.entry {
+        if let Some(note) = entry_pivot_empty_note(&report, entry) {
+            eprintln!("{note}");
+        }
+        apply_entry_pivot(report, entry)
+    } else {
+        report
+    };
+
     let stdout_is_tty = std::io::stdout().is_terminal();
     match resolve_display_mode(cli.tui, cli.format, stdout_is_tty) {
         DisplayMode::Tui => rinkaku_tui::run(&report, &diff_text)?,
@@ -296,6 +317,39 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Applies `--entry <path>` (ADR 0019) to an already-built `Report`: swaps
+/// `report.graph` for `graph::pivot_graph`'s re-rooted clone, leaving every
+/// other field (`files`, `hotspots`, `removed`, ...) untouched — the pivot
+/// only changes which nodes `render`/`rinkaku-tui` treat as entry points,
+/// not what was analyzed.
+fn apply_entry_pivot(
+    report: rinkaku_core::render::Report,
+    path: &str,
+) -> rinkaku_core::render::Report {
+    let graph = rinkaku_core::graph::pivot_graph(&report.graph, path);
+    rinkaku_core::render::Report { graph, ..report }
+}
+
+/// Returns a note for `--entry <path>` (ADR 0019) when no symbol's path
+/// falls under `path` at all — mirroring `garbage_input_note`/
+/// `repo_outline_empty_note`'s existing pure-note-then-`eprintln!`-at-the-
+/// call-site pattern rather than having `apply_entry_pivot` itself perform
+/// IO. `None` when the report had no symbols to begin with (an empty graph
+/// pivoting to an empty graph is not a pivot-specific problem worth a
+/// separate note — `garbage_input_note`/`repo_outline_empty_note` already
+/// cover that case for their respective input modes).
+fn entry_pivot_empty_note(report: &rinkaku_core::render::Report, path: &str) -> Option<String> {
+    if report.graph.nodes.is_empty() {
+        return None;
+    }
+    let roots = rinkaku_core::graph::pivot_roots(&report.graph, path);
+    if roots.is_empty() {
+        Some(format!("note: no symbols under {path}"))
+    } else {
+        None
+    }
 }
 
 /// Which output stage `main` dispatches to, once a `Report` is built —
@@ -1782,6 +1836,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku"]);
@@ -1800,6 +1855,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: true,
         };
         let actual = Cli::parse_from(["rinkaku", "--tui"]);
@@ -1885,6 +1941,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main"]);
@@ -1903,6 +1960,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main", "--head", "feature-branch"]);
@@ -1921,6 +1979,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--format", "json"]);
@@ -1946,6 +2005,7 @@ mod tests {
             deps: 0,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--deps", "0"]);
@@ -1971,6 +2031,7 @@ mod tests {
             deps: 1,
             include_tests: true,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--include-tests"]);
@@ -1989,9 +2050,29 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: true,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--include-generated"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_set_entry_when_entry_flag_given() {
+        let expected = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: None,
+            deps: 1,
+            include_tests: false,
+            include_generated: false,
+            entry: Some("src/api".to_string()),
+            tui: false,
+        };
+        let actual = Cli::parse_from(["rinkaku", "--entry", "src/api"]);
 
         assert_eq!(expected, actual);
     }
@@ -2007,6 +2088,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update"]);
@@ -2025,6 +2107,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update", "--yes"]);
@@ -2043,6 +2126,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update", "-y"]);
@@ -2076,6 +2160,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--pr", "76"]);
@@ -2906,6 +2991,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let changed_paths = vec!["Cargo.lock".to_string()];
@@ -2932,6 +3018,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: true,
+            entry: None,
             tui: false,
         };
         let changed_paths = vec!["Cargo.lock".to_string()];
@@ -3315,6 +3402,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 0,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         // Never called if `deps == 0` truly short-circuits before doing
@@ -3348,6 +3436,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let read_file = |_: &str| -> std::io::Result<String> { Ok(String::new()) };
@@ -3393,6 +3482,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let actual = run_base_pipeline(&cli, "HEAD", "HEAD", Some(dir.path()));
@@ -3470,6 +3560,7 @@ fn should_add_two_numbers() {
             deps: 0,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
@@ -3518,6 +3609,7 @@ fn should_add_two_numbers() {
             deps: 0,
             include_tests: false,
             include_generated: false,
+            entry: None,
             tui: false,
         };
         let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
@@ -3685,6 +3777,116 @@ fn should_add_two_numbers() {
             };
 
             let actual = garbage_input_note("some diff text", &report);
+
+            assert_eq!(None, actual);
+        }
+    }
+
+    mod apply_entry_pivot_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use rinkaku_core::diff::LineRange;
+        use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
+        use rinkaku_core::render::{FileReport, Report};
+
+        fn symbol(name: &str, referenced_names: Vec<&str>) -> ExtractedSymbol {
+            ExtractedSymbol {
+                id: String::new(),
+                name: name.to_string(),
+                kind: SymbolKind::Function,
+                signature: format!("fn {name}()"),
+                range: LineRange { start: 1, end: 1 },
+                container: None,
+                referenced_names: referenced_names.into_iter().map(str::to_string).collect(),
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+                classification: None,
+                previous_signature: None,
+            }
+        }
+
+        /// `src/api/handler.rs::api` references `src/util.rs::helper` —
+        /// pivoting at "src/api" makes "api" the sole root, mirroring
+        /// `graph.rs`'s own pivot-root fixtures. `apply_entry_pivot` is a
+        /// thin wrapper over `graph::pivot_graph`, so this module's tests
+        /// only pin the wrapper's own contract (every other `Report` field
+        /// stays untouched, the note is only printed when appropriate), not
+        /// pivot root selection itself.
+        fn report_with_api_and_util() -> Report {
+            let files = vec![
+                FileReport {
+                    path: "src/api/handler.rs".to_string(),
+                    symbols: vec![symbol("api", vec!["helper"])],
+                },
+                FileReport {
+                    path: "src/util.rs".to_string(),
+                    symbols: vec![symbol("helper", vec![])],
+                },
+            ];
+            let graph = rinkaku_core::graph::build_graph(&files);
+            Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
+                files,
+                skipped: vec![],
+                graph,
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            }
+        }
+
+        #[test]
+        fn should_re_root_graph_at_prefix_while_leaving_other_fields_untouched() {
+            let report = report_with_api_and_util();
+
+            let actual = apply_entry_pivot(report.clone(), "src/api");
+
+            let expected = Report {
+                graph: rinkaku_core::graph::pivot_graph(&report.graph, "src/api"),
+                ..report
+            };
+            assert_eq!(expected, actual);
+        }
+
+        #[test]
+        fn should_return_no_symbols_under_path_note_when_prefix_matches_nothing() {
+            let report = report_with_api_and_util();
+
+            let actual = entry_pivot_empty_note(&report, "no/such/path");
+
+            assert_eq!(
+                Some("note: no symbols under no/such/path".to_string()),
+                actual
+            );
+        }
+
+        #[test]
+        fn should_return_none_when_prefix_matches_at_least_one_symbol() {
+            let report = report_with_api_and_util();
+
+            let actual = entry_pivot_empty_note(&report, "src/api");
+
+            assert_eq!(None, actual);
+        }
+
+        #[test]
+        fn should_return_none_when_report_graph_has_no_nodes_at_all() {
+            let report = Report {
+                origin: rinkaku_core::render::ReportOrigin::Diff,
+                files: vec![],
+                skipped: vec![],
+                graph: rinkaku_core::graph::SymbolGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                    roots: vec![],
+                },
+                tests: vec![],
+                hotspots: vec![],
+                removed: vec![],
+            };
+
+            let actual = entry_pivot_empty_note(&report, "src/api");
 
             assert_eq!(None, actual);
         }
