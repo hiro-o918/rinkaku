@@ -117,7 +117,9 @@ impl<'a> SymbolLookup<'a> {
 
 /// Renders a [`Report`] as Markdown: a "Change graph" tree of entry points
 /// (ADR 0008), a "Definitions" section with each changed symbol's signature
-/// in the same tree order, and a list of skipped files.
+/// in the same tree order, an "Other changed files" section for files that
+/// were analyzed but contributed no symbol (e.g. a pure rename — see
+/// `pipeline::analyze_diff`'s doc comment), and a list of skipped files.
 ///
 /// Path headings and tree labels (`{prefix} {name} ({path})`) do not escape
 /// Markdown special characters (`#`, `[`, `]`, `_`, ...). A path containing
@@ -126,7 +128,17 @@ impl<'a> SymbolLookup<'a> {
 /// in practice and the fenced code blocks (the part that matters for
 /// correctness) are already hardened against content-driven breakage.
 fn render_markdown(report: &Report) -> Result<String, RenderError> {
-    if report.graph.nodes.is_empty() && report.skipped.is_empty() {
+    let files_with_no_symbols: Vec<&str> = report
+        .files
+        .iter()
+        .filter(|file| file.symbols.is_empty())
+        .map(|file| file.path.as_str())
+        .collect();
+
+    if report.graph.nodes.is_empty()
+        && files_with_no_symbols.is_empty()
+        && report.skipped.is_empty()
+    {
         return Ok(String::new());
     }
 
@@ -149,6 +161,15 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
             };
             render_definition(&mut out, path, symbol)?;
         }
+    }
+
+    if !files_with_no_symbols.is_empty() {
+        writeln!(out, "## Other changed files")?;
+        writeln!(out)?;
+        for path in &files_with_no_symbols {
+            writeln!(out, "- {path}")?;
+        }
+        writeln!(out)?;
     }
 
     if !report.skipped.is_empty() {
@@ -474,6 +495,129 @@ mod tests {
         };
 
         let expected = "".to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    // Regression test: a pure rename (or mode-change-only diff) is reported
+    // as a `FileReport` with an empty `symbols` list (see
+    // `pipeline::analyze_diff`'s doc comment) rather than a `SkippedFile` —
+    // the file *was* looked at, it just had no symbol-level changes. Before
+    // this fix, such a file was silently dropped from Markdown output
+    // entirely (the empty-output guard fired because `graph.nodes` and
+    // `skipped` were both empty, even though `files` was not), which is a
+    // regression from the pre-ADR-0008 renderer that always emitted a `##
+    // {path}` heading for every entry in `report.files`.
+    #[test]
+    fn should_list_file_with_no_symbols_under_other_changed_files_when_report_has_no_graph_nodes() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/new_name.rs".to_string(),
+                symbols: vec![],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+        };
+
+        let expected = "\
+## Other changed files
+
+- src/new_name.rs
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_list_file_with_no_symbols_after_definitions_when_report_has_graph_nodes_too() {
+        // A diff with one file that has a changed symbol (feeds the
+        // "Change graph"/"Definitions" sections) alongside a pure-rename
+        // file with no symbols at all — the pure rename must still show up,
+        // in its own section after "Definitions".
+        let report = Report {
+            files: vec![
+                FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![symbol(
+                        "src/lib.rs::foo",
+                        "foo",
+                        SymbolKind::Function,
+                        "fn foo()",
+                    )],
+                },
+                FileReport {
+                    path: "src/new_name.rs".to_string(),
+                    symbols: vec![],
+                },
+            ],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+        };
+
+        let expected = "\
+## Change graph
+
+- fn foo (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+## Other changed files
+
+- src/new_name.rs
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_other_changed_files_before_skipped_files_when_report_has_both() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/new_name.rs".to_string(),
+                symbols: vec![],
+            }],
+            skipped: vec![SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: SkipReason::Binary,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+        };
+
+        let expected = "\
+## Other changed files
+
+- src/new_name.rs
+
+## Skipped files
+
+- assets/logo.png (binary)
+"
+        .to_string();
         let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
 
         assert_eq!(expected, actual);
