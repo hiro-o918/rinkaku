@@ -636,14 +636,30 @@ jobs:
 ```
 
 Inputs: `version` (a release tag to download, default `latest`), `binary`
-(path to an already-built rinkaku binary, skipping the download entirely —
-see this repository's own [dogfooding workflow](.github/workflows/rinkaku-report.yaml),
-which builds rinkaku from the PR's *base* ref rather than trusting a
-downloaded binary, for the same reason the LLM-review recipe above always
-builds its map from a trusted checkout), `base` (defaults to the PR's base
-ref), `github-token` (defaults to `github.token`), and `comment` (set
-`false` to skip posting and just get the `mermaid-path`/`markdown-path`
-outputs).
+(path to an already-built rinkaku binary, skipping the download entirely),
+`repo-path` (the checkout rinkaku should analyze; defaults to the current
+directory), `base` (defaults to the PR's base ref), `github-token`
+(defaults to `github.token`), and `comment` (set `false` to skip posting
+and just get the `mermaid-path`/`markdown-path` outputs).
+
+**Trusted-base posture**: the snippet above is the simple case (a pinned
+release binary, `permissions: pull-requests: write` scoped to only what
+posting a comment needs). If you build rinkaku yourself instead of using a
+release binary, build it from the PR's **base** ref, not the PR head —
+same rule this repository's own [dogfooding
+workflow](.github/workflows/rinkaku-report.yaml) follows, and for the
+same reason the [LLM-review recipe](#using-rinkaku-with-llm-reviewers)
+above always builds its map from a trusted checkout: a PR is exactly the
+input an attacker controls, and this job runs with a write token before
+anyone has reviewed it. That workflow checks out the PR's base ref at the
+job's default location (so `uses: ./` resolves *its own action code* —
+not just the binary — from the trusted checkout too) and checks out the
+PR head into a subdirectory purely as data, passed to this action via
+`repo-path`. **Fork PRs** get a read-only token from the `pull_request`
+trigger regardless of `permissions:` — this action detects that and falls
+back to writing the report into the job's step summary instead of
+posting a comment, so a fork PR's run still succeeds (exit 0) rather than
+failing on a 403.
 
 ## Development
 
