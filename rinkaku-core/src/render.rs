@@ -143,14 +143,15 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
     }
 
     let lookup = SymbolLookup::build(&report.files);
-    let visit_order = dfs_pre_order(&report.graph);
+    let children = children_by_node(&report.graph);
+    let visit_order = dfs_pre_order(&report.graph, &children);
 
     let mut out = String::new();
 
     if !report.graph.nodes.is_empty() {
         writeln!(out, "## Change graph")?;
         writeln!(out)?;
-        render_change_graph(&mut out, &report.graph, &lookup)?;
+        render_change_graph(&mut out, &report.graph, &children, &lookup)?;
         writeln!(out)?;
 
         writeln!(out, "## Definitions")?;
@@ -200,13 +201,13 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
 fn render_change_graph(
     out: &mut String,
     graph: &SymbolGraph,
+    children: &HashMap<&str, Vec<(&str, bool)>>,
     lookup: &SymbolLookup,
 ) -> Result<(), RenderError> {
-    let children = children_by_node(graph);
     let mut printed: HashSet<String> = HashSet::new();
 
     for root in &graph.roots {
-        render_tree_node(out, root, &children, lookup, &mut printed, 0)?;
+        render_tree_node(out, root, children, lookup, &mut printed, 0)?;
     }
     Ok(())
 }
@@ -367,22 +368,24 @@ fn symbol_kind_prefix(kind: SymbolKind) -> &'static str {
 /// non-cycle edges only (a cycle edge is rendered as a warning reference in
 /// `render_change_graph`, never walked into) and never revisiting a node.
 /// Used by `render_markdown` to decide "Definitions"' order, matching the
-/// order symbols first appear in the "Change graph" tree above it.
+/// order symbols first appear in the "Change graph" tree above it. Takes
+/// the already-built `children` lookup (built once by `render_markdown` and
+/// shared with `render_change_graph`) rather than rebuilding it from
+/// `graph.edges` itself.
 ///
 /// Falls back to visiting any node no root reaches (defensive: `roots` is
 /// documented to always cover every node via SCC condensation, see
 /// `graph::find_roots`, so this branch is not expected to trigger in
 /// practice, only guarding against that guarantee being broken later).
-fn dfs_pre_order(graph: &SymbolGraph) -> Vec<NodeId> {
-    let children = children_by_node(graph);
+fn dfs_pre_order(graph: &SymbolGraph, children: &HashMap<&str, Vec<(&str, bool)>>) -> Vec<NodeId> {
     let mut visited: HashSet<String> = HashSet::new();
     let mut order: Vec<NodeId> = Vec::new();
 
     for root in &graph.roots {
-        visit_from(root, &children, &mut visited, &mut order);
+        visit_from(root, children, &mut visited, &mut order);
     }
     for node in &graph.nodes {
-        visit_from(node.id.as_str(), &children, &mut visited, &mut order);
+        visit_from(node.id.as_str(), children, &mut visited, &mut order);
     }
 
     order
