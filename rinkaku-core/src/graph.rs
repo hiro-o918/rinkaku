@@ -178,6 +178,20 @@ fn collect_edges(files: &[FileReport], nodes: &[Node]) -> Vec<Edge> {
     edges
 }
 
+/// Maps each node's [`NodeId`] to its position in `nodes`, letting the
+/// index-based algorithms below (`find_roots`'s SCC condensation,
+/// `mark_cycle_edges`'s back-edge DFS) translate an [`Edge`]'s
+/// string-keyed `from`/`to` into array indices without a linear scan per
+/// lookup. Shared by both rather than each rebuilding its own copy from
+/// `nodes`.
+fn node_index_map(nodes: &[Node]) -> HashMap<&str, usize> {
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect()
+}
+
 /// Computes entry points as the representative nodes of in-degree-0 SCCs in
 /// the condensation graph, so at least one root always exists even if every
 /// node participates in some cycle (a pure raw in-degree-0 test would find
@@ -193,11 +207,7 @@ fn find_roots(nodes: &[Node], edges: &[Edge]) -> Vec<NodeId> {
         return Vec::new();
     }
 
-    let index_of: HashMap<&str, usize> = nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
+    let index_of = node_index_map(nodes);
 
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     for edge in edges {
@@ -266,11 +276,7 @@ fn mark_cycle_edges(nodes: &[Node], roots: &[NodeId], edges: &mut [Edge]) {
         return;
     }
 
-    let index_of: HashMap<&str, usize> = nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
+    let index_of = node_index_map(nodes);
 
     let mut adjacency: Vec<Vec<(usize, usize)>> = vec![Vec::new(); nodes.len()]; // (target, edge_index)
     for (edge_index, edge) in edges.iter().enumerate() {
