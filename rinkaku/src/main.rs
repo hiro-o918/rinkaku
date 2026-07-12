@@ -70,7 +70,16 @@ enum Command {
     /// or `cargo install rinkaku` instead so your package manager stays
     /// in sync — self-update works either way, but it bypasses those
     /// managers' bookkeeping.
-    SelfUpdate,
+    ///
+    /// Requires either an interactive terminal (to confirm the update) or
+    /// `--yes`. Refuses to run when stdin is not a TTY and `--yes` is not
+    /// given, since there would be no one to answer the confirmation
+    /// prompt.
+    SelfUpdate {
+        /// Skip the interactive confirmation prompt and proceed.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,8 +101,8 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
     let cli = Cli::parse();
 
-    if matches!(cli.command, Some(Command::SelfUpdate)) {
-        return self_update::run_self_update();
+    if let Some(Command::SelfUpdate { yes }) = cli.command {
+        return self_update::run_self_update(yes);
     }
 
     let report = match &cli.base {
@@ -407,13 +416,41 @@ mod tests {
     #[test]
     fn should_set_self_update_command_when_self_update_subcommand_given() {
         let expected = Cli {
-            command: Some(Command::SelfUpdate),
+            command: Some(Command::SelfUpdate { yes: false }),
             base: None,
             head: "HEAD".to_string(),
             format: Format::Md,
             deps: 1,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_set_yes_flag_when_self_update_yes_flag_given() {
+        let expected = Cli {
+            command: Some(Command::SelfUpdate { yes: true }),
+            base: None,
+            head: "HEAD".to_string(),
+            format: Format::Md,
+            deps: 1,
+        };
+        let actual = Cli::parse_from(["rinkaku", "self-update", "--yes"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_set_yes_flag_when_self_update_short_y_flag_given() {
+        let expected = Cli {
+            command: Some(Command::SelfUpdate { yes: true }),
+            base: None,
+            head: "HEAD".to_string(),
+            format: Format::Md,
+            deps: 1,
+        };
+        let actual = Cli::parse_from(["rinkaku", "self-update", "-y"]);
 
         assert_eq!(expected, actual);
     }
