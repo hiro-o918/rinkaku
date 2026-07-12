@@ -433,7 +433,12 @@ fn build_resolver(
     let files: Vec<(String, String)> = match head {
         // One `git cat-file --batch` child process serves every path
         // (see `read_git_show_files_batch`'s doc comment for why this
-        // replaces a `git show` subprocess per file).
+        // replaces a `git show` subprocess per file). A single
+        // unresolvable path is isolated inside that call (same
+        // best-effort skip as the working-tree branch below); the `?`
+        // here only ever fires for a genuinely unrecoverable failure
+        // (the child process itself failing to start, or the batch
+        // stream desyncing), which cannot be isolated to one path.
         Some(head) => read_git_show_files_batch(cwd, head, paths)?,
         None => paths
             .into_iter()
@@ -1057,11 +1062,13 @@ fn read_git_show_file(
 /// process spawns just to build the dependency index).
 ///
 /// Protocol: `git cat-file --batch` reads `<object>\n` requests from
-/// stdin and writes one of two response shapes to stdout per request,
-/// documented in `git help cat-file`:
-/// - found: `<oid> <type> <size>\n` followed by exactly `size` content
-///   bytes and a trailing `\n`;
-/// - not found: `<object> missing\n`.
+/// stdin and writes a response to stdout per request, documented in
+/// `git help cat-file`'s BATCH OUTPUT section — mainly the "found" shape
+/// (`<oid> <type> <size>\n` followed by exactly `size` content bytes and
+/// a trailing `\n`) and several single-line, no-content shapes
+/// (`<object> missing`, `<object> ambiguous`, `<oid> submodule`, ...);
+/// see `read_cat_file_batch_response`'s doc comment for exactly which
+/// shapes are treated as "skip this path" versus a hard failure.
 ///
 /// Requests and responses are sent one at a time (write a request, then
 /// immediately read its response) rather than writing every request up
@@ -1071,13 +1078,10 @@ fn read_git_show_file(
 /// already-full pipe that nobody is draining. One-at-a-time interleaving
 /// avoids that entirely while still cutting the process count from one
 /// per file to exactly one for the whole index — the actual cost this
-/// change targets.
-///
-/// A path that doesn't resolve (`missing` — e.g. a submodule gitlink
-/// entry `git ls-files` still lists) or whose content isn't valid UTF-8
-/// (a binary tracked file) is skipped rather than failing the whole call,
-/// matching `build_resolver`'s existing best-effort handling of
-/// `read_git_show_file` failures for the working-tree read path.
+/// change targets. stderr is drained concurrently on a dedicated thread
+/// for the same reason (see the inline comment where it's spawned) — a
+/// verbose enough diagnostic on stderr could otherwise fill that pipe too
+/// and deadlock the same way.
 fn read_git_show_files_batch(
     cwd: Option<&std::path::Path>,
     head: &str,
@@ -1103,7 +1107,26 @@ fn read_git_show_files_batch(
         .stdout
         .take()
         .expect("stdout is piped, so it must be present");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("stderr is piped, so it must be present");
     let mut reader = std::io::BufReader::new(stdout);
+
+    // Drained on a dedicated thread rather than read after `wait()`: this
+    // call writes/reads stdin and stdout on the main thread in lockstep,
+    // so nothing here would otherwise ever read stderr. If `git` writes
+    // enough diagnostics to fill the OS pipe buffer, the child would block
+    // writing to stderr while this thread blocks reading stdout — an
+    // indefinite mutual stall neither side can break out of. A concurrent
+    // reader keeps that pipe draining regardless of what the main thread
+    // is doing.
+    let stderr_reader = std::thread::spawn(move || {
+        let mut stderr = stderr;
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
 
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
@@ -1127,21 +1150,46 @@ fn read_git_show_files_batch(
     let status = child
         .wait()
         .map_err(|source| anyhow::anyhow!("failed to wait on git cat-file --batch: {source}"))?;
+    // The child has exited, so its stderr end is closed and this join
+    // cannot block indefinitely waiting for more output.
+    let stderr_output = stderr_reader
+        .join()
+        .unwrap_or_else(|_| b"<failed to read stderr: reader thread panicked>".to_vec());
     if !status.success() {
-        anyhow::bail!("git cat-file --batch exited with {status}");
+        anyhow::bail!(
+            "git cat-file --batch exited with {status}: {}",
+            String::from_utf8_lossy(&stderr_output)
+        );
     }
     Ok(files)
 }
 
 /// Reads and parses one `git cat-file --batch` response for `object`
-/// (`<head>:<path>`, used only for the "missing" line's exact echo). See
-/// `read_git_show_files_batch`'s doc comment for the two response shapes.
+/// (`<head>:<path>`). See `read_git_show_files_batch`'s doc comment for
+/// the "found" response shape.
 ///
-/// `Ok(None)` for a `missing` response or non-UTF-8 content (both treated
-/// as "skip this path", matching the working-tree read path's `.ok()`
-/// handling); `Err` only for a genuinely malformed/unexpected response,
-/// which would mean the batch stream itself has desynchronized and every
-/// subsequent read in the loop would be garbage.
+/// `git cat-file --batch` has more single-line, no-content-body response
+/// shapes than just `<object> missing` — `git help cat-file`'s BATCH
+/// OUTPUT section also documents `<object> ambiguous` (an ambiguous short
+/// name — not reachable through this call's `<head>:<path>` requests,
+/// which are never short/ambiguous, but defended against anyway) and
+/// `<oid> submodule` (a gitlink entry whose target commit isn't present
+/// in the repository). Any header line that isn't the `<oid> <type>
+/// <size>` "found" shape is therefore treated the same way as `missing`:
+/// skip this single path, since a single line was already fully consumed
+/// by `read_line` and the stream position is well-defined regardless of
+/// what that line actually said — there is nothing to desync.
+///
+/// `Ok(None)` for any such skippable single-line response, or for
+/// found-but-non-UTF-8 content (both "skip this path", matching the
+/// working-tree read path's `.ok()` handling and restoring the same
+/// per-file isolation `read_git_show_file` had before batching). `Err`
+/// only for an IO failure reading the header line, the exact-size content
+/// bytes, or the trailing newline after a "found" header — those are the
+/// only points where the stream's position becomes genuinely unknown
+/// (a partial read of `size` content bytes, in particular, means there is
+/// no way to know where the next response begins), so recovery for later
+/// paths in the same batch is not possible and the whole call must fail.
 fn read_cat_file_batch_response(
     reader: &mut impl BufRead,
     object: &str,
@@ -1152,29 +1200,31 @@ fn read_cat_file_batch_response(
     })?;
     let header = header.trim_end_matches('\n');
 
-    if header == format!("{object} missing") {
-        return Ok(None);
-    }
-
-    // Found: "<oid> <type> <size>".
-    let size: usize = header
+    // "Found" shape: "<oid> <type> <size>", the size being the last
+    // whitespace-separated token. Anything else (missing, ambiguous,
+    // submodule, or any other single-line shape this code doesn't
+    // specifically know about) is a skip, not a hard error — see the doc
+    // comment above for why that's safe.
+    let Some(size) = header
         .rsplit(' ')
         .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| {
-            anyhow::anyhow!("unexpected git cat-file --batch response for {object}: {header:?}")
-        })?;
+        .and_then(|s| s.parse::<usize>().ok())
+    else {
+        return Ok(None);
+    };
 
     let mut content = vec![0u8; size];
     reader.read_exact(&mut content).map_err(|source| {
-        anyhow::anyhow!("failed to read git cat-file --batch content: {source}")
+        anyhow::anyhow!("failed to read git cat-file --batch content for {object}: {source}")
     })?;
     // Every found response is followed by exactly one trailing newline
     // after the content bytes, regardless of whether the content itself
     // ends in one.
     let mut trailing_newline = [0u8; 1];
     reader.read_exact(&mut trailing_newline).map_err(|source| {
-        anyhow::anyhow!("failed to read git cat-file --batch trailing newline: {source}")
+        anyhow::anyhow!(
+            "failed to read git cat-file --batch trailing newline for {object}: {source}"
+        )
     })?;
 
     match String::from_utf8(content) {
@@ -2023,6 +2073,119 @@ mod tests {
         assert_eq!(
             vec![("text.rs".to_string(), "fn ok() {}\n".to_string())],
             actual
+        );
+    }
+
+    mod read_cat_file_batch_response_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_return_content_when_response_is_found() {
+            let mut reader = std::io::Cursor::new(b"abc123 blob 5\nhello\n".to_vec());
+
+            let actual = read_cat_file_batch_response(&mut reader, "HEAD:a.rs")
+                .expect("a well-formed found response must parse");
+
+            assert_eq!(Some("hello".to_string()), actual);
+        }
+
+        #[test]
+        fn should_return_none_when_response_is_missing() {
+            let mut reader = std::io::Cursor::new(b"HEAD:a.rs missing\n".to_vec());
+
+            let actual = read_cat_file_batch_response(&mut reader, "HEAD:a.rs")
+                .expect("a missing response must not be a hard error");
+
+            assert_eq!(None, actual);
+        }
+
+        // `git help cat-file`'s BATCH OUTPUT section documents this shape
+        // for an ambiguous short name. Not reachable in practice through
+        // this codebase's `<head>:<path>` requests (never a short/
+        // ambiguous name by construction), but must still be treated as a
+        // skip rather than a hard error if git ever emitted it — it's a
+        // single line with no content body, so there is nothing to
+        // desync on.
+        #[test]
+        fn should_return_none_when_response_is_ambiguous() {
+            let mut reader = std::io::Cursor::new(b"abc1 ambiguous\n".to_vec());
+
+            let actual = read_cat_file_batch_response(&mut reader, "abc1")
+                .expect("an ambiguous response must not be a hard error");
+
+            assert_eq!(None, actual);
+        }
+
+        // `git help cat-file`'s BATCH OUTPUT section documents this shape
+        // for a gitlink (submodule) entry whose target commit isn't
+        // present in the repository — exactly the kind of single-file
+        // condition the regression this test guards against used to turn
+        // into a hard failure for the whole batch (the "<size>" parse
+        // used to require the header be an exact `missing` match or
+        // parse as `<oid> <type> <size>`; anything else, including this
+        // shape, fell into an `Err`).
+        #[test]
+        fn should_return_none_when_response_is_a_submodule_entry() {
+            let mut reader = std::io::Cursor::new(
+                b"3eb8e680cc28d03641be1d2af8e098e8ac6a42f8 submodule\n".to_vec(),
+            );
+
+            let actual = read_cat_file_batch_response(&mut reader, "HEAD:sub")
+                .expect("a submodule response must not be a hard error");
+
+            assert_eq!(None, actual);
+        }
+
+        #[test]
+        fn should_return_none_when_found_content_is_not_valid_utf8() {
+            let mut reader = std::io::Cursor::new(
+                [
+                    b"abc123 blob 4\n".as_slice(),
+                    &[0xff, 0xfe, 0x00, 0x01],
+                    b"\n",
+                ]
+                .concat(),
+            );
+
+            let actual = read_cat_file_batch_response(&mut reader, "HEAD:binary.dat")
+                .expect("non-UTF-8 content must not be a hard error");
+
+            assert_eq!(None, actual);
+        }
+
+        // Regression guard for the opposite direction of the fix above:
+        // a genuine stream desync (here, content truncated shorter than
+        // the declared size) must still be a hard error — it cannot be
+        // isolated to a single path, unlike the skippable shapes above.
+        #[test]
+        fn should_return_error_when_content_is_truncated() {
+            let mut reader = std::io::Cursor::new(b"abc123 blob 100\nshort\n".to_vec());
+
+            let actual = read_cat_file_batch_response(&mut reader, "HEAD:a.rs");
+
+            assert!(actual.is_err());
+        }
+    }
+
+    // Regression test for the must-fix cleanup: the exit-status error
+    // message must include the child's stderr, matching every other
+    // subprocess call in this file. Also exercises the concurrent
+    // stderr-draining thread end to end (rather than only reasoning about
+    // it): a non-git `cwd` makes `git cat-file --batch` write a `fatal:
+    // not a git repository...` diagnostic to stderr and exit non-zero,
+    // and that diagnostic must show up in the returned error.
+    #[test]
+    fn should_include_stderr_in_error_when_git_cat_file_batch_exits_non_zero() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+
+        let actual = read_git_show_files_batch(Some(dir.path()), "HEAD", vec!["a.rs".to_string()]);
+
+        let error = actual.expect_err("a non-git cwd must fail rather than silently succeed");
+        let message = error.to_string();
+        assert!(
+            message.contains("not a git repository"),
+            "expected the child's stderr to be included in the error, got: {message:?}"
         );
     }
 
