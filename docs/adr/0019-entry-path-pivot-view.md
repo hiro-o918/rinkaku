@@ -63,3 +63,16 @@ entry trees and following the cursor until toggled off.
 - The root rule change is scoped: ADR 0008's global auto-detection
   stays the default everywhere; the pivot only applies under the flag
   or the TUI mode.
+- Hotspots (fan-in counts, and the TUI directory/file tree's `^N`
+  badge derived from them) stay whole-analysis under `--entry`/the TUI
+  pivot — deliberately not scoped to the pivoted subset. Fan-in is an
+  *inbound* dependency count; a pivot changes the vantage point
+  (which nodes are treated as entry points, walking outward), not the
+  direction fan-in measures. Scoping it to "only count referrers also
+  under the pivoted path" would misreport how much the rest of the
+  repository actually depends on a symbol — exactly the outside-in
+  information a reviewer pivoting from a layer wants to keep visible,
+  not have quietly narrowed. A symbol can be a hotspot in the pivoted
+  tree yet show a fan-in count that includes referrers the tree itself
+  never renders (they live outside `path` and so never appear as a
+  node in the pivoted walk) — this is expected, not a bug.

@@ -451,7 +451,13 @@ exactly, the TUI opens normally (cursor on the first row, Detail pane) with
 a status-line note instead.
 
 Prints `note: no symbols under <path>` to stderr and renders an empty tree
-when no symbol's path falls under `path`.
+when no symbol's path falls under `path`. Fan-in counts (Hotspots, and the
+TUI tree's `^N` badge) stay whole-analysis under `--entry`/the TUI pivot —
+a pivot changes the vantage point (which symbols count as entry points),
+not the direction fan-in itself measures, so scoping it to the pivoted
+subset would misreport how much the rest of the repository actually
+depends on a symbol (see [ADR 0019](docs/adr/0019-entry-path-pivot-view.md)'s
+Consequences).
 
 ## Interactive TUI
 
