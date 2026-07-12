@@ -9,6 +9,7 @@
 
 use rinkaku_core::extract::{Classification, SymbolKind};
 use rinkaku_core::render::Report;
+use std::collections::HashSet;
 
 /// One symbol referenced from a [`DetailView`] (a caller or callee), named
 /// and located but not carrying its full signature — a caller/callee
@@ -110,19 +111,31 @@ pub fn build_detail(report: &Report, id: &str) -> Option<DetailView> {
         })
     };
 
+    // Edge uniqueness within `graph.edges` is not a contractual guarantee —
+    // `compute_hotspots`'s own doc comment in `rinkaku-core::graph` notes
+    // that a repeated edge between the same pair of nodes is not something
+    // `build_graph` can currently produce, but nothing in this function's
+    // contract depends on that staying true either. Deduping by the other
+    // endpoint's id before collecting mentions keeps a duplicate edge from
+    // making the same caller/callee show up twice in the detail pane's
+    // pivots, mirroring `compute_hotspots`'s own dedup-by-referrer-id.
+    let mut seen_callees = HashSet::new();
     let callees: Vec<SymbolMention> = report
         .graph
         .edges
         .iter()
         .filter(|edge| edge.from == id)
+        .filter(|edge| seen_callees.insert(edge.to.as_str()))
         .filter_map(|edge| mentions_by_id(&edge.to))
         .collect();
 
+    let mut seen_callers = HashSet::new();
     let callers: Vec<SymbolMention> = report
         .graph
         .edges
         .iter()
         .filter(|edge| edge.to == id)
+        .filter(|edge| seen_callers.insert(edge.from.as_str()))
         .filter_map(|edge| mentions_by_id(&edge.from))
         .collect();
 
@@ -427,5 +440,67 @@ mod tests {
         assert_eq!(Vec::<SymbolMention>::new(), actual.callers);
         assert_eq!(Vec::<SymbolMention>::new(), actual.callees);
         assert_eq!(Vec::<SymbolMention>::new(), actual.used_by);
+    }
+
+    // SHOULD-FIX 5: `graph.edges` uniqueness is not a contractual guarantee
+    // (`compute_hotspots`'s own doc comment in rinkaku-core::graph notes
+    // this, and defends against it by deduping referrers per target) —
+    // `build_detail` must apply the same defensive dedup to `callees`,
+    // `callers`, and `used_by` rather than assume `graph.edges` never
+    // repeats an edge, or a duplicate edge would silently double-count a
+    // caller/callee in the detail pane's pivots.
+    #[test]
+    fn should_dedup_duplicate_edges_between_the_same_pair_of_symbols() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![
+                    symbol("lib.rs::caller", "caller"),
+                    symbol("lib.rs::callee", "callee"),
+                ],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("lib.rs::caller", "lib.rs", "caller"),
+                    node("lib.rs::callee", "lib.rs", "callee"),
+                ],
+                // Same caller -> callee edge listed twice — a hand-built
+                // graph standing in for whatever upstream circumstance
+                // (not currently reachable through `build_graph`, per
+                // `compute_hotspots`'s own doc comment) might one day
+                // produce a repeated edge.
+                edges: vec![
+                    Edge {
+                        from: "lib.rs::caller".to_string(),
+                        to: "lib.rs::callee".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "lib.rs::caller".to_string(),
+                        to: "lib.rs::callee".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec!["lib.rs::caller".to_string()],
+            },
+            ..empty_report()
+        };
+
+        let callee_detail = build_detail(&report, "lib.rs::callee").expect("symbol found");
+        let caller_detail = build_detail(&report, "lib.rs::caller").expect("symbol found");
+
+        let expected_caller_mention = vec![SymbolMention {
+            id: "lib.rs::caller".to_string(),
+            name: "caller".to_string(),
+            path: "lib.rs".to_string(),
+        }];
+        let expected_callee_mention = vec![SymbolMention {
+            id: "lib.rs::callee".to_string(),
+            name: "callee".to_string(),
+            path: "lib.rs".to_string(),
+        }];
+        assert_eq!(expected_caller_mention, callee_detail.callers);
+        assert_eq!(expected_caller_mention, callee_detail.used_by);
+        assert_eq!(expected_callee_mention, caller_detail.callees);
     }
 }
