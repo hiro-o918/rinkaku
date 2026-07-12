@@ -334,19 +334,31 @@ By default (see [ADR 0010](docs/adr/0010-skip-files-marked-no-diff-or-generated-
 rinkaku resolves each changed file's `diff`/`linguist-generated`
 `.gitattributes` attributes via `git check-attr` and skips files marked
 `-diff` or `linguist-generated` (lockfiles, generated code — content a
-repository has already declared uninteresting to diff-review), listing them
-under "Skipped files" with reason `generated`:
+repository has already declared uninteresting to diff-review). In Markdown
+output, these files are dropped silently: they do **not** appear under
+"Skipped files" at all, since `.gitattributes` has already marked them
+uninteresting and listing them as something rinkaku "didn't look at" would
+just be noise. A diff that touches nothing but generated files renders as
+empty Markdown output.
 
-```markdown
-## Skipped files
+They do still appear in `--format json`'s `skipped` array, with reason
+`"generated"`, for consumers that want the full picture:
 
-- Cargo.lock (generated)
+```sh
+$ rinkaku --base main --format json | jq '.skipped'
+```
+
+```json
+[
+  { "path": "Cargo.lock", "reason": "generated" }
+]
 ```
 
 This only applies when a local git repository is available (`--base`,
 `--pr`, or stdin piped inside a repository); outside a repository, no
 attribute filtering happens. Pass `--include-generated` to restore the
-previous behavior.
+previous behavior (generated files are analyzed like any other file, in
+both output formats).
 
 ## Development
 

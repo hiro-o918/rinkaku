@@ -18,11 +18,18 @@ already declared uninteresting.
 When a local git repository is available (the `--base` and `--pr` modes,
 or stdin piped inside a repo), resolve attributes via `git check-attr`
 at the process boundary and skip files whose `diff` attribute is unset
-(`-diff`) or whose `linguist-generated` is set. Skipped files appear
-under the existing `Skipped files` section with a new `generated` skip
-reason. Without a repository, no attribute filtering happens (best
-effort). A `--include-generated` flag restores the previous behavior,
-mirroring `--include-tests`.
+(`-diff`) or whose `linguist-generated` is set, recording a new
+`generated` skip reason on each. These entries are always recorded in
+`Report.skipped` and therefore always present in JSON output, but are
+omitted from the Markdown "Skipped files" section entirely — a
+`.gitattributes`-generated file is content the repository has already
+declared uninteresting to diff-review, so listing it as something
+rinkaku "didn't look at" in output meant for a human/LLM skimming a
+change would just be noise on top of what `.gitattributes` already
+communicates. Without a repository, no attribute filtering happens
+(best effort). A `--include-generated` flag restores the previous
+behavior (no filtering at all, in either output format), mirroring
+`--include-tests`.
 
 ## Alternatives
 
@@ -35,10 +42,17 @@ mirroring `--include-tests`.
 
 ## Consequences
 
-- Generated/lockfile churn disappears from the output while staying
-  visible as skip entries; repositories control the behavior through
-  their own `.gitattributes`.
+- Generated/lockfile churn disappears from Markdown output entirely;
+  repositories control the behavior through their own `.gitattributes`.
 - JSON consumers see a new `skipped.reason` value (`generated`) — a
   minor breaking change for strict enum consumers, acceptable pre-1.0.
+- Markdown readers cannot tell, from the rendered output alone, that a
+  generated file was skipped — unlike every other skip reason
+  (`binary`/`deleted`/`unsupported_language`), which still appear under
+  "Skipped files". This is a deliberate asymmetry: a reviewer only needs
+  to know a generated file existed if they specifically want to check,
+  which JSON output (`--format json`, always includes every `generated`
+  entry) supports; the common case is that generated-file noise should
+  simply not compete for attention in the primary, human-facing rendering.
 - Pure-stdin-outside-a-repo input keeps generated files; documented
   limitation rather than a fragile homegrown attribute parser.
