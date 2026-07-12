@@ -531,6 +531,36 @@ mod tests {
     }
 
     #[test]
+    fn should_not_strip_partial_string_overlap_between_sibling_directory_names() {
+        // "src" and "src2" are two independent top-level roots (both
+        // depth 0, i.e. siblings, not ancestor/descendant) that happen to
+        // share "src" as a string prefix. `relative_labels` only ever
+        // compares a row against its own ancestor chain (via
+        // `ancestor_path_at[row.depth - 1]`), never against a sibling at
+        // the same depth, so "src2" must keep its full label rather than
+        // having "src" spuriously stripped off it as if "src" were its
+        // parent.
+        let src = dir_node("src", Badges::default(), vec![]);
+        let src2 = dir_node("src2", Badges::default(), vec![]);
+        let rows = vec![
+            Row {
+                node: &src,
+                depth: 0,
+                expanded: false,
+            },
+            Row {
+                node: &src2,
+                depth: 0,
+                expanded: false,
+            },
+        ];
+
+        let labels = relative_labels(&rows);
+
+        assert_eq!(vec!["src".to_string(), "src2".to_string()], labels);
+    }
+
+    #[test]
     fn should_return_empty_label_for_symbol_rows() {
         let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
         let rows = vec![Row {
