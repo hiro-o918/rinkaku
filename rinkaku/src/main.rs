@@ -2,8 +2,9 @@
 //!
 //! This is the only place allowed to know about the concrete CLI wiring.
 //! It stays a thin entry point: parse arguments, obtain the diff text
-//! (stdin or `git diff`), read changed files, and dispatch to the pure
-//! core in `lib.rs` (`pipeline::analyze_diff`, `render::render`).
+//! (stdin, `git diff`, or a resolved PR), read changed files, and
+//! dispatch to the pure core in `lib.rs` (`pipeline::analyze_diff`,
+//! `render::render`).
 //!
 //! The file-reading port passed to `analyze_diff` differs by input mode:
 //!
@@ -12,6 +13,14 @@
 //!   working tree. This keeps the diff and the file content read from the
 //!   exact same commit by construction, regardless of what the working
 //!   tree currently holds (uncommitted changes, a dirty checkout, etc.).
+//! - `--pr` mode (ADR 0004): the PR's base branch and head commit are
+//!   resolved via `gh pr view`, both are fetched into the local clone
+//!   with `git fetch`, and the resulting base/head SHAs are handed to
+//!   exactly the same `git show`-backed read strategy as `--base` mode —
+//!   `--pr` is a resolution step in front of the `--base` pipeline, not a
+//!   separate read strategy. Requires running inside a local clone whose
+//!   `origin` remote is the target repository, and requires `gh` to be
+//!   installed and authenticated.
 //! - stdin mode: the diff's provenance is unknown to rinkaku (it could be
 //!   `gh pr diff`, a saved patch file, anything). Files are read off the
 //!   working tree, under the assumption that **the diff is consistent
@@ -42,13 +51,27 @@ struct Cli {
 
     /// Base ref to diff against (runs `git diff <base>...<head>` instead
     /// of reading from stdin).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "pr")]
     base: Option<String>,
 
     /// Head ref to diff against `base`. Only meaningful together with
     /// `--base`; defaults to `HEAD`.
-    #[arg(long, default_value = "HEAD")]
+    //
+    // `conflicts_with = "pr"` only fires when `--head` is explicitly
+    // passed (clap does not treat a default value as "provided"), which
+    // is exactly what's wanted: `--pr` resolves its own head commit via
+    // `gh`, so an explicit `--head` alongside `--pr` would be silently
+    // ignored otherwise.
+    #[arg(long, default_value = "HEAD", conflicts_with = "pr")]
     head: String,
+
+    /// GitHub PR to review, as a URL
+    /// (`https://github.com/<owner>/<repo>/pull/<number>`) or a bare PR
+    /// number (`76`). Must be run inside a local clone of the target
+    /// repository, with `gh` installed and authenticated.
+    // See ADR 0004 for the resolve-then-fetch design this drives in `main`.
+    #[arg(long)]
+    pr: Option<String>,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Md)]
@@ -105,47 +128,76 @@ fn main() -> anyhow::Result<()> {
         return self_update::run_self_update(yes);
     }
 
-    let report = match &cli.base {
-        Some(base) => {
-            let diff_text = run_git_diff(base, &cli.head)?;
-            let head = cli.head.clone();
-            let read_file = {
-                let head = head.clone();
-                move |path: &str| read_git_show_file(None, &head, path)
-            };
-            let resolver = build_resolver(&cli, &diff_text, &read_file, Some(&head), None)?;
-            analyze_diff(
-                &diff_text,
-                read_file,
-                resolver
-                    .as_ref()
-                    .map(|r| r as &dyn rinkaku_core::deps::Resolver),
-            )?
+    let report = if let Some(pr_arg) = &cli.pr {
+        // Validate the arg and derive the fetch refspec's PR number, but
+        // pass the original (trimmed) value — not the parsed number — to
+        // `gh pr view` (see that function's doc comment for why).
+        let number = parse_pr_arg(pr_arg)?;
+        let pr_info = fetch_pr_info(pr_arg.trim())?;
+        let head_sha = fetch_pr_head(number)?;
+        if head_sha != pr_info.head_ref_oid {
+            anyhow::bail!(
+                "fetched PR #{number} head ({head_sha}) does not match `gh`'s reported head \
+                 ({expected}); this usually means the PR belongs to a different repository than \
+                 this clone's `origin` remote, or the PR was updated between resolving it and \
+                 fetching it — verify `origin` points at the PR's repository and re-run",
+                expected = pr_info.head_ref_oid,
+            );
         }
-        None => {
-            let diff_text = read_stdin_diff()?;
-            if diff_text.trim().is_empty() {
-                eprintln!("note: diff is empty, nothing to analyze");
-            }
-            let resolver = build_resolver(&cli, &diff_text, read_working_tree_file, None, None)?;
-            let report = analyze_diff(
-                &diff_text,
-                read_working_tree_file,
-                resolver
-                    .as_ref()
-                    .map(|r| r as &dyn rinkaku_core::deps::Resolver),
-            )?;
-            if let Some(note) = garbage_input_note(&diff_text, &report) {
-                eprintln!("{note}");
-            }
-            report
+        let base_sha = fetch_branch_head(&pr_info.base_ref_name)?;
+        run_base_pipeline(&cli, &base_sha, &head_sha)?
+    } else if let Some(base) = &cli.base {
+        run_base_pipeline(&cli, base, &cli.head)?
+    } else {
+        let diff_text = read_stdin_diff()?;
+        if diff_text.trim().is_empty() {
+            eprintln!("note: diff is empty, nothing to analyze");
         }
+        let resolver = build_resolver(&cli, &diff_text, read_working_tree_file, None, None)?;
+        let report = analyze_diff(
+            &diff_text,
+            read_working_tree_file,
+            resolver
+                .as_ref()
+                .map(|r| r as &dyn rinkaku_core::deps::Resolver),
+        )?;
+        if let Some(note) = garbage_input_note(&diff_text, &report) {
+            eprintln!("{note}");
+        }
+        report
     };
 
     let output = render(&report, cli.format.into())?;
     print!("{output}");
 
     Ok(())
+}
+
+/// Runs `git diff <base>...<head>` and analyzes the result, reading file
+/// content via `git show <head>:<path>` (ADR: keeps the diff and file
+/// reads pinned to the same commit regardless of the working tree's
+/// state). Shared by `--base` mode (`base`/`head` are the ref strings the
+/// user passed) and `--pr` mode (`base`/`head` are the SHAs resolved and
+/// fetched from the PR, see ADR 0004) — `--pr` is a resolution step in
+/// front of this same pipeline, not a separate read strategy.
+fn run_base_pipeline(
+    cli: &Cli,
+    base: &str,
+    head: &str,
+) -> anyhow::Result<rinkaku_core::render::Report> {
+    let diff_text = run_git_diff(base, head)?;
+    let read_file = {
+        let head = head.to_string();
+        move |path: &str| read_git_show_file(None, &head, path)
+    };
+    let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), None)?;
+    Ok(analyze_diff(
+        &diff_text,
+        read_file,
+        resolver
+            .as_ref()
+            .map(|r| r as &dyn rinkaku_core::deps::Resolver),
+    )?)
 }
 
 /// Returns a warning note for stdin input that is garbage rather than a
@@ -288,6 +340,131 @@ fn run_git_diff(base: &str, head: &str) -> anyhow::Result<String> {
     Ok(String::from_utf8(output.stdout)?)
 }
 
+/// The subset of `gh pr view --json number,baseRefName,headRefOid` this
+/// binary needs to drive `--pr` mode (ADR 0004): which PR, what its base
+/// branch is called, and the exact commit its head is expected to be at
+/// (checked against what `git fetch` actually retrieves, see
+/// `main`'s mismatch check).
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+struct PrInfo {
+    number: u64,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+}
+
+/// Extracts a PR number from `--pr`'s value: either a bare number
+/// (`"76"`) or a GitHub PR URL
+/// (`https://github.com/<owner>/<repo>/pull/<number>`, tolerating a
+/// trailing slash or extra path segments like `/files`).
+///
+/// `0` is rejected even though it parses as a `u64`: GitHub PR numbers
+/// are 1-indexed, so `0` can only be a typo, and failing fast here beats
+/// a confusing `gh pr view 0` error downstream.
+fn parse_pr_arg(value: &str) -> anyhow::Result<u64> {
+    let candidate = match value.trim().strip_prefix("https://github.com/") {
+        Some(rest) => {
+            // Expect `<owner>/<repo>/pull/<number>[/...]`.
+            let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+            match segments.as_slice() {
+                [_owner, _repo, "pull", number, ..] => *number,
+                _ => anyhow::bail!(
+                    "--pr URL must look like https://github.com/<owner>/<repo>/pull/<number>, \
+                     got: {value}"
+                ),
+            }
+        }
+        None => value.trim(),
+    };
+
+    let number: u64 = candidate.parse().map_err(|_| {
+        anyhow::anyhow!("--pr must be a PR number or a GitHub PR URL, got: {value}")
+    })?;
+    if number == 0 {
+        anyhow::bail!("--pr must be a positive PR number, got: {value}");
+    }
+    Ok(number)
+}
+
+/// Parses `gh pr view --json number,baseRefName,headRefOid`'s stdout.
+/// Split out from `fetch_pr_info` so the JSON shape can be unit-tested
+/// without shelling out to `gh`.
+fn parse_pr_view_json(json: &str) -> anyhow::Result<PrInfo> {
+    Ok(serde_json::from_str(json)?)
+}
+
+/// Runs `gh pr view <arg> --json number,baseRefName,headRefOid` and parses
+/// the result.
+///
+/// Takes the user's original `--pr` argument (URL or bare number) rather
+/// than the number `parse_pr_arg` extracts from it, and this is load-bearing
+/// rather than cosmetic: `gh pr view <number>` always resolves against the
+/// *current directory's* repository, ignoring any owner/repo encoded in a
+/// URL the user passed. If it were fed only the number, `--pr
+/// https://github.com/other/repo/pull/5` run inside an unrelated clone
+/// would silently resolve and analyze that clone's own PR #5. Passing the
+/// full URL through lets `gh` itself resolve against the URL's repository,
+/// so a foreign-repo URL makes `gh` report a `headRefOid` that the
+/// cwd-scoped `git fetch origin refs/pull/<n>/head` in `main` cannot
+/// possibly match — the mismatch check there is what actually surfaces the
+/// error, and it only works if `gh` and `git` are allowed to disagree on
+/// which repository they resolved against.
+fn fetch_pr_info(arg: &str) -> anyhow::Result<PrInfo> {
+    let output = std::process::Command::new("gh")
+        .args(["pr", "view", arg, "--json", "number,baseRefName,headRefOid"])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "gh pr view {arg} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    parse_pr_view_json(&String::from_utf8(output.stdout)?)
+}
+
+/// Fetches PR `number`'s head ref into the local clone and returns the
+/// fetched commit's SHA, via `git fetch origin refs/pull/<number>/head`
+/// followed by `git rev-parse FETCH_HEAD`.
+fn fetch_pr_head(number: u64) -> anyhow::Result<String> {
+    run_git_fetch(&format!("refs/pull/{number}/head"))
+}
+
+/// Fetches branch `name` into the local clone and returns the fetched
+/// commit's SHA. Used to resolve `--pr` mode's base commit from the base
+/// branch name `gh pr view` reports.
+fn fetch_branch_head(name: &str) -> anyhow::Result<String> {
+    run_git_fetch(name)
+}
+
+/// Runs `git fetch origin <refspec>` then `git rev-parse FETCH_HEAD`,
+/// returning the resulting SHA. Shared by `fetch_pr_head` and
+/// `fetch_branch_head`, which differ only in what refspec they fetch.
+fn run_git_fetch(refspec: &str) -> anyhow::Result<String> {
+    let fetch_output = std::process::Command::new("git")
+        .args(["fetch", "origin", refspec])
+        .output()?;
+    if !fetch_output.status.success() {
+        anyhow::bail!(
+            "git fetch origin {refspec} failed: {}",
+            String::from_utf8_lossy(&fetch_output.stderr)
+        );
+    }
+
+    let rev_parse_output = std::process::Command::new("git")
+        .args(["rev-parse", "FETCH_HEAD"])
+        .output()?;
+    if !rev_parse_output.status.success() {
+        anyhow::bail!(
+            "git rev-parse FETCH_HEAD failed after fetching {refspec}: {}",
+            String::from_utf8_lossy(&rev_parse_output.stderr)
+        );
+    }
+    Ok(String::from_utf8(rev_parse_output.stdout)?
+        .trim()
+        .to_string())
+}
+
 /// Reads a changed file's new-side content off the working tree.
 fn read_working_tree_file(path: &str) -> std::io::Result<String> {
     std::fs::read_to_string(path)
@@ -328,6 +505,7 @@ fn read_git_show_file(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[test]
     fn should_default_to_markdown_head_and_no_base_when_no_args_given() {
@@ -335,6 +513,7 @@ mod tests {
             command: None,
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 1,
         };
@@ -349,6 +528,7 @@ mod tests {
             command: None,
             base: Some("main".to_string()),
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 1,
         };
@@ -363,6 +543,7 @@ mod tests {
             command: None,
             base: Some("main".to_string()),
             head: "feature-branch".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 1,
         };
@@ -377,6 +558,7 @@ mod tests {
             command: None,
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Json,
             deps: 1,
         };
@@ -398,6 +580,7 @@ mod tests {
             command: None,
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 0,
         };
@@ -419,6 +602,7 @@ mod tests {
             command: Some(Command::SelfUpdate { yes: false }),
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 1,
         };
@@ -433,6 +617,7 @@ mod tests {
             command: Some(Command::SelfUpdate { yes: true }),
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 1,
         };
@@ -447,6 +632,7 @@ mod tests {
             command: Some(Command::SelfUpdate { yes: true }),
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 1,
         };
@@ -462,6 +648,98 @@ mod tests {
         // convention for catching CLI wiring mistakes at test time.
         use clap::CommandFactory;
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn should_set_pr_when_pr_flag_given() {
+        // Also covers that `--pr` alone (no explicit `--head`) parses
+        // successfully: `--head` has a default value, so clap's
+        // `conflicts_with` must not fire unless `--head` was actually
+        // passed on the command line — this is the behavior the ADR relies
+        // on to let `--pr` reuse the `Cli` struct's `head` field internally
+        // without users needing to omit an unrelated flag.
+        let expected = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: Some("76".to_string()),
+            format: Format::Md,
+            deps: 1,
+        };
+        let actual = Cli::parse_from(["rinkaku", "--pr", "76"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_reject_pr_and_base_together() {
+        let actual = Cli::try_parse_from(["rinkaku", "--pr", "76", "--base", "main"]);
+
+        assert!(actual.is_err());
+    }
+
+    #[test]
+    fn should_reject_pr_and_explicit_head_together() {
+        let actual = Cli::try_parse_from(["rinkaku", "--pr", "76", "--head", "feature-branch"]);
+
+        assert!(actual.is_err());
+    }
+
+    #[rstest]
+    #[case::should_parse_bare_number("76", 76)]
+    #[case::should_parse_number_with_surrounding_whitespace(" 76 ", 76)]
+    #[case::should_parse_pull_url("https://github.com/octocat/hello-world/pull/123", 123)]
+    #[case::should_parse_pull_url_with_trailing_slash(
+        "https://github.com/octocat/hello-world/pull/123/",
+        123
+    )]
+    #[case::should_parse_pull_url_with_extra_path_segment(
+        "https://github.com/octocat/hello-world/pull/123/files",
+        123
+    )]
+    fn should_parse_pr_arg_when_input_is_valid(#[case] input: &str, #[case] expected: u64) {
+        let actual = parse_pr_arg(input).expect("expected a valid PR number");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[rstest]
+    #[case::should_reject_empty_string("")]
+    #[case::should_reject_non_numeric_string("abc")]
+    #[case::should_reject_zero("0")]
+    #[case::should_reject_negative_number("-1")]
+    #[case::should_reject_non_pull_github_url("https://github.com/octocat/hello-world/issues/123")]
+    #[case::should_reject_github_url_missing_number("https://github.com/octocat/hello-world/pull/")]
+    #[case::should_reject_unrelated_url("https://example.com/pull/123")]
+    fn should_reject_pr_arg_when_input_is_invalid(#[case] input: &str) {
+        let actual = parse_pr_arg(input);
+
+        assert!(actual.is_err(), "expected an error for input: {input}");
+    }
+
+    #[test]
+    fn should_parse_pr_view_json_into_pr_info() {
+        let json = r#"{"number":123,"baseRefName":"main","headRefOid":"abc123def456"}"#;
+
+        let actual = parse_pr_view_json(json).expect("expected valid JSON to parse");
+
+        assert_eq!(
+            PrInfo {
+                number: 123,
+                base_ref_name: "main".to_string(),
+                head_ref_oid: "abc123def456".to_string(),
+            },
+            actual
+        );
+    }
+
+    #[test]
+    fn should_fail_to_parse_pr_view_json_when_a_required_field_is_missing() {
+        let json = r#"{"number":123,"baseRefName":"main"}"#;
+
+        let actual = parse_pr_view_json(json);
+
+        assert!(actual.is_err());
     }
 
     /// Runs `git` inside `dir`, panicking with the captured stderr on
@@ -537,6 +815,7 @@ mod tests {
             command: None,
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 0,
         };
@@ -566,6 +845,7 @@ mod tests {
             command: None,
             base: None,
             head: "HEAD".to_string(),
+            pr: None,
             format: Format::Md,
             deps: 1,
         };

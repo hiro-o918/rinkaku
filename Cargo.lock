@@ -1296,6 +1296,8 @@ dependencies = [
  "rinkaku-core",
  "rstest",
  "self_update",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

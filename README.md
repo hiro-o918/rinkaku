@@ -9,10 +9,16 @@ every implementation line.
 
 ## What it is
 
-- **Input**: a unified diff via stdin (`gh pr diff 123 | rinkaku`), or
-  `rinkaku --base main` to run `git diff` internally. In `--base` mode,
+- **Input**: a unified diff via stdin (`gh pr diff 123 | rinkaku`),
+  `rinkaku --base main` to run `git diff` internally, or
+  `rinkaku --pr 123` to review a GitHub PR directly. In `--base` mode,
   file contents are read via `git show <head>:<path>` so extraction always
-  matches the diffed commit, regardless of the working tree's state. In
+  matches the diffed commit, regardless of the working tree's state.
+  `--pr` mode resolves the PR's base and head via `gh pr view`, fetches
+  both into the local clone, and reuses the same `git show`-backed read
+  strategy as `--base` — it requires running inside a local clone of the
+  target repository, and `gh` installed and authenticated (see
+  [ADR 0004](docs/adr/0004-pr-input-mode-via-gh-in-local-clone.md)). In
   stdin mode, file contents are read off the working tree, which assumes
   **the piped diff is consistent with the current working tree** (e.g. it
   was just produced by `git diff` or already applied); a stale or
@@ -36,7 +42,7 @@ See [`docs/adr/`](docs/adr) for the reasoning behind these choices.
 ## Status
 
 Early development. Diff parsing, tree-sitter extraction, the CLI
-(stdin/`--base` input, Markdown/JSON output), and 1-hop dependency
+(stdin/`--base`/`--pr` input, Markdown/JSON output), and 1-hop dependency
 expansion (`--deps`, the tags-based `Resolver`) are implemented.
 
 ## Installation
@@ -106,8 +112,13 @@ not given, `self-update` refuses to run rather than silently proceeding.
 ## Usage
 
 ```sh
-# From a GitHub PR
+# From a GitHub PR (stdin, no local clone required)
 gh pr diff 123 | rinkaku
+
+# From a GitHub PR, run inside a local clone of the target repository
+# (fetches the PR via `gh`/`git`; requires `gh` installed and authenticated)
+rinkaku --pr 123
+rinkaku --pr https://github.com/octocat/hello-world/pull/123
 
 # From a local git diff against a base branch
 rinkaku --base main
