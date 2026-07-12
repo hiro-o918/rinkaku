@@ -149,6 +149,15 @@ impl<'a> SymbolLookup<'a> {
 /// (e.g. a pure rename — see `pipeline::analyze_diff`'s doc comment); and a
 /// list of skipped files.
 ///
+/// `SkipReason::Generated` entries are omitted from "Skipped files"
+/// entirely (ADR 0010): `.gitattributes` already marks these files as
+/// uninteresting to diff-review, so listing them as something rinkaku
+/// "didn't look at" would just be noise in output meant for a human/LLM
+/// skimming a change. They remain in `Report.skipped` and therefore in
+/// JSON output (`render`'s `OutputFormat::Json` branch serializes `report`
+/// as-is, unfiltered) for machine consumers that want the full picture —
+/// this function only affects the Markdown rendering.
+///
 /// Path headings and tree labels (`{prefix} {name} ({path})`) do not escape
 /// Markdown special characters (`#`, `[`, `]`, `_`, ...). A path containing
 /// them can distort the rendered heading; this is accepted rather than
@@ -162,11 +171,16 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
         .filter(|file| file.symbols.is_empty())
         .map(|file| file.path.as_str())
         .collect();
+    let visible_skipped: Vec<&SkippedFile> = report
+        .skipped
+        .iter()
+        .filter(|skipped| !matches!(skipped.reason, SkipReason::Generated))
+        .collect();
 
     if report.graph.nodes.is_empty()
         && report.tests.is_empty()
         && files_with_no_symbols.is_empty()
-        && report.skipped.is_empty()
+        && visible_skipped.is_empty()
     {
         return Ok(String::new());
     }
@@ -220,10 +234,10 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
         writeln!(out)?;
     }
 
-    if !report.skipped.is_empty() {
+    if !visible_skipped.is_empty() {
         writeln!(out, "## Skipped files")?;
         writeln!(out)?;
-        for skipped in &report.skipped {
+        for skipped in &visible_skipped {
             writeln!(
                 out,
                 "- {} ({})",
@@ -800,8 +814,80 @@ fn foo()
         assert_eq!(expected, actual);
     }
 
+    // Regression test: a `Generated` skip entry must not appear in Markdown
+    // output at all (not even under "Skipped files") — `.gitattributes`
+    // already marks these files as uninteresting to diff-review, so
+    // Markdown output (meant for humans/LLMs skimming a change) drops them
+    // silently rather than listing them as something rinkaku "didn't look
+    // at". They stay visible in JSON (see
+    // `should_keep_generated_entry_in_json_output` below) for machine
+    // consumers that want the full picture.
     #[test]
-    fn should_render_generated_skip_reason_label() {
+    fn should_omit_generated_skip_entry_from_markdown_output() {
+        let report = Report {
+            files: vec![],
+            skipped: vec![SkippedFile {
+                path: "Cargo.lock".to_string(),
+                reason: SkipReason::Generated,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+        };
+
+        let expected = "".to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    // Sibling case: when a `Generated` entry is mixed with other skip
+    // reasons, only the generated one is dropped from Markdown — the
+    // section itself still renders for the remaining, non-generated skips.
+    #[test]
+    fn should_omit_only_generated_entries_when_skipped_has_other_reasons_too() {
+        let report = Report {
+            files: vec![],
+            skipped: vec![
+                SkippedFile {
+                    path: "Cargo.lock".to_string(),
+                    reason: SkipReason::Generated,
+                },
+                SkippedFile {
+                    path: "assets/logo.png".to_string(),
+                    reason: SkipReason::Binary,
+                },
+            ],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+        };
+
+        let expected = "\
+## Skipped files
+
+- assets/logo.png (binary)
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    // JSON is machine-readable output, not the human-skimmable Markdown
+    // rendering — `Generated` entries must stay in `skipped` there for
+    // full-fidelity consumers and so `garbage_input_note`'s "did we
+    // recognize anything at all" check keeps working for an all-generated
+    // diff (see `garbage_input_note_tests` in `rinkaku/src/main.rs`, which
+    // reads `report.skipped` directly, not the rendered Markdown).
+    #[test]
+    fn should_keep_generated_entry_in_json_output() {
         let report = Report {
             files: vec![],
             skipped: vec![SkippedFile {
@@ -817,12 +903,23 @@ fn foo()
         };
 
         let expected = "\
-## Skipped files
-
-- Cargo.lock (generated)
-"
+{
+  \"files\": [],
+  \"skipped\": [
+    {
+      \"path\": \"Cargo.lock\",
+      \"reason\": \"generated\"
+    }
+  ],
+  \"graph\": {
+    \"nodes\": [],
+    \"edges\": [],
+    \"roots\": []
+  },
+  \"tests\": []
+}"
         .to_string();
-        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+        let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
 
         assert_eq!(expected, actual);
     }

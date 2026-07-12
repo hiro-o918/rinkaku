@@ -2938,5 +2938,40 @@ fn should_add_two_numbers() {
 
             assert_eq!(None, actual);
         }
+
+        // Regression test (ADR 0010 follow-up): a diff whose every changed
+        // file is `.gitattributes`-generated produces a Report with empty
+        // files/tests but a non-empty skipped list of Generated entries —
+        // this is still a fully-recognized, legitimate diff, not garbage
+        // input, even though the Markdown rendering now hides Generated
+        // entries entirely (render.rs's render_markdown) and would
+        // therefore render as an empty string. garbage_input_note reads
+        // report.skipped directly (never the rendered Markdown string), so
+        // this must keep passing without any code change — this test pins
+        // that down explicitly rather than leaving it as an implicit
+        // consequence of should_return_none_when_report_has_only_skipped_entries
+        // above.
+        #[test]
+        fn should_return_none_when_report_has_only_generated_skip_entries() {
+            let report = Report {
+                files: vec![],
+                skipped: vec![
+                    rinkaku_core::render::SkippedFile {
+                        path: "Cargo.lock".to_string(),
+                        reason: rinkaku_core::render::SkipReason::Generated,
+                    },
+                    rinkaku_core::render::SkippedFile {
+                        path: "vendor/generated.go".to_string(),
+                        reason: rinkaku_core::render::SkipReason::Generated,
+                    },
+                ],
+                graph: empty_graph(),
+                tests: vec![],
+            };
+
+            let actual = garbage_input_note("some diff text", &report);
+
+            assert_eq!(None, actual);
+        }
     }
 }
