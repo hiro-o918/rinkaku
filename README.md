@@ -371,6 +371,18 @@ the Roadmap below.
   ...) as a higher-precision, opt-in alternative to the v1 tags-based
   `Resolver`.
 
+## Release
+
+`rinkaku` and `rinkaku-core` are versioned independently by
+[release-please](https://github.com/googleapis/release-please) (no
+`linked-versions` grouping): each crate only bumps when a commit touches
+its own path, so it's normal for them to be on different versions (e.g.
+`rinkaku` 0.2.0 depending on `rinkaku-core` 0.1.0). Only `rinkaku`'s
+release tag (`v{version}`, no component prefix) triggers
+`build-and-publish.yaml`; `rinkaku-core`'s tag is prefixed
+(`rinkaku-core-v{version}`) so a `rinkaku-core`-only release doesn't spin
+up the binary build/publish pipeline.
+
 ## License
 
 MIT
