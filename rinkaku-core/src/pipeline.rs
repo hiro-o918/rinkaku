@@ -1200,13 +1200,38 @@ func Foo() int { return 2 }
 ";
             let read_file = fake_reader(HashMap::from([("models/user.go", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "models/user.go".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "models/user.go::Foo".to_string(),
+                        name: "Foo".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "func Foo() int".to_string(),
+                        range: LineRange { start: 3, end: 3 },
+                        container: None,
+                        referenced_names: vec!["int".to_string()],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                    }],
+                }],
+                skipped: vec![],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "models/user.go::Foo".to_string(),
+                        path: "models/user.go".to_string(),
+                        name: "Foo".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["models/user.go::Foo".to_string()],
+                },
+                tests: vec![],
+            };
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
-            let expected_skipped: Vec<SkippedFile> = Vec::new();
-            assert_eq!(1, report.files.len());
-            assert_eq!(1, report.files[0].symbols.len());
-            assert_eq!(expected_skipped, report.skipped);
+            assert_eq!(expected, actual);
         }
 
         #[test]
@@ -1229,12 +1254,38 @@ fn foo(a: i32) -> i32 {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "src/lib.rs::foo".to_string(),
+                        name: "foo".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "fn foo(a: i32) -> i32".to_string(),
+                        range: LineRange { start: 1, end: 3 },
+                        container: None,
+                        referenced_names: vec![],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                    }],
+                }],
+                skipped: vec![],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "src/lib.rs::foo".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        name: "foo".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+            };
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
                 .expect("analyze should succeed");
 
-            let expected_skipped: Vec<SkippedFile> = Vec::new();
-            assert_eq!(1, report.files.len());
-            assert_eq!(expected_skipped, report.skipped);
+            assert_eq!(expected, actual);
         }
 
         #[test]
@@ -1264,16 +1315,41 @@ index e69de29..4b825dc 100644
                 ("src/lib.rs", normal_source),
             ]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+            let expected = Report {
+                files: vec![FileReport {
+                    path: "src/lib.rs".to_string(),
+                    symbols: vec![ExtractedSymbol {
+                        id: "src/lib.rs::foo".to_string(),
+                        name: "foo".to_string(),
+                        kind: SymbolKind::Function,
+                        signature: "fn foo(a: i32) -> i32".to_string(),
+                        range: LineRange { start: 1, end: 3 },
+                        container: None,
+                        referenced_names: vec![],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                    }],
+                }],
+                skipped: vec![SkippedFile {
+                    path: "models/user.go".to_string(),
+                    reason: SkipReason::Generated,
+                }],
+                graph: crate::graph::SymbolGraph {
+                    nodes: vec![crate::graph::Node {
+                        id: "src/lib.rs::foo".to_string(),
+                        path: "src/lib.rs".to_string(),
+                        name: "foo".to_string(),
+                    }],
+                    edges: vec![],
+                    roots: vec!["src/lib.rs::foo".to_string()],
+                },
+                tests: vec![],
+            };
+            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
                 .expect("analyze should succeed");
 
-            let expected_skipped = vec![SkippedFile {
-                path: "models/user.go".to_string(),
-                reason: SkipReason::Generated,
-            }];
-            assert_eq!(1, report.files.len());
-            assert_eq!("src/lib.rs", report.files[0].path);
-            assert_eq!(expected_skipped, report.skipped);
+            assert_eq!(expected, actual);
         }
 
         // Regression test: an attribute-based generated_paths match must

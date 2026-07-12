@@ -17,11 +17,17 @@
 //! 0009); "Other changed files" — files with no changed-symbol-level
 //! content (e.g. pure renames); and "Skipped files".
 //!
-//! Skipped files are always listed, never silently dropped — a reviewer
-//! or LLM consuming the output needs to know what rinkaku didn't look at.
-//! Test symbols are summarized rather than dropped outright for the same
-//! reason: a reviewer still wants to know "did this change come with
-//! tests?" even though the individual test signatures are noise (ADR 0009).
+//! Skipped files are listed, never silently dropped, with one exception:
+//! `SkipReason::Generated` entries are omitted from Markdown entirely (ADR
+//! 0010/0011) — a `.gitattributes` declaration or a linguist-compatible
+//! content marker has already told the repository this file is
+//! uninteresting to diff-review, so listing it as something rinkaku
+//! "didn't look at" would just be noise. Every other skip reason still
+//! always appears, since a reviewer or LLM consuming the output needs to
+//! know what rinkaku didn't look at. Test symbols are summarized rather
+//! than dropped outright for the same reason: a reviewer still wants to
+//! know "did this change come with tests?" even though the individual test
+//! signatures are noise (ADR 0009).
 
 use crate::extract::{ExtractedSymbol, SymbolKind};
 use crate::graph::{NodeId, SymbolGraph};
@@ -150,13 +156,18 @@ impl<'a> SymbolLookup<'a> {
 /// list of skipped files.
 ///
 /// `SkipReason::Generated` entries are omitted from "Skipped files"
-/// entirely (ADR 0010): `.gitattributes` already marks these files as
-/// uninteresting to diff-review, so listing them as something rinkaku
-/// "didn't look at" would just be noise in output meant for a human/LLM
-/// skimming a change. They remain in `Report.skipped` and therefore in
-/// JSON output (`render`'s `OutputFormat::Json` branch serializes `report`
-/// as-is, unfiltered) for machine consumers that want the full picture —
-/// this function only affects the Markdown rendering.
+/// entirely, however the file was detected as generated — either an
+/// explicit `.gitattributes` declaration (ADR 0010) or a linguist-
+/// compatible content marker found in the file itself (ADR 0011); both
+/// produce the same `SkipReason::Generated`, and this function does not
+/// distinguish between them. Either way the repository (or the generating
+/// tool) has already marked the file uninteresting to diff-review, so
+/// listing it as something rinkaku "didn't look at" would just be noise in
+/// output meant for a human/LLM skimming a change. These entries remain in
+/// `Report.skipped` and therefore in JSON output (`render`'s
+/// `OutputFormat::Json` branch serializes `report` as-is, unfiltered) for
+/// machine consumers that want the full picture — this function only
+/// affects the Markdown rendering.
 ///
 /// Path headings and tree labels (`{prefix} {name} ({path})`) do not escape
 /// Markdown special characters (`#`, `[`, `]`, `_`, ...). A path containing
