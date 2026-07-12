@@ -313,7 +313,10 @@ fn main() -> anyhow::Result<()> {
 
     let stdout_is_tty = std::io::stdout().is_terminal();
     match resolve_display_mode(cli.tui, cli.format, stdout_is_tty) {
-        DisplayMode::Tui => rinkaku_tui::run(&report, &diff_text, cli.entry.as_deref())?,
+        DisplayMode::Tui => {
+            let repo_root = resolve_repo_root(None);
+            rinkaku_tui::run(&report, &diff_text, cli.entry.as_deref(), &repo_root)?
+        }
         DisplayMode::Output(format) => {
             let output = render(&report, format.into())?;
             print!("{output}");
@@ -1424,6 +1427,46 @@ fn run_git_fetch(refspec: &str, cwd: Option<&std::path::Path>) -> anyhow::Result
     Ok(String::from_utf8(rev_parse_output.stdout)?
         .trim()
         .to_string())
+}
+
+/// Resolves the repository root the TUI's source drill-down
+/// (`rinkaku_tui::run`'s `repo_root` parameter) should read files under —
+/// `Report` paths are always repository-root-relative (produced by `git
+/// diff`/`git ls-files` output, never by the process's own current
+/// directory), so `rinkaku-tui/src/source.rs`'s file reads need this to
+/// join against rather than the process's current directory directly,
+/// which only happens to be the repository root when `rinkaku` is invoked
+/// from there.
+///
+/// Runs `git rev-parse --show-toplevel` in `cwd` (or the process's current
+/// directory when `None`, the only production caller — the TUI always
+/// reads the working tree it was launched in, see
+/// `source::load_symbol_source`'s doc comment on why it never reads from
+/// `--base`/`--pr`'s resolved commit instead). Falls back to `cwd`
+/// unchanged (or the process's actual current directory, via
+/// `std::env::current_dir`, when `cwd` is `None`) when the command fails —
+/// stdin-diff mode reaches the TUI without ever requiring a git repository
+/// (`main`'s stdin arm calls `read_working_tree_file` directly, with no
+/// `list_git_files`-style gate), so this must degrade gracefully rather
+/// than erroring out for a use case ADR 0016/0017 already treat as
+/// legitimate.
+fn resolve_repo_root(cwd: Option<&std::path::Path>) -> std::path::PathBuf {
+    let mut command = std::process::Command::new("git");
+    command.args(["rev-parse", "--show-toplevel"]);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let toplevel = command
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|stdout| std::path::PathBuf::from(stdout.trim()));
+
+    toplevel.unwrap_or_else(|| match cwd {
+        Some(cwd) => cwd.to_path_buf(),
+        None => std::env::current_dir().unwrap_or_default(),
+    })
 }
 
 /// Runs `git remote get-url origin` in `cwd` (or the process's current
@@ -3387,6 +3430,39 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             .expect("a non-repository directory should not error");
 
         assert_eq!(None, actual);
+    }
+
+    // Regression test for the TUI source view failing whenever `rinkaku`
+    // is launched from a subdirectory of the repository (the bug this
+    // function exists to fix): `git rev-parse --show-toplevel` run from
+    // `src/` must still resolve to the repository root, not `src/` itself
+    // — `resolve_repo_root`'s own doc comment explains why `Report` paths
+    // need the *root*, not the process's actual current directory, to
+    // join against.
+    #[test]
+    fn should_resolve_repository_root_when_cwd_is_a_subdirectory() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(dir.path(), "fn foo() {}\n");
+        let subdir = dir.path().join("src");
+
+        let actual = resolve_repo_root(Some(&subdir));
+
+        // Compare canonicalized paths on both sides: `git rev-parse
+        // --show-toplevel`'s output and `tempfile::TempDir::path()` can
+        // differ by a symlink resolution (e.g. macOS's `/tmp` ->
+        // `/private/tmp`), which is not the thing this test is checking.
+        let expected = dir.path().canonicalize().expect("canonicalize expected");
+        let actual = actual.canonicalize().expect("canonicalize actual");
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_fall_back_to_cwd_when_directory_is_not_a_git_repository() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+
+        let actual = resolve_repo_root(Some(dir.path()));
+
+        assert_eq!(dir.path(), actual);
     }
 
     // Regression test for the must-fix performance bug: `build_resolver`
