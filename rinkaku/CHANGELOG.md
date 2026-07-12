@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.1](https://github.com/hiro-o918/rinkaku/compare/v0.4.0...v0.4.1) (2026-07-12)
+
+
+### Features
+
+* log progress to stderr by default ([aa7ca34](https://github.com/hiro-o918/rinkaku/commit/aa7ca3418651ca1fecbe413adf9354ec698217fa))
+
+
+### Bug Fixes
+
+* base --pr diffs on baseRefOid so merged PRs produce output ([73eb482](https://github.com/hiro-o918/rinkaku/commit/73eb482bda4c11b5f0f5ea60b10b6e9f8f00d5f1))
+* make resolve_pr_base_sha's base-branch fetch failure soft and avoid a redundant refetch ([0149768](https://github.com/hiro-o918/rinkaku/commit/014976889bd80fd37fa6bd05f736372508181e54))
+* own self-update messaging instead of the crate's output ([7e423ea](https://github.com/hiro-o918/rinkaku/commit/7e423eab9d54b8252d01b512274aea85ffca2b06))
+* report empty diffs and skip dependency indexing when the diff is empty ([af9fbf8](https://github.com/hiro-o918/rinkaku/commit/af9fbf85aeaa574584b942bad2c1adb204db493b))
+* restore per-file isolation and drain stderr in the cat-file batch reader ([001d8c9](https://github.com/hiro-o918/rinkaku/commit/001d8c99e3f21b6fef82ea1769a1ef5805d2f8f0))
+
 ## [0.4.0](https://github.com/hiro-o918/rinkaku/compare/v0.3.1...v0.4.0) (2026-07-12)
 
 
