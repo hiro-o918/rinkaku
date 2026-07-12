@@ -42,16 +42,90 @@ pub struct DirRank {
     pub in_cycle: bool,
 }
 
+/// The directory-level condensation shared by [`rank_directories`] and
+/// [`cycle_partners`]/[`cycle_edges`]: every directory that owns at least
+/// one graph node, the inter-directory adjacency derived from
+/// `report.graph.edges`, and the Tarjan SCC grouping over that adjacency.
+/// Built once so the two public functions (ranking directories for display
+/// order, and explaining *which* directories cycle with a given one) don't
+/// each re-run Tarjan and re-derive the same directory index independently.
+struct DirCondensation<'a> {
+    /// Directory paths, sorted, indexed by position — `dirs[i]` is the
+    /// directory `scc_of[i]`/`adjacency[i]` refer to by index `i`.
+    dirs: Vec<&'a str>,
+    /// Adjacency between directories (by index into `dirs`), edges within
+    /// the same directory already dropped (see `build`'s doc comment).
+    adjacency: Vec<Vec<usize>>,
+    sccs: Vec<Vec<usize>>,
+    /// `scc_of[i]` is the SCC index (into `sccs`) directory `dirs[i]`
+    /// belongs to.
+    scc_of: Vec<usize>,
+}
+
+impl<'a> DirCondensation<'a> {
+    /// Builds the condensation from `report.graph`: remaps every
+    /// [`rinkaku_core::graph::Edge`] from its endpoints' node ids to the
+    /// parent directory of each endpoint's file path (the empty string for
+    /// a root-level file, e.g. `"lib.rs"` condenses to `""`), dropping any
+    /// edge whose two endpoints condense to the *same* directory — it says
+    /// nothing about inter-directory dependency, only intra-directory
+    /// structure (a directory doesn't depend on itself).
+    fn build(report: &'a Report) -> Self {
+        let dir_of_node: HashMap<&str, &str> = report
+            .graph
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), parent_dir(&node.path)))
+            .collect();
+
+        let mut dirs: Vec<&str> = dir_of_node
+            .values()
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        dirs.sort_unstable();
+        let dir_index: HashMap<&str, usize> =
+            dirs.iter().enumerate().map(|(i, &d)| (d, i)).collect();
+
+        let mut adjacency: Vec<HashSet<usize>> = vec![HashSet::new(); dirs.len()];
+        for edge in &report.graph.edges {
+            let (Some(&from_dir), Some(&to_dir)) = (
+                dir_of_node.get(edge.from.as_str()),
+                dir_of_node.get(edge.to.as_str()),
+            ) else {
+                continue;
+            };
+            if from_dir == to_dir {
+                continue;
+            }
+            let (from_i, to_i) = (dir_index[from_dir], dir_index[to_dir]);
+            adjacency[from_i].insert(to_i);
+        }
+        let adjacency: Vec<Vec<usize>> = adjacency
+            .into_iter()
+            .map(|targets| targets.into_iter().collect())
+            .collect();
+
+        let sccs = tarjan_sccs(&adjacency);
+        let mut scc_of = vec![0usize; dirs.len()];
+        for (scc_index, scc) in sccs.iter().enumerate() {
+            for &node_index in scc {
+                scc_of[node_index] = scc_index;
+            }
+        }
+
+        Self {
+            dirs,
+            adjacency,
+            sccs,
+            scc_of,
+        }
+    }
+}
+
 /// Computes each directory's [`DirRank`] from `report.graph`'s edges,
 /// condensed from symbol-level to directory-level.
-///
-/// Condensation: every [`rinkaku_core::graph::Edge`] is remapped from its
-/// endpoints' node ids to the parent directory of each endpoint's file path
-/// (the empty string for a root-level file, e.g. `"lib.rs"` condenses to
-/// `""`). An edge whose two endpoints condense to the *same* directory is
-/// dropped — it says nothing about inter-directory dependency, only
-/// intra-directory structure, which is not this module's concern (a
-/// directory doesn't depend on itself).
 ///
 /// Ranking: Tarjan SCCs the condensed directory graph, then orders SCCs by
 /// a Kahn topological sort starting from in-degree-0 SCCs — the same
@@ -80,48 +154,13 @@ pub struct DirRank {
 /// `order_tree`/`order_siblings` sort those after every ranked directory,
 /// A-Z (ADR 0016 decision 4).
 pub fn rank_directories(report: &Report) -> HashMap<String, DirRank> {
-    let dir_of_node: HashMap<&str, &str> = report
-        .graph
-        .nodes
-        .iter()
-        .map(|node| (node.id.as_str(), parent_dir(&node.path)))
-        .collect();
-
-    let mut dirs: Vec<&str> = dir_of_node
-        .values()
-        .copied()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    dirs.sort_unstable();
-    let dir_index: HashMap<&str, usize> = dirs.iter().enumerate().map(|(i, &d)| (d, i)).collect();
-
-    let mut adjacency: Vec<HashSet<usize>> = vec![HashSet::new(); dirs.len()];
-    for edge in &report.graph.edges {
-        let (Some(&from_dir), Some(&to_dir)) = (
-            dir_of_node.get(edge.from.as_str()),
-            dir_of_node.get(edge.to.as_str()),
-        ) else {
-            continue;
-        };
-        if from_dir == to_dir {
-            continue;
-        }
-        let (from_i, to_i) = (dir_index[from_dir], dir_index[to_dir]);
-        adjacency[from_i].insert(to_i);
-    }
-    let adjacency: Vec<Vec<usize>> = adjacency
-        .into_iter()
-        .map(|targets| targets.into_iter().collect())
-        .collect();
-
-    let sccs = tarjan_sccs(&adjacency);
-    let mut scc_of = vec![0usize; dirs.len()];
-    for (scc_index, scc) in sccs.iter().enumerate() {
-        for &node_index in scc {
-            scc_of[node_index] = scc_index;
-        }
-    }
+    let condensation = DirCondensation::build(report);
+    let DirCondensation {
+        dirs,
+        adjacency,
+        sccs,
+        scc_of,
+    } = condensation;
 
     let scc_order = topological_scc_order(&sccs, &scc_of, &adjacency);
 
@@ -144,6 +183,108 @@ pub fn rank_directories(report: &Report) -> HashMap<String, DirRank> {
         }
     }
     result
+}
+
+/// For every directory that participates in a directory-level cycle (an
+/// SCC of size > 1 in the condensation [`rank_directories`] already
+/// computes), the sorted list of *other* directories sharing that cycle —
+/// the answer to "cycle と言われても何が cycle してるか分からない" (the dir
+/// detail view's own motivating complaint): a directory marked `(cycle)`
+/// in the entry view names its actual partners here, rather than leaving
+/// the reviewer to guess. A directory with no `ranks` entry, or whose SCC
+/// has only itself as a member, is simply absent from the returned map
+/// (not present with an empty `Vec`) — "not in a cycle" and "in a
+/// one-member cycle" (impossible, since Tarjan's own SCCs are only >1
+/// member when there's an actual back edge) are the same "nothing to
+/// report" case either way.
+pub fn cycle_partners(report: &Report) -> HashMap<String, Vec<String>> {
+    let condensation = DirCondensation::build(report);
+    let DirCondensation { dirs, sccs, .. } = condensation;
+
+    let mut result = HashMap::new();
+    for scc in &sccs {
+        if scc.len() < 2 {
+            continue;
+        }
+        let members: Vec<String> = scc.iter().map(|&i| dirs[i].to_string()).collect();
+        for &node_index in scc {
+            let this_dir = dirs[node_index];
+            let mut partners: Vec<String> = members
+                .iter()
+                .filter(|m| m.as_str() != this_dir)
+                .cloned()
+                .collect();
+            partners.sort_unstable();
+            result.insert(this_dir.to_string(), partners);
+        }
+    }
+    result
+}
+
+/// One directed cross-directory edge forming part of a cycle — the
+/// concrete `path::name -> path::name` line the dir detail view renders,
+/// derived from `report.graph.edges` rather than the directory-level
+/// condensation directly, since a reviewer wants to see the actual symbols
+/// involved, not just "these two directories cycle".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleEdge {
+    pub from_path: String,
+    pub from_name: String,
+    pub to_path: String,
+    pub to_name: String,
+}
+
+/// Every `report.graph.edges` entry whose two endpoints' parent
+/// directories are distinct members of the same cycle-forming SCC (per
+/// [`cycle_partners`]) — the edges that concretely *make up* a directory
+/// cycle, for the dir detail view to render as `path::name -> path::name`
+/// lines. An edge within a single directory, or between two directories
+/// that merely both happen to exist without forming a cycle together, is
+/// excluded — only edges between two SCC-mates count.
+pub fn cycle_edges(report: &Report) -> Vec<CycleEdge> {
+    let node_by_id: HashMap<&str, &rinkaku_core::graph::Node> = report
+        .graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+
+    let condensation = DirCondensation::build(report);
+    let dir_index: HashMap<&str, usize> = condensation
+        .dirs
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| (d, i))
+        .collect();
+    let scc_of_dir = |dir: &str| dir_index.get(dir).map(|&i| condensation.scc_of[i]);
+
+    let mut edges = Vec::new();
+    for edge in &report.graph.edges {
+        let (Some(from_node), Some(to_node)) = (
+            node_by_id.get(edge.from.as_str()),
+            node_by_id.get(edge.to.as_str()),
+        ) else {
+            continue;
+        };
+        let from_dir = parent_dir(&from_node.path);
+        let to_dir = parent_dir(&to_node.path);
+        if from_dir == to_dir {
+            continue;
+        }
+        let (Some(from_scc), Some(to_scc)) = (scc_of_dir(from_dir), scc_of_dir(to_dir)) else {
+            continue;
+        };
+        if from_scc != to_scc {
+            continue;
+        }
+        edges.push(CycleEdge {
+            from_path: from_node.path.clone(),
+            from_name: from_node.name.clone(),
+            to_path: to_node.path.clone(),
+            to_name: to_node.name.clone(),
+        });
+    }
+    edges
 }
 
 /// The parent directory of a slash-separated `path` — everything before
@@ -607,6 +748,202 @@ mod tests {
         assert_eq!(ranks["api"].rank, ranks["store"].rank);
         assert_eq!(true, ranks["api"].in_cycle);
         assert_eq!(true, ranks["store"].in_cycle);
+    }
+
+    #[test]
+    fn should_list_cycle_partners_for_each_directory_in_a_two_directory_cycle() {
+        let report = report_with_graph(
+            vec![
+                node("api/handler.rs::handle", "api/handler.rs", "handle"),
+                node("store/db.rs::save", "store/db.rs", "save"),
+            ],
+            vec![
+                Edge {
+                    from: "api/handler.rs::handle".to_string(),
+                    to: "store/db.rs::save".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "store/db.rs::save".to_string(),
+                    to: "api/handler.rs::handle".to_string(),
+                    is_cycle: false,
+                },
+            ],
+        );
+
+        let partners = cycle_partners(&report);
+
+        let mut expected = HashMap::new();
+        expected.insert("api".to_string(), vec!["store".to_string()]);
+        expected.insert("store".to_string(), vec!["api".to_string()]);
+        assert_eq!(expected, partners);
+    }
+
+    #[test]
+    fn should_return_empty_map_when_no_directory_is_in_a_cycle() {
+        let report = report_with_graph(
+            vec![
+                node("api/a.rs::a", "api/a.rs", "a"),
+                node("store/db.rs::save", "store/db.rs", "save"),
+            ],
+            vec![Edge {
+                from: "api/a.rs::a".to_string(),
+                to: "store/db.rs::save".to_string(),
+                is_cycle: false,
+            }],
+        );
+
+        let partners = cycle_partners(&report);
+
+        let expected: HashMap<String, Vec<String>> = HashMap::new();
+        assert_eq!(expected, partners);
+    }
+
+    #[test]
+    fn should_list_every_partner_when_three_directories_form_one_cycle() {
+        // api -> store -> service -> api: a three-directory cycle, so every
+        // directory's partner list must contain the other two.
+        let report = report_with_graph(
+            vec![
+                node("api/a.rs::a", "api/a.rs", "a"),
+                node("store/s.rs::s", "store/s.rs", "s"),
+                node("service/v.rs::v", "service/v.rs", "v"),
+            ],
+            vec![
+                Edge {
+                    from: "api/a.rs::a".to_string(),
+                    to: "store/s.rs::s".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "store/s.rs::s".to_string(),
+                    to: "service/v.rs::v".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "service/v.rs::v".to_string(),
+                    to: "api/a.rs::a".to_string(),
+                    is_cycle: false,
+                },
+            ],
+        );
+
+        let partners = cycle_partners(&report);
+
+        let mut expected = HashMap::new();
+        expected.insert(
+            "api".to_string(),
+            vec!["service".to_string(), "store".to_string()],
+        );
+        expected.insert(
+            "service".to_string(),
+            vec!["api".to_string(), "store".to_string()],
+        );
+        expected.insert(
+            "store".to_string(),
+            vec!["api".to_string(), "service".to_string()],
+        );
+        assert_eq!(expected, partners);
+    }
+
+    #[test]
+    fn should_return_cross_directory_edges_forming_a_two_directory_cycle() {
+        let report = report_with_graph(
+            vec![
+                node("api/handler.rs::handle", "api/handler.rs", "handle"),
+                node("store/db.rs::save", "store/db.rs", "save"),
+            ],
+            vec![
+                Edge {
+                    from: "api/handler.rs::handle".to_string(),
+                    to: "store/db.rs::save".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "store/db.rs::save".to_string(),
+                    to: "api/handler.rs::handle".to_string(),
+                    is_cycle: false,
+                },
+            ],
+        );
+
+        let mut edges = cycle_edges(&report);
+        edges.sort_by(|a, b| a.from_path.cmp(&b.from_path));
+
+        let expected = vec![
+            CycleEdge {
+                from_path: "api/handler.rs".to_string(),
+                from_name: "handle".to_string(),
+                to_path: "store/db.rs".to_string(),
+                to_name: "save".to_string(),
+            },
+            CycleEdge {
+                from_path: "store/db.rs".to_string(),
+                from_name: "save".to_string(),
+                to_path: "api/handler.rs".to_string(),
+                to_name: "handle".to_string(),
+            },
+        ];
+        assert_eq!(expected, edges);
+    }
+
+    #[test]
+    fn should_exclude_edge_from_cycle_edges_when_directories_do_not_cycle() {
+        // api -> store, but store does not depend back on api: no cycle,
+        // so this edge must not show up as a "cycle edge".
+        let report = report_with_graph(
+            vec![
+                node("api/a.rs::a", "api/a.rs", "a"),
+                node("store/db.rs::save", "store/db.rs", "save"),
+            ],
+            vec![Edge {
+                from: "api/a.rs::a".to_string(),
+                to: "store/db.rs::save".to_string(),
+                is_cycle: false,
+            }],
+        );
+
+        let edges = cycle_edges(&report);
+
+        assert_eq!(Vec::<CycleEdge>::new(), edges);
+    }
+
+    #[test]
+    fn should_exclude_intra_directory_edge_from_cycle_edges() {
+        // Both symbols live in "api" itself; even if api participates in a
+        // cycle with another directory, an edge fully inside api is not a
+        // cross-directory cycle edge.
+        let report = report_with_graph(
+            vec![
+                node("api/a.rs::a", "api/a.rs", "a"),
+                node("api/b.rs::b", "api/b.rs", "b"),
+                node("store/db.rs::save", "store/db.rs", "save"),
+            ],
+            vec![
+                Edge {
+                    from: "api/a.rs::a".to_string(),
+                    to: "api/b.rs::b".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "api/a.rs::a".to_string(),
+                    to: "store/db.rs::save".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "store/db.rs::save".to_string(),
+                    to: "api/a.rs::a".to_string(),
+                    is_cycle: false,
+                },
+            ],
+        );
+
+        let edges = cycle_edges(&report);
+
+        // Only the two cross-directory edges (api <-> store) qualify; the
+        // intra-"api" edge (a -> b) must be excluded.
+        assert_eq!(2, edges.len());
+        assert!(edges.iter().all(|e| e.from_path != e.to_path));
     }
 
     #[test]

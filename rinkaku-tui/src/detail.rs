@@ -6,7 +6,18 @@
 //!
 //! [`build_detail`] is a pure function of a symbol id plus [`Report`]: no
 //! IO, no `ratatui` types.
+//!
+//! [`build_dir_detail`]/[`build_file_detail`] (TUI iteration 2) extend the
+//! same detail pane to directory and file rows, which previously showed
+//! only a placeholder ("select a symbol row to see its detail"). A
+//! directory's detail is a badge breakdown plus, when it participates in a
+//! directory-level cycle, an explanation of exactly which directories it
+//! cycles with and which concrete symbol-to-symbol edges form that cycle —
+//! the entry view's `(cycle)` marker on its own only says *that* a
+//! directory cycles, not *with what*.
 
+use crate::order::{CycleEdge, cycle_edges, cycle_partners};
+use crate::tree::{Badges, NodeKind, SymbolRef, Tree, TreeNode};
 use rinkaku_core::extract::{Classification, SymbolKind};
 use rinkaku_core::render::Report;
 use std::collections::HashSet;
@@ -171,6 +182,224 @@ pub fn build_detail(report: &Report, id: &str) -> Option<DetailView> {
         callees,
         callers,
     })
+}
+
+/// A cross-directory edge forming part of a directory cycle, as displayed
+/// text — `crate::order::CycleEdge`'s fields pre-joined into the
+/// `path::name -> path::name` shape the detail pane renders directly,
+/// keeping `crate::ui` free of string-formatting decisions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleEdgeView {
+    pub from: String,
+    pub to: String,
+}
+
+impl From<&CycleEdge> for CycleEdgeView {
+    fn from(edge: &CycleEdge) -> Self {
+        Self {
+            from: format!("{}::{}", edge.from_path, edge.from_name),
+            to: format!("{}::{}", edge.to_path, edge.to_name),
+        }
+    }
+}
+
+/// The detail-pane view-model for a selected [`NodeKind::Dir`] row
+/// (TUI iteration 2): a badge breakdown (already aggregated bottom-up onto
+/// the node by `crate::tree::build_tree`), the directory's own top fan-in
+/// symbols, and — only when this directory participates in a
+/// directory-level cycle — which other directories it cycles with and the
+/// concrete symbol-to-symbol edges that make up that cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirDetail {
+    pub path: String,
+    pub badges: Badges,
+    /// This directory's own hotspot symbols (fan-in >= 2), sorted by
+    /// fan-in descending then `(path, name)` ascending for determinism —
+    /// mirrors `compute_hotspots`'s own tie-break in `rinkaku-core::graph`.
+    /// Capped at 5: this is a "what stands out" summary, not an exhaustive
+    /// listing (the badge's `fan_in` count already carries the full
+    /// aggregate).
+    pub top_fan_in: Vec<SymbolMention>,
+    /// Other directories sharing this directory's cycle (empty when this
+    /// directory is not in a cycle at all), sorted ascending.
+    pub cycle_partners: Vec<String>,
+    /// Concrete cross-directory edges forming the cycle this directory
+    /// participates in, restricted to edges touching this directory as
+    /// either endpoint (empty when not in a cycle) — the answer to "cycle
+    /// と言われても何が cycle してるか分からない".
+    pub cycle_edges: Vec<CycleEdgeView>,
+}
+
+/// One symbol summary line for a [`FileDetail`]: enough to render a
+/// classification marker and fan-in without duplicating the full
+/// [`DetailView`] a reviewer gets by selecting that symbol row directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSymbolSummary {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub classification: Option<Classification>,
+    pub removed: bool,
+    pub fan_in: usize,
+}
+
+/// The detail-pane view-model for a selected [`NodeKind::File`] row (TUI
+/// iteration 2): the list of symbols changed in this file, each with its
+/// classification marker and fan-in — a compact index of "what changed
+/// here" before drilling into an individual symbol row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDetail {
+    pub path: String,
+    pub symbols: Vec<FileSymbolSummary>,
+}
+
+/// Builds a [`DirDetail`] for the directory at `path` in `tree`, or `None`
+/// when no such directory node exists. `report` supplies the cycle
+/// explanation (`crate::order::cycle_partners`/`cycle_edges`) and the
+/// hotspot lookup for `top_fan_in` — both computed fresh per call, same
+/// "recompute rather than cache" philosophy the rest of this view-model
+/// layer already follows (ADR 0016 decision 1).
+pub fn build_dir_detail(tree: &Tree, report: &Report, path: &str) -> Option<DirDetail> {
+    let node = find_dir_node(tree, path)?;
+
+    let hotspot_by_id: std::collections::HashMap<&str, &rinkaku_core::graph::Hotspot> = report
+        .hotspots
+        .iter()
+        .map(|hotspot| (hotspot.id.as_str(), hotspot))
+        .collect();
+
+    let mut symbol_ids = Vec::new();
+    collect_symbol_ids(node, &mut symbol_ids);
+
+    let mut top_fan_in: Vec<SymbolMention> = symbol_ids
+        .iter()
+        .filter_map(|id| hotspot_by_id.get(id.as_str()).map(|h| (*h, id)))
+        .map(|(hotspot, id)| SymbolMention {
+            id: id.clone(),
+            name: hotspot.name.clone(),
+            path: hotspot.path.clone(),
+        })
+        .collect();
+    // Sort by fan-in descending (looked up again per entry rather than
+    // carried alongside — the list is small, capped at 5 below, so a
+    // second map lookup per comparison is not worth avoiding via a tuple),
+    // ties broken by (path, name) ascending, mirroring
+    // `compute_hotspots`'s own tie-break in `rinkaku-core::graph`.
+    top_fan_in.sort_by(|a, b| {
+        let fan_in_of = |mention: &SymbolMention| {
+            hotspot_by_id
+                .get(mention.id.as_str())
+                .map(|h| h.used_by.len())
+                .unwrap_or(0)
+        };
+        fan_in_of(b)
+            .cmp(&fan_in_of(a))
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    top_fan_in.truncate(5);
+
+    let partners = cycle_partners(report).remove(path).unwrap_or_default();
+    let edges: Vec<CycleEdgeView> = if partners.is_empty() {
+        Vec::new()
+    } else {
+        cycle_edges(report)
+            .iter()
+            .filter(|edge| dir_of(&edge.from_path) == path || dir_of(&edge.to_path) == path)
+            .map(CycleEdgeView::from)
+            .collect()
+    };
+
+    Some(DirDetail {
+        path: node.path.clone(),
+        badges: node.badges,
+        top_fan_in,
+        cycle_partners: partners,
+        cycle_edges: edges,
+    })
+}
+
+/// Builds a [`FileDetail`] for the file at `path` in `tree`, or `None` when
+/// no such file node exists.
+pub fn build_file_detail(tree: &Tree, report: &Report, path: &str) -> Option<FileDetail> {
+    let node = find_file_node(tree, path)?;
+
+    let fan_in_by_id: std::collections::HashMap<&str, usize> = report
+        .hotspots
+        .iter()
+        .map(|hotspot| (hotspot.id.as_str(), hotspot.used_by.len()))
+        .collect();
+
+    let symbols: Vec<FileSymbolSummary> = node
+        .children
+        .iter()
+        .filter_map(|child| match &child.kind {
+            NodeKind::Symbol(symbol_ref) => Some(file_symbol_summary(symbol_ref, &fan_in_by_id)),
+            _ => None,
+        })
+        .collect();
+
+    Some(FileDetail {
+        path: node.path.clone(),
+        symbols,
+    })
+}
+
+fn file_symbol_summary(
+    symbol_ref: &SymbolRef,
+    fan_in_by_id: &std::collections::HashMap<&str, usize>,
+) -> FileSymbolSummary {
+    FileSymbolSummary {
+        name: symbol_ref.name.clone(),
+        kind: symbol_ref.kind,
+        classification: symbol_ref.classification,
+        removed: symbol_ref.removed,
+        fan_in: fan_in_by_id
+            .get(symbol_ref.id.as_str())
+            .copied()
+            .unwrap_or(0),
+    }
+}
+
+/// The parent directory of a slash-separated `path` — mirrors
+/// `crate::order`'s own private `parent_dir` (not reused directly since
+/// that one is private to `order.rs`; duplicating one small line here is
+/// cheaper than making it `pub(crate)` for a single call site).
+fn dir_of(path: &str) -> &str {
+    path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
+}
+
+fn find_dir_node<'a>(tree: &'a Tree, path: &str) -> Option<&'a TreeNode> {
+    tree.roots
+        .iter()
+        .find_map(|root| find_node(root, path, |kind| matches!(kind, NodeKind::Dir)))
+}
+
+fn find_file_node<'a>(tree: &'a Tree, path: &str) -> Option<&'a TreeNode> {
+    tree.roots
+        .iter()
+        .find_map(|root| find_node(root, path, |kind| matches!(kind, NodeKind::File)))
+}
+
+fn find_node<'a>(
+    node: &'a TreeNode,
+    path: &str,
+    matches_kind: impl Fn(&NodeKind) -> bool + Copy,
+) -> Option<&'a TreeNode> {
+    if node.path == path && matches_kind(&node.kind) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_node(child, path, matches_kind))
+}
+
+fn collect_symbol_ids(node: &TreeNode, ids: &mut Vec<String>) {
+    if let NodeKind::Symbol(symbol_ref) = &node.kind {
+        ids.push(symbol_ref.id.clone());
+    }
+    for child in &node.children {
+        collect_symbol_ids(child, ids);
+    }
 }
 
 #[cfg(test)]
@@ -544,5 +773,296 @@ mod tests {
         assert_eq!(Vec::<SymbolMention>::new(), actual.callees);
         assert_eq!(Vec::<SymbolMention>::new(), actual.callers);
         assert_eq!(Vec::<SymbolMention>::new(), actual.used_by);
+    }
+
+    // build_dir_detail / build_file_detail tests (TUI iteration 2).
+
+    #[test]
+    fn should_return_none_when_dir_path_is_not_found() {
+        let report = empty_report();
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_dir_detail(&tree, &report, "missing");
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_build_dir_detail_with_badges_and_no_cycle_when_directory_is_not_in_a_cycle() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    classification: Some(Classification::SignatureChanged),
+                    ..symbol("src/lib.rs::foo", "foo")
+                }],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_dir_detail(&tree, &report, "src").expect("dir found");
+
+        let expected = DirDetail {
+            path: "src".to_string(),
+            badges: crate::tree::Badges {
+                changed_symbols: 1,
+                contract_changes: 1,
+                fan_in: 0,
+            },
+            top_fan_in: vec![],
+            cycle_partners: vec![],
+            cycle_edges: vec![],
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_list_top_fan_in_symbols_sorted_by_fan_in_descending() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![
+                    symbol("src/lib.rs::a", "a"),
+                    symbol("src/lib.rs::b", "b"),
+                    symbol("src/lib.rs::shared_low", "shared_low"),
+                    symbol("src/lib.rs::shared_high", "shared_high"),
+                ],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("src/lib.rs::a", "src/lib.rs", "a"),
+                    node("src/lib.rs::b", "src/lib.rs", "b"),
+                    node("src/lib.rs::shared_low", "src/lib.rs", "shared_low"),
+                    node("src/lib.rs::shared_high", "src/lib.rs", "shared_high"),
+                ],
+                edges: vec![],
+                roots: vec![],
+            },
+            hotspots: vec![
+                Hotspot {
+                    id: "src/lib.rs::shared_low".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    name: "shared_low".to_string(),
+                    used_by: vec!["a".to_string(), "b".to_string()],
+                },
+                Hotspot {
+                    id: "src/lib.rs::shared_high".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    name: "shared_high".to_string(),
+                    used_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                },
+            ],
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_dir_detail(&tree, &report, "src").expect("dir found");
+
+        let expected_top_fan_in = vec![
+            SymbolMention {
+                id: "src/lib.rs::shared_high".to_string(),
+                name: "shared_high".to_string(),
+                path: "src/lib.rs".to_string(),
+            },
+            SymbolMention {
+                id: "src/lib.rs::shared_low".to_string(),
+                name: "shared_low".to_string(),
+                path: "src/lib.rs".to_string(),
+            },
+        ];
+        assert_eq!(expected_top_fan_in, actual.top_fan_in);
+    }
+
+    #[test]
+    fn should_truncate_top_fan_in_to_five_entries() {
+        let symbols: Vec<ExtractedSymbol> = (0..7)
+            .map(|i| symbol(&format!("src/lib.rs::s{i}"), &format!("s{i}")))
+            .collect();
+        let nodes: Vec<Node> = (0..7)
+            .map(|i| node(&format!("src/lib.rs::s{i}"), "src/lib.rs", &format!("s{i}")))
+            .collect();
+        let hotspots: Vec<Hotspot> = (0..7)
+            .map(|i| Hotspot {
+                id: format!("src/lib.rs::s{i}"),
+                path: "src/lib.rs".to_string(),
+                name: format!("s{i}"),
+                used_by: vec!["x".to_string(), "y".to_string()],
+            })
+            .collect();
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols,
+            }],
+            graph: SymbolGraph {
+                nodes,
+                edges: vec![],
+                roots: vec![],
+            },
+            hotspots,
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_dir_detail(&tree, &report, "src").expect("dir found");
+
+        assert_eq!(5, actual.top_fan_in.len());
+    }
+
+    #[test]
+    fn should_explain_cycle_partners_and_edges_when_directory_participates_in_a_cycle() {
+        // api/ and store/ depend on each other — a directory-level cycle
+        // (mirrors crate::order's own cycle test fixtures).
+        let report = Report {
+            files: vec![
+                FileReport {
+                    path: "api/handler.rs".to_string(),
+                    symbols: vec![symbol("api/handler.rs::handle", "handle")],
+                },
+                FileReport {
+                    path: "store/db.rs".to_string(),
+                    symbols: vec![symbol("store/db.rs::save", "save")],
+                },
+            ],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("api/handler.rs::handle", "api/handler.rs", "handle"),
+                    node("store/db.rs::save", "store/db.rs", "save"),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "api/handler.rs::handle".to_string(),
+                        to: "store/db.rs::save".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "store/db.rs::save".to_string(),
+                        to: "api/handler.rs::handle".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec![],
+            },
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_dir_detail(&tree, &report, "api").expect("dir found");
+
+        assert_eq!(vec!["store".to_string()], actual.cycle_partners);
+        // Both directed edges touch "api" as an endpoint (api -> store and
+        // store -> api), so both are part of the cycle explanation shown
+        // for "api" — not just the one where "api" is the source.
+        let expected_edges = vec![
+            CycleEdgeView {
+                from: "api/handler.rs::handle".to_string(),
+                to: "store/db.rs::save".to_string(),
+            },
+            CycleEdgeView {
+                from: "store/db.rs::save".to_string(),
+                to: "api/handler.rs::handle".to_string(),
+            },
+        ];
+        assert_eq!(expected_edges, actual.cycle_edges);
+    }
+
+    #[test]
+    fn should_return_none_when_file_path_is_not_found() {
+        let report = empty_report();
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_file_detail(&tree, &report, "missing.rs");
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_build_file_detail_with_symbol_summaries_and_fan_in() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![
+                    ExtractedSymbol {
+                        classification: Some(Classification::Added),
+                        ..symbol("lib.rs::foo", "foo")
+                    },
+                    symbol("lib.rs::bar", "bar"),
+                ],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("lib.rs::foo", "lib.rs", "foo"),
+                    node("lib.rs::bar", "lib.rs", "bar"),
+                ],
+                edges: vec![],
+                roots: vec![],
+            },
+            hotspots: vec![Hotspot {
+                id: "lib.rs::bar".to_string(),
+                path: "lib.rs".to_string(),
+                name: "bar".to_string(),
+                used_by: vec!["foo".to_string(), "baz".to_string()],
+            }],
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_file_detail(&tree, &report, "lib.rs").expect("file found");
+
+        let expected = FileDetail {
+            path: "lib.rs".to_string(),
+            symbols: vec![
+                FileSymbolSummary {
+                    name: "foo".to_string(),
+                    kind: SymbolKind::Function,
+                    classification: Some(Classification::Added),
+                    removed: false,
+                    fan_in: 0,
+                },
+                FileSymbolSummary {
+                    name: "bar".to_string(),
+                    kind: SymbolKind::Function,
+                    classification: None,
+                    removed: false,
+                    fan_in: 2,
+                },
+            ],
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_include_removed_symbol_in_file_detail_summary() {
+        let report = Report {
+            files: vec![],
+            removed: vec![rinkaku_core::extract::RemovedSymbol {
+                name: "gone".to_string(),
+                kind: SymbolKind::Function,
+                path: "lib.rs".to_string(),
+                signature: "fn gone()".to_string(),
+            }],
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_file_detail(&tree, &report, "lib.rs").expect("file found");
+
+        let expected = FileDetail {
+            path: "lib.rs".to_string(),
+            symbols: vec![FileSymbolSummary {
+                name: "gone".to_string(),
+                kind: SymbolKind::Function,
+                classification: None,
+                removed: true,
+                fan_in: 0,
+            }],
+        };
+        assert_eq!(expected, actual);
     }
 }
