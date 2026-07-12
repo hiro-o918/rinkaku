@@ -165,6 +165,11 @@ enum Command {
 enum Format {
     Md,
     Json,
+    /// A human-oriented call/dependency graph as a mermaid `flowchart`
+    /// document (ADR 0020) — opt-in, aimed at GitHub's native mermaid
+    /// rendering in PR comments/descriptions, not the default Markdown
+    /// output.
+    Mermaid,
 }
 
 impl From<Format> for OutputFormat {
@@ -172,6 +177,7 @@ impl From<Format> for OutputFormat {
         match format {
             Format::Md => OutputFormat::Markdown,
             Format::Json => OutputFormat::Json,
+            Format::Mermaid => OutputFormat::Mermaid,
         }
     }
 }
