@@ -150,6 +150,11 @@ rinkaku --base main
 # JSON output for feeding into another tool or LLM
 rinkaku --base main --format json
 
+# A human-oriented call/dependency graph as a mermaid flowchart (ADR
+# 0020) — opt-in, meant for pasting into a GitHub PR comment/description
+# where mermaid renders natively, not for piping into an LLM
+rinkaku --base main --format mermaid
+
 # Skip dependency resolution (faster, no repo-wide index — see below)
 rinkaku --base main --deps 0
 ```
@@ -594,6 +599,51 @@ instead of reconstructing the change's structure itself.
    Behavioral bugs don't show up on the signature surface the map draws
    from, and the experiment's own rounds found real defects (a non-TTY
    panic) only by running the binary.
+
+## GitHub Action
+
+This repository ships a composite [`action.yaml`](action.yaml) that runs
+rinkaku against a pull request's diff and posts (or updates) a sticky PR
+comment: a [`--format mermaid`](#usage) call/dependency graph up front —
+rendered natively by GitHub in the comment — with the full Markdown
+outline collapsed underneath for anyone who wants signature-level detail.
+
+```yaml
+name: rinkaku PR report
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - uses: hiro-o918/rinkaku@main
+        with:
+          github-token: ${{ github.token }}
+```
+
+Inputs: `version` (a release tag to download, default `latest`), `binary`
+(path to an already-built rinkaku binary, skipping the download entirely —
+see this repository's own [dogfooding workflow](.github/workflows/rinkaku-report.yaml),
+which builds rinkaku from the PR's *base* ref rather than trusting a
+downloaded binary, for the same reason the LLM-review recipe above always
+builds its map from a trusted checkout), `base` (defaults to the PR's base
+ref), `github-token` (defaults to `github.token`), and `comment` (set
+`false` to skip posting and just get the `mermaid-path`/`markdown-path`
+outputs).
 
 ## Development
 
