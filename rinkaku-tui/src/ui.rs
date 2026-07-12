@@ -1041,17 +1041,7 @@ fn source_lines(source: &SourceView, start: usize, end: usize) -> Vec<Line<'stat
 }
 
 fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
-    let help = match app.screen() {
-        Screen::Entry => {
-            "j/k: move  enter/space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  J/K: scroll  s: source  q: quit"
-        }
-        Screen::Source { .. } => "esc/q: back",
-    };
-
-    let text = match app.status() {
-        Some(status) => format!("{status}  |  {help}"),
-        None => help.to_string(),
-    };
+    let text = status_line_text(app);
 
     let style = if app.status().is_some() {
         Style::default().fg(Color::Yellow)
@@ -1060,6 +1050,47 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     frame.render_widget(Paragraph::new(text).style(style), area);
+}
+
+/// The status line's full text (ADR 0020): the current order mode is
+/// always shown (the real `crate::order::OrderMode` term, not a
+/// paraphrase, so it matches what `o` actually toggles between), and the
+/// key-hint segment switches on `app.focus()` while [`Screen::Entry`] —
+/// Tree-focused hints are navigation-oriented, Right-focused hints are
+/// scroll/hunk-jump-oriented, and both end with a `?` mention so the fuller
+/// keymap/glossary overlay is always one keypress away. [`Screen::Source`]
+/// keeps its own short "esc/q: back" hint, unaffected by focus (drilling
+/// into source is reached only via [`Focus::Right`] already, so a focus
+/// distinction there would be redundant).
+///
+/// Extracted as its own pure function (no `ratatui` types) so the text
+/// itself — not just that *something* renders — is unit-testable, mirroring
+/// [`clamp_scroll`]/[`scroll_indicator`]'s own precedent in this module for
+/// layout-adjacent pure logic.
+fn status_line_text(app: &App) -> String {
+    let help = match app.screen() {
+        Screen::Entry => {
+            let order = match app.order_mode() {
+                crate::order::OrderMode::Topological => "topological",
+                crate::order::OrderMode::AlphaNumeric => "alphabetical",
+            };
+            let keys = match app.focus() {
+                crate::app::Focus::Tree => {
+                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+                }
+                crate::app::Focus::Right => {
+                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                }
+            };
+            format!("order: {order}  |  {keys}")
+        }
+        Screen::Source { .. } => "esc/q: back".to_string(),
+    };
+
+    match app.status() {
+        Some(status) => format!("{status}  |  {help}"),
+        None => help,
+    }
 }
 
 #[cfg(test)]
@@ -2172,11 +2203,11 @@ index e69de29..4b825dc 100644
         let report = report_with_one_symbol();
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
-        // module: the full help text (now including the J/K scroll hint and
-        // the `p: pivot` hint, ADR 0019) is ~114 columns and would
-        // otherwise be truncated (the status line intentionally does not
-        // wrap), hiding the "quit" fragment this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(120, 20)).expect("terminal");
+        // module: the full help text (order mode + Tree-focus key hints,
+        // ADR 0020) is ~140 columns and would otherwise be truncated (the
+        // status line intentionally does not wrap), hiding the "quit"
+        // fragment this test checks for.
+        let mut terminal = Terminal::new(TestBackend::new(150, 20)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -2194,6 +2225,7 @@ index e69de29..4b825dc 100644
 
         let text = buffer_text(&terminal);
         assert!(text.contains("quit"));
+        assert!(text.contains("order: topological"));
     }
 
     #[test]
@@ -2339,6 +2371,87 @@ index e69de29..4b825dc 100644
         let actual = scroll_indicator(20, 10, 10);
 
         assert_eq!(Some(" (11-20/20)".to_string()), actual);
+    }
+
+    // --- status_line_text (pure helper) ---
+
+    #[test]
+    fn should_show_topological_order_and_tree_focus_hints_by_default() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report);
+
+        let actual = status_line_text(&app);
+
+        assert_eq!(
+            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+                .to_string(),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_show_alphabetical_order_after_toggle_order_is_pressed() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleOrder);
+
+        let actual = status_line_text(&app);
+
+        assert!(actual.starts_with("order: alphabetical  |  "));
+    }
+
+    #[test]
+    fn should_show_right_focus_hints_when_focus_is_right() {
+        let report = report_with_one_symbol();
+        // `Open` on the file row (cursor starts there) reaches Focus::Right
+        // (ADR 0020) without leaving Screen::Entry.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Open);
+
+        let actual = status_line_text(&app);
+
+        assert_eq!(
+            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                .to_string(),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_show_back_hint_only_on_source_screen_regardless_of_focus() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Open); // opens Screen::Source
+
+        let actual = status_line_text(&app);
+
+        assert_eq!("esc/q: back".to_string(), actual);
+    }
+
+    #[test]
+    fn should_prefix_status_message_before_the_help_text_when_set() {
+        let report = empty_report_for_status_line();
+        let mut app = App::new(&report);
+        app.set_status("a source read failed");
+
+        let actual = status_line_text(&app);
+
+        assert!(actual.starts_with("a source read failed  |  order: topological  |  "));
+    }
+
+    fn empty_report_for_status_line() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        }
     }
 
     // --- rendered scroll behavior (TestBackend) ---
