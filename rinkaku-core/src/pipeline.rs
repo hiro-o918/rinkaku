@@ -10,7 +10,7 @@
 use crate::deps::{Resolver, is_generated_content, resolve_dependencies};
 use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::{
-    ExtractedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
+    ExtractedSymbol, RemovedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
 };
 use crate::graph::{build_graph, compute_hotspots, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
@@ -171,12 +171,25 @@ pub fn analyze_diff(
             continue;
         };
 
-        // No hunks means no content change (a pure rename or a
-        // mode-change-only diff): extract_changed_symbols would return no
-        // symbols for an empty changed_ranges anyway, so skip the read
-        // entirely rather than pay IO for a result already known to be
-        // empty.
+        // No new-side hunks means no new-side content change (a pure
+        // rename, a mode-change-only diff, or — ADR 0014's case — a hunk
+        // that only *removes* lines with nothing added back):
+        // extract_changed_symbols would return no symbols for an empty
+        // changed_ranges anyway, so the head-side read is skipped entirely
+        // rather than paying IO for a result already known to be empty.
+        // `old_changed_ranges` can still be non-empty in the removal case,
+        // though, so classification against the base side still runs when
+        // a base reader is available — a whole-function deletion is
+        // exactly the case ADR 0014's `removed` classification exists for.
         if changed_file.changed_ranges.is_empty() {
+            let mut no_head_symbols: Vec<ExtractedSymbol> = Vec::new();
+            removed.extend(classify_against_base(
+                &mut no_head_symbols,
+                read_base_file,
+                lang,
+                &changed_file.path,
+                &changed_file.old_changed_ranges,
+            ));
             files.push(FileReport {
                 path: changed_file.path,
                 symbols: Vec::new(),
@@ -205,18 +218,13 @@ pub fn analyze_diff(
         // base side, when base content is available and readable for this
         // path. Left at `None`/empty (classify_symbols never runs) when
         // `read_base_file` is absent or its call fails for this file.
-        if let Some(read_base_file) = read_base_file
-            && let Ok(base_source) = read_base_file(&changed_file.path)
-        {
-            let base_symbols = extract_all_symbols(&base_source, lang);
-            let file_removed = classify_symbols(
-                &mut symbols,
-                &base_symbols,
-                &changed_file.old_changed_ranges,
-                &changed_file.path,
-            );
-            removed.extend(file_removed);
-        }
+        removed.extend(classify_against_base(
+            &mut symbols,
+            read_base_file,
+            lang,
+            &changed_file.path,
+            &changed_file.old_changed_ranges,
+        ));
 
         files.push(FileReport {
             path: changed_file.path,
@@ -254,6 +262,43 @@ pub fn analyze_diff(
         hotspots,
         removed,
     })
+}
+
+/// Shared by both places in `analyze_diff`'s loop that need ADR 0014
+/// classification for one file: the ordinary case (`head_symbols` already
+/// extracted from a non-empty `changed_ranges`) and the "removal-only hunk"
+/// case (`head_symbols` empty by construction, since there was no new-side
+/// content to extract from — see `analyze_diff`'s doc comment). Reads
+/// `path`'s base-side content via `read_base_file`, extracts every base
+/// symbol via [`extract_all_symbols`], and runs [`classify_symbols`] to set
+/// `head_symbols`' classification fields in place and collect this file's
+/// removed symbols.
+///
+/// No-ops (returns an empty `Vec`, `head_symbols` untouched) when
+/// `read_base_file` is `None`, the read fails for `path`, or
+/// `old_changed_ranges` is empty and `head_symbols` is also empty — the
+/// last case is a pure optimization (an empty `head_symbols` with no
+/// old-side ranges to check for removals can never produce anything from
+/// `classify_symbols`), sparing a base-content read/parse that would
+/// otherwise be pure waste for e.g. a mode-change-only diff.
+fn classify_against_base(
+    head_symbols: &mut [ExtractedSymbol],
+    read_base_file: Option<ReadBaseFile>,
+    lang: &dyn LanguageSupport,
+    path: &str,
+    old_changed_ranges: &[crate::diff::LineRange],
+) -> Vec<RemovedSymbol> {
+    if head_symbols.is_empty() && old_changed_ranges.is_empty() {
+        return Vec::new();
+    }
+    let Some(read_base_file) = read_base_file else {
+        return Vec::new();
+    };
+    let Ok(base_source) = read_base_file(path) else {
+        return Vec::new();
+    };
+    let base_symbols = extract_all_symbols(&base_source, lang);
+    classify_symbols(head_symbols, &base_symbols, old_changed_ranges, path)
 }
 
 /// Splits `files` into (non-test symbols, per-file test-symbol counts) for
@@ -1757,6 +1802,74 @@ fn new_name() -> i32 {
                 signature: "fn old_name() -> i32".to_string(),
             }];
             assert_eq!(expected, report.removed);
+        }
+
+        // Regression test: a hunk that only *removes* lines (no `+` lines
+        // at all — e.g. an entire function deleted from a file that also
+        // has other, untouched content) produces an empty new-side
+        // `changed_ranges`. Before this fix, `analyze_diff` treated that
+        // the same as a pure rename (no content change at all) and skipped
+        // straight past classification, so a whole-function deletion could
+        // never be reported as `removed` — exactly the case ADR 0014's
+        // `removed` classification exists for.
+        #[test]
+        fn should_populate_removed_when_a_hunk_only_removes_lines_with_no_additions() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,7 +1,3 @@
+ fn kept() -> i32 {
+     1
+ }
+-
+-fn old_helper() -> i32 {
+-    2
+-}
+";
+            let base_source = "\
+fn kept() -> i32 {
+    1
+}
+
+fn old_helper() -> i32 {
+    2
+}
+";
+            let head_source = "\
+fn kept() -> i32 {
+    1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", head_source)]));
+            let read_base_file = fake_reader(HashMap::from([("src/lib.rs", base_source)]));
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let expected = vec![RemovedSymbol {
+                name: "old_helper".to_string(),
+                kind: crate::extract::SymbolKind::Function,
+                path: "src/lib.rs".to_string(),
+                signature: "fn old_helper() -> i32".to_string(),
+            }];
+            assert_eq!(expected, report.removed);
+            // The file itself still reports as having no (head-side)
+            // symbols, same as any other empty-changed_ranges file.
+            let expected_files = vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![],
+            }];
+            assert_eq!(expected_files, report.files);
         }
 
         // A `read_base_file` call failing for one path (e.g. the file is
