@@ -4,6 +4,20 @@ on:
   push:
     tags:
       - "v*"
+  # Manual re-run, e.g. when only publish-homebrew failed and needs
+  # retrying without repeating publish-crates. Trigger against the tag
+  # itself (`gh workflow run build-and-publish.yaml --ref v0.1.0`) so
+  # the default checkout ref is already correct; the `tag` input only
+  # documents/records which release this dispatch is for.
+  # publish-crates guards itself against re-publishing a version that's
+  # already on crates.io, so a full re-run is safe even after a partial
+  # success.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag being (re-)published, e.g. v0.1.0 -- must match the ref this workflow is dispatched against"
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}--${{ github.ref }}
@@ -86,8 +100,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # --clobber makes this safe to re-run via workflow_dispatch
+          # against a tag whose assets were already uploaded.
           gh release upload "${{ github.ref_name }}" dist/* \
-            --repo "${{ github.repository }}"
+            --repo "${{ github.repository }}" \
+            --clobber
 
   publish-crates:
     needs: [rust-test]
@@ -100,18 +117,53 @@ jobs:
         with:
           key: publish-crates
 
+      # Makes this job idempotent so workflow_dispatch (or a build
+      # rerun) can safely repeat it after a partial release failure:
+      # crates.io rejects re-publishing an existing version, so skip
+      # ahead instead of letting `cargo publish` fail the whole job.
+      - name: Check whether rinkaku-core is already published
+        id: check-core
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "rinkaku-core") | .version')
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://crates.io/api/v1/crates/rinkaku-core/${version}")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [ "$status" = "200" ]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # rinkaku-core must publish first: rinkaku depends on it by version,
       # and crates.io resolves that dependency from the registry, not the
       # workspace's local path.
       - name: Publish rinkaku-core
+        if: steps.check-core.outputs.already_published == 'false'
         run: cargo publish -p rinkaku-core --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
 
       # crates.io needs a short window to index rinkaku-core before
-      # rinkaku's publish can resolve it as a dependency.
+      # rinkaku's publish can resolve it as a dependency. Only needed
+      # right after an actual publish, not when we skipped above.
       - name: Wait for rinkaku-core to be indexed
+        if: steps.check-core.outputs.already_published == 'false'
         run: sleep 30
 
+      - name: Check whether rinkaku is already published
+        id: check-bin
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "rinkaku") | .version')
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://crates.io/api/v1/crates/rinkaku/${version}")
+          if [ "$status" = "200" ]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish rinkaku
+        if: steps.check-bin.outputs.already_published == 'false'
         run: cargo publish -p rinkaku --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
 
   publish-homebrew:
