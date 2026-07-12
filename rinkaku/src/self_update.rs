@@ -36,16 +36,23 @@ enum ConfirmMode {
 /// touching the terminal or the network — kept pure so the three cases are
 /// unit-testable directly.
 ///
-/// This matters beyond UX: the `self_update` crate's confirmation prompt
-/// reads a line from stdin and treats an *empty* response as "yes" (see
-/// `self_update::confirm`), and reading from a closed/non-TTY stdin
-/// immediately yields an empty line (EOF). Left unguarded, running
-/// `self-update` with stdin non-interactive (e.g. piped, `/dev/null`, or a
-/// CI job) would auto-confirm the update. This function is checked before
-/// ever calling into `self_update`, so that case is refused explicitly
-/// instead. It also means an accidental `rinkaku self-update` (e.g. a typo
-/// of `--base main`, see PR review) can no longer silently replace the
-/// binary when stdin isn't a terminal.
+/// This matters beyond UX, for two independent reasons:
+///
+/// - Confirmation is now handled entirely by our own code (`is_affirmative`
+///   below), not the `self_update` crate's `confirm()` — the crate is
+///   always run with `no_confirm(true)` so it never prompts on its own
+///   (see `run_self_update`'s doc comment for why). `RefuseNonInteractive`
+///   is what actually blocks running non-interactively.
+/// - Even with our own prompt, reading from a closed/non-TTY stdin
+///   immediately yields an empty line (EOF), and `is_affirmative` treats
+///   empty as *not* affirmative (deliberately the opposite of the crate's
+///   own `confirm()`, which treats empty as "yes" — see its doc comment).
+///   `RefuseNonInteractive` still exists as a defense-in-depth guard
+///   before that: it fails fast with a clear message instead of silently
+///   reading an empty line and declining, and it means an accidental
+///   `rinkaku self-update` (e.g. a typo of `--base main`, see PR review)
+///   can no longer be interpreted as any kind of answer when stdin isn't a
+///   terminal.
 fn confirm_mode(yes: bool, stdin_is_tty: bool) -> ConfirmMode {
     if yes {
         ConfirmMode::Skip
@@ -56,26 +63,58 @@ fn confirm_mode(yes: bool, stdin_is_tty: bool) -> ConfirmMode {
     }
 }
 
+/// Whether a confirmation answer counts as "yes": trimmed and compared
+/// case-insensitively against `y` / `yes`. Everything else — including an
+/// empty string — is not affirmative.
+///
+/// This is the deliberate opposite of the `self_update` crate's own
+/// `confirm()` helper, which treats an *empty* response as "yes" (see
+/// `confirm_mode`'s doc comment for why that default is unsafe for us):
+/// requiring an explicit `y`/`yes` means a stray newline or a
+/// misunderstood prompt can never be read as consent to replace the
+/// running binary.
+fn is_affirmative(answer: &str) -> bool {
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
 /// Runs `self-update`: downloads and installs the latest GitHub release
 /// asset matching the running binary's target triple, replacing the
 /// current executable in place.
+///
+/// All user-facing messaging is owned by this function rather than the
+/// `self_update` crate's own `println!`s, which is why the builder below
+/// always sets `.no_confirm(true)` and `.show_output(false)`: reading
+/// `self_update` v0.42's `update_extended()` (`src/update.rs`) shows every
+/// line it would otherwise print — including `Checking target-arch...`,
+/// `New release found! v{cur} --> v{new}`, and, notably, `New release is
+/// {*NOT* }compatible` — is gated behind `show_output` (via its internal
+/// `println`/`print_flush` helpers), and the `"{bin} release status:"`
+/// block plus its own confirmation prompt are gated behind
+/// `show_output() || !no_confirm()`, i.e. `show_output(false)` +
+/// `no_confirm(true)` together skip both. The `*NOT* compatible` line in
+/// particular is actively misleading for us: it comes from
+/// `self_update::version::bump_is_compatible`, which treats *any* 0.x
+/// minor bump (e.g. 0.3.x -> 0.4.0) as incompatible by semver convention —
+/// correct for that crate's general-purpose semantics, wrong for a
+/// pre-1.0 tool whose 0.x minor bumps are just ordinary releases.
+/// `.show_download_progress(true)` is kept on: the download progress bar
+/// is rendered by `indicatif` directly (`Download::download_to`), not by
+/// any of the suppressed `println!`s, so it stays as a real progress
+/// indicator with none of the chatter.
 ///
 /// `yes` corresponds to the `--yes`/`-y` flag; TTY detection (the other
 /// input to `confirm_mode`) is read here at the composition-root boundary
 /// rather than passed in, since it is itself a form of environment IO.
 pub fn run_self_update(yes: bool) -> Result<()> {
-    let no_confirm = match confirm_mode(yes, std::io::stdin().is_terminal()) {
-        ConfirmMode::Skip => true,
-        ConfirmMode::Prompt => false,
-        ConfirmMode::RefuseNonInteractive => {
-            anyhow::bail!("refusing to self-update non-interactively; pass --yes to proceed");
-        }
-    };
+    let confirm_mode = confirm_mode(yes, std::io::stdin().is_terminal());
+    if confirm_mode == ConfirmMode::RefuseNonInteractive {
+        anyhow::bail!("refusing to self-update non-interactively; pass --yes to proceed");
+    }
 
     let current_version = env!("CARGO_PKG_VERSION");
     let target = self_update::get_target();
 
-    let status = self_update::backends::github::Update::configure()
+    let updater = self_update::backends::github::Update::configure()
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
         .bin_name(BIN_NAME)
@@ -83,14 +122,47 @@ pub fn run_self_update(yes: bool) -> Result<()> {
         .current_version(current_version)
         .identifier(&release_asset_name(BIN_NAME, target))
         .bin_path_in_archive(&archive_bin_path(BIN_NAME, target))
-        .no_confirm(no_confirm)
-        .build()?
-        .update()
-        .context(
-            "self-update failed; if this is a permission error, try again with sudo, \
-             or update via the package manager you installed rinkaku with \
-             (e.g. `brew upgrade` or `cargo install rinkaku`)",
-        )?;
+        .no_confirm(true)
+        .show_output(false)
+        .show_download_progress(true)
+        .build()?;
+
+    let latest = updater
+        .get_latest_release()
+        .context("failed to check the latest rinkaku release")?;
+    let is_newer = self_update::version::bump_is_greater(current_version, &latest.version)
+        .with_context(|| {
+            format!(
+                "failed to compare current version v{current_version} with latest v{}",
+                latest.version
+            )
+        })?;
+    if !is_newer {
+        println!("{BIN_NAME} is already up to date (v{current_version})");
+        return Ok(());
+    }
+
+    println!(
+        "New release found: v{current_version} -> v{}",
+        latest.version
+    );
+
+    if confirm_mode == ConfirmMode::Prompt {
+        print!("Update to v{}? [y/N]: ", latest.version);
+        std::io::Write::flush(&mut std::io::stdout())?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !is_affirmative(&answer) {
+            println!("Update cancelled");
+            return Ok(());
+        }
+    }
+
+    let status = updater.update().context(
+        "self-update failed; if this is a permission error, try again with sudo, \
+         or update via the package manager you installed rinkaku with \
+         (e.g. `brew upgrade` or `cargo install rinkaku`)",
+    )?;
 
     if status.updated() {
         println!(
@@ -132,6 +204,7 @@ fn archive_bin_path(bin: &str, target: &str) -> String {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[test]
     fn should_build_dot_tar_gz_asset_name_from_bin_and_target() {
@@ -153,17 +226,21 @@ mod tests {
     // nor `PartialEq` — there is nothing to compare it against. `is_ok()`
     // is the strongest assertion available: it proves the builder accepts
     // this exact configuration (owner/repo/bin/target/version/identifier/
-    // archive path/no_confirm) without error.
+    // archive path/no_confirm/show_output/show_download_progress) without
+    // error.
     #[test]
     fn should_configure_update_builder_without_error() {
         let target = self_update::get_target();
         let current_version = env!("CARGO_PKG_VERSION");
 
         // Verifies the builder itself accepts this configuration (no
-        // network IO — `.build()` only validates configuration, `.update()`
-        // is what would actually hit the network and is intentionally not
-        // exercised here per this project's "no mocking external
-        // processes" test convention).
+        // network IO — `.build()` only validates configuration,
+        // `.get_latest_release()`/`.update()` are what would actually hit
+        // the network and are intentionally not exercised here per this
+        // project's "no mocking external processes" test convention).
+        // `no_confirm(true)` and `show_output(false)` are always-on now
+        // (see `run_self_update`'s doc comment for why), so this is the
+        // one configuration the builder is ever actually built with.
         let result = self_update::backends::github::Update::configure()
             .repo_owner(REPO_OWNER)
             .repo_name(REPO_NAME)
@@ -173,6 +250,8 @@ mod tests {
             .identifier(&release_asset_name(BIN_NAME, target))
             .bin_path_in_archive(&archive_bin_path(BIN_NAME, target))
             .no_confirm(true)
+            .show_output(false)
+            .show_download_progress(true)
             .build();
 
         assert!(
@@ -208,5 +287,25 @@ mod tests {
         let actual = confirm_mode(true, true);
 
         assert_eq!(ConfirmMode::Skip, actual);
+    }
+
+    #[rstest]
+    #[case::should_accept_lowercase_y("y", true)]
+    #[case::should_accept_uppercase_y("Y", true)]
+    #[case::should_accept_lowercase_yes("yes", true)]
+    #[case::should_accept_uppercase_yes("YES", true)]
+    #[case::should_accept_mixed_case_yes("Yes", true)]
+    #[case::should_accept_y_with_surrounding_whitespace("  y  \n", true)]
+    #[case::should_accept_yes_with_surrounding_whitespace("  yes  \n", true)]
+    #[case::should_reject_empty_string("", false)]
+    #[case::should_reject_whitespace_only_string("   \n", false)]
+    #[case::should_reject_n("n", false)]
+    #[case::should_reject_no("no", false)]
+    #[case::should_reject_arbitrary_text("sure why not", false)]
+    #[case::should_reject_y_as_prefix_of_longer_word("yesterday", false)]
+    fn should_check_is_affirmative(#[case] answer: &str, #[case] expected: bool) {
+        let actual = is_affirmative(answer);
+
+        assert_eq!(expected, actual);
     }
 }
