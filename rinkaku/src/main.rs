@@ -13,20 +13,24 @@
 //!   working tree. This keeps the diff and the file content read from the
 //!   exact same commit by construction, regardless of what the working
 //!   tree currently holds (uncommitted changes, a dirty checkout, etc.).
-//! - `--pr` mode (ADR 0004, ADR 0005, ADR 0006): the PR's base branch and
-//!   head commit are resolved via `gh pr view`, both are fetched with
-//!   `git fetch`, and the resulting base/head SHAs are handed to exactly
-//!   the same `git show`-backed read strategy as `--base` mode — `--pr`
-//!   is a resolution step in front of the `--base` pipeline, not a
-//!   separate read strategy. A bare PR number requires running inside a
-//!   local clone of the target repository. A PR URL also uses the
-//!   current directory when its `origin` matches the URL's repository;
-//!   otherwise it prefers an existing `ghq`-managed clone of the
-//!   repository when one is found (ADR 0006), and only falls back to
-//!   auto-cloning a blobless partial clone into a per-repository cache
-//!   directory (ADR 0005) if neither the cwd nor `ghq` has one — so URL
-//!   input works from any directory either way. `gh` must be installed
-//!   and authenticated either way.
+//! - `--pr` mode (ADR 0004, ADR 0005, ADR 0006, ADR 0007): the PR's base
+//!   branch, base commit (`baseRefOid`), and head commit are resolved via
+//!   `gh pr view`; the head is fetched with `git fetch`, and the base
+//!   commit is resolved via `baseRefOid` rather than the base branch's
+//!   current tip (ADR 0007) — this is what makes `--pr` work on a merged
+//!   PR, whose base branch has since advanced past the PR's own commits.
+//!   The resulting base/head SHAs are handed to exactly the same
+//!   `git show`-backed read strategy as `--base` mode — `--pr` is a
+//!   resolution step in front of the `--base` pipeline, not a separate
+//!   read strategy. A bare PR number requires running inside a local
+//!   clone of the target repository. A PR URL also uses the current
+//!   directory when its `origin` matches the URL's repository; otherwise
+//!   it prefers an existing `ghq`-managed clone of the repository when one
+//!   is found (ADR 0006), and only falls back to auto-cloning a blobless
+//!   partial clone into a per-repository cache directory (ADR 0005) if
+//!   neither the cwd nor `ghq` has one — so URL input works from any
+//!   directory either way. `gh` must be installed and authenticated
+//!   either way.
 //! - stdin mode: the diff's provenance is unknown to rinkaku (it could be
 //!   `gh pr diff`, a saved patch file, anything). Files are read off the
 //!   working tree, under the assumption that **the diff is consistent
@@ -155,7 +159,23 @@ fn main() -> anyhow::Result<()> {
                 expected = pr_info.head_ref_oid,
             );
         }
-        let base_sha = fetch_branch_head(&pr_info.base_ref_name, workdir.as_deref())?;
+        let cwd = workdir.as_deref();
+        let (base_sha, used_fallback) = resolve_pr_base_sha(
+            &pr_info.base_ref_oid,
+            |oid| object_exists_locally(cwd, oid),
+            || fetch_branch_head(&pr_info.base_ref_name, cwd).map(|_| ()),
+            |oid| fetch_oid(cwd, oid),
+            || fetch_branch_head(&pr_info.base_ref_name, cwd),
+        )?;
+        if used_fallback {
+            log::warn!(
+                "could not resolve PR #{number}'s base commit ({base_oid}) locally; falling \
+                 back to the current tip of {base_branch}, which may not reproduce the original \
+                 PR diff for a merged PR",
+                base_oid = pr_info.base_ref_oid,
+                base_branch = pr_info.base_ref_name,
+            );
+        }
         run_base_pipeline(&cli, &base_sha, &head_sha, workdir.as_deref())?
     } else if let Some(base) = &cli.base {
         run_base_pipeline(&cli, base, &cli.head, None)?
@@ -434,16 +454,20 @@ fn run_git_diff(base: &str, head: &str, cwd: Option<&std::path::Path>) -> anyhow
     Ok(String::from_utf8(output.stdout)?)
 }
 
-/// The subset of `gh pr view --json number,baseRefName,headRefOid` this
-/// binary needs to drive `--pr` mode (ADR 0004): which PR, what its base
-/// branch is called, and the exact commit its head is expected to be at
-/// (checked against what `git fetch` actually retrieves, see
+/// The subset of `gh pr view --json number,baseRefName,baseRefOid,
+/// headRefOid` this binary needs to drive `--pr` mode (ADR 0004, ADR
+/// 0007): which PR, what its base branch is called (fallback path),
+/// the commit its base was pinned to at PR time (`base_ref_oid`,
+/// preferred — see ADR 0007), and the exact commit its head is expected
+/// to be at (checked against what `git fetch` actually retrieves, see
 /// `main`'s mismatch check).
 #[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 struct PrInfo {
     number: u64,
     #[serde(rename = "baseRefName")]
     base_ref_name: String,
+    #[serde(rename = "baseRefOid")]
+    base_ref_oid: String,
     #[serde(rename = "headRefOid")]
     head_ref_oid: String,
 }
@@ -599,15 +623,15 @@ fn cache_repo_dir(
     Ok(root.join("repos").join("github.com").join(owner).join(repo))
 }
 
-/// Parses `gh pr view --json number,baseRefName,headRefOid`'s stdout.
-/// Split out from `fetch_pr_info` so the JSON shape can be unit-tested
-/// without shelling out to `gh`.
+/// Parses `gh pr view --json number,baseRefName,baseRefOid,headRefOid`'s
+/// stdout. Split out from `fetch_pr_info` so the JSON shape can be
+/// unit-tested without shelling out to `gh`.
 fn parse_pr_view_json(json: &str) -> anyhow::Result<PrInfo> {
     Ok(serde_json::from_str(json)?)
 }
 
-/// Runs `gh pr view <arg> --json number,baseRefName,headRefOid` and parses
-/// the result.
+/// Runs `gh pr view <arg> --json number,baseRefName,baseRefOid,headRefOid`
+/// and parses the result.
 ///
 /// Takes the user's original `--pr` argument (URL or bare number) rather
 /// than the number `parse_pr_arg` extracts from it, and this is load-bearing
@@ -624,7 +648,13 @@ fn parse_pr_view_json(json: &str) -> anyhow::Result<PrInfo> {
 /// which repository they resolved against.
 fn fetch_pr_info(arg: &str) -> anyhow::Result<PrInfo> {
     let output = std::process::Command::new("gh")
-        .args(["pr", "view", arg, "--json", "number,baseRefName,headRefOid"])
+        .args([
+            "pr",
+            "view",
+            arg,
+            "--json",
+            "number,baseRefName,baseRefOid,headRefOid",
+        ])
         .output()?;
     if !output.status.success() {
         anyhow::bail!(
@@ -648,6 +678,90 @@ fn fetch_pr_head(number: u64, cwd: Option<&std::path::Path>) -> anyhow::Result<S
 /// the base branch name `gh pr view` reports.
 fn fetch_branch_head(name: &str, cwd: Option<&std::path::Path>) -> anyhow::Result<String> {
     run_git_fetch(name, cwd)
+}
+
+/// Resolves `--pr` mode's diff base commit following ADR 0007's
+/// availability cascade, preferring `base_ref_oid` (pinned to the PR-time
+/// base, correct for both open and merged PRs) over the base branch's
+/// current tip (correct only for open PRs, since a merged PR's base
+/// branch has since advanced past it).
+///
+/// Cascade, each step only taken if the previous one didn't already
+/// resolve `base_ref_oid` locally:
+///
+/// 1. `object_exists` (`git cat-file -e <oid>^{commit}`) — already have it.
+/// 2. `fetch_base_branch` (`git fetch origin <base_ref_name>`) then
+///    re-check `object_exists` — an ordinary branch fetch usually retrieves
+///    it, since `base_ref_oid` is normally reachable from the base
+///    branch's history.
+/// 3. `fetch_oid` (`git fetch origin <oid>`) then re-check `object_exists`
+///    — covers a base branch that has since been force-pushed past it or
+///    deleted.
+/// 4. Fall back to `branch_tip` (today's pre-ADR-0007 behavior, e.g. an
+///    already-fetched `fetch_branch_head` result) with `used_fallback`
+///    signaling the caller should warn — the commit is unreachable by any
+///    means available, so this degrades rather than fails the whole run.
+///
+/// Every IO step is injected as a closure so this decision logic is
+/// unit-testable without shelling out to `git`, following the same
+/// pattern as `select_matching_clone` elsewhere in this file.
+///
+/// Returns the resolved SHA and whether the fallback (step 4) was used.
+fn resolve_pr_base_sha(
+    base_ref_oid: &str,
+    mut object_exists: impl FnMut(&str) -> bool,
+    mut fetch_base_branch: impl FnMut() -> anyhow::Result<()>,
+    mut fetch_oid: impl FnMut(&str) -> anyhow::Result<()>,
+    branch_tip: impl FnOnce() -> anyhow::Result<String>,
+) -> anyhow::Result<(String, bool)> {
+    if object_exists(base_ref_oid) {
+        return Ok((base_ref_oid.to_string(), false));
+    }
+
+    fetch_base_branch()?;
+    if object_exists(base_ref_oid) {
+        return Ok((base_ref_oid.to_string(), false));
+    }
+
+    if fetch_oid(base_ref_oid).is_ok() && object_exists(base_ref_oid) {
+        return Ok((base_ref_oid.to_string(), false));
+    }
+
+    Ok((branch_tip()?, true))
+}
+
+/// Runs `git cat-file -e <oid>^{commit}` in `cwd`, i.e. whether `oid`
+/// already exists locally as a commit object — the cheap first check in
+/// `resolve_pr_base_sha`'s cascade, run before attempting any fetch.
+fn object_exists_locally(cwd: Option<&std::path::Path>, oid: &str) -> bool {
+    let mut command = std::process::Command::new("git");
+    command.args(["cat-file", "-e", &format!("{oid}^{{commit}}")]);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    command.output().is_ok_and(|output| output.status.success())
+}
+
+/// Runs `git fetch origin <oid>` in `cwd` — the direct-oid step of
+/// `resolve_pr_base_sha`'s cascade, tried only when the base branch itself
+/// (already fetched by the caller) didn't bring the commit in, e.g. after
+/// a force-push past it. Unlike `run_git_fetch`, this doesn't need
+/// `FETCH_HEAD` afterwards: the caller re-checks `object_exists_locally`
+/// instead, since fetching a bare oid doesn't update any ref.
+fn fetch_oid(cwd: Option<&std::path::Path>, oid: &str) -> anyhow::Result<()> {
+    let mut command = std::process::Command::new("git");
+    command.args(["fetch", "origin", oid]);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command.output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git fetch origin {oid} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
 }
 
 /// Runs `git fetch origin <refspec>` then `git rev-parse FETCH_HEAD` in
@@ -1294,9 +1408,145 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    mod resolve_pr_base_sha_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use std::cell::RefCell;
+
+        #[test]
+        fn should_return_base_ref_oid_when_it_already_exists_locally() {
+            let fetch_base_branch_calls = RefCell::new(0);
+            let fetch_oid_calls = RefCell::new(0);
+
+            let actual = resolve_pr_base_sha(
+                "base789",
+                |_oid| true,
+                || {
+                    *fetch_base_branch_calls.borrow_mut() += 1;
+                    Ok(())
+                },
+                |_oid| {
+                    *fetch_oid_calls.borrow_mut() += 1;
+                    Ok(())
+                },
+                || panic!("branch_tip must not be called when base_ref_oid already exists"),
+            )
+            .expect("should resolve without error");
+
+            assert_eq!(("base789".to_string(), false), actual);
+            assert_eq!(0, *fetch_base_branch_calls.borrow());
+            assert_eq!(0, *fetch_oid_calls.borrow());
+        }
+
+        #[test]
+        fn should_return_base_ref_oid_when_fetching_the_base_branch_makes_it_available() {
+            let exists_calls = RefCell::new(0);
+            let object_exists = |_oid: &str| {
+                let mut calls = exists_calls.borrow_mut();
+                *calls += 1;
+                // First check (before any fetch) fails; the check right
+                // after `fetch_base_branch` succeeds.
+                *calls > 1
+            };
+
+            let actual = resolve_pr_base_sha(
+                "base789",
+                object_exists,
+                || Ok(()),
+                |_oid| panic!("fetch_oid must not be called when the base branch fetch sufficed"),
+                || panic!("branch_tip must not be called when the base branch fetch sufficed"),
+            )
+            .expect("should resolve without error");
+
+            assert_eq!(("base789".to_string(), false), actual);
+        }
+
+        #[test]
+        fn should_return_base_ref_oid_when_fetching_the_oid_directly_makes_it_available() {
+            let exists_calls = RefCell::new(0);
+            let object_exists = |_oid: &str| {
+                let mut calls = exists_calls.borrow_mut();
+                *calls += 1;
+                // Neither the initial check nor the one after the base
+                // branch fetch succeed; only the one after `fetch_oid`
+                // does (third call).
+                *calls > 2
+            };
+
+            let actual = resolve_pr_base_sha(
+                "base789",
+                object_exists,
+                || Ok(()),
+                |_oid| Ok(()),
+                || panic!("branch_tip must not be called when fetch_oid sufficed"),
+            )
+            .expect("should resolve without error");
+
+            assert_eq!(("base789".to_string(), false), actual);
+        }
+
+        #[test]
+        fn should_fall_back_to_branch_tip_when_the_oid_is_unreachable_by_any_means() {
+            let actual = resolve_pr_base_sha(
+                "base789",
+                |_oid| false,
+                || Ok(()),
+                |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
+                || Ok("branch-tip-sha".to_string()),
+            )
+            .expect("should fall back rather than error");
+
+            assert_eq!(("branch-tip-sha".to_string(), true), actual);
+        }
+
+        #[test]
+        fn should_fall_back_to_branch_tip_when_fetch_oid_succeeds_but_object_still_missing() {
+            // `git fetch origin <oid>` can itself succeed (e.g. the remote
+            // accepts the request) while the object is still not resolvable
+            // locally afterwards — covered separately from the "fetch_oid
+            // errors outright" case above.
+            let actual = resolve_pr_base_sha(
+                "base789",
+                |_oid| false,
+                || Ok(()),
+                |_oid| Ok(()),
+                || Ok("branch-tip-sha".to_string()),
+            )
+            .expect("should fall back rather than error");
+
+            assert_eq!(("branch-tip-sha".to_string(), true), actual);
+        }
+
+        #[test]
+        fn should_propagate_error_when_fetching_the_base_branch_fails() {
+            let actual = resolve_pr_base_sha(
+                "base789",
+                |_oid| false,
+                || anyhow::bail!("simulated: git fetch origin main failed"),
+                |_oid| Ok(()),
+                || Ok("branch-tip-sha".to_string()),
+            );
+
+            assert!(actual.is_err());
+        }
+
+        #[test]
+        fn should_propagate_error_when_the_branch_tip_fallback_itself_fails() {
+            let actual = resolve_pr_base_sha(
+                "base789",
+                |_oid| false,
+                || Ok(()),
+                |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
+                || anyhow::bail!("simulated: git fetch origin main failed"),
+            );
+
+            assert!(actual.is_err());
+        }
+    }
+
     #[test]
     fn should_parse_pr_view_json_into_pr_info() {
-        let json = r#"{"number":123,"baseRefName":"main","headRefOid":"abc123def456"}"#;
+        let json = r#"{"number":123,"baseRefName":"main","baseRefOid":"base789","headRefOid":"abc123def456"}"#;
 
         let actual = parse_pr_view_json(json).expect("expected valid JSON to parse");
 
@@ -1304,6 +1554,7 @@ mod tests {
             PrInfo {
                 number: 123,
                 base_ref_name: "main".to_string(),
+                base_ref_oid: "base789".to_string(),
                 head_ref_oid: "abc123def456".to_string(),
             },
             actual
