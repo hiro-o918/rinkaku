@@ -39,16 +39,23 @@ use std::time::Duration;
 
 /// Runs the interactive TUI over `report` until the user quits, taking
 /// over the terminal for the duration of the call (raw mode + alternate
-/// screen via [`ratatui::init`], restored on return **and** on panic —
-/// `ratatui::init`'s own panic hook covers the latter, so a bug in this
+/// screen via [`ratatui::try_init`], restored on return **and** on panic —
+/// `ratatui::try_init`'s own panic hook covers the latter, so a bug in this
 /// crate cannot leave the caller's terminal in raw mode).
+///
+/// Uses `try_init` rather than [`ratatui::init`] specifically so terminal
+/// setup failure (e.g. stdin/stdout is not a TTY at all — piped input,
+/// `< /dev/null`, a CI runner) surfaces as an `Err` for `main.rs`'s
+/// `anyhow` path to print cleanly and exit 1, instead of `ratatui::init`'s
+/// own `.expect(...)` panicking with a raw Rust panic message and exit
+/// code 101.
 ///
 /// This is the only function in the crate that touches a real terminal or
 /// blocks on input; everything it calls into (`App`, `row_view`, `ui`,
 /// `source`) is either pure or an isolated, narrowly-scoped IO call (a
 /// single source-file read).
 pub fn run(report: &Report) -> std::io::Result<()> {
-    let mut terminal = ratatui::init();
+    let mut terminal = ratatui::try_init()?;
     let result = run_app(&mut terminal, report);
     ratatui::restore();
     result
@@ -80,6 +87,14 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, report: &Report) -> std::io:
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id } = app.screen().clone() {
                     match source::load_symbol_source(report, &symbol_id) {
+                        // The `SourceView` itself is discarded here — only
+                        // used to detect a failure early so it can be
+                        // surfaced on the status line right away, rather
+                        // than silently on the next redraw. `ui::draw`'s
+                        // `draw_source_screen` re-reads the file itself
+                        // when it renders the screen (see that function's
+                        // doc comment for why it re-reads instead of
+                        // caching this result).
                         Ok(_) => {}
                         Err(message) => app.set_status(message),
                     }
