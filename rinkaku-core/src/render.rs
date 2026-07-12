@@ -1013,14 +1013,20 @@ fn render_mermaid(report: &Report) -> String {
         writeln!(out, "  {from} {arrow} {to}").expect("writing to a String cannot fail");
     }
 
-    // Class assignment: a node that is both `changed` (SignatureChanged)
-    // and a hotspot gets `hotspot` styling, not `changed` — see this
-    // function's doc comment / ADR 0021's Decision on precedence. `added`
-    // never overlaps with `hotspot` in practice (a hotspot is referenced by
-    // >= 2 other changed symbols, which requires base-side symbols to
-    // compare against, the same data `Added` vs `SignatureChanged`
-    // classification depends on) but is checked after `changed` regardless,
-    // so the precedence order is explicit rather than incidental.
+    // Class assignment: a node that is both classified (`added` or
+    // `changed`) and a hotspot gets `hotspot` styling, checked first —
+    // see this function's doc comment / ADR 0021's Decision on
+    // precedence. This overlap is real, not just theoretical: fan-in
+    // (`hotspot_ids`, from `compute_hotspots`) counts referrers among
+    // *changed* symbols regardless of the target's own classification, so
+    // a brand-new (`Added`) symbol referenced by two or more other
+    // changed symbols is a perfectly ordinary hotspot too — e.g. a new
+    // helper function two other new/changed call sites both use in the
+    // same diff. `hotspot` wins because fan-in ("how many other changed
+    // symbols depend on this") is the more decision-relevant signal for a
+    // reviewer skimming the graph than "this particular node is new" —
+    // the node's own classification is still visible in the companion
+    // Markdown/JSON output's Definitions section either way.
     for n in &report.graph.nodes {
         let safe_id = &safe_id_by_node[n.id.as_str()];
         let class = if hotspot_ids.contains(n.id.as_str()) {
@@ -1158,12 +1164,19 @@ const MERMAID_CLASS_DEFS: &str = concat!(
 /// Escapes text embedded in a quoted mermaid node/subgraph label
 /// (`id["text"]`): `&` first (so the escape sequences below aren't
 /// themselves re-escaped), then `"` and `[`/`]`, any of which would
-/// otherwise prematurely close or corrupt the quoted label.
+/// otherwise prematurely close or corrupt the quoted label. Embedded
+/// newlines are replaced with a space rather than escaped — a path or
+/// symbol name is not expected to legitimately contain one, but a literal
+/// `\n` inside a quoted label would break the single-line label syntax
+/// (and, worse, could start a new line mermaid tries to parse as its own
+/// statement), so this is a defensive normalization rather than a
+/// meaning-preserving escape the way the others are.
 fn escape_mermaid_label(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('[', "&#91;")
         .replace(']', "&#93;")
+        .replace('\n', " ")
 }
 
 #[cfg(test)]
@@ -4559,6 +4572,37 @@ flowchart LR
     }
 
     #[test]
+    fn should_replace_embedded_newline_with_space_when_path_contains_one() {
+        // A path/name is not expected to legitimately contain a newline,
+        // but nothing upstream guarantees it can't — an unescaped `\n`
+        // inside a quoted mermaid label would break the single-line label
+        // syntax, so it is normalized to a space defensively rather than
+        // left as-is or escaped like the other special characters.
+        let report = empty_report(
+            SymbolGraph {
+                nodes: vec![node("src/lib.rs::weird", "src/li\nb.rs", "weird")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::weird".to_string()],
+            },
+            vec![],
+        );
+
+        let expected = "\
+flowchart LR
+  subgraph sub0[\"src/li b.rs\"]
+    n0[\"weird\"]
+  end
+  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
+  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
+  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn should_prefer_hotspot_class_over_changed_class_when_node_is_both() {
         // "shared" is SignatureChanged *and* referenced by two other
         // symbols (fan-in >= 2, so it's also a hotspot) — precedence goes
@@ -4601,6 +4645,98 @@ flowchart LR
   classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
+        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_prefer_hotspot_class_over_added_class_when_a_new_symbol_is_also_a_hotspot() {
+        // Fan-in (`compute_hotspots`) counts referrers among *changed*
+        // symbols regardless of the referenced node's own classification —
+        // a brand-new ("added") symbol referenced by two or more other
+        // changed symbols in the same diff (e.g. a new helper two other
+        // new/changed call sites both use) is a perfectly ordinary
+        // hotspot too, not a case that can't occur. Same precedence as
+        // the SignatureChanged sibling test above: `hotspot` wins.
+        let report = Report {
+            origin: ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::new_helper",
+                    "new_helper",
+                    SymbolKind::Function,
+                    Some(Classification::Added),
+                )],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::new_helper", "src/lib.rs", "new_helper")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::new_helper".to_string()],
+            },
+            tests: vec![],
+            hotspots: vec![Hotspot {
+                id: "src/lib.rs::new_helper".to_string(),
+                path: "src/lib.rs".to_string(),
+                name: "new_helper".to_string(),
+                used_by: vec!["a".to_string(), "b".to_string()],
+            }],
+            removed: vec![],
+        };
+
+        let expected = "\
+flowchart LR
+  subgraph sub0[\"src/lib.rs\"]
+    n0[\"new_helper\"]
+  end
+  class n0 hotspot
+  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
+  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
+  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_stay_symbol_level_when_node_count_equals_budget_exactly() {
+        // Exactly MERMAID_NODE_BUDGET (30) nodes: the fallback condition
+        // is `> budget`, so this boundary case must still render one
+        // subgraph/node per symbol, not the file-level aggregation — pins
+        // the off-by-one the sibling over-budget test alone can't rule
+        // out (that test only proves 31 falls back, not that 30 doesn't).
+        let mut nodes = Vec::new();
+        let mut symbols = Vec::new();
+        for i in 0..30 {
+            let id = format!("src/lib.rs::s{i}");
+            nodes.push(node(&id, "src/lib.rs", &format!("s{i}")));
+            symbols.push(symbol(&id, &format!("s{i}"), SymbolKind::Function, None));
+        }
+        assert_eq!(30, nodes.len());
+
+        let report = empty_report(
+            SymbolGraph {
+                nodes,
+                edges: vec![],
+                roots: vec!["src/lib.rs::s0".to_string()],
+            },
+            vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols,
+            }],
+        );
+
+        let mut expected = String::from("flowchart LR\n  subgraph sub0[\"src/lib.rs\"]\n");
+        for i in 0..30 {
+            expected.push_str(&format!("    n{i}[\"s{i}\"]\n"));
+        }
+        expected.push_str("  end\n");
+        expected.push_str(MERMAID_CLASS_DEFS);
+
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
         assert_eq!(expected, actual);

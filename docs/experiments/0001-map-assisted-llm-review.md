@@ -482,6 +482,158 @@ that in mind.
   stops being an independent signal. Seed when correctness matters
   more than the experiment (it usually does), but record it.
 
+## Results (round 8)
+
+Same two-pass method, eighth subject: this PR's own fix for the TUI
+source view's path resolution (2 commits — repo-root-relative reads for
+`load_symbol_source`, then a follow-up addressing review feedback on
+that first commit).
+
+| Metric               | A (map)     | B (control) |
+| -------------------- | ----------- | ----------- |
+| Blocker findings      | 1           | 1           |
+| Should-fix findings   | —           | 1           |
+
+- **Both arms independently converged on the same blocker**: `--pr`'s
+  resolved workdir (a ghq/cache clone that can live anywhere on disk,
+  `resolve_pr_workdir`) never reached `resolve_repo_root`, which was
+  called unconditionally with `None`. If the process's own current
+  directory happened to be a *different* git repository, the source
+  view would silently resolve *that* repository's root and, for any
+  relative path that happens to exist in both, show an unrelated
+  file — no error, just wrong content. Neither arm found this via the
+  map: `main`'s signature did not change, and "does the right variable
+  reach the right call" is not a relationship the map draws at all. It
+  came from actively cross-checking the README's description of `--pr`
+  against the new `resolve_repo_root(None)` call site — the same
+  doc-versus-implementation reading strategy that produced round 7's
+  four findings, applied here to code rather than a doc comment.
+- **Only the independent pass's live tmux verification** caught a
+  second, narrower defect: the read-failure error message this PR adds
+  (explaining that a missing file may simply not be checked out
+  locally, e.g. a PR/historical diff) was not wrapped, so `Paragraph`
+  silently truncated it in anything narrower than a very wide pane —
+  the very case the message exists to explain became unreadable in the
+  layout it was written for. A static read of the string literal gives
+  no signal that it will be cut off; only watching the rendered pane
+  does.
+- Dynamic verification also surfaced a defect entirely outside this
+  PR's scope: launching the TUI on stdin-piped diff input
+  (`git diff | rinkaku`) fails to start, because crossterm's raw-mode
+  input reader errors ("Failed to initialize input reader") when stdin
+  has already been consumed reading the diff. Not fixed here — recorded
+  as a backlog item, since stdin-diff mode piping straight into `--tui`
+  is a legitimate ADR 0016/0017 use case that currently cannot reach
+  the TUI at all.
+- Fixes shipped in response: the workdir-propagation blocker (with a
+  regression test constructing two independent repositories to prove
+  the fix resolves the passed-in workdir, not the process's own cwd
+  repository), the message-wrapping should-fix (with a regression test
+  in a 40-column `TestBackend` pane, confirmed to fail without
+  `.wrap(...)`), and a `debug_assert!` plus `#[should_panic]` test
+  pinning `resolve_source_path`'s pre-existing assumption that `Report`
+  paths stay relative (`PathBuf::join` silently discards the root
+  otherwise).
+
+## Conclusions (after 8 rounds)
+
+- Round 8 sharpens round 7's finding rather than adding a new one: the
+  map shows that a wire exists (`main` → `resolve_repo_root` →
+  `rinkaku_tui::run` → ... → `load_symbol_source`), not whether it
+  carries the *correct* value. A caller-side data-flow defect — the
+  right function called with the wrong variable — sits in exactly the
+  blind spot both round 7 and round 8 needed doc-versus-code
+  cross-checking, not the map, to see.
+- The narrow-pane wrapping bug is the same class experiment rounds 3–7
+  keep surfacing: a behavioral defect with zero footprint on any
+  signature, found only by watching the thing render. Reinforces (not
+  extends) round 6's standing conclusion that dynamic verification is
+  the review angle that does not get replaced by better static
+  tooling.
+- Unlike rounds 1–7, this round's map-assisted and independent passes
+  fully converged on the round's most important finding (the blocker)
+  rather than splitting territory — welcome as confidence, but a
+  reminder per round 5's caveat that convergence on an easy-to-spot
+  defect says less about the two passes' complementary value than
+  divergence does.
+
+## Results (round 9)
+
+Same two-pass method, ninth subject: showing skipped and whole-test
+files in the TUI entry tree (2 commits — the feature itself, then a
+follow-up addressing review feedback).
+
+| Metric               | A (map)     | B (control) |
+| --------------------- | ----------- | ----------- |
+| Blocker findings      | 0           | 0           |
+| Should-fix findings   | 1           | 1           |
+
+- The map for this diff was small: 15 changed symbols across 5 files,
+  with `TreeNode` and `FileDetail` (a `signature changed` node) as its
+  two hotspots. Allocating attention by hotspot and walking outward to
+  consumers (`nav`, `order`, `app`, `detail`, `ui`, `row_view`) worked
+  as intended — A's one should-fix came from actually reading the
+  `TreeNode` the map pointed at: the same file path can be inserted
+  from `report.files`, `report.tests`, and `report.skipped`
+  independently, and nothing stopped a later insert from silently
+  overwriting an earlier one's fields, producing a row that both lists
+  real symbols and claims to be skipped/test-only. What the map could
+  not show is the root cause underneath that finding — the three
+  insert paths share a private `file_at` get-or-insert helper, a
+  structural fact invisible to a signature-level diff.
+- B's finding was unrelated and came from plain reading, not
+  execution: a leftover duplicate doc comment above `file_detail_lines`
+  (an old block describing the pre-change behavior, superseded by a
+  new block but never deleted, left the two concatenated and
+  self-contradictory).
+- B also carried this round's dynamic-verification step: a synthetic
+  Go repository (a whole test-only file, a binary file, and an
+  unsupported-language text file) driven end-to-end through the real
+  TUI binary in tmux — every navigation key, the detail pane for both
+  new row kinds, the diff pane for both (including the binary file's
+  correct "no diff hunks found" fallback, since git itself reports no
+  hunks for binaries), and a check that whole-repo/non-TTY paths
+  weren't regressed. No behavioral defect turned up; this pass's value
+  here was confirming the feature, not finding a bug.
+- Zero overlap between the two passes' findings, and neither
+  finding was the kind the other pass's method could realistically
+  have produced: the map routed A to a structural risk sitting one
+  level of indirection below the diff's own signatures; B's finding
+  was a textual leftover a signature-level map has no reason to flag
+  at all, plus a clean bill of health from actually running the thing.
+- Fixes shipped in response: `debug_assert!` guards (plus two
+  `#[should_panic]` regression tests) on the three insert paths
+  pinning the "one path, one source" invariant explicitly rather than
+  leaving it as an unstated assumption of the shared `file_at` helper;
+  the duplicate doc comment removed; and, as a related consistency fix
+  neither pass explicitly flagged but both findings motivated once
+  looked at together, the entry-row badge's skip-reason-vs-test-badge
+  priority was aligned with the detail pane's own priority (`if`/`else
+  if` instead of two independent `if let`s).
+
+## Conclusions (after 9 rounds)
+
+- Round 9 adds a variant to round 8's "the map shows a wire exists,
+  not whether it's correct" lesson: here the map correctly pointed at
+  the *node* where the defect lived (`TreeNode`), but the defect's
+  cause was a shared private helper one layer beneath anything the
+  map's symbol-level view represents. A hotspot is still a good place
+  to look; it is not a guarantee the map has shown you everything
+  worth seeing at that location.
+- This is the first round with **zero overlap and no shared theme**
+  between the two passes' findings — a sharper case of round 8's
+  point that convergence is not itself evidence of complementary
+  value, restated from the other side: divergence this clean (a
+  structural-invariant gap vs. a leftover comment, found by
+  fundamentally different means) is closer to what "two
+  complementary angles" was supposed to produce than any prior round.
+- Dynamic verification's role keeps shifting round to round — round 8
+  used it to *find* a defect (unwrapped text truncated in a narrow
+  pane); here it *confirmed the absence* of one across every new
+  interactive surface. Both outcomes are the step earning its keep:
+  the point is that someone actually drove the binary, not that doing
+  so must always turn up a bug.
+
 ## Next
 
 - Consider a map feature flagging cross-crate duplicate-domain
@@ -493,3 +645,14 @@ that in mind.
   it has now appeared three times (rounds 3, 7, and PR #55's spec
   guarding against it), which is enough recurrence to justify
   mechanizing it.
+- Fix the stdin-diff + `--tui` startup failure found in round 8
+  (crossterm's input reader fails to initialize because stdin was
+  already consumed reading the diff) — a pre-existing gap in a
+  documented use case (ADR 0016/0017), not a regression of this PR.
+- Round 9's near-miss (a shared private helper causing a display bug
+  invisible to a symbol-level map) suggests a possible map feature:
+  flag when two or more independent top-level `Report` fields
+  (`files`/`tests`/`skipped`/`removed`) feed into the same
+  downstream construction function, since that shape recurs whenever
+  a `Report` consumer merges several "list of things about a path"
+  fields back into one per-path structure.
