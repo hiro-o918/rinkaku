@@ -138,12 +138,12 @@ pub struct App {
     /// `content_len.saturating_sub(pane_height)` is `crate::ui`'s
     /// responsibility (`ui::clamp_scroll`) — keeping this module free of
     /// any layout concern, matching the rest of `App`'s pure-state
-    /// discipline. Reset to 0 whenever the pane's underlying content could
-    /// have changed out from under the current offset: cursor movement
-    /// (`InputKey::Up`/`Down`, a different row's detail/diff), the
-    /// Detail/Diff toggle (a different content stream entirely), and any
-    /// screen transition (`InputKey::Source`/`Back`) — see `handle_key`'s
-    /// match arms for exactly which trigger each reset.
+    /// discipline. Reset to 0 by every key `handle_key` processes *except*
+    /// `InputKey::ScrollDown`/`ScrollUp` on [`Screen::Entry`] (`handle_key`'s
+    /// own doc comment on why this is a blanket rule rather than an
+    /// enumerated list of "actions that change the pane's content" — the
+    /// cursor can move *indirectly*, e.g. a collapse retargeting it onto a
+    /// different row, which an enumerated list is prone to missing).
     right_pane_scroll: usize,
     /// A transient message for the status line (e.g. a source-read
     /// failure) — cleared on the next action that doesn't re-set it, so a
@@ -294,17 +294,29 @@ impl App {
     /// cursor is a present symbol before switching screens — the actual
     /// file read happens later, in `crate::run`, once `Screen::Source` is
     /// active) and is otherwise unused.
+    ///
+    /// `right_pane_scroll` is reset to 0 by every key *except*
+    /// `ScrollDown`/`ScrollUp` on [`Screen::Entry`] — a uniform rule applied
+    /// once below, rather than each action deciding individually whether it
+    /// might change the right pane's content. The per-action approach used
+    /// to miss cases where the cursor moves *indirectly*: collapsing a
+    /// directory (`Select`/`CollapseAll`) can retarget the cursor onto a
+    /// different row via `Nav::retarget_cursor`, and reordering
+    /// (`ToggleOrder`) can do the same simply by changing which row now
+    /// sits at the same cursor index — both used to leave a stale nonzero
+    /// scroll offset pointing into the *new* row's unrelated content. Only
+    /// `ScrollDown`/`ScrollUp` are exempt, since they are the two actions
+    /// whose entire purpose is to set this value.
     pub fn handle_key(mut self, key: InputKey) -> Self {
         self.status = None;
+        let preserve_scroll = matches!(
+            (&self.screen, key),
+            (Screen::Entry, InputKey::ScrollDown) | (Screen::Entry, InputKey::ScrollUp)
+        );
 
         match (&self.screen, key) {
             (Screen::Source { .. }, InputKey::Back) => {
                 self.screen = Screen::Entry;
-                // The right pane was last showing whatever row was under
-                // the cursor before `s` opened the source view; returning
-                // here should not carry over an old scroll position for
-                // content the user has not looked at yet in this session.
-                self.right_pane_scroll = 0;
             }
             // Every other key is a no-op while the source view is open —
             // navigation/reordering only make sense against the entry
@@ -317,11 +329,9 @@ impl App {
             }
             (Screen::Entry, InputKey::Up) => {
                 self.nav = self.nav.handle(Action::CursorUp, &self.tree);
-                self.right_pane_scroll = 0;
             }
             (Screen::Entry, InputKey::Down) => {
                 self.nav = self.nav.handle(Action::CursorDown, &self.tree);
-                self.right_pane_scroll = 0;
             }
             (Screen::Entry, InputKey::Select) => {
                 self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
@@ -355,7 +365,6 @@ impl App {
                     RightPane::Detail => RightPane::Diff,
                     RightPane::Diff => RightPane::Detail,
                 };
-                self.right_pane_scroll = 0;
             }
             (Screen::Entry, InputKey::ScrollDown) => {
                 self.right_pane_scroll = self.right_pane_scroll.saturating_add(1);
@@ -368,6 +377,10 @@ impl App {
                 // return to. Quitting from the entry view is the
                 // dedicated `InputKey::Quit` variant instead.
             }
+        }
+
+        if !preserve_scroll {
+            self.right_pane_scroll = 0;
         }
 
         self
@@ -828,5 +841,98 @@ mod tests {
             },
             *app.screen()
         );
+    }
+
+    /// Two independent top-level directories, each with one file holding
+    /// one symbol — deep/wide enough that `Nav::retarget_cursor` can land
+    /// the cursor on a genuinely different node after a collapse, matching
+    /// `nav.rs`'s own `should_not_move_cursor_when_collapse_happens_elsewhere_in_the_tree`
+    /// fixture shape. Expanded row order: a(0), a/one.rs(1), foo(2), b(3),
+    /// b/two.rs(4), bar(5).
+    fn report_with_two_directories() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![
+                FileReport {
+                    path: "a/one.rs".to_string(),
+                    symbols: vec![symbol("a/one.rs::foo", "foo")],
+                },
+                FileReport {
+                    path: "b/two.rs".to_string(),
+                    symbols: vec![symbol("b/two.rs::bar", "bar")],
+                },
+            ],
+            ..empty_report()
+        }
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_select_collapses_the_row_under_the_cursor() {
+        // Row 0 is "a" itself; collapsing it via `Select` hides its
+        // children but the cursor's own row survives unmoved — still a
+        // case the blanket reset rule must cover, since a directory row's
+        // own detail content (fan-in/badges) does not depend on which of
+        // its children are currently shown, but this pins the simplest
+        // Select case regardless.
+        let report = report_with_two_directories();
+        let app = App::new(&report).handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Select);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_collapse_all_retargets_cursor_onto_a_different_node() {
+        // Cursor starts on "bar" (row 5, under "b/two.rs"); CollapseAll
+        // hides every file/symbol row, and `Nav::retarget_cursor` lands the
+        // cursor on "b" (the nearest still-visible ancestor) — a genuinely
+        // different node's detail than the one the pre-collapse scroll
+        // offset was scrolled into.
+        let report = report_with_two_directories();
+        let mut app = App::new(&report);
+        for _ in 0..5 {
+            app = app.handle_key(InputKey::Down);
+        }
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b/two.rs", rows[app.nav().cursor()].node.path);
+        let app = app
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::CollapseAll);
+
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b", rows[app.nav().cursor()].node.path);
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_expand_all_is_pressed() {
+        let report = report_with_two_directories();
+        let app = App::new(&report)
+            .handle_key(InputKey::CollapseAll)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ExpandAll);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_toggle_order_is_pressed() {
+        // ToggleOrder can change which row now sits at the same cursor
+        // index (reordering siblings), so it must reset the scroll offset
+        // even though it never calls into `Nav` at all.
+        let report = report_with_two_directories();
+        let app = App::new(&report).handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ToggleOrder);
+
+        assert_eq!(0, app.right_pane_scroll());
     }
 }
