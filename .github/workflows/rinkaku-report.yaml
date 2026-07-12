@@ -1,0 +1,66 @@
+name: rinkaku PR report
+
+# Dogfoods this repository's own action (ADR 0020): posts a mermaid
+# call/dependency graph plus a collapsed Markdown outline as a sticky PR
+# comment.
+#
+# Trust boundary: rinkaku is built from the PR's *base* ref, not the PR
+# head and not a downloaded release binary, then run against the PR head
+# checkout's diff. A PR is exactly the input an attacker controls, so the
+# tool doing the inspecting must never be built from it — same rule this
+# repository's own README documents for the "map-assisted LLM review"
+# recipe (docs/experiments/0001-map-assisted-llm-review.md): "built from a
+# trusted `main` checkout, never from the branch under review."
+#
+# The PR head is checked out at the job's default workspace root (no
+# `path:`) so `uses: ./` below — the action definition committed on the PR
+# branch itself — runs its composite steps with that checkout as the
+# working directory, which is what lets `rinkaku --base` resolve the diff
+# via plain `git diff`/`git show` without any extra `working-directory`
+# plumbing. The base build lives in a subdirectory instead.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+concurrency:
+  group: rinkaku-report-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Checkout PR base into a subdirectory (trusted build source)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: rinkaku-base-build
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          workspaces: rinkaku-base-build
+          key: rinkaku-report-build
+
+      - name: Build rinkaku from the base ref
+        working-directory: rinkaku-base-build
+        run: cargo build --release -p rinkaku
+
+      - name: Run rinkaku report action
+        uses: ./
+        with:
+          binary: ${{ github.workspace }}/rinkaku-base-build/target/release/rinkaku
+          base: ${{ github.event.pull_request.base.ref }}
+          github-token: ${{ github.token }}

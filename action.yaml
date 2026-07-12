@@ -1,0 +1,135 @@
+name: "rinkaku PR report"
+description: >-
+  Runs rinkaku against a pull request's diff and posts (or updates) a
+  sticky PR comment: a mermaid call/dependency graph up front, with the
+  full Markdown outline collapsed underneath for anyone who wants the
+  signature-level detail.
+branding:
+  icon: "git-pull-request"
+  color: "blue"
+
+inputs:
+  version:
+    description: >-
+      rinkaku release tag to download from GitHub Releases, e.g. "v0.4.1".
+      Defaults to the latest release. Ignored when `binary` is set.
+    required: false
+    default: "latest"
+  binary:
+    description: >-
+      Path to an already-built rinkaku binary to use instead of downloading
+      a release asset. Set this when the caller already built rinkaku
+      itself (e.g. the dogfooding workflow in this repository, which builds
+      rinkaku from the PR's base ref rather than trusting a release binary
+      built from who-knows-where) — leaving `version`'s download step
+      skipped entirely rather than duplicating the compose/post logic in
+      two places.
+    required: false
+    default: ""
+  base:
+    description: >-
+      Base ref to diff against, passed through to `rinkaku --base`.
+      Defaults to the pull request's base ref.
+    required: false
+    default: ${{ github.event.pull_request.base.ref }}
+  github-token:
+    description: Token used to read/write the PR comment via `gh`/`gh api`.
+    required: false
+    default: ${{ github.token }}
+  comment:
+    description: >-
+      Whether to post/update a sticky PR comment. When `false`, this action
+      only produces the report files referenced by this action's outputs —
+      useful for callers that want to compose their own comment or use the
+      report some other way.
+    required: false
+    default: "true"
+
+outputs:
+  mermaid-path:
+    description: Path to the generated mermaid report file.
+    value: ${{ steps.run-rinkaku.outputs.mermaid-path }}
+  markdown-path:
+    description: Path to the generated Markdown report file.
+    value: ${{ steps.run-rinkaku.outputs.markdown-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve rinkaku binary
+      id: resolve-binary
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        BINARY: ${{ inputs.binary }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "${BINARY}" ]; then
+          echo "using caller-provided binary: ${BINARY}"
+          echo "path=${BINARY}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Asset naming matches .github/workflows/build-and-publish.yaml's
+        # `build` job: "rinkaku-<target>.tar.gz", containing the `rinkaku`
+        # binary at its archive root.
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
+          Linux-aarch64) target="aarch64-unknown-linux-gnu" ;;
+          Darwin-x86_64) target="x86_64-apple-darwin" ;;
+          Darwin-arm64) target="aarch64-apple-darwin" ;;
+          *)
+            echo "::error::unsupported runner platform: $(uname -s)-$(uname -m)"
+            exit 1
+            ;;
+        esac
+
+        asset="rinkaku-${target}.tar.gz"
+        mkdir -p "${RUNNER_TEMP}/rinkaku-dist"
+
+        if [ "${VERSION}" = "latest" ]; then
+          gh release download --repo hiro-o918/rinkaku --pattern "${asset}" \
+            --dir "${RUNNER_TEMP}/rinkaku-dist" --clobber
+        else
+          gh release download "${VERSION}" --repo hiro-o918/rinkaku --pattern "${asset}" \
+            --dir "${RUNNER_TEMP}/rinkaku-dist" --clobber
+        fi
+
+        tar xzf "${RUNNER_TEMP}/rinkaku-dist/${asset}" -C "${RUNNER_TEMP}/rinkaku-dist"
+        binary_path=$(find "${RUNNER_TEMP}/rinkaku-dist" -type f -name rinkaku)
+        chmod +x "${binary_path}"
+        echo "path=${binary_path}" >> "$GITHUB_OUTPUT"
+
+    - name: Run rinkaku
+      id: run-rinkaku
+      shell: bash
+      env:
+        RINKAKU_BIN: ${{ steps.resolve-binary.outputs.path }}
+        BASE_REF: ${{ inputs.base }}
+      run: |
+        set -euo pipefail
+
+        mkdir -p "${RUNNER_TEMP}/rinkaku-report"
+        mermaid_path="${RUNNER_TEMP}/rinkaku-report/report.mmd"
+        markdown_path="${RUNNER_TEMP}/rinkaku-report/report.md"
+
+        "${RINKAKU_BIN}" --base "origin/${BASE_REF}" --format mermaid > "${mermaid_path}"
+        "${RINKAKU_BIN}" --base "origin/${BASE_REF}" --format md > "${markdown_path}"
+
+        echo "mermaid-path=${mermaid_path}" >> "$GITHUB_OUTPUT"
+        echo "markdown-path=${markdown_path}" >> "$GITHUB_OUTPUT"
+
+    - name: Compose and post sticky PR comment
+      if: inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MERMAID_PATH: ${{ steps.run-rinkaku.outputs.mermaid-path }}
+        MARKDOWN_PATH: ${{ steps.run-rinkaku.outputs.markdown-path }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        "${GITHUB_ACTION_PATH}/compose_and_post_comment.sh"
