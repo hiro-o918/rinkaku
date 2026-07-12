@@ -632,6 +632,7 @@ mod tests {
 
         fn symbol(name: &str, referenced_names: Vec<&str>) -> ExtractedSymbol {
             ExtractedSymbol {
+                id: String::new(),
                 name: name.to_string(),
                 kind: SymbolKind::Function,
                 signature: format!("fn {name}()"),

@@ -332,6 +332,11 @@ fn run_base_pipeline(
         return Ok(rinkaku_core::render::Report {
             files: Vec::new(),
             skipped: Vec::new(),
+            graph: rinkaku_core::graph::SymbolGraph {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                roots: Vec::new(),
+            },
         });
     }
 
@@ -2357,6 +2362,11 @@ mod tests {
             rinkaku_core::render::Report {
                 files: Vec::new(),
                 skipped: Vec::new(),
+                graph: rinkaku_core::graph::SymbolGraph {
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                    roots: Vec::new(),
+                },
             },
             actual.expect("empty diff must not touch the repository-wide index scan")
         );
@@ -2367,10 +2377,19 @@ mod tests {
         use pretty_assertions::assert_eq;
         use rinkaku_core::render::Report;
 
+        fn empty_graph() -> rinkaku_core::graph::SymbolGraph {
+            rinkaku_core::graph::SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            }
+        }
+
         fn empty_report() -> Report {
             Report {
                 files: vec![],
                 skipped: vec![],
+                graph: empty_graph(),
             }
         }
 
@@ -2381,6 +2400,7 @@ mod tests {
                     symbols: vec![],
                 }],
                 skipped: vec![],
+                graph: empty_graph(),
             }
         }
 
@@ -2423,6 +2443,7 @@ mod tests {
                     path: "assets/logo.png".to_string(),
                     reason: rinkaku_core::render::SkipReason::Binary,
                 }],
+                graph: empty_graph(),
             };
 
             let actual = garbage_input_note("some diff text", &report);

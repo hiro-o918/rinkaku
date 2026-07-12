@@ -146,103 +146,103 @@ rinkaku --base main --deps 0
 ### What it looks like
 
 All examples below are captured from the `cargo build --release` binary
-against `main` post-[#9](https://github.com/hiro-o918/rinkaku/pull/9)
-(the dependency-resolution precision and indexing performance
-improvements), not fabricated.
+against `main` post-[ADR 0008](docs/adr/0008-entry-point-tree-rendering-for-changed-symbols.md)
+(entry-point tree rendering), not fabricated.
 
 Running `rinkaku` on
-[a real rinkaku commit](https://github.com/hiro-o918/rinkaku/commit/1ccc183)
-(a 128-line diff adding the stdin garbage-input warning in `main.rs`)
-produces:
+[a real rinkaku commit](https://github.com/hiro-o918/rinkaku/commit/aa7ca34)
+(a 35-line diff adding stderr progress logging to `main.rs`) produces:
 
 ```sh
-$ git show 1ccc183 --format="" | rinkaku
+$ git show aa7ca34 --format="" | rinkaku --deps 0
 ```
 
 ````markdown
-## rinkaku-core/src/main.rs
+## Change graph
+
+- fn main (rinkaku/src/main.rs)
+  - fn build_resolver (rinkaku/src/main.rs)
+  - fn resolve_pr_workdir (rinkaku/src/main.rs)
+  - fn run_base_pipeline (rinkaku/src/main.rs)
+    - fn build_resolver (rinkaku/src/main.rs) (see above)
+
+## Definitions
+
+### fn main (rinkaku/src/main.rs)
 
 ```
 fn main() -> anyhow::Result<()>
 ```
 
-Depends on:
-- `rinkaku-core/src/deps.rs`: `pub trait Resolver { fn resolve(&self, name: &str) -> Vec<ResolvedSymbol>; }`
-- `rinkaku-core/src/pipeline.rs`: `pub fn analyze_diff( diff_text: &str, read_file: impl Fn(&str) -> std::io::Result<String>, resolver: Option<&dyn Resolver>, ) -> Result<Report, AnalyzeError>`
-- `rinkaku-core/src/main.rs`: `fn build_resolver( cli: &Cli, diff_text: &str, diff_read_file: impl Fn(&str) -> std::io::Result<String>, head: Option<&str>, cwd: Option<&std::path::Path>, ) -> anyhow::Result<Option<TagsResolver>>`
-- `rinkaku-core/src/main.rs`: `fn read_git_show_file( cwd: Option<&std::path::Path>, head: &str, path: &str, ) -> std::io::Result<String>`
-- `rinkaku-core/src/main.rs`: `fn read_stdin_diff() -> anyhow::Result<String>`
-- `rinkaku-core/src/render.rs`: `pub fn render(report: &Report, format: OutputFormat) -> Result<String, RenderError>`
-- `rinkaku-core/src/main.rs`: `fn run_git_diff(base: &str, head: &str) -> anyhow::Result<String>`
+### fn build_resolver (rinkaku/src/main.rs)
 
 ```
-fn garbage_input_note( diff_text: &str, report: &rinkaku_core::render::Report, ) -> Option<&'static str>
+fn build_resolver( cli: &Cli, diff_text: &str, diff_read_file: impl Fn(&str) -> std::io::Result<String>, head: Option<&str>, cwd: Option<&std::path::Path>, ) -> anyhow::Result<Option<TagsResolver>>
 ```
 
-Depends on:
-- `rinkaku-core/src/render.rs`: `pub struct Report { pub files: Vec<FileReport>, pub skipped: Vec<SkippedFile>, }`
+### fn resolve_pr_workdir (rinkaku/src/main.rs)
 
-... (6 more symbols, same shape)
+```
+fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBuf>>
+```
+
+### fn run_base_pipeline (rinkaku/src/main.rs)
+
+```
+fn run_base_pipeline( cli: &Cli, base: &str, head: &str, cwd: Option<&std::path::Path>, ) -> anyhow::Result<rinkaku_core::render::Report>
+```
+
 ````
 
-The 128-line diff (test bodies included) becomes 59 lines of signatures
-and their dependencies — the reviewer sees which functions changed and
-what they touch, without reading every match arm by hand. On a larger
-real diff — rinkaku's own [PR #7](https://github.com/hiro-o918/rinkaku/pull/7)
-(a 2,254-line diff adding dependency resolution across 12 files) —
-`rinkaku` produces 658 lines: about 29% of the original, while surfacing
-cross-file dependencies that would otherwise require opening every
-changed file to trace by hand.
+"Change graph" reads top-down in call-hierarchy order: `main` is the only
+entry point (nothing else changed in this diff calls it), and every
+function it reaches is nested beneath it. `build_resolver` is reachable
+from both `main` and `run_base_pipeline`; it is rendered in full once,
+under `main` (the first place it's reached), and referenced by name only
+(`(see above)`) the second time — so a reviewer never sees the same
+signature twice. When two changed symbols depend on each other (a
+mutual-recursion cycle), the edge that closes the loop is marked
+`⚠️ ... — dependency cycle, see above` instead of being walked into again;
+see [ADR 0008](docs/adr/0008-entry-point-tree-rendering-for-changed-symbols.md)
+for the full rationale.
+
+Unchanged 1-hop dependencies (ADR 0003) — functions/types the diff touches
+but did not itself change — still show up as a `Depends on:` list under
+each definition, same as before ADR 0008; they're omitted from the example
+above (`--deps 0`) to keep it focused on the tree shape.
 
 `--format json` renders the same data as structured JSON instead
-(`{"files": [{"path", "symbols": [{"name", "kind", "signature", "range",
-"container", "dependencies", "omitted_matches"}]}], "skipped": [...]}`),
-for piping into `jq` or another tool:
+(`{"files": [...], "skipped": [...], "graph": {"nodes", "edges", "roots"}}`),
+for piping into `jq` or another tool. The `graph` field is the same
+call-graph data "Change graph" renders as a tree, so JSON consumers don't
+need to recompute it from `referenced_names`:
 
 ```sh
-$ git show 1ccc183 --format="" | rinkaku --format json | jq '.files[0].symbols[0]'
+$ git show aa7ca34 --format="" | rinkaku --format json --deps 0 | jq '.graph'
 ```
 
 ```json
 {
-  "name": "main",
-  "kind": "Function",
-  "signature": "fn main() -> anyhow::Result<()>",
-  "range": { "start": 73, "end": 118 },
-  "container": null,
-  "dependencies": [
-    {
-      "signature": "pub trait Resolver { fn resolve(&self, name: &str) -> Vec<ResolvedSymbol>; }",
-      "path": "rinkaku-core/src/deps.rs"
-    },
-    {
-      "signature": "pub fn analyze_diff( diff_text: &str, read_file: impl Fn(&str) -> std::io::Result<String>, resolver: Option<&dyn Resolver>, ) -> Result<Report, AnalyzeError>",
-      "path": "rinkaku-core/src/pipeline.rs"
-    },
-    {
-      "signature": "fn build_resolver( cli: &Cli, diff_text: &str, diff_read_file: impl Fn(&str) -> std::io::Result<String>, head: Option<&str>, cwd: Option<&std::path::Path>, ) -> anyhow::Result<Option<TagsResolver>>",
-      "path": "rinkaku-core/src/main.rs"
-    },
-    {
-      "signature": "fn read_git_show_file( cwd: Option<&std::path::Path>, head: &str, path: &str, ) -> std::io::Result<String>",
-      "path": "rinkaku-core/src/main.rs"
-    },
-    {
-      "signature": "fn read_stdin_diff() -> anyhow::Result<String>",
-      "path": "rinkaku-core/src/main.rs"
-    },
-    {
-      "signature": "pub fn render(report: &Report, format: OutputFormat) -> Result<String, RenderError>",
-      "path": "rinkaku-core/src/render.rs"
-    },
-    {
-      "signature": "fn run_git_diff(base: &str, head: &str) -> anyhow::Result<String>",
-      "path": "rinkaku-core/src/main.rs"
-    }
+  "nodes": [
+    { "id": "rinkaku/src/main.rs::main", "path": "rinkaku/src/main.rs", "name": "main" },
+    { "id": "rinkaku/src/main.rs::resolve_pr_workdir", "path": "rinkaku/src/main.rs", "name": "resolve_pr_workdir" },
+    { "id": "rinkaku/src/main.rs::run_base_pipeline", "path": "rinkaku/src/main.rs", "name": "run_base_pipeline" },
+    { "id": "rinkaku/src/main.rs::build_resolver", "path": "rinkaku/src/main.rs", "name": "build_resolver" }
   ],
-  "omitted_matches": 0
+  "edges": [
+    { "from": "rinkaku/src/main.rs::main", "to": "rinkaku/src/main.rs::build_resolver", "is_cycle": false },
+    { "from": "rinkaku/src/main.rs::main", "to": "rinkaku/src/main.rs::resolve_pr_workdir", "is_cycle": false },
+    { "from": "rinkaku/src/main.rs::main", "to": "rinkaku/src/main.rs::run_base_pipeline", "is_cycle": false },
+    { "from": "rinkaku/src/main.rs::run_base_pipeline", "to": "rinkaku/src/main.rs::build_resolver", "is_cycle": false }
+  ],
+  "roots": ["rinkaku/src/main.rs::main"]
 }
 ```
+
+Each symbol in `files[].symbols` also carries an `id` field matching its
+`graph` node's `id`, so a consumer can join a symbol's full signature back
+to its position in the graph without recomputing the `{path}::{name}` id
+scheme itself.
 
 ### When same-name matches are capped
 
@@ -257,7 +257,7 @@ by path proximity are shown, and the rest are reported as a count instead
 of listed in full or silently dropped:
 
 ````markdown
-## crates/ty_server/src/server/lazy_work_done_progress.rs
+### struct LazyWorkDoneProgress (crates/ty_server/src/server/lazy_work_done_progress.rs)
 
 ```
 pub(super) struct LazyWorkDoneProgress { inner: Arc<Inner>, }
@@ -274,7 +274,8 @@ This same 810-line diff also shows the noise reduction from filtering `_`
 and single-character identifiers out of referenced names entirely (see
 Known limitations): the pre-#9 QA pass on this exact diff found 76 of 188
 "Depends on" lines were unrelated `def _(...)` matches (~40% noise); on
-the current `main`, the same diff produces 295 output lines (down from
+the current `main`, the same diff produces 384 output lines (up from 295
+pre-ADR-0008 due to the added "Change graph" tree section, and down from
 405 pre-#9) with zero `_`-related entries, since `_` is no longer looked
 up at all.
 

@@ -44,6 +44,14 @@ pub enum SymbolKind {
 /// (declaration or body) fell inside a changed range.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExtractedSymbol {
+    /// Stable identifier matching this symbol's [`crate::graph::Node::id`]
+    /// once graph-building has run, so JSON consumers can correlate a
+    /// symbol with the graph's `nodes`/`edges`/`roots` without recomputing
+    /// the `{path}::{name}` scheme themselves. Empty until
+    /// [`crate::graph::build_graph`] populates it (mirrors `dependencies`
+    /// and `omitted_dependency_matches`, both populated post-extraction by
+    /// a later pipeline stage rather than by `build_symbol`).
+    pub id: String,
     pub name: String,
     pub kind: SymbolKind,
     /// Declaration text without its body, whitespace-normalized. Doc
@@ -252,6 +260,9 @@ fn build_symbol(
     let referenced_names = collect_referenced_names(node, source, reference_query);
 
     Some(ExtractedSymbol {
+        // Populated later by `graph::build_graph`, once node IDs are
+        // assigned across the whole diff (see the field's doc comment).
+        id: String::new(),
         name,
         kind,
         signature,
@@ -588,6 +599,7 @@ struct Point {
 
         let expected = vec![
             ExtractedSymbol {
+                id: String::new(),
                 name: "helper".to_string(),
                 kind: SymbolKind::Function,
                 signature: "fn helper(x: i32) -> i32".to_string(),
@@ -598,6 +610,7 @@ struct Point {
                 omitted_dependency_matches: 0,
             },
             ExtractedSymbol {
+                id: String::new(),
                 name: "Point".to_string(),
                 kind: SymbolKind::Struct,
                 signature: "struct Point { x: i32, }".to_string(),
@@ -634,6 +647,7 @@ fn foo() -> i32 {
         // `_` local names) as noise unlikely to resolve to a meaningful,
         // uniquely named definition.
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "foo".to_string(),
             kind: SymbolKind::Function,
             signature: "fn foo() -> i32".to_string(),
@@ -672,6 +686,7 @@ fn foo(a: i32) -> i32 {
         let changed_ranges = vec![LineRange { start: 2, end: 2 }];
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "foo".to_string(),
             kind: SymbolKind::Function,
             signature: "fn foo(a: i32) -> i32".to_string(),
@@ -698,6 +713,7 @@ fn foo(a: i32, c: i32) -> i32 {
         let changed_ranges = vec![LineRange { start: 1, end: 1 }];
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "foo".to_string(),
             kind: SymbolKind::Function,
             signature: "fn foo(a: i32, c: i32) -> i32".to_string(),
@@ -725,6 +741,7 @@ struct Point {
         let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "Point".to_string(),
             kind: SymbolKind::Struct,
             signature: "struct Point { x: i32, y: i32, }".to_string(),
@@ -759,6 +776,7 @@ impl Foo {
         let changed_ranges = vec![LineRange { start: 5, end: 5 }];
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "bar".to_string(),
             kind: SymbolKind::Function,
             signature: "fn bar(&self) -> i32".to_string(),
@@ -789,6 +807,7 @@ impl Foo {
         let changed_ranges = vec![LineRange { start: 4, end: 4 }];
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "bar".to_string(),
             kind: SymbolKind::Function,
             signature: "fn bar(&self, extra: i32) -> i32".to_string(),
@@ -817,6 +836,7 @@ enum Color {
         let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "Color".to_string(),
             kind: SymbolKind::Enum,
             signature: "enum Color { Red, Green, Blue, }".to_string(),
@@ -848,6 +868,7 @@ trait Greeter {
         // rather than the whole trait body — same "narrowest enclosing
         // definition" rule used for impl methods.
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "greet".to_string(),
             kind: SymbolKind::Function,
             signature: "fn greet(&self) -> String;".to_string(),
@@ -875,6 +896,7 @@ trait Greeter {
         let changed_ranges = vec![LineRange { start: 1, end: 1 }];
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "Greeter".to_string(),
             kind: SymbolKind::Trait,
             signature: "trait Greeter { fn greet(&self) -> String; }".to_string(),
@@ -912,6 +934,7 @@ const X: i32 = 1;
     #[case::should_extract_only_the_touched_function_when_two_functions_exist(
         vec![LineRange { start: 2, end: 2 }],
         vec![ExtractedSymbol {
+            id: String::new(),
             name: "first".to_string(),
             kind: SymbolKind::Function,
             signature: "fn first()".to_string(),
@@ -971,6 +994,7 @@ fn foo(a: i32) -> i32 {
         let lang = language_for_path(&changed_file.path).expect("*.rs should resolve to Rust");
 
         let expected = vec![ExtractedSymbol {
+            id: String::new(),
             name: "foo".to_string(),
             kind: SymbolKind::Function,
             signature: "fn foo(a: i32) -> i32".to_string(),
@@ -1017,6 +1041,7 @@ func foo(a int) int {
             let changed_ranges = vec![LineRange { start: 4, end: 4 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 signature: "func foo(a int) int".to_string(),
@@ -1048,6 +1073,7 @@ func foo(a int, c int) int {
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 signature: "func foo(a int, c int) int".to_string(),
@@ -1077,6 +1103,7 @@ type Repo struct {
             let changed_ranges = vec![LineRange { start: 5, end: 5 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Repo".to_string(),
                 kind: SymbolKind::Struct,
                 signature: "Repo struct { Name string Size int }".to_string(),
@@ -1109,6 +1136,7 @@ type Fetcher interface {
             let changed_ranges = vec![LineRange { start: 4, end: 4 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Fetcher".to_string(),
                 kind: SymbolKind::Interface,
                 signature: "Fetcher interface { Fetch(id string) (string, error) }".to_string(),
@@ -1166,6 +1194,7 @@ func (r *Repo) Save(id string) error {
             let changed_ranges = vec![LineRange { start: 8, end: 8 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Save".to_string(),
                 kind: SymbolKind::Function,
                 signature: "func (r *Repo) Save(id string) error".to_string(),
@@ -1206,6 +1235,7 @@ func (r Repo) Label() string {
             let changed_ranges = vec![LineRange { start: 7, end: 7 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Label".to_string(),
                 kind: SymbolKind::Function,
                 signature: "func (r Repo) Label() string".to_string(),
@@ -1275,6 +1305,7 @@ func (r *Repo) Save(id string) error {
             let lang = language_for_path(&changed_file.path).expect("*.go should resolve to Go");
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Save".to_string(),
                 kind: SymbolKind::Function,
                 signature: "func (r *Repo) Save(id string) error".to_string(),
@@ -1311,6 +1342,7 @@ def foo(a):
             let changed_ranges = vec![LineRange { start: 2, end: 2 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def foo(a):".to_string(),
@@ -1335,6 +1367,7 @@ def foo(a, c):
             let changed_ranges = vec![LineRange { start: 1, end: 1 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def foo(a, c):".to_string(),
@@ -1367,6 +1400,7 @@ def top_level(a, b):
             // walks past it and finds nothing (see extract.rs doc comment
             // on `find_container`).
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "inner".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def inner(c):".to_string(),
@@ -1411,6 +1445,7 @@ def decorated(a):
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "decorated".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def decorated(a):".to_string(),
@@ -1442,6 +1477,7 @@ class Point:
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Point".to_string(),
                 kind: SymbolKind::Class,
                 signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
@@ -1470,6 +1506,7 @@ class Point:
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "__init__".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def __init__(self, x):".to_string(),
@@ -1496,6 +1533,7 @@ class Point:
             let changed_ranges = vec![LineRange { start: 2, end: 2 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "__init__".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def __init__(self, x):".to_string(),
@@ -1525,6 +1563,7 @@ class Point:
             let changed_ranges = vec![LineRange { start: 6, end: 6 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "label".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def label(self):".to_string(),
@@ -1592,6 +1631,7 @@ class Point:
                 language_for_path(&changed_file.path).expect("*.py should resolve to Python");
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "__init__".to_string(),
                 kind: SymbolKind::Function,
                 signature: "def __init__(self, x):".to_string(),
@@ -1624,6 +1664,7 @@ function foo(a: number): number {
             let changed_ranges = vec![LineRange { start: 2, end: 2 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 signature: "function foo(a: number): number".to_string(),
@@ -1649,6 +1690,7 @@ function foo(a: number, c: number): number {
             let changed_ranges = vec![LineRange { start: 1, end: 1 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 signature: "function foo(a: number, c: number): number".to_string(),
@@ -1675,6 +1717,7 @@ const arrow = (a: number): number => {
             let changed_ranges = vec![LineRange { start: 2, end: 2 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "arrow".to_string(),
                 kind: SymbolKind::Function,
                 signature: "arrow = (a: number): number =>".to_string(),
@@ -1721,6 +1764,7 @@ interface Shape {
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Shape".to_string(),
                 kind: SymbolKind::Interface,
                 signature: "interface Shape { area(): number; perimeter(): number; }".to_string(),
@@ -1752,6 +1796,7 @@ type Point = {
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Point".to_string(),
                 kind: SymbolKind::TypeAlias,
                 signature: "type Point = { x: number; y: number; };".to_string(),
@@ -1780,6 +1825,7 @@ enum Color {
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Color".to_string(),
                 kind: SymbolKind::Enum,
                 signature: "enum Color { Red, Green, Blue, }".to_string(),
@@ -1811,6 +1857,7 @@ class Circle {
             let changed_ranges = vec![LineRange { start: 2, end: 2 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Circle".to_string(),
                 kind: SymbolKind::Class,
                 signature: "class Circle { radius: number; area(): number }".to_string(),
@@ -1841,6 +1888,7 @@ class Circle {
             let changed_ranges = vec![LineRange { start: 5, end: 5 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "area".to_string(),
                 kind: SymbolKind::Function,
                 signature: "area(): number".to_string(),
@@ -1871,6 +1919,7 @@ class Circle {
             let changed_ranges = vec![LineRange { start: 4, end: 4 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "area".to_string(),
                 kind: SymbolKind::Function,
                 signature: "area(): number".to_string(),
@@ -1903,6 +1952,7 @@ class Circle {
             let changed_ranges = vec![LineRange { start: 7, end: 7 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "area".to_string(),
                 kind: SymbolKind::Function,
                 signature: "area(): number".to_string(),
@@ -1965,6 +2015,7 @@ function foo(a: number): number {
                 language_for_path(&changed_file.path).expect("*.ts should resolve to TypeScript");
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 signature: "function foo(a: number): number".to_string(),
@@ -1997,6 +2048,7 @@ abstract class Shape {
             let changed_ranges = vec![LineRange { start: 3, end: 3 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "perimeter".to_string(),
                 kind: SymbolKind::Function,
                 signature: "abstract perimeter(): number".to_string(),
@@ -2025,6 +2077,7 @@ abstract class Shape {
             let changed_ranges = vec![LineRange { start: 1, end: 1 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Shape".to_string(),
                 kind: SymbolKind::Class,
                 signature:
@@ -2061,6 +2114,7 @@ class Circle {
             let changed_ranges = vec![LineRange { start: 2, end: 2 }];
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Circle".to_string(),
                 kind: SymbolKind::Class,
                 signature: "class Circle { radius: number; area = (): number => ; }".to_string(),
@@ -2095,6 +2149,7 @@ const Component = () => {
             let lang = language_for_path("src/Component.tsx").expect("*.tsx should resolve to TSX");
 
             let expected = vec![ExtractedSymbol {
+                id: String::new(),
                 name: "Component".to_string(),
                 kind: SymbolKind::Function,
                 signature: "Component = () =>".to_string(),
