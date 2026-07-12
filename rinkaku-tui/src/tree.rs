@@ -7,7 +7,7 @@
 //! separate concern, see `crate::order`).
 
 use rinkaku_core::extract::{Classification, SymbolKind};
-use rinkaku_core::render::Report;
+use rinkaku_core::render::{Report, SkipReason};
 use std::collections::{BTreeMap, HashMap};
 
 /// A symbol's identity, as carried by a [`NodeKind::Symbol`] leaf — enough
@@ -113,6 +113,28 @@ pub struct TreeNode {
     pub path: String,
     pub badges: Badges,
     pub children: Vec<TreeNode>,
+    /// `Some` only for a [`NodeKind::File`] node built from
+    /// `report.skipped` (a file rinkaku could not extract symbols from —
+    /// see `SkipReason`), `None` for every other node including an
+    /// ordinary analyzed `File`. Kept as a field on `TreeNode` rather than a
+    /// new `NodeKind` variant so `crate::app`/`crate::order`'s existing
+    /// exhaustive `match`es over `NodeKind` (dispatching detail/diff/pivot
+    /// panes and sibling ordering) keep treating a skipped file exactly
+    /// like any other file row — it already has the right shape (a
+    /// childless file with a path), it just additionally carries *why*
+    /// rinkaku skipped it, for `row_view`/the detail pane to surface.
+    pub skip_reason: Option<SkipReason>,
+    /// `Some(symbol_count)` only for a [`NodeKind::File`] node built from
+    /// `report.tests` (a file whose changed symbols were *all* test code,
+    /// ADR 0009 — such a file has no `FileReport` in `report.files` at all,
+    /// see `pipeline::partition_test_symbols`'s doc comment, so without
+    /// this it would be invisible in the tree the same way a skipped file
+    /// is). `None` for every other node, including an ordinary `File` node
+    /// whose *some* (not all) symbols were tests — those are filtered out
+    /// of `report.files` silently today and stay that way here too; only a
+    /// whole-file test exclusion has no other representation in the tree to
+    /// piggyback on.
+    pub test_symbol_count: Option<usize>,
 }
 
 /// The whole directory tree built from one [`Report`]. `roots` holds the
@@ -128,13 +150,31 @@ pub struct Tree {
 /// (`report.files`, including files with an empty `symbols` list — e.g. a
 /// pure rename, still shown as a `File` node with zero badges — and
 /// `report.removed`'s files, which may not otherwise appear in `files` at
-/// all if every symbol in that file was removed).
+/// all if every symbol in that file was removed), plus every whole-test
+/// file summarized in `report.tests` and every non-`Generated` entry in
+/// `report.skipped` (a file rinkaku could not extract symbols from at
+/// all) — both of which otherwise have no `TreeNode` of their own and so
+/// were previously invisible in the tree entirely (see `TreeNode`'s
+/// `skip_reason`/`test_symbol_count` doc comments).
+///
+/// `SkipReason::Generated` entries are dropped from the tree the same way
+/// `render_markdown` drops them from "Skipped files" — a `.gitattributes`
+/// declaration or linguist-compatible marker has already told the
+/// repository this file is uninteresting to diff-review (ADR 0010/0011),
+/// so surfacing it in the TUI would just be noise a reviewer has to
+/// scroll past, same reasoning as the Markdown renderer's own comment.
 ///
 /// Construction is a pure function of `report` alone and deterministic:
 /// files are visited in `report.files` order (already source order per
-/// `pipeline::analyze_diff`), then `report.removed` for any additional
-/// files/symbols not already covered, and directory chains are inserted in
-/// that same discovery order.
+/// `pipeline::analyze_diff`), then `report.removed`, then `report.tests`,
+/// then `report.skipped`, for any additional files/symbols not already
+/// covered, and directory chains are inserted in that same discovery
+/// order. A path present in more than one of these sources (not expected
+/// from `pipeline::analyze_diff`'s own invariants — a file is either kept
+/// in `files`, summarized in `tests`, or listed in `skipped`, never more
+/// than one) merges into one `TreeNode` the same way `insert_file`/
+/// `insert_removed` already merge on a shared path, rather than producing
+/// a duplicate row.
 ///
 /// **Single-child directory collapsing**: a directory whose only content is
 /// exactly one child directory (and nothing else — no files or symbols of
@@ -161,6 +201,14 @@ pub fn build_tree(report: &Report) -> Tree {
     }
     for removed in &report.removed {
         builder.insert_removed(&removed.path, removed);
+    }
+    for test_file in &report.tests {
+        builder.insert_test_file(&test_file.path, test_file.symbol_count);
+    }
+    for skipped in &report.skipped {
+        if !matches!(skipped.reason, SkipReason::Generated) {
+            builder.insert_skipped(&skipped.path, skipped.reason);
+        }
     }
 
     builder.finish()
@@ -195,6 +243,11 @@ struct DirBuilder {
 #[derive(Default)]
 struct FileBuilder {
     symbols: Vec<SymbolRef>,
+    /// Set by `insert_skipped` — see `TreeNode::skip_reason`'s doc comment.
+    skip_reason: Option<SkipReason>,
+    /// Set by `insert_test_file` — see `TreeNode::test_symbol_count`'s doc
+    /// comment.
+    test_symbol_count: Option<usize>,
 }
 
 impl<'a> TreeBuilder<'a> {
@@ -208,6 +261,25 @@ impl<'a> TreeBuilder<'a> {
     fn insert_file(&mut self, path: &str, symbols: &[rinkaku_core::extract::ExtractedSymbol]) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
+        // `pipeline::analyze_diff`'s own invariant is that a path is either
+        // kept in `report.files`, summarized in `report.tests`, or listed
+        // in `report.skipped` — never more than one (see `build_tree`'s doc
+        // comment). This is unreachable from that pipeline today, but
+        // `build_tree` is a public, pure function any caller (e.g. a future
+        // non-`analyze_diff` JSON-input path) could feed a `Report` that
+        // violates it — silently the later insert would win, producing a
+        // `File` row that both lists symbols and claims to be
+        // skipped/test-only, a display contradiction (`row_view` would show
+        // a skip/test badge alongside real symbol children; the detail pane
+        // would drop the symbols entirely, see `file_detail_lines`'s
+        // mutually-exclusive branches). Debug-only since this is a caller
+        // contract violation, not a condition `build_tree` itself needs to
+        // handle gracefully in release builds.
+        debug_assert!(
+            file_builder.skip_reason.is_none() && file_builder.test_symbol_count.is_none(),
+            "path {path:?} has real symbols but was already marked skipped/test-only — \
+             report.files/report.tests/report.skipped must not overlap on the same path"
+        );
         for symbol in symbols {
             file_builder.symbols.push(SymbolRef {
                 id: symbol.id.clone(),
@@ -229,6 +301,40 @@ impl<'a> TreeBuilder<'a> {
             classification: None,
             removed: true,
         });
+    }
+
+    /// Inserts a whole-test-file summary (`report.tests`, see
+    /// `TreeNode::test_symbol_count`'s doc comment) as a childless `File`
+    /// node — there is no per-symbol data to nest under it, only the count
+    /// `pipeline::partition_test_symbols` kept.
+    fn insert_test_file(&mut self, path: &str, symbol_count: usize) {
+        let segments: Vec<&str> = path.split('/').collect();
+        let file_builder = self.root.file_at(&segments);
+        // Same overlap contract as `insert_file`'s debug_assert, mirrored
+        // here: a path already carrying real symbols must not also be
+        // marked test-only, or `file_detail_lines`'s early-return on
+        // `test_symbol_count` would silently drop those symbols from the
+        // detail pane.
+        debug_assert!(
+            file_builder.symbols.is_empty(),
+            "path {path:?} already has real symbols but was also summarized in report.tests — \
+             report.files/report.tests must not overlap on the same path"
+        );
+        file_builder.test_symbol_count = Some(symbol_count);
+    }
+
+    /// Inserts a skipped-file entry (`report.skipped`, see
+    /// `TreeNode::skip_reason`'s doc comment) as a childless `File` node.
+    fn insert_skipped(&mut self, path: &str, reason: SkipReason) {
+        let segments: Vec<&str> = path.split('/').collect();
+        let file_builder = self.root.file_at(&segments);
+        // Same overlap contract as `insert_file`'s debug_assert.
+        debug_assert!(
+            file_builder.symbols.is_empty(),
+            "path {path:?} already has real symbols but was also listed in report.skipped — \
+             report.files/report.skipped must not overlap on the same path"
+        );
+        file_builder.skip_reason = Some(reason);
     }
 
     fn finish(self) -> Tree {
@@ -347,6 +453,8 @@ fn build_dir_node(
         path,
         badges,
         children,
+        skip_reason: None,
+        test_symbol_count: None,
     }
 }
 
@@ -369,6 +477,8 @@ fn build_file_node(
                 path: path.clone(),
                 badges: symbol_badges,
                 children: Vec::new(),
+                skip_reason: None,
+                test_symbol_count: None,
             }
         })
         .collect();
@@ -378,6 +488,8 @@ fn build_file_node(
         path,
         badges,
         children,
+        skip_reason: file.skip_reason,
+        test_symbol_count: file.test_symbol_count,
     }
 }
 
@@ -418,7 +530,7 @@ mod tests {
     use rinkaku_core::diff::LineRange;
     use rinkaku_core::extract::{ExtractedSymbol, RemovedSymbol};
     use rinkaku_core::graph::{Hotspot, SymbolGraph};
-    use rinkaku_core::render::FileReport;
+    use rinkaku_core::render::{FileReport, SkippedFile, TestFileSummary};
 
     fn symbol(id: &str, name: &str, kind: SymbolKind) -> ExtractedSymbol {
         ExtractedSymbol {
@@ -498,7 +610,11 @@ mod tests {
                         fan_in: 0,
                     },
                     children: vec![],
+                    skip_reason: None,
+                    test_symbol_count: None,
                 }],
+                skip_reason: None,
+                test_symbol_count: None,
             }],
         };
         let actual = build_tree(&report);
@@ -529,7 +645,11 @@ mod tests {
                     path: "src/foo/bar/lib.rs".to_string(),
                     badges: Badges::default(),
                     children: vec![],
+                    skip_reason: None,
+                    test_symbol_count: None,
                 }],
+                skip_reason: None,
+                test_symbol_count: None,
             }],
         };
         let actual = build_tree(&report);
@@ -565,14 +685,20 @@ mod tests {
                         path: "src/a.rs".to_string(),
                         badges: Badges::default(),
                         children: vec![],
+                        skip_reason: None,
+                        test_symbol_count: None,
                     },
                     TreeNode {
                         kind: NodeKind::File,
                         path: "src/b.rs".to_string(),
                         badges: Badges::default(),
                         children: vec![],
+                        skip_reason: None,
+                        test_symbol_count: None,
                     },
                 ],
+                skip_reason: None,
+                test_symbol_count: None,
             }],
         };
         let actual = build_tree(&report);
@@ -611,6 +737,8 @@ mod tests {
                         path: "src/mod.rs".to_string(),
                         badges: Badges::default(),
                         children: vec![],
+                        skip_reason: None,
+                        test_symbol_count: None,
                     },
                     TreeNode {
                         kind: NodeKind::Dir,
@@ -621,9 +749,15 @@ mod tests {
                             path: "src/foo/bar.rs".to_string(),
                             badges: Badges::default(),
                             children: vec![],
+                            skip_reason: None,
+                            test_symbol_count: None,
                         }],
+                        skip_reason: None,
+                        test_symbol_count: None,
                     },
                 ],
+                skip_reason: None,
+                test_symbol_count: None,
             }],
         };
         let actual = build_tree(&report);
@@ -721,7 +855,11 @@ mod tests {
                         fan_in: 0,
                     },
                     children: vec![],
+                    skip_reason: None,
+                    test_symbol_count: None,
                 }],
+                skip_reason: None,
+                test_symbol_count: None,
             }],
         };
         let actual = build_tree(&report);
@@ -774,6 +912,8 @@ mod tests {
                             fan_in: 0,
                         },
                         children: vec![],
+                        skip_reason: None,
+                        test_symbol_count: None,
                     },
                     TreeNode {
                         kind: NodeKind::Symbol(SymbolRef {
@@ -790,8 +930,12 @@ mod tests {
                             fan_in: 0,
                         },
                         children: vec![],
+                        skip_reason: None,
+                        test_symbol_count: None,
                     },
                 ],
+                skip_reason: None,
+                test_symbol_count: None,
             }],
         };
         let actual = build_tree(&report);
@@ -863,7 +1007,11 @@ mod tests {
                     path: "src/renamed.rs".to_string(),
                     badges: Badges::default(),
                     children: vec![],
+                    skip_reason: None,
+                    test_symbol_count: None,
                 }],
+                skip_reason: None,
+                test_symbol_count: None,
             }],
         };
         let actual = build_tree(&report);
@@ -942,5 +1090,247 @@ mod tests {
         let tree = build_tree(&report);
 
         assert_eq!(0, tree.roots[0].badges.fan_in);
+    }
+
+    // Skipped-file tests: a file rinkaku could not extract symbols from
+    // (unsupported language, binary, deleted) must still show up in the
+    // tree, since otherwise it is invisible to a reviewer relying on the
+    // TUI to see the whole PR (the user-reported gap this feature closes).
+
+    #[test]
+    fn should_add_skipped_file_as_childless_file_node_with_skip_reason() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            ..empty_report()
+        };
+
+        let expected = Tree {
+            roots: vec![TreeNode {
+                kind: NodeKind::Dir,
+                path: "assets".to_string(),
+                badges: Badges::default(),
+                children: vec![TreeNode {
+                    kind: NodeKind::File,
+                    path: "assets/logo.png".to_string(),
+                    badges: Badges::default(),
+                    children: vec![],
+                    skip_reason: Some(rinkaku_core::render::SkipReason::Binary),
+                    test_symbol_count: None,
+                }],
+                skip_reason: None,
+                test_symbol_count: None,
+            }],
+        };
+        let actual = build_tree(&report);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_omit_generated_skip_reason_from_tree_by_default() {
+        // Mirrors `render_markdown`'s own `SkipReason::Generated` filter
+        // (ADR 0010/0011): a `.gitattributes`-declared or content-marked
+        // generated file is already known-uninteresting, so it should not
+        // clutter the TUI tree either.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![SkippedFile {
+                path: "Cargo.lock".to_string(),
+                reason: rinkaku_core::render::SkipReason::Generated,
+            }],
+            ..empty_report()
+        };
+
+        let tree = build_tree(&report);
+
+        assert_eq!(Tree { roots: vec![] }, tree);
+    }
+
+    #[test]
+    fn should_keep_non_generated_skip_reasons_when_mixed_with_a_generated_entry() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![
+                SkippedFile {
+                    path: "Cargo.lock".to_string(),
+                    reason: rinkaku_core::render::SkipReason::Generated,
+                },
+                SkippedFile {
+                    path: "assets/logo.png".to_string(),
+                    reason: rinkaku_core::render::SkipReason::Binary,
+                },
+            ],
+            ..empty_report()
+        };
+
+        let tree = build_tree(&report);
+
+        let paths: Vec<&str> = tree.roots.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(vec!["assets"], paths);
+    }
+
+    #[test]
+    fn should_merge_skipped_file_into_existing_dir_alongside_analyzed_files() {
+        // A skipped file sharing a directory with an already-analyzed file
+        // must land in the same `Dir` node, not create a second "src" root.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![],
+            }],
+            skipped: vec![SkippedFile {
+                path: "src/generated.pb.go".to_string(),
+                reason: rinkaku_core::render::SkipReason::UnsupportedLanguage,
+            }],
+            ..empty_report()
+        };
+
+        let tree = build_tree(&report);
+
+        assert_eq!(1, tree.roots.len());
+        let src = &tree.roots[0];
+        assert_eq!("src", src.path);
+        assert_eq!(2, src.children.len());
+        // Source order: `report.files` is inserted before `report.skipped`
+        // (see `build_tree`'s own doc comment), so the analyzed file comes
+        // first even though "generated.pb.go" sorts first alphabetically.
+        let paths: Vec<&str> = src.children.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(vec!["src/lib.rs", "src/generated.pb.go"], paths);
+    }
+
+    // Whole-test-file tests: a file whose changed symbols were *all* test
+    // code has no `FileReport` in `report.files` at all
+    // (`pipeline::partition_test_symbols`'s doc comment) — only a
+    // `TestFileSummary` in `report.tests`. Without surfacing that summary
+    // into the tree, such a file is invisible to a reviewer, the same gap
+    // as a skipped file.
+
+    #[test]
+    fn should_add_whole_test_file_as_childless_file_node_with_symbol_count() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            tests: vec![TestFileSummary {
+                path: "src/lib_test.go".to_string(),
+                symbol_count: 3,
+            }],
+            ..empty_report()
+        };
+
+        let expected = Tree {
+            roots: vec![TreeNode {
+                kind: NodeKind::Dir,
+                path: "src".to_string(),
+                badges: Badges::default(),
+                children: vec![TreeNode {
+                    kind: NodeKind::File,
+                    path: "src/lib_test.go".to_string(),
+                    badges: Badges::default(),
+                    children: vec![],
+                    skip_reason: None,
+                    test_symbol_count: Some(3),
+                }],
+                skip_reason: None,
+                test_symbol_count: None,
+            }],
+        };
+        let actual = build_tree(&report);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_merge_test_file_into_existing_dir_alongside_analyzed_files() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("src/lib.rs::foo", "foo", SymbolKind::Function)],
+            }],
+            tests: vec![TestFileSummary {
+                path: "src/lib_test.rs".to_string(),
+                symbol_count: 2,
+            }],
+            ..empty_report()
+        };
+
+        let tree = build_tree(&report);
+
+        assert_eq!(1, tree.roots.len());
+        let src = &tree.roots[0];
+        assert_eq!("src", src.path);
+        assert_eq!(2, src.children.len());
+        let paths: Vec<&str> = src.children.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(vec!["src/lib.rs", "src/lib_test.rs"], paths);
+    }
+
+    #[test]
+    fn should_not_set_test_symbol_count_or_skip_reason_on_an_ordinary_file() {
+        // Regression guard: an ordinary analyzed file must keep both new
+        // fields at `None`, not accidentally inherit a stale default from
+        // whatever `FileBuilder` construction path is taken.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![],
+            }],
+            ..empty_report()
+        };
+
+        let tree = build_tree(&report);
+
+        assert_eq!(None, tree.roots[0].skip_reason);
+        assert_eq!(None, tree.roots[0].test_symbol_count);
+    }
+
+    // `pipeline::analyze_diff` never produces a `Report` where the same
+    // path appears in more than one of `files`/`tests`/`skipped` (see
+    // `build_tree`'s doc comment), so `#[cfg(debug_assertions)]` keeps this
+    // panic-path test out of release builds, matching the `debug_assert!`s
+    // themselves — this only guards a caller contract, not a condition
+    // `build_tree` needs to handle gracefully at runtime.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "report.files/report.skipped must not overlap")]
+    fn should_panic_when_the_same_path_appears_in_files_and_skipped() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::foo", "foo", SymbolKind::Function)],
+            }],
+            skipped: vec![SkippedFile {
+                path: "lib.rs".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            ..empty_report()
+        };
+
+        build_tree(&report);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "report.files/report.tests must not overlap")]
+    fn should_panic_when_the_same_path_appears_in_files_and_tests() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::foo", "foo", SymbolKind::Function)],
+            }],
+            tests: vec![TestFileSummary {
+                path: "lib.rs".to_string(),
+                symbol_count: 1,
+            }],
+            ..empty_report()
+        };
+
+        build_tree(&report);
     }
 }

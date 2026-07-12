@@ -709,13 +709,17 @@ fn dir_detail_lines(detail: &DirDetail, origin: ReportOrigin) -> Vec<Line<'stati
     lines
 }
 
-/// Formats a [`FileDetail`] into displayable lines: every symbol in this
-/// file (changed symbols for a diff, every symbol for a whole-repo
-/// outline — ADR 0017), with the same classification marker convention
-/// `crate::row_view::entry_row_line` uses on symbol rows, plus fan-in. The
-/// "Symbols (N)" label itself is already origin-neutral, unlike
-/// `dir_detail_lines`'s first badge line, so no `origin` parameter is
-/// needed here.
+/// Formats a [`FileDetail`] into displayable lines: a `File <path>` header,
+/// then either a skipped-file explanation, a whole-test-file explanation, or
+/// the ordinary "Symbols (N)" listing — the three are mutually exclusive by
+/// construction (`crate::tree::TreeNode`'s own doc comment on
+/// `skip_reason`/`test_symbol_count`: an ordinary analyzed file has neither
+/// set, a skipped file has no symbols to list, and a whole-test file has no
+/// per-symbol data at all, only the count `pipeline::partition_test_symbols`
+/// kept). Without this, a skipped or whole-test file's detail pane would
+/// show a bare "Symbols (0)" — indistinguishable from a file that genuinely
+/// changed nothing, which is exactly the gap this feature closes for the
+/// entry-tree row too (see `row_view::entry_row_line`).
 fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -724,6 +728,35 @@ fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
         Style::default().add_modifier(Modifier::BOLD),
     ));
     lines.push(Line::raw(""));
+
+    if let Some(reason) = detail.skip_reason {
+        lines.push(Line::styled(
+            format!(
+                "Skipped: {}",
+                rinkaku_core::render::skip_reason_label(reason)
+            ),
+            Style::default().fg(Color::DarkGray),
+        ));
+        lines.push(Line::raw("rinkaku did not extract symbols from this file."));
+        return lines;
+    }
+
+    if let Some(symbol_count) = detail.test_symbol_count {
+        let noun = if symbol_count == 1 {
+            "symbol"
+        } else {
+            "symbols"
+        };
+        lines.push(Line::styled(
+            format!("Test file: {symbol_count} changed test {noun}"),
+            Style::default().fg(Color::Magenta),
+        ));
+        lines.push(Line::raw(
+            "Every changed symbol in this file is test code, excluded from the default view (see --include-tests).",
+        ));
+        return lines;
+    }
+
     lines.push(Line::styled(
         format!("Symbols ({})", detail.symbols.len()),
         Style::default().add_modifier(Modifier::BOLD),
@@ -1152,6 +1185,108 @@ mod tests {
         assert!(!text.contains("changed symbols:"));
     }
 
+    /// A [`Report`] whose only entry is a skipped file (no `files`, no
+    /// `tests`) — pairs with `report_with_one_symbol` for the detail-pane
+    /// tests below.
+    fn report_with_one_skipped_file() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![],
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        }
+    }
+
+    #[test]
+    fn should_draw_skip_reason_in_detail_pane_when_cursor_is_on_a_skipped_file_row() {
+        let report = report_with_one_skipped_file();
+        // Row 0 is the collapsing "assets" dir (single child, see
+        // `crate::tree::build_tree`'s collapsing rule); row 1 is the
+        // skipped "logo.png" file itself.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("File assets/logo.png"));
+        assert!(text.contains("Skipped: binary"));
+        assert!(!text.contains("Symbols ("));
+    }
+
+    /// A [`Report`] whose only entry is a whole-test-file summary (no
+    /// `files`, no `skipped`).
+    fn report_with_one_test_file() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![rinkaku_core::render::TestFileSummary {
+                path: "src/lib_test.go".to_string(),
+                symbol_count: 3,
+            }],
+            hotspots: vec![],
+            removed: vec![],
+        }
+    }
+
+    #[test]
+    fn should_draw_test_symbol_count_in_detail_pane_when_cursor_is_on_a_whole_test_file_row() {
+        let report = report_with_one_test_file();
+        // Row 0 is the collapsing "src" dir; row 1 is the whole test file.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("File src/lib_test.go"));
+        // "Test file: 3 changed test symbols" wraps across two rendered
+        // lines at this terminal's pane width, so assert on a substring
+        // that survives the wrap rather than the whole phrase.
+        assert!(text.contains("Test file: 3 changed test"));
+        assert!(!text.contains("Symbols ("));
+    }
+
     #[test]
     fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_symbol_row() {
         let report = report_with_one_symbol();
@@ -1188,6 +1323,132 @@ index e69de29..4b825dc 100644
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"));
         assert!(text.contains("+fn foo() {}"));
+    }
+
+    // Dynamic-verification note (see CLAUDE.md's reviewing-changes
+    // section): this pins that a skipped file's diff pane still resolves
+    // real hunks from the raw diff text — `App::selected_diff_target`
+    // scopes a `NodeKind::File` row to `DiffTarget::File { path }`
+    // regardless of `skip_reason` (see the `app.rs` unit test
+    // `should_return_file_diff_target_when_cursor_is_on_a_skipped_file_row`),
+    // and `draw_diff_pane` looks hunks up by that path alone — so a
+    // skipped file (which has no `FileReport`/symbols to key off of) must
+    // not silently fall back to the "no diff hunks found" placeholder just
+    // because rinkaku didn't extract symbols from it.
+    #[test]
+    fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_skipped_file_row() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+            files: vec![],
+        };
+        // Row 0 is the collapsing "assets" dir; row 1 is the skipped file.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/assets/logo.png b/assets/logo.png
+index e69de29..4b825dc 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // A binary file has no hunks at all in the diff text itself (git
+        // reports "Binary files ... differ" instead of `@@` hunks), so the
+        // correct, honest behavior is the pane's own "no diff hunks found"
+        // placeholder — this test's real assertion is that it names the
+        // right path, not a stale/mismatched one, confirming the lookup
+        // reached this row's `path` at all. Checked as two substrings
+        // rather than the whole phrase since it wraps across rendered
+        // lines at this terminal's pane width.
+        assert!(text.contains("no diff hunks found for"));
+        assert!(text.contains("assets/logo.png"));
+    }
+
+    /// Sibling of the binary-skip test above, using an unsupported-language
+    /// skip (a real text file with real hunks in the raw diff) to confirm
+    /// the diff pane actually renders content — not just the placeholder —
+    /// for a skipped-but-textual file.
+    #[test]
+    fn should_draw_diff_pane_with_hunk_lines_for_an_unsupported_language_skipped_file() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "vendor/lib.zig".to_string(),
+                reason: rinkaku_core::render::SkipReason::UnsupportedLanguage,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+            files: vec![],
+        };
+        // Row 0 is the collapsing "vendor" dir; row 1 is the skipped file.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/vendor/lib.zig b/vendor/lib.zig
+index e69de29..4b825dc 100644
+--- a/vendor/lib.zig
++++ b/vendor/lib.zig
+@@ -1,1 +1,2 @@
+ const a = 1;
++const b = 2;
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Diff"));
+        assert!(text.contains("+const b = 2;"));
     }
 
     #[test]

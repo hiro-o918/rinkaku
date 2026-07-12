@@ -725,6 +725,8 @@ mod tests {
                 removed: false,
                 fan_in: 0,
             }],
+            skip_reason: None,
+            test_symbol_count: None,
         });
         assert_eq!(Some(expected), actual);
     }
@@ -1084,6 +1086,36 @@ mod tests {
         assert_eq!(
             Some(DiffTarget::File {
                 path: "lib.rs".to_string()
+            }),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_file_diff_target_when_cursor_is_on_a_skipped_file_row() {
+        // A skipped file has no symbols, but `selected_diff_target` scopes
+        // a file row's diff to the whole file regardless of `skip_reason`
+        // (only the entry-tree label/detail pane change for a skipped
+        // file) — the raw diff hunks for it still exist and should still
+        // be reachable via the diff pane.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            ..empty_report()
+        };
+        // Row 0 is the collapsing "assets" dir (single child, see
+        // `crate::tree::build_tree`'s collapsing rule); row 1 is the
+        // skipped "logo.png" file itself.
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        let actual = app.selected_diff_target(&report);
+
+        assert_eq!(
+            Some(DiffTarget::File {
+                path: "assets/logo.png".to_string()
             }),
             actual
         );
