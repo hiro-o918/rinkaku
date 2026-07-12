@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/hiro-o918/rinkaku/compare/v0.2.0...v0.3.0) (2026-07-12)
+
+
+### Features
+
+* add --pr input mode resolving GitHub PRs via gh ([5fb0464](https://github.com/hiro-o918/rinkaku/commit/5fb0464c5a0391894540c4fdc5ca853253c3f946))
+
 ## [0.2.0](https://github.com/hiro-o918/rinkaku/compare/v0.1.0...v0.2.0) (2026-07-12)
 
 
