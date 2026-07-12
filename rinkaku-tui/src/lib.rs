@@ -40,7 +40,7 @@ pub mod source;
 pub mod tree;
 pub mod ui;
 
-use app::{App, InputKey, Screen};
+use app::{App, InputKey, PivotSelection, Screen};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rinkaku_core::render::Report;
 use std::time::Duration;
@@ -94,9 +94,29 @@ fn run_app(
     // more expensive than the hunk parse above, so it must not run inside
     // the render loop either.
     let diff_highlights = highlight::highlight_diff_files(&diff_hunks);
+    // Computed on demand below (once per handled key, not once up front —
+    // unlike `diff_hunks`/`diff_highlights` above, the pivot view depends on
+    // `app`'s cursor position and right-pane mode, both of which change as
+    // keys are handled) and cached here across idle poll ticks for the same
+    // reason those two are computed outside the draw loop at all: `ui::draw`
+    // itself runs on every ~100ms idle poll timeout, not just on an actual
+    // key press, and `crate::pivot::build_pivot_view` is an O(V+E) graph
+    // walk — recomputing it on every one of those idle ticks while the
+    // pivot pane merely sits on screen was the per-frame recompute bug this
+    // cache exists to fix (`App::selected_pivot_view`'s own doc comment).
+    let mut pivot_selection = PivotSelection::NotApplicable;
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, &app, report, &diff_hunks, &diff_highlights))?;
+        terminal.draw(|frame| {
+            ui::draw(
+                frame,
+                &app,
+                report,
+                &diff_hunks,
+                &diff_highlights,
+                &pivot_selection,
+            )
+        })?;
 
         if app.should_quit() {
             return Ok(());
@@ -133,8 +153,26 @@ fn run_app(
             } else {
                 app = app.handle_key(input_key);
             }
+
+            if should_recompute_pivot_selection(&app) {
+                pivot_selection = app.selected_pivot_view(report);
+            }
         }
     }
+}
+
+/// Whether `crate::run_app`'s event loop should recompute the pivot
+/// selection this key, rather than keep showing the previously cached one
+/// (this function's own extraction is what makes that decision
+/// unit-testable without a live `ratatui::DefaultTerminal` — `run_app`
+/// itself takes one and so cannot be driven directly in a test). `true`
+/// only when the pivot pane is actually the active right pane on the entry
+/// screen; every other key/screen combination leaves the cached value
+/// untouched rather than resetting it to `NotApplicable`, so switching away
+/// from and back to the pivot pane (e.g. `p` -> `d` -> `p`) does not need a
+/// wasted recompute on the `d` press that briefly leaves it.
+fn should_recompute_pivot_selection(app: &App) -> bool {
+    matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Pivot
 }
 
 /// Translates a raw `crossterm` key press into this crate's
@@ -255,5 +293,83 @@ mod tests {
         let actual = translate_key(KeyCode::Char('j'), KeyModifiers::NONE, &app);
 
         assert_eq!(Some(InputKey::Down), actual);
+    }
+
+    // Regression guard for the per-frame pivot recompute bug: `run_app`
+    // used to call `App::selected_pivot_view` from inside `ui::draw`, which
+    // runs on every ~100ms idle poll tick, not only on a key press. Pinning
+    // `should_recompute_pivot_selection`'s contract (recompute exactly when
+    // the pivot pane is the active right pane on the entry screen, and
+    // nowhere else) is the closest unit-testable proxy for that fix, since
+    // `run_app` itself takes a live `ratatui::DefaultTerminal` and cannot be
+    // driven directly in a test.
+    #[test]
+    fn should_recompute_pivot_selection_when_pivot_pane_is_active_on_entry_screen() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+
+        let actual = should_recompute_pivot_selection(&app);
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_not_recompute_pivot_selection_when_right_pane_is_detail() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = should_recompute_pivot_selection(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_recompute_pivot_selection_when_right_pane_is_diff() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleDiff);
+
+        let actual = should_recompute_pivot_selection(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_recompute_pivot_selection_while_source_screen_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::TogglePivot)
+            .handle_key(InputKey::Source);
+
+        let actual = should_recompute_pivot_selection(&app);
+
+        assert!(!actual);
+    }
+
+    fn report_with_one_symbol() -> Report {
+        use rinkaku_core::diff::LineRange;
+        use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
+        use rinkaku_core::render::FileReport;
+
+        Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    id: "lib.rs::foo".to_string(),
+                    name: "foo".to_string(),
+                    kind: SymbolKind::Function,
+                    signature: "fn foo()".to_string(),
+                    range: LineRange { start: 1, end: 1 },
+                    container: None,
+                    referenced_names: vec![],
+                    dependencies: vec![],
+                    omitted_dependency_matches: 0,
+                    is_test: false,
+                    classification: None,
+                    previous_signature: None,
+                }],
+            }],
+            ..empty_report()
+        }
     }
 }

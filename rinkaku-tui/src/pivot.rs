@@ -12,7 +12,14 @@
 //! on pivot toggle or cursor move while pivoted, not per frame" stance
 //! (ADR 0016's existing recompute-not-cache philosophy) and `crate::app`'s
 //! wider convention of deriving view-models fresh from `Report` on each
-//! call rather than threading derived state through `App`.
+//! call rather than threading derived state through `App`. That "not per
+//! frame" half of the stance is enforced by the caller, not by this
+//! function itself: `crate::run_app`'s event loop calls
+//! [`crate::app::App::selected_pivot_view`] (which wraps this function) at
+//! most once per handled key, caches the result, and hands the cached value
+//! into `crate::ui::draw` — `crate::ui::draw_pivot_pane` must not call
+//! either function itself, since `terminal.draw` also runs on every idle
+//! poll tick, not only on a key press.
 
 use rinkaku_core::extract::ExtractedSymbol;
 use rinkaku_core::graph::{SymbolGraph, path_under_prefix, pivot_graph};

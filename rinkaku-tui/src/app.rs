@@ -329,11 +329,16 @@ impl App {
     /// symbols under `<path>`" message rather than reuse a diff-pane-style
     /// generic placeholder, hence the extra variant instead of `Option`.
     ///
-    /// Recomputed on every call rather than cached on `App` — the same
-    /// recompute-not-cache stance ADR 0019 states explicitly (cost is
-    /// O(V+E) per call, see `crate::pivot::build_pivot_view`'s own doc
-    /// comment), and this is only invoked when `crate::ui` actually draws
-    /// the pivot pane, not on every keystroke or idle poll tick.
+    /// Not cached on `App` itself (ADR 0019's "recompute on pivot toggle or
+    /// cursor move while pivoted, not per frame" stance) — but this method
+    /// still recomputes from scratch (cost O(V+E), see
+    /// `crate::pivot::build_pivot_view`'s own doc comment) on *every* call,
+    /// so satisfying that stance is the caller's responsibility: `crate::run`'s
+    /// event loop calls this once per handled key (when the pivot pane is
+    /// active and the selection could have changed), caches the result, and
+    /// hands the cached [`PivotSelection`] into `crate::ui::draw` — which
+    /// must not call this method itself, since `terminal.draw` runs on every
+    /// ~100ms idle poll tick as well as on an actual key press.
     pub fn selected_pivot_view(&self, report: &Report) -> PivotSelection {
         let rows = self.nav.rows(&self.tree);
         let Some(row) = rows.get(self.nav.cursor()) else {
