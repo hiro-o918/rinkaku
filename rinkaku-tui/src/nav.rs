@@ -126,10 +126,20 @@ impl Nav {
     /// just an index, so it would otherwise keep pointing at whatever row
     /// happens to now occupy that slot (or past the end of the list). To
     /// keep the cursor meaningfully attached to "the thing the user was
-    /// looking at", every action re-targets the cursor afterward via
-    /// [`Self::retarget_cursor`] rather than only the actions that are
-    /// obviously collapse-shaped — this also future-proofs against a new
-    /// `Action` variant that shrinks the row list in some other way.
+    /// looking at", every action that can shrink or reshuffle the row list
+    /// re-targets the cursor afterward via [`Self::retarget_cursor`] — that
+    /// covers `ToggleExpand`, `ExpandAll`, and `CollapseAll` below, falling
+    /// through to the shared `retarget_cursor` call after the `match`
+    /// rather than only the branches that are obviously collapse-shaped, so
+    /// this also future-proofs against a new `Action` variant added there
+    /// later that shrinks the row list in some other way.
+    ///
+    /// `CursorUp`/`CursorDown` are the two exceptions: they `return self`
+    /// directly from inside the `match`, bypassing `retarget_cursor`
+    /// entirely. This is safe rather than an oversight — moving the cursor
+    /// is the action that *sets* the cursor's new target, so there is
+    /// nothing to re-target it against; both arms already do their own
+    /// bounds clamping against the current `rows(tree).len()` inline.
     pub fn handle(mut self, action: Action, tree: &Tree) -> Self {
         let cursor_path_chain = self.cursor_path_chain(tree);
 
