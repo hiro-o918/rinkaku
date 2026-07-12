@@ -18,9 +18,11 @@ every implementation line.
   both, and reuses the same `git show`-backed read strategy as `--base`
   (see [ADR 0004](docs/adr/0004-pr-input-mode-via-gh-in-local-clone.md)).
   A bare PR number requires running inside a local clone of the target
-  repository; a URL also works from any directory by auto-cloning a
-  blobless copy into a cache (see
-  [ADR 0005](docs/adr/0005-auto-clone-into-cache-for-pr-urls.md)). `gh`
+  repository; a URL also works from any directory, preferring an existing
+  [ghq](https://github.com/x-motemen/ghq)-managed clone when one matches
+  and otherwise auto-cloning a blobless copy into a cache (see
+  [ADR 0005](docs/adr/0005-auto-clone-into-cache-for-pr-urls.md) and
+  [ADR 0006](docs/adr/0006-prefer-ghq-managed-clones-over-cache.md)). `gh`
   must be installed and authenticated either way. In
   stdin mode, file contents are read off the working tree, which assumes
   **the piped diff is consistent with the current working tree** (e.g. it
@@ -124,10 +126,11 @@ gh pr diff 123 | rinkaku
 rinkaku --pr 123
 
 # From a GitHub PR URL: works from any directory. If the cwd isn't already
-# a clone of that repository, rinkaku auto-clones a blobless copy into
-# $RINKAKU_CACHE_DIR / $XDG_CACHE_HOME/rinkaku / ~/.cache/rinkaku and runs
-# there instead (see ADR 0005). Private repos need `gh auth setup-git` so
-# the cache clone's later `git fetch`s can authenticate too.
+# a clone of that repository, rinkaku prefers an existing ghq-managed
+# clone (see ADR 0006) when ghq is installed, else auto-clones a blobless
+# copy into $RINKAKU_CACHE_DIR / $XDG_CACHE_HOME/rinkaku / ~/.cache/rinkaku
+# and runs there instead (see ADR 0005). Private repos need
+# `gh auth setup-git` so later `git fetch`s can authenticate too.
 rinkaku --pr https://github.com/octocat/hello-world/pull/123
 
 # From a local git diff against a base branch
