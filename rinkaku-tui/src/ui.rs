@@ -2102,7 +2102,12 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_scroll_detail_pane_content_down_when_scroll_down_is_pressed() {
         let report = report_with_many_symbols(40);
-        let app = App::new(&report).handle_key(crate::app::InputKey::ScrollDown);
+        // `Open` on the file row (cursor starts there) reaches Focus::Right
+        // (ADR 0020) without changing the selected row itself, so `Down`
+        // afterward scrolls instead of moving the cursor.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::Down);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2134,9 +2139,9 @@ index e69de29..4b825dc 100644
         // report; the pane must clamp to its last full page rather than
         // showing a mostly-blank pane past the end of the content.
         let report = report_with_many_symbols(40);
-        let mut app = App::new(&report);
+        let mut app = App::new(&report).handle_key(crate::app::InputKey::Open);
         for _ in 0..1000 {
-            app = app.handle_key(crate::app::InputKey::ScrollDown);
+            app = app.handle_key(crate::app::InputKey::Down);
         }
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
@@ -2167,8 +2172,10 @@ index e69de29..4b825dc 100644
         // top, not carry over the file row's scroll offset.
         let report = report_with_many_symbols(40);
         let app = App::new(&report)
-            .handle_key(crate::app::InputKey::ScrollDown)
-            .handle_key(crate::app::InputKey::ScrollDown)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::FocusLeft)
             .handle_key(crate::app::InputKey::Down);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
@@ -2323,11 +2330,11 @@ index e69de29..4b825dc 100644
             hotspots: vec![],
             removed: vec![],
         };
-        let mut app = App::new(&report);
+        let mut app = App::new(&report).handle_key(crate::app::InputKey::Open);
         // Scroll far enough down to reach the wrapped tail of the long path
         // line, however many wrapped rows that turns out to be.
         for _ in 0..200 {
-            app = app.handle_key(crate::app::InputKey::ScrollDown);
+            app = app.handle_key(crate::app::InputKey::Down);
         }
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 

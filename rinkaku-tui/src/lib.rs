@@ -217,30 +217,46 @@ fn should_recompute_pivot_selection(app: &App) -> bool {
 
 /// Translates a raw `crossterm` key press into this crate's
 /// terminal-agnostic [`InputKey`], or `None` for a key the app does not
-/// react to. Depends on `app.screen()` only to disambiguate `q`/Esc
-/// (`Quit` on the entry view, `Back` on the source view) — every other
-/// mapping is context-free.
+/// react to. Depends on `app.screen()` to disambiguate `q`/Esc (`Quit`/
+/// `FocusLeft` on the entry view depending on focus, `Back` on the source
+/// view) and on `app.focus()` (ADR 0020) to route Esc between `FocusLeft`
+/// and its other meanings — every other mapping is context-free.
 fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
     let on_source_screen = matches!(app.screen(), Screen::Source { .. });
+    let right_focused = app.focus() == app::Focus::Right;
 
     match code {
         KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
         KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
-        KeyCode::Enter | KeyCode::Char(' ') => Some(InputKey::Select),
+        // Space always means "expand/collapse", never "drill in" — kept
+        // distinct from Enter's own `InputKey::Open` (ADR 0020) so Space on
+        // a file/symbol row never moves focus.
+        KeyCode::Char(' ') => Some(InputKey::Select),
+        KeyCode::Enter => Some(InputKey::Open),
         KeyCode::Char('e') | KeyCode::Char('E') => Some(InputKey::ExpandAll),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::Quit),
         KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
         KeyCode::Char('p') | KeyCode::Char('P') => Some(InputKey::TogglePivot),
-        // Uppercase specifically: `j`/`k` already move the tree cursor, so
-        // the right-pane scroll needs a key that doesn't collide with
-        // them. Shift+j/k arrives here as the distinct `Char('J')`/`Char('K')`
-        // values (crossterm folds Shift into the char itself for plain
-        // letter keys), so this needs no separate modifier check.
-        KeyCode::Char('J') => Some(InputKey::ScrollDown),
-        KeyCode::Char('K') => Some(InputKey::ScrollUp),
+        // `h`, or Esc while the right pane has focus: return focus to the
+        // tree (ADR 0020's neovim-style "move left/back"). Checked before
+        // the source-screen Esc arm below so `h`/Esc while Right-focused
+        // never reaches the source screen (impossible in practice today,
+        // since opening the source screen already moves focus to `Right`,
+        // but ordered defensively rather than relying on that invariant).
+        KeyCode::Char('h') if right_focused => Some(InputKey::FocusLeft),
+        KeyCode::Esc if right_focused && !on_source_screen => Some(InputKey::FocusLeft),
+        // `]c`/`[c` (vim's hunk-jump idiom) are read here as a single
+        // bracket keystroke rather than a buffered two-key chord — this
+        // crate's event loop (`run_app`) has no notion of a pending-chord
+        // state machine today, and introducing one for exactly one binding
+        // would be disproportionate; `]`/`[` alone are otherwise unbound,
+        // so no existing gesture is lost by this simplification.
+        KeyCode::Char(']') => Some(InputKey::NextHunk),
+        KeyCode::Char('[') => Some(InputKey::PrevHunk),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
+        KeyCode::Char('?') => Some(InputKey::ToggleHelp),
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') => Some(InputKey::Quit),
@@ -303,30 +319,100 @@ mod tests {
     }
 
     #[test]
-    fn should_translate_uppercase_j_to_scroll_down() {
+    fn should_translate_enter_to_open() {
+        // ADR 0020: Enter is `Open` (may move focus), distinct from Space's
+        // `Select` (never moves focus) — see the two tests right after this
+        // one.
         let report = empty_report();
         let app = App::new(&report);
 
-        let actual = translate_key(KeyCode::Char('J'), KeyModifiers::NONE, &app);
+        let actual = translate_key(KeyCode::Enter, KeyModifiers::NONE, &app);
 
-        assert_eq!(Some(InputKey::ScrollDown), actual);
+        assert_eq!(Some(InputKey::Open), actual);
     }
 
     #[test]
-    fn should_translate_uppercase_k_to_scroll_up() {
+    fn should_translate_space_to_select() {
         let report = empty_report();
         let app = App::new(&report);
 
-        let actual = translate_key(KeyCode::Char('K'), KeyModifiers::NONE, &app);
+        let actual = translate_key(KeyCode::Char(' '), KeyModifiers::NONE, &app);
 
-        assert_eq!(Some(InputKey::ScrollUp), actual);
+        assert_eq!(Some(InputKey::Select), actual);
     }
 
     #[test]
-    fn should_translate_lowercase_j_to_down_not_scroll() {
-        // Regression guard: lowercase j/k must keep moving the tree cursor
-        // (InputKey::Down/Up) rather than being swallowed by the new
-        // uppercase-only scroll bindings.
+    fn should_translate_h_to_focus_left_when_right_focused() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(app::Focus::Right, app.focus());
+
+        let actual = translate_key(KeyCode::Char('h'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::FocusLeft), actual);
+    }
+
+    #[test]
+    fn should_not_translate_h_at_all_when_tree_focused() {
+        // `h` has no meaning while Focus::Tree (ADR 0020 only assigns it a
+        // "move left/back" meaning while Focus::Right) — must fall through
+        // to `None`, not be swallowed by some other arm.
+        let report = empty_report();
+        let app = App::new(&report);
+        assert_eq!(app::Focus::Tree, app.focus());
+
+        let actual = translate_key(KeyCode::Char('h'), KeyModifiers::NONE, &app);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_esc_to_focus_left_when_right_focused_on_entry_screen() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(app::Focus::Right, app.focus());
+
+        let actual = translate_key(KeyCode::Esc, KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::FocusLeft), actual);
+    }
+
+    #[test]
+    fn should_translate_right_bracket_to_next_hunk() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char(']'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::NextHunk), actual);
+    }
+
+    #[test]
+    fn should_translate_left_bracket_to_prev_hunk() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('['), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::PrevHunk), actual);
+    }
+
+    #[test]
+    fn should_translate_question_mark_to_toggle_help() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('?'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleHelp), actual);
+    }
+
+    #[test]
+    fn should_translate_lowercase_j_to_down_regardless_of_focus() {
+        // Regression guard: lowercase j/k are always translated to the same
+        // `InputKey::Down`/`Up` regardless of focus — `App::handle_key`, not
+        // `translate_key`, is what decides whether that means "move cursor"
+        // or "scroll" (ADR 0020).
         let report = empty_report();
         let app = App::new(&report);
 
