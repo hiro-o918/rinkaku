@@ -29,6 +29,19 @@ pub enum Action {
 /// model stays cheap to rebuild every frame, matching `ratatui`'s
 /// immediate-mode redraw-from-state model per ADR 0016 decision 1) plus
 /// its depth for indentation and whether it is currently expanded.
+///
+/// A `Symbol` row's `node.path` is its containing file's path, not a path
+/// unique to that symbol (`crate::tree::TreeNode::path`'s own doc comment
+/// notes this) — so several symbol rows can share the same `path` with
+/// each other and with their file's own row. This is safe for the
+/// `collapsed` set this module keys by path (`Nav`'s own doc comment)
+/// specifically because `push_rows`/`retarget_cursor` only ever treat a
+/// path as a collapse/lookup key together with `has_children`: a `Symbol`
+/// row always has `has_children == false`, so it is never itself a
+/// candidate to collapse or a distinct target to re-target the cursor onto
+/// — code relying on `path` to identify a *specific* row must additionally
+/// check `has_children`/`expanded` (or the node's `kind`) rather than
+/// assume `path` alone disambiguates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row<'a> {
     pub node: &'a TreeNode,
