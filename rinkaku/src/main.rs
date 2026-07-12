@@ -465,6 +465,13 @@ fn garbage_input_note(
 /// `should_skip_git_ls_files_when_deps_is_zero` below (pointing `cwd` at
 /// a directory with no git repository would make `list_git_files` fail,
 /// so a passing `Ok(None)` there is proof the scan never ran).
+///
+/// `cli.include_tests` is threaded straight through to `TagsResolver::new`
+/// (ADR 0009), so the repo-wide index excludes test symbols by the same
+/// default `analyze_diff` uses for the diff's own symbols — without this, a
+/// changed production symbol's "Depends on:" could resolve to a same-named
+/// test helper/fixture elsewhere in the repo, which is almost always a
+/// false match rather than a real dependency.
 fn build_resolver(
     cli: &Cli,
     diff_text: &str,
@@ -512,6 +519,7 @@ fn build_resolver(
         files,
         language_for_path,
         &reference_names,
+        cli.include_tests,
     )))
 }
 
