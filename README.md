@@ -413,14 +413,74 @@ Pass `--include-generated` to restore the previous behavior (generated
 files — by either detection method — are analyzed like any other file, in
 both output formats).
 
+## Interactive TUI
+
+Markdown/JSON stay optimized for LLMs and CI ([ADR 0015](docs/adr/0015-tui-for-humans-markdown-for-machines.md));
+for a human reviewing a change in a terminal, pass `--tui` instead of
+`--format` to open an interactive terminal UI ([ADR 0016](docs/adr/0016-tui-crate-and-stack.md)),
+built with [ratatui](https://ratatui.rs):
+
+```sh
+rinkaku --base main --tui
+```
+
+`--tui` takes the same input flow as every other mode (stdin / `--base` /
+`--pr`) and only changes the output stage, so it conflicts with `--format`
+rather than combining with it.
+
+### What it shows
+
+- **Entry pane (left):** the directory tree of changed files, not the
+  call-graph tree — nesting depth mirrors your repository's layout.
+  Directories and files carry badges: `~N` changed symbols, `!N` contract
+  changes (added/removed/signature-changed), `^N` fan-in (hotspot
+  aggregate). A directory that participates in a dependency cycle is
+  marked `(cycle)`. By default, sibling directories are ordered
+  topologically — entry points (least depended-on) first, foundations
+  (most depended-on) last — the same shape the "Change graph" root-finding
+  uses in Markdown, condensed to the directory level; `o` toggles to plain
+  alphabetical order. Symbol rows show a kind abbreviation (`fn`, `struct`,
+  ...) and a classification marker: `+` added, `~` signature-changed, `x`
+  removed (dimmed and crossed out).
+- **Detail pane (right):** the symbol under the cursor — its
+  classification, signature (an old/new diff when the contract changed),
+  who depends on it ("used by"), and its callees.
+- **Source view:** `s` on a symbol row opens that file, scrolled to and
+  highlighting the symbol's line range; `esc`/`q` returns to the entry
+  view. Reads the working tree directly (not the historical commit a
+  `--base`/`--pr` diff was computed against), so it always shows the
+  file's current content — note that the highlighted line range itself is
+  from analysis time, so it can drift (or, if the file has since shrunk,
+  get clamped to the end of the file) if you edit the file after opening
+  the TUI.
+
+### Key bindings
+
+| Key(s) | Action |
+| --- | --- |
+| `j` / `k` / `↓` / `↑` | Move the cursor |
+| `enter` / `space` | Expand or collapse a directory/file row |
+| `e` / `E` | Expand every row |
+| `c` / `C` | Collapse every row |
+| `o` / `O` | Toggle topological / alphabetical ordering |
+| `s` / `S` | Open the source view for the symbol under the cursor |
+| `esc` / `q` | Return to the entry view (from the source view) |
+| `q` / `ctrl-c` | Quit (from the entry view) |
+
+Glyphs are plain ASCII (`~`/`!`/`^`/`+`/`x`, `v`/`>` for expand state)
+rather than Unicode/emoji, for compatibility with plainer terminal
+configurations.
+
 ## Development
 
 Requires a Rust toolchain (pinned in [`rust-toolchain.toml`](rust-toolchain.toml);
 `rustup` will install it automatically).
 
-The workspace has two crates: `rinkaku-core` (the pure diff-condensation
-library, published standalone so it can be embedded in other tools) and
-`rinkaku` (the thin CLI binary, depending on `rinkaku-core`).
+The workspace has three crates: `rinkaku-core` (the pure diff-condensation
+library, published standalone so it can be embedded in other tools),
+`rinkaku-tui` (the interactive terminal UI's view-models and `ratatui`
+rendering, depending on `rinkaku-core`; see [ADR 0016](docs/adr/0016-tui-crate-and-stack.md)),
+and `rinkaku` (the thin CLI binary, depending on both).
 
 ```sh
 make test    # cargo test --all-features

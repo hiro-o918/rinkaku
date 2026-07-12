@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rinkaku-core", "rinkaku"]
+members = ["rinkaku-core", "rinkaku-tui", "rinkaku"]
 
 [workspace.package]
 edition = "2024"
@@ -26,3 +26,8 @@ tempfile = "3.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 self_update = { version = "0.42", default-features = false, features = ["archive-tar", "compression-flate2", "rustls"] }
+# Only rinkaku-tui depends on this (ADR 0016 decision 2): rinkaku-core's
+# dependency set stays untouched. crossterm is not declared separately —
+# rinkaku-tui uses ratatui's own `ratatui::crossterm` re-export instead of
+# depending on crossterm directly (see rinkaku-tui/Cargo.toml).
+ratatui = "0.30"
