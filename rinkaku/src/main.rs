@@ -1415,21 +1415,16 @@ fn read_git_show_files_batch(
         buf
     });
 
-    let mut files = Vec::with_capacity(paths.len());
-    for path in paths {
-        let object = format!("{head}:{path}");
-        writeln!(stdin, "{object}").map_err(|source| {
-            anyhow::anyhow!("failed to write to git cat-file --batch: {source}")
-        })?;
-        stdin.flush().map_err(|source| {
-            anyhow::anyhow!("failed to flush git cat-file --batch stdin: {source}")
-        })?;
-
-        match read_cat_file_batch_response(&mut reader, &object)? {
-            Some(content) => files.push((path, content)),
-            None => continue,
-        }
-    }
+    // The pump's `Result` is captured rather than propagated with `?` here:
+    // if the child has already exited (e.g. `cwd` is not a git repository),
+    // the very first `writeln!`/`flush` below can fail with a broken-pipe
+    // error before this thread ever gets to read the child's stderr. An
+    // early return at that point would surface the generic broken-pipe
+    // message and lose the actual `git` diagnostic. Running the pump to
+    // completion (successful or not) and only then reaping the child keeps
+    // the drop-stdin-then-wait-then-join sequence unconditional, so stderr
+    // is always drained and available to fold into the final error.
+    let pump_result = pump_cat_file_batch_requests(&mut stdin, &mut reader, head, paths);
 
     // Dropping `stdin` here (end of scope) closes the pipe, which is what
     // makes `git cat-file --batch` exit; `wait()` then just reaps it.
@@ -1442,13 +1437,79 @@ fn read_git_show_files_batch(
     let stderr_output = stderr_reader
         .join()
         .unwrap_or_else(|_| b"<failed to read stderr: reader thread panicked>".to_vec());
-    if !status.success() {
-        anyhow::bail!(
-            "git cat-file --batch exited with {status}: {}",
-            String::from_utf8_lossy(&stderr_output)
-        );
+
+    combine_cat_file_batch_result(pump_result, &status, &stderr_output)
+}
+
+/// Writes one `<object>\n` request per path and reads its response in
+/// lockstep (see `read_git_show_files_batch`'s doc comment for why writes
+/// and reads are interleaved rather than batched). Split out from
+/// `read_git_show_files_batch` so a write/flush/read failure partway
+/// through can be captured as a plain `Result` instead of using `?` to
+/// return early past the caller's reaping of the child process.
+fn pump_cat_file_batch_requests(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut impl BufRead,
+    head: &str,
+    paths: Vec<String>,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let object = format!("{head}:{path}");
+        writeln!(stdin, "{object}").map_err(|source| {
+            anyhow::anyhow!("failed to write to git cat-file --batch: {source}")
+        })?;
+        stdin.flush().map_err(|source| {
+            anyhow::anyhow!("failed to flush git cat-file --batch stdin: {source}")
+        })?;
+
+        match read_cat_file_batch_response(reader, &object)? {
+            Some(content) => files.push((path, content)),
+            None => continue,
+        }
     }
     Ok(files)
+}
+
+/// Combines the request/response pump's outcome with the child's exit
+/// status and drained stderr into the final `Result`, once both are known.
+///
+/// This is a pure decision, split out from `read_git_show_files_batch` so
+/// each combination is directly unit-testable without spawning `git`:
+///
+/// - pump succeeded, exit succeeded → the pump's files, as-is.
+/// - pump succeeded, exit failed → the exit-status/stderr error (the pump
+///   getting to the end doesn't mean the child considered itself successful).
+/// - pump failed, exit failed → the exit-status/stderr error, with the
+///   pump's own error appended for extra detail — the stderr text stays the
+///   *primary* message (what `.to_string()` returns starts with it) since
+///   it is the actionable diagnostic (e.g. `fatal: not a git repository`),
+///   not the secondary broken-pipe symptom. This is the EPIPE race: when
+///   the child has already exited before the parent's first write, the
+///   write fails with a broken-pipe error that on its own says nothing
+///   about *why* the child was already gone — observed to consistently win
+///   the race on CI, where the generic broken-pipe message otherwise
+///   replaced the real `git` diagnostic.
+/// - pump failed, exit succeeded → the pump's error, unchanged: the child
+///   reported success, so whatever went wrong is on the parent's side (or
+///   is otherwise not explained by the child's stderr).
+fn combine_cat_file_batch_result(
+    pump_result: anyhow::Result<Vec<(String, String)>>,
+    status: &std::process::ExitStatus,
+    stderr_output: &[u8],
+) -> anyhow::Result<Vec<(String, String)>> {
+    match (pump_result, status.success()) {
+        (Ok(files), true) => Ok(files),
+        (Ok(_), false) => Err(anyhow::anyhow!(
+            "git cat-file --batch exited with {status}: {}",
+            String::from_utf8_lossy(stderr_output)
+        )),
+        (Err(pump_error), false) => Err(anyhow::anyhow!(
+            "git cat-file --batch exited with {status}: {} (pump error: {pump_error})",
+            String::from_utf8_lossy(stderr_output)
+        )),
+        (Err(pump_error), true) => Err(pump_error),
+    }
 }
 
 /// Reads and parses one `git cat-file --batch` response for `object`
@@ -2769,6 +2830,103 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             let actual = read_cat_file_batch_response(&mut reader, "HEAD:a.rs");
 
             assert!(actual.is_err());
+        }
+    }
+
+    mod combine_cat_file_batch_result_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use std::os::unix::process::ExitStatusExt;
+
+        fn exit_status(code: i32) -> std::process::ExitStatus {
+            std::process::ExitStatus::from_raw(code)
+        }
+
+        #[test]
+        fn should_return_files_when_pump_succeeds_and_status_succeeds() {
+            let pump_result = Ok(vec![("a.rs".to_string(), "fn a() {}\n".to_string())]);
+
+            let actual = combine_cat_file_batch_result(pump_result, &exit_status(0), b"")
+                .expect("a successful pump and exit status must not error");
+
+            assert_eq!(
+                vec![("a.rs".to_string(), "fn a() {}\n".to_string())],
+                actual
+            );
+        }
+
+        #[test]
+        fn should_return_stderr_error_when_pump_succeeds_and_status_fails() {
+            let pump_result = Ok(vec![]);
+
+            let actual = combine_cat_file_batch_result(
+                pump_result,
+                &exit_status(1 << 8),
+                b"fatal: not a git repository (or any of the parent directories): .git\n",
+            );
+
+            let message = actual
+                .expect_err("a failing exit status must be an error")
+                .to_string();
+            assert!(
+                message.contains(
+                    "fatal: not a git repository (or any of the parent directories): .git"
+                ),
+                "expected the stderr text in the error message, got: {message:?}"
+            );
+        }
+
+        // The EPIPE race this whole fix targets: the pump fails first
+        // (broken pipe, because the child already exited) and the exit
+        // status is also a failure. The stderr diagnostic must still win
+        // as the primary message, with the pump's broken-pipe error folded
+        // in as extra detail rather than replacing it.
+        #[test]
+        fn should_prefer_stderr_error_over_pump_error_when_both_fail() {
+            let pump_result: anyhow::Result<Vec<(String, String)>> = Err(anyhow::anyhow!(
+                "failed to write to git cat-file --batch: Broken pipe (os error 32)"
+            ));
+
+            let actual = combine_cat_file_batch_result(
+                pump_result,
+                &exit_status(128 << 8),
+                b"fatal: not a git repository (or any of the parent directories): .git\n",
+            );
+
+            let message = actual
+                .expect_err("a failing pump and a failing exit status must be an error")
+                .to_string();
+            assert!(
+                message.starts_with("git cat-file --batch exited with"),
+                "expected the stderr-derived message to be primary, got: {message:?}"
+            );
+            assert!(
+                message.contains(
+                    "fatal: not a git repository (or any of the parent directories): .git"
+                ),
+                "expected the stderr text in the error message, got: {message:?}"
+            );
+            assert!(
+                message.contains("Broken pipe"),
+                "expected the pump error to be folded in as extra detail, got: {message:?}"
+            );
+        }
+
+        #[test]
+        fn should_return_pump_error_unchanged_when_pump_fails_and_status_succeeds() {
+            let pump_result: anyhow::Result<Vec<(String, String)>> = Err(anyhow::anyhow!(
+                "failed to read git cat-file --batch header: unexpected EOF"
+            ));
+
+            let actual = combine_cat_file_batch_result(pump_result, &exit_status(0), b"");
+
+            let message = actual
+                .expect_err("a failing pump must be an error even if the exit status succeeded")
+                .to_string();
+            assert_eq!(
+                "failed to read git cat-file --batch header: unexpected EOF",
+                message
+            );
         }
     }
 
