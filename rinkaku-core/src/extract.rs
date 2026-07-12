@@ -413,7 +413,7 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 }
 
 /// Slices a definition's signature: the declaration text with implementation
-/// detail removed and internal whitespace normalized to single spaces.
+/// detail and comment nodes removed, whitespace normalized to single spaces.
 ///
 /// - `function_item`, `function_declaration` (Go/TS), `method_declaration`
 ///   (Go), `function_definition` (Python), `method_definition` (TS),
@@ -435,12 +435,24 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 ///   but adds real complexity — e.g. reconciling which subset of members to
 ///   show when only one changed — that v1 defers; see the module-level
 ///   rationale in `language/python.rs` and `language/typescript.rs`.
+///
+/// Comment nodes (`line_comment`/`block_comment` in Rust, `comment` in
+/// Go/Python/TypeScript — see [`is_comment_node`]) inside the kept range are
+/// stripped in every case (ADR 0014): otherwise a comment-only edit inside a
+/// struct/interface/class body would change the reported signature string,
+/// making a `body_only`/`signature_changed` classification based on
+/// signature-string equality fire incorrectly. This is a pre-1.0 output
+/// change sanctioned by the ADR — some previously-reported signature strings
+/// that contained inline comments now omit them.
 fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     if matches!(
         node.kind(),
         "class_definition" | "class_declaration" | "abstract_class_declaration"
     ) {
-        return normalize_whitespace(&class_signature_text(node, source));
+        let mut removed_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+        collect_method_body_ranges(node, &mut removed_ranges);
+        collect_comment_ranges(node, &removed_ranges.clone(), &mut removed_ranges);
+        return normalize_whitespace(&text_with_ranges_removed(node, source, removed_ranges));
     }
 
     // `variable_declarator`'s body (a TS arrow function's `{ ... }`) is
@@ -462,33 +474,50 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
         None
     };
 
-    let text_range = body
-        .map(|body| node.start_byte()..body.start_byte())
-        .unwrap_or(node.start_byte()..node.end_byte());
-    let raw = std::str::from_utf8(&source[text_range]).unwrap_or("");
-    normalize_whitespace(raw)
+    let text_end = body
+        .map(|body| body.start_byte())
+        .unwrap_or(node.end_byte());
+    let mut comment_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    collect_comment_ranges(node, &[], &mut comment_ranges);
+    // Comments at/after `text_end` fall inside the body, which is dropped
+    // wholesale below anyway — only ones inside the kept declaration prefix
+    // need to be individually removed.
+    comment_ranges.retain(|range| range.start < text_end);
+
+    let mut removed_ranges = comment_ranges;
+    if let Some(body) = body {
+        removed_ranges.push(body.start_byte()..node.end_byte());
+    }
+
+    let raw = text_with_ranges_removed(node, source, removed_ranges);
+    normalize_whitespace(&raw)
 }
 
-/// Builds a class/class-declaration's signature text: the full node text
-/// with every nested method body's byte range removed, leaving member
-/// signatures (fields, method declarations) intact. Byte ranges are
-/// collected first and removed back-to-front so earlier removals don't
-/// shift the offsets of ones still pending.
-fn class_signature_text(node: tree_sitter::Node, source: &[u8]) -> String {
-    let mut body_ranges: Vec<std::ops::Range<usize>> = Vec::new();
-    collect_method_body_ranges(node, &mut body_ranges);
-    body_ranges.sort_by_key(|r| r.start);
+/// Removes every byte range in `ranges` from `node`'s own text (`node`'s
+/// full span, not just the declaration prefix — callers that only want a
+/// prefix pre-truncate `ranges` to stop at that boundary), returning the
+/// remainder as a `String`. Ranges are sorted and removed back-to-front so
+/// earlier removals don't shift the offsets of ones still pending; if a
+/// range comes back before the previous cursor position (overlapping
+/// ranges, defensively not expected in practice) it is skipped rather than
+/// panicking on an invalid slice.
+fn text_with_ranges_removed(
+    node: tree_sitter::Node,
+    source: &[u8],
+    mut ranges: Vec<std::ops::Range<usize>>,
+) -> String {
+    ranges.sort_by_key(|r| r.start);
 
     let mut result = Vec::with_capacity(source.len());
     let mut cursor = node.start_byte();
-    for range in &body_ranges {
+    for range in &ranges {
         if range.start < cursor {
             continue; // Defensive: overlapping ranges should not occur.
         }
-        result.extend_from_slice(&source[cursor..range.start]);
-        cursor = range.end;
+        result.extend_from_slice(&source[cursor..range.start.min(node.end_byte())]);
+        cursor = range.end.max(cursor);
     }
-    result.extend_from_slice(&source[cursor..node.end_byte()]);
+    result.extend_from_slice(&source[cursor.min(node.end_byte())..node.end_byte()]);
     String::from_utf8(result).unwrap_or_default()
 }
 
@@ -521,6 +550,46 @@ fn collect_method_body_ranges(node: tree_sitter::Node, ranges: &mut Vec<std::ops
         }
         collect_method_body_ranges(child, ranges);
     }
+}
+
+/// Recursively collects the byte ranges of every comment node
+/// ([`is_comment_node`]) inside `node`, skipping any range already covered
+/// by `already_removed` (e.g. a method body `collect_method_body_ranges`
+/// already sliced out) so a comment nested inside an already-removed range
+/// isn't redundantly appended a second time — `text_with_ranges_removed`
+/// would still handle an overlapping range correctly (it clamps against
+/// `cursor`), but skipping it here keeps `ranges` a non-overlapping set,
+/// matching that function's stated "not expected in practice" assumption.
+fn collect_comment_ranges(
+    node: tree_sitter::Node,
+    already_removed: &[std::ops::Range<usize>],
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) {
+    if is_comment_node(node) {
+        ranges.push(node.start_byte()..node.end_byte());
+        return; // A comment node has no children worth descending into.
+    }
+    if already_removed
+        .iter()
+        .any(|r| r.start <= node.start_byte() && node.end_byte() <= r.end)
+    {
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_comment_ranges(child, already_removed, ranges);
+    }
+}
+
+/// Whether `node` is a tree-sitter comment node under any of the four
+/// grammars this module supports: Rust splits line/block comments into two
+/// distinct kinds (`line_comment`, `block_comment`); Go, Python, and
+/// TypeScript each use a single `comment` kind for both forms (verified
+/// against each grammar directly — Go's grammar has no such split and
+/// Python/TypeScript comments are line-oriented `#`/`//`/`/* */` all
+/// captured under the same node kind).
+fn is_comment_node(node: tree_sitter::Node) -> bool {
+    matches!(node.kind(), "line_comment" | "block_comment" | "comment")
 }
 
 /// Collapses runs of whitespace (including newlines/indentation from the
@@ -861,6 +930,69 @@ struct Point {
             // as a reference the same as any other type mention. `deps.rs`
             // filters self-references before resolving.
             referenced_names: vec!["Point".to_string()],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+        }];
+        let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+        assert_eq!(expected, actual);
+    }
+
+    // ADR 0014: comment nodes inside a definition's kept signature text must
+    // be stripped, not just implementation bodies — otherwise a comment-only
+    // edit inside a struct would produce a different signature string and
+    // falsely register as a contract change.
+    #[test]
+    fn should_strip_line_and_block_comments_from_struct_signature() {
+        let source = "\
+struct Point {
+    // a line comment
+    x: i32, /* a block comment */
+    y: i32,
+}
+";
+        let lang = RustSupport;
+        let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+        let expected = vec![ExtractedSymbol {
+            id: String::new(),
+            name: "Point".to_string(),
+            kind: SymbolKind::Struct,
+            signature: "struct Point { x: i32, y: i32, }".to_string(),
+            range: LineRange { start: 1, end: 5 },
+            container: None,
+            referenced_names: vec!["Point".to_string()],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+        }];
+        let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+        assert_eq!(expected, actual);
+    }
+
+    // Comments inside a function's declaration prefix (before the body)
+    // must also be stripped — this is the part of the signature that
+    // actually survives into the reported `signature` string.
+    #[test]
+    fn should_strip_comment_from_function_signature_line() {
+        let source = "\
+fn foo(/* count */ a: i32) -> i32 {
+    a
+}
+";
+        let lang = RustSupport;
+        let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+        let expected = vec![ExtractedSymbol {
+            id: String::new(),
+            name: "foo".to_string(),
+            kind: SymbolKind::Function,
+            signature: "fn foo( a: i32) -> i32".to_string(),
+            range: LineRange { start: 1, end: 3 },
+            container: None,
+            referenced_names: vec![],
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
@@ -1296,6 +1428,39 @@ type Repo struct {
             assert_eq!(expected, actual);
         }
 
+        // ADR 0014: Go uses a single `comment` node kind for `//` comments
+        // (no `block_comment` split, unlike Rust).
+        #[test]
+        fn should_strip_comment_from_struct_signature() {
+            let source = "\
+package main
+
+type Repo struct {
+	// a comment
+	Name string
+	Size int
+}
+";
+            let lang = GoSupport;
+            let changed_ranges = vec![LineRange { start: 6, end: 6 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Repo".to_string(),
+                kind: SymbolKind::Struct,
+                signature: "Repo struct { Name string Size int }".to_string(),
+                range: LineRange { start: 3, end: 7 },
+                container: None,
+                referenced_names: vec!["Repo".to_string(), "int".to_string(), "string".to_string()],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
         #[test]
         fn should_extract_full_interface_signature_when_method_elem_changed() {
             let source = "\
@@ -1708,6 +1873,41 @@ class Point:
                 container: None,
                 // "int" is the shared field-annotation type of both `x`
                 // and `y`, deduplicated to a single entry.
+                referenced_names: vec!["int".to_string()],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        // ADR 0014: a `#` comment inside the class body, outside any method,
+        // must be stripped from the reported signature just like a method
+        // body is.
+        #[test]
+        fn should_strip_comment_from_class_signature() {
+            let source = "\
+class Point:
+    # a comment
+    x: int
+    y: int
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+";
+            let lang = PythonSupport;
+            let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Point".to_string(),
+                kind: SymbolKind::Class,
+                signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
+                range: LineRange { start: 1, end: 8 },
+                container: None,
                 referenced_names: vec!["int".to_string()],
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
@@ -2138,6 +2338,41 @@ class Circle {
                 kind: SymbolKind::Class,
                 signature: "class Circle { radius: number; area(): number }".to_string(),
                 range: LineRange { start: 1, end: 7 },
+                container: None,
+                referenced_names: vec!["Circle".to_string()],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+            }];
+            let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+            assert_eq!(expected, actual);
+        }
+
+        // ADR 0014: both `//` and `/* */` comments in this grammar parse
+        // under the same `comment` node kind (unlike Rust's split), and
+        // both must be stripped from a class signature.
+        #[test]
+        fn should_strip_line_and_block_comments_from_class_signature() {
+            let source = "\
+class Circle {
+    // a line comment
+    radius: number; /* a block comment */
+
+    area(): number {
+        return 3.14 * this.radius * this.radius;
+    }
+}
+";
+            let lang = TypeScriptSupport;
+            let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+            let expected = vec![ExtractedSymbol {
+                id: String::new(),
+                name: "Circle".to_string(),
+                kind: SymbolKind::Class,
+                signature: "class Circle { radius: number; area(): number }".to_string(),
+                range: LineRange { start: 1, end: 8 },
                 container: None,
                 referenced_names: vec!["Circle".to_string()],
                 dependencies: vec![],
