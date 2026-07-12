@@ -89,8 +89,16 @@ struct Cli {
     pr: Option<String>,
 
     /// Output format.
-    #[arg(long, value_enum, default_value_t = Format::Md)]
+    #[arg(long, value_enum, default_value_t = Format::Md, conflicts_with = "tui")]
     format: Format,
+
+    /// Open the interactive terminal UI (ADR 0015/0016) instead of
+    /// printing Markdown/JSON. The input flow (stdin / `--base` / `--pr`)
+    /// is unchanged — `--tui` only changes the output stage, once a
+    /// `Report` is built. Conflicts with `--format`, since the two are
+    /// mutually exclusive output stages rather than combinable options.
+    #[arg(long, default_value_t = false)]
+    tui: bool,
 
     /// Whether to resolve each changed symbol's 1-hop dependencies
     /// (ADR 0003). `1` (default) runs the tags-based `Resolver` over
@@ -229,6 +237,11 @@ fn main() -> anyhow::Result<()> {
         }
         report
     };
+
+    if cli.tui {
+        rinkaku_tui::run(&report)?;
+        return Ok(());
+    }
 
     let output = render(&report, cli.format.into())?;
     print!("{output}");
@@ -1619,10 +1632,36 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku"]);
 
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_set_tui_when_tui_flag_given() {
+        let expected = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+            include_tests: false,
+            include_generated: false,
+            tui: true,
+        };
+        let actual = Cli::parse_from(["rinkaku", "--tui"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_reject_tui_and_format_given_together() {
+        let actual = Cli::try_parse_from(["rinkaku", "--tui", "--format", "json"]);
+
+        assert!(actual.is_err());
     }
 
     #[test]
@@ -1636,6 +1675,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main"]);
 
@@ -1653,6 +1693,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--base", "main", "--head", "feature-branch"]);
 
@@ -1670,6 +1711,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--format", "json"]);
 
@@ -1694,6 +1736,7 @@ mod tests {
             deps: 0,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--deps", "0"]);
 
@@ -1718,6 +1761,7 @@ mod tests {
             deps: 1,
             include_tests: true,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--include-tests"]);
 
@@ -1735,6 +1779,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: true,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--include-generated"]);
 
@@ -1752,6 +1797,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update"]);
 
@@ -1769,6 +1815,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update", "--yes"]);
 
@@ -1786,6 +1833,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "self-update", "-y"]);
 
@@ -1818,6 +1866,7 @@ mod tests {
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = Cli::parse_from(["rinkaku", "--pr", "76"]);
 
@@ -2647,6 +2696,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let changed_paths = vec!["Cargo.lock".to_string()];
         let actual = resolve_generated_paths(&cli, &changed_paths, Some(dir.path()));
@@ -2672,6 +2722,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: true,
+            tui: false,
         };
         let changed_paths = vec!["Cargo.lock".to_string()];
         let actual = resolve_generated_paths(&cli, &changed_paths, Some(dir.path()));
@@ -3054,6 +3105,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 0,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         // Never called if `deps == 0` truly short-circuits before doing
         // any work at all — deliberately panics so a regression that
@@ -3086,6 +3138,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let read_file = |_: &str| -> std::io::Result<String> { Ok(String::new()) };
 
@@ -3130,6 +3183,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             deps: 1,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = run_base_pipeline(&cli, "HEAD", "HEAD", Some(dir.path()));
 
@@ -3203,6 +3257,7 @@ fn should_add_two_numbers() {
             deps: 0,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
             .expect("run_base_pipeline should succeed for a test-only diff");
@@ -3250,6 +3305,7 @@ fn should_add_two_numbers() {
             deps: 0,
             include_tests: false,
             include_generated: false,
+            tui: false,
         };
         let actual = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
             .expect("run_base_pipeline should succeed");

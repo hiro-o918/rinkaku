@@ -2061,6 +2061,7 @@ dependencies = [
  "log",
  "pretty_assertions",
  "rinkaku-core",
+ "rinkaku-tui",
  "rstest",
  "self_update",
  "serde",
