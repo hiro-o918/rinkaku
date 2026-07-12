@@ -7,4 +7,5 @@
 //! signature here (ADR 0016 decision 3): rendering those view-models to
 //! the terminal is a later stage's job, layered on top of this crate.
 
+pub mod order;
 pub mod tree;
