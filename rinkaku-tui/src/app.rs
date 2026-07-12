@@ -44,6 +44,13 @@ pub enum InputKey {
     /// then moving the cursor keeps showing the diff pane for the newly
     /// selected row instead of resetting on every cursor move.
     ToggleDiff,
+    /// `J`: scroll the right-hand pane (Detail/Diff) down by one line.
+    /// Uppercase specifically so it does not collide with `j`'s existing
+    /// cursor-move binding (`crate::run`'s `translate_key` matches
+    /// `KeyCode::Char` case-sensitively).
+    ScrollDown,
+    /// `K`: scroll the right-hand pane up by one line (see [`Self::ScrollDown`]).
+    ScrollUp,
     /// Esc or `q` while in the source view: return to the entry view.
     /// A no-op on the entry view itself (`q`'s quit behavior on the entry
     /// view is `InputKey::Quit`, a separate variant, since Esc has no
@@ -123,6 +130,21 @@ pub struct App {
     order_mode: OrderMode,
     screen: Screen,
     right_pane: RightPane,
+    /// The user's requested scroll offset (in lines) into the right-hand
+    /// pane's content, as an unclamped "how far down would the user like to
+    /// be" value rather than an authoritative display position: `App` has
+    /// no notion of the pane's rendered height (that is a `ratatui::Rect`
+    /// only `crate::ui` sees at draw time), so clamping this to
+    /// `content_len.saturating_sub(pane_height)` is `crate::ui`'s
+    /// responsibility (`ui::clamp_scroll`) — keeping this module free of
+    /// any layout concern, matching the rest of `App`'s pure-state
+    /// discipline. Reset to 0 whenever the pane's underlying content could
+    /// have changed out from under the current offset: cursor movement
+    /// (`InputKey::Up`/`Down`, a different row's detail/diff), the
+    /// Detail/Diff toggle (a different content stream entirely), and any
+    /// screen transition (`InputKey::Source`/`Back`) — see `handle_key`'s
+    /// match arms for exactly which trigger each reset.
+    right_pane_scroll: usize,
     /// A transient message for the status line (e.g. a source-read
     /// failure) — cleared on the next action that doesn't re-set it, so a
     /// stale error doesn't linger forever once the user has moved on.
@@ -151,6 +173,7 @@ impl App {
             order_mode,
             screen: Screen::Entry,
             right_pane: RightPane::default(),
+            right_pane_scroll: 0,
             status: None,
             should_quit: false,
         }
@@ -183,6 +206,13 @@ impl App {
 
     pub fn right_pane(&self) -> RightPane {
         self.right_pane
+    }
+
+    /// The user's requested scroll offset into the right-hand pane — see
+    /// the `right_pane_scroll` field's own doc comment on why this is an
+    /// unclamped request rather than an authoritative display position.
+    pub fn right_pane_scroll(&self) -> usize {
+        self.right_pane_scroll
     }
 
     pub fn status(&self) -> Option<&str> {
@@ -270,6 +300,11 @@ impl App {
         match (&self.screen, key) {
             (Screen::Source { .. }, InputKey::Back) => {
                 self.screen = Screen::Entry;
+                // The right pane was last showing whatever row was under
+                // the cursor before `s` opened the source view; returning
+                // here should not carry over an old scroll position for
+                // content the user has not looked at yet in this session.
+                self.right_pane_scroll = 0;
             }
             // Every other key is a no-op while the source view is open —
             // navigation/reordering only make sense against the entry
@@ -282,9 +317,11 @@ impl App {
             }
             (Screen::Entry, InputKey::Up) => {
                 self.nav = self.nav.handle(Action::CursorUp, &self.tree);
+                self.right_pane_scroll = 0;
             }
             (Screen::Entry, InputKey::Down) => {
                 self.nav = self.nav.handle(Action::CursorDown, &self.tree);
+                self.right_pane_scroll = 0;
             }
             (Screen::Entry, InputKey::Select) => {
                 self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
@@ -318,6 +355,13 @@ impl App {
                     RightPane::Detail => RightPane::Diff,
                     RightPane::Diff => RightPane::Detail,
                 };
+                self.right_pane_scroll = 0;
+            }
+            (Screen::Entry, InputKey::ScrollDown) => {
+                self.right_pane_scroll = self.right_pane_scroll.saturating_add(1);
+            }
+            (Screen::Entry, InputKey::ScrollUp) => {
+                self.right_pane_scroll = self.right_pane_scroll.saturating_sub(1);
             }
             (Screen::Entry, InputKey::Back) => {
                 // No-op: Esc/q-as-back on the entry view has nowhere to
@@ -666,6 +710,123 @@ mod tests {
                 range_end: 7,
             }),
             actual
+        );
+    }
+
+    #[test]
+    fn should_start_with_zero_right_pane_scroll() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_increment_right_pane_scroll_when_scroll_down_is_pressed() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let app = app
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+
+        assert_eq!(2, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_decrement_right_pane_scroll_when_scroll_up_is_pressed() {
+        let report = empty_report();
+        let app = App::new(&report)
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ScrollUp);
+
+        assert_eq!(1, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_not_scroll_up_past_zero() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let app = app.handle_key(InputKey::ScrollUp);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_cursor_moves_down() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Down);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_cursor_moves_up() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Up);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_toggling_diff_pane() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ToggleDiff);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_returning_from_source_screen() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::Source);
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string()
+            },
+            *app.screen()
+        );
+
+        let app = app.handle_key(InputKey::Back);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_ignore_scroll_keys_while_source_screen_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+
+        let app = app.handle_key(InputKey::ScrollDown);
+
+        assert_eq!(0, app.right_pane_scroll());
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string()
+            },
+            *app.screen()
         );
     }
 }
