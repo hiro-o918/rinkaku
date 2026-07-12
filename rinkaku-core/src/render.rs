@@ -913,7 +913,13 @@ fn longest_backtick_run(text: &str) -> Option<usize> {
         .max()
 }
 
-fn skip_reason_label(reason: SkipReason) -> &'static str {
+/// The short label shown for a [`SkipReason`] — `"unsupported language"`,
+/// `"binary"`, `"deleted"`, `"generated"`. `pub` (rather than private to
+/// this module) so other renderers of the same [`Report`] data — currently
+/// `rinkaku-tui`'s entry-tree view — can show the identical wording instead
+/// of maintaining a second copy of this match that could drift from
+/// Markdown's.
+pub fn skip_reason_label(reason: SkipReason) -> &'static str {
     match reason {
         SkipReason::UnsupportedLanguage => "unsupported language",
         SkipReason::Binary => "binary",

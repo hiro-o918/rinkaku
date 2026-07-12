@@ -246,10 +246,19 @@ pub struct FileSymbolSummary {
 /// iteration 2): the list of symbols changed in this file, each with its
 /// classification marker and fan-in — a compact index of "what changed
 /// here" before drilling into an individual symbol row.
+///
+/// `skip_reason`/`test_symbol_count` mirror `crate::tree::TreeNode`'s own
+/// fields of the same name (copied straight from the tree node this detail
+/// was built from — see `build_file_detail`) so the detail pane can explain
+/// *why* a skipped or whole-test file has no `symbols` entries instead of
+/// silently showing an empty list, which used to read as "this file changed
+/// nothing" rather than "rinkaku did not analyze this file's symbols".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDetail {
     pub path: String,
     pub symbols: Vec<FileSymbolSummary>,
+    pub skip_reason: Option<rinkaku_core::render::SkipReason>,
+    pub test_symbol_count: Option<usize>,
 }
 
 /// Builds a [`DirDetail`] for the directory at `path` in `tree`, or `None`
@@ -334,6 +343,8 @@ pub fn build_file_detail(tree: &Tree, report: &Report, path: &str) -> Option<Fil
     Some(FileDetail {
         path: node.path.clone(),
         symbols,
+        skip_reason: node.skip_reason,
+        test_symbol_count: node.test_symbol_count,
     })
 }
 
@@ -1033,6 +1044,8 @@ mod tests {
                     fan_in: 2,
                 },
             ],
+            skip_reason: None,
+            test_symbol_count: None,
         };
         assert_eq!(expected, actual);
     }
@@ -1063,6 +1076,54 @@ mod tests {
                 removed: true,
                 fan_in: 0,
             }],
+            skip_reason: None,
+            test_symbol_count: None,
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_carry_skip_reason_into_file_detail_when_file_row_is_skipped() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_file_detail(&tree, &report, "assets/logo.png").expect("file found");
+
+        let expected = FileDetail {
+            path: "assets/logo.png".to_string(),
+            symbols: vec![],
+            skip_reason: Some(rinkaku_core::render::SkipReason::Binary),
+            test_symbol_count: None,
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_carry_test_symbol_count_into_file_detail_when_file_row_is_a_whole_test_file() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            tests: vec![rinkaku_core::render::TestFileSummary {
+                path: "src/lib_test.go".to_string(),
+                symbol_count: 4,
+            }],
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_file_detail(&tree, &report, "src/lib_test.go").expect("file found");
+
+        let expected = FileDetail {
+            path: "src/lib_test.go".to_string(),
+            symbols: vec![],
+            skip_reason: None,
+            test_symbol_count: Some(4),
         };
         assert_eq!(expected, actual);
     }

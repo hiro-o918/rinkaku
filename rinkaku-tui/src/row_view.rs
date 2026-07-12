@@ -70,9 +70,17 @@ pub fn entry_row_line(
         }
         NodeKind::File => {
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
-            spans.push(Span::raw(label.to_string()));
+            spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
             spans.push(Span::raw(" "));
             spans.push(badges_span(&row.node.badges));
+            if let Some(reason) = row.node.skip_reason {
+                spans.push(Span::raw(" "));
+                spans.push(skip_reason_span(reason));
+            }
+            if let Some(count) = row.node.test_symbol_count {
+                spans.push(Span::raw(" "));
+                spans.push(test_badge_span(count));
+            }
         }
         NodeKind::Symbol(symbol_ref) => {
             spans.push(Span::raw("  "));
@@ -186,6 +194,52 @@ fn badges_span(badges: &Badges) -> Span<'static> {
     Span::styled(parts.join(" "), Style::default().fg(Color::Cyan))
 }
 
+/// A `File` row's label style: dimmed for a skipped file (nothing was
+/// extracted from it, so it reads visually as "less relevant" than an
+/// analyzed file, same intent as `symbol_name_style`'s dimming of a removed
+/// symbol), plain otherwise — including a whole-test-file row, which is
+/// still an ordinarily-styled label with its own `[test]` badge appended
+/// separately (see `test_badge_span`) rather than dimmed, since a test file
+/// is not "uninteresting", just excluded from the default symbol-level view
+/// (ADR 0009).
+fn file_label_style(node: &crate::tree::TreeNode) -> Style {
+    if node.skip_reason.is_some() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default()
+    }
+}
+
+/// The `(skipped: <reason>)` annotation for a skipped `File` row, reusing
+/// [`rinkaku_core::render::skip_reason_label`]'s exact wording so the TUI
+/// and Markdown output never describe the same `SkipReason` differently.
+fn skip_reason_span(reason: rinkaku_core::render::SkipReason) -> Span<'static> {
+    Span::styled(
+        format!(
+            "(skipped: {})",
+            rinkaku_core::render::skip_reason_label(reason)
+        ),
+        Style::default().fg(Color::DarkGray),
+    )
+}
+
+/// The `[test] (N symbols)` badge for a whole-test-file `File` row (a file
+/// with no `FileReport` in `report.files` at all, see
+/// `crate::tree::TreeNode::test_symbol_count`'s doc comment) — `N symbol`
+/// (singular) when there is exactly one, matching `render.rs`'s own
+/// singular/plural "Tests" section wording.
+fn test_badge_span(symbol_count: usize) -> Span<'static> {
+    let noun = if symbol_count == 1 {
+        "symbol"
+    } else {
+        "symbols"
+    };
+    Span::styled(
+        format!("[test] ({symbol_count} {noun})"),
+        Style::default().fg(Color::Magenta),
+    )
+}
+
 /// A symbol row's leading classification marker: `+` added, `~`
 /// signature-changed, ` ` (blank, one column) body-only or unclassified,
 /// `x` removed. Kept as its own single-character span (rather than folded
@@ -244,6 +298,8 @@ mod tests {
             path: path.to_string(),
             badges,
             children,
+            skip_reason: None,
+            test_symbol_count: None,
         }
     }
 
@@ -253,6 +309,30 @@ mod tests {
             path: path.to_string(),
             badges,
             children: vec![],
+            skip_reason: None,
+            test_symbol_count: None,
+        }
+    }
+
+    fn skipped_file_node(path: &str, reason: rinkaku_core::render::SkipReason) -> TreeNode {
+        TreeNode {
+            kind: NodeKind::File,
+            path: path.to_string(),
+            badges: Badges::default(),
+            children: vec![],
+            skip_reason: Some(reason),
+            test_symbol_count: None,
+        }
+    }
+
+    fn test_file_node(path: &str, symbol_count: usize) -> TreeNode {
+        TreeNode {
+            kind: NodeKind::File,
+            path: path.to_string(),
+            badges: Badges::default(),
+            children: vec![],
+            skip_reason: None,
+            test_symbol_count: Some(symbol_count),
         }
     }
 
@@ -262,6 +342,8 @@ mod tests {
             path: path.to_string(),
             badges,
             children: vec![],
+            skip_reason: None,
+            test_symbol_count: None,
         }
     }
 
@@ -330,6 +412,77 @@ mod tests {
         let line = entry_row_line(&row, "lib.rs", &HashMap::new(), false);
 
         assert_eq!("  lib.rs ", line_text(&line));
+    }
+
+    #[test]
+    fn should_append_skip_reason_for_a_skipped_file_row() {
+        let node = skipped_file_node("assets/logo.png", rinkaku_core::render::SkipReason::Binary);
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "assets/logo.png", &HashMap::new(), false);
+
+        assert_eq!("  assets/logo.png  (skipped: binary)", line_text(&line));
+    }
+
+    #[test]
+    fn should_dim_label_for_a_skipped_file_row() {
+        let node = skipped_file_node("assets/logo.png", rinkaku_core::render::SkipReason::Binary);
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "assets/logo.png", &HashMap::new(), false);
+
+        // The label span is the third span: indent, expand marker, label.
+        assert_eq!(Some(Color::DarkGray), line.spans[2].style.fg);
+    }
+
+    #[test]
+    fn should_not_append_skip_reason_for_an_ordinary_file_row() {
+        let node = file_node("lib.rs", Badges::default());
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "lib.rs", &HashMap::new(), false);
+
+        assert!(!line_text(&line).contains("skipped"));
+    }
+
+    #[test]
+    fn should_append_test_badge_with_plural_symbols_noun_for_a_whole_test_file_row() {
+        let node = test_file_node("src/lib_test.go", 3);
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "src/lib_test.go", &HashMap::new(), false);
+
+        assert_eq!("  src/lib_test.go  [test] (3 symbols)", line_text(&line));
+    }
+
+    #[test]
+    fn should_append_test_badge_with_singular_symbol_noun_when_count_is_one() {
+        let node = test_file_node("src/lib_test.go", 1);
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "src/lib_test.go", &HashMap::new(), false);
+
+        assert_eq!("  src/lib_test.go  [test] (1 symbol)", line_text(&line));
     }
 
     #[test]
