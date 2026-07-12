@@ -146,8 +146,10 @@ rinkaku --base main --deps 0
 ### What it looks like
 
 All examples below are captured from the `cargo build --release` binary
-against `main` post-[ADR 0008](docs/adr/0008-entry-point-tree-rendering-for-changed-symbols.md)
-(entry-point tree rendering), not fabricated. The example diff below
+post-[ADR 0008](docs/adr/0008-entry-point-tree-rendering-for-changed-symbols.md)
+(entry-point tree rendering) and
+[ADR 0012](docs/adr/0012-condense-change-graph-rendering.md)
+(condensed rendering), not fabricated. The example diff below
 touches no test symbols and no generated files, so it renders the same
 with or without the defaults introduced in
 [ADR 0009](docs/adr/0009-exclude-test-symbols-from-output-by-default.md),
@@ -166,6 +168,8 @@ $ git show aa7ca34 --format="" | rinkaku --deps 0
 
 ````markdown
 ## Change graph
+
+4 changed symbols in 1 file
 
 - fn main (rinkaku/src/main.rs)
   - fn build_resolver (rinkaku/src/main.rs)
@@ -201,6 +205,12 @@ fn run_base_pipeline( cli: &Cli, base: &str, head: &str, cwd: Option<&std::path:
 
 ````
 
+The line under the heading summarizes the shape of the change — how many
+symbols changed, across how many files, and (for multi-file diffs) which
+file concentrates most of them, e.g.
+`16 changed symbols in 3 files — most in store/items.go (11)` — so a
+reviewer sees the epicenter before reading a single tree line.
+
 "Change graph" reads top-down in call-hierarchy order: `main` is the only
 entry point (nothing else changed in this diff calls it), and every
 function it reaches is nested beneath it. `build_resolver` is reachable
@@ -212,6 +222,32 @@ mutual-recursion cycle), the edge that closes the loop is marked
 `⚠️ ... — dependency cycle, see above` instead of being walked into again;
 see [ADR 0008](docs/adr/0008-entry-point-tree-rendering-for-changed-symbols.md)
 for the full rationale.
+
+Two more condensations
+([ADR 0012](docs/adr/0012-condense-change-graph-rendering.md)) keep
+request/response-style diffs readable. Changed **data-carrier types**
+(structs/enums/type aliases with no outgoing edges of their own) don't get
+tree lines; they're folded into the line of each symbol that references
+them as a `— uses:` annotation, with their full signatures still listed
+under "Definitions". And an **interface/trait declaration is linked to its
+changed methods** by method-spec name, so the methods nest under the
+interface instead of duplicating it at top level. A Go diff adding an
+`ItemStore` interface, two receiver-method implementations, and four
+request/response structs — 8 changed symbols — renders as just three tree
+lines:
+
+```markdown
+## Change graph
+
+8 changed symbols in 1 file
+
+- interface ItemStore (store.go) — uses: ListItemsRequest, ListItemsResponse, SaveItemRequest, SaveItemResponse
+  - fn ListItems (store.go) — uses: ListItemsRequest, ListItemsResponse, itemStore
+  - fn SaveItem (store.go) — uses: SaveItemRequest, SaveItemResponse, itemStore
+```
+
+(The "Definitions" section, omitted here, still carries all 8 full
+signatures.)
 
 Unchanged 1-hop dependencies (ADR 0003) — functions/types the diff touches
 but did not itself change — still show up as a `Depends on:` list under
