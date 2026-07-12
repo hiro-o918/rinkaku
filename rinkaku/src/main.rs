@@ -206,7 +206,8 @@ fn main() -> anyhow::Result<()> {
             eprintln!("note: diff is empty, nothing to analyze");
         }
         let resolver = build_resolver(&cli, &diff_text, read_working_tree_file, None, None)?;
-        let generated_paths = resolve_generated_paths(&cli, &diff_text, None)?;
+        let changed_paths = changed_paths(&diff_text)?;
+        let generated_paths = resolve_generated_paths(&cli, &changed_paths, None);
         log::info!("analyzing diff");
         let report = analyze_diff(
             &diff_text,
@@ -360,7 +361,8 @@ fn run_base_pipeline(
         move |path: &str| read_git_show_file(cwd, &head, path)
     };
     let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd)?;
-    let generated_paths = resolve_generated_paths(cli, &diff_text, cwd)?;
+    let changed_paths = changed_paths(&diff_text)?;
+    let generated_paths = resolve_generated_paths(cli, &changed_paths, cwd);
     log::info!("analyzing diff");
     let report = analyze_diff(
         &diff_text,
@@ -377,12 +379,33 @@ fn run_base_pipeline(
     Ok(report)
 }
 
-/// Resolves ADR 0010's generated-path set for `diff_text`, or an empty set
-/// when `cli.include_generated` opts out. Parses `diff_text` once more
-/// (same accepted double-parse tradeoff as `build_resolver`'s
-/// `collect_referenced_names` call, see its doc comment) purely to collect
-/// the changed paths `git check-attr` needs to be asked about — this
-/// function does not otherwise touch symbol extraction.
+/// Parses `diff_text` and extracts just the changed paths, for callers that
+/// only need path strings (currently only `resolve_generated_paths`) rather
+/// than the full `ChangedFile` data `analyze_diff` itself parses out.
+/// Sharing this single parse between `main`/`run_base_pipeline` and
+/// `resolve_generated_paths` is what lets `resolve_generated_paths` stay
+/// diff-text-free (see its own doc comment) — this function is the one
+/// place that still pays that specific parse's cost, once per run.
+fn changed_paths(diff_text: &str) -> anyhow::Result<Vec<String>> {
+    Ok(rinkaku_core::diff::parse_unified_diff(diff_text)?
+        .into_iter()
+        .map(|changed_file| changed_file.path)
+        .collect())
+}
+
+/// Resolves ADR 0010's generated-path set for `changed_paths`, or an empty
+/// set when `cli.include_generated` opts out.
+///
+/// Takes already-parsed changed paths rather than the raw diff text, so it
+/// never parses the diff itself: `main`/`run_base_pipeline` parse
+/// `diff_text` via `parse_unified_diff` exactly once per run and pass the
+/// resulting paths here, instead of this function re-parsing the same text
+/// a third time on top of `analyze_diff`'s own parse and
+/// `build_resolver`'s `collect_referenced_names` parse (both still
+/// separate, accepted the same way `collect_referenced_names`'s own doc
+/// comment already accepts that double-parse). Infallible now that there is
+/// no parse step of its own to fail — `check_generated_paths` never
+/// returns an `Err` either (see its own doc comment).
 ///
 /// `cwd` is passed straight through to `check_generated_paths`, so it
 /// inherits that function's best-effort behavior: no local repository (or
@@ -391,17 +414,13 @@ fn run_base_pipeline(
 /// primary diff-condensation flow, not a hard requirement of it (ADR 0010).
 fn resolve_generated_paths(
     cli: &Cli,
-    diff_text: &str,
+    changed_paths: &[String],
     cwd: Option<&std::path::Path>,
-) -> anyhow::Result<std::collections::HashSet<String>> {
+) -> std::collections::HashSet<String> {
     if cli.include_generated {
-        return Ok(std::collections::HashSet::new());
+        return std::collections::HashSet::new();
     }
-    let changed_paths: Vec<String> = rinkaku_core::diff::parse_unified_diff(diff_text)?
-        .into_iter()
-        .map(|changed_file| changed_file.path)
-        .collect();
-    Ok(check_generated_paths(cwd, &changed_paths))
+    check_generated_paths(cwd, changed_paths)
 }
 
 /// Returns a warning note for stdin input that is garbage rather than a
@@ -2312,6 +2331,62 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
         run_git(dir.path(), &["init", "--initial-branch=main"]);
 
         let actual = check_generated_paths(Some(dir.path()), &[]);
+
+        let expected: HashSet<String> = HashSet::new();
+        assert_eq!(expected, actual);
+    }
+
+    // resolve_generated_paths takes already-parsed changed paths (a
+    // Vec<String>) rather than the raw diff text, so it cannot re-parse the
+    // diff itself — parsing happens exactly once at the call site and the
+    // resulting paths are shared with analyze_diff's own parse (still
+    // unavoidable, since analyze_diff needs the full ChangedFile data, not
+    // just paths).
+    #[test]
+    fn should_resolve_generated_paths_from_already_parsed_changed_paths() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(dir.path().join(".gitattributes"), "Cargo.lock -diff\n")
+            .expect("write .gitattributes");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+            include_tests: false,
+            include_generated: false,
+        };
+        let changed_paths = vec!["Cargo.lock".to_string()];
+        let actual = resolve_generated_paths(&cli, &changed_paths, Some(dir.path()));
+
+        let expected: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_set_when_include_generated_is_true() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(dir.path().join(".gitattributes"), "Cargo.lock -diff\n")
+            .expect("write .gitattributes");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 1,
+            include_tests: false,
+            include_generated: true,
+        };
+        let changed_paths = vec!["Cargo.lock".to_string()];
+        let actual = resolve_generated_paths(&cli, &changed_paths, Some(dir.path()));
 
         let expected: HashSet<String> = HashSet::new();
         assert_eq!(expected, actual);
