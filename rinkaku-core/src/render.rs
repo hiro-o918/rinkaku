@@ -752,6 +752,8 @@ mod tests {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }
     }
 

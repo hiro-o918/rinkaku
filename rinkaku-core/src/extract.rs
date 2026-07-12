@@ -40,6 +40,33 @@ pub enum SymbolKind {
     TypeAlias,
 }
 
+/// A changed symbol's contract impact (ADR 0014), classified by comparing
+/// its comment-stripped, normalized signature against the base side's:
+///
+/// - [`Classification::Added`]: no matching symbol on the base side at all
+///   (a brand-new definition).
+/// - [`Classification::SignatureChanged`]: a matching base-side symbol
+///   exists, but its signature text differs — the API surface itself
+///   changed, not just the implementation.
+/// - [`Classification::BodyOnly`]: a matching base-side symbol exists with
+///   an identical signature — only the body changed.
+///
+/// `None` (rather than a fourth "unknown" variant) is used when base-side
+/// content wasn't available to compare against at all (e.g. plain stdin
+/// input with no resolvable base commit) — see
+/// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter. Modeling
+/// "unknown" as the field's absence, rather than as a variant of this enum,
+/// keeps every variant here meaning "we know, and this is what we found"; a
+/// caller checking `symbol.classification.is_none()` reads unambiguously as
+/// "classification wasn't attempted" rather than "found nothing interesting".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Classification {
+    Added,
+    SignatureChanged,
+    BodyOnly,
+}
+
 /// A definition whose signature was extracted because one of its lines
 /// (declaration or body) fell inside a changed range.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -110,6 +137,21 @@ pub struct ExtractedSymbol {
     /// serialization like `referenced_names`.
     #[serde(skip)]
     pub is_test: bool,
+    /// This symbol's contract impact (ADR 0014), or `None` when no base-side
+    /// content was available to classify against (see
+    /// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter).
+    /// Populated by [`crate::pipeline::classify_symbols`], a pipeline stage
+    /// that runs after extraction — `None` here at construction time, same
+    /// as `dependencies`/`id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<Classification>,
+    /// The base-side symbol's comment-stripped, normalized signature, only
+    /// when [`Classification::SignatureChanged`] — lets renderers show a
+    /// before/after diff of the signature text itself. `None` for every
+    /// other classification (including `None` classification) since there
+    /// is nothing meaningful to show otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_signature: Option<String>,
 }
 
 /// Extracts the signatures of definitions that contain at least one
@@ -291,6 +333,10 @@ fn build_symbol(
         dependencies: Vec::new(),
         omitted_dependency_matches: 0,
         is_test,
+        // Populated later by `pipeline::classify_symbols`, which needs the
+        // base-side content this function has no access to.
+        classification: None,
+        previous_signature: None,
     })
 }
 
@@ -695,6 +741,8 @@ struct Point {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             },
             ExtractedSymbol {
                 id: String::new(),
@@ -707,6 +755,8 @@ struct Point {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             },
         ];
         let actual = extract_all_symbols(source, &lang);
@@ -745,6 +795,8 @@ fn foo() -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -773,6 +825,8 @@ mod tests {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: true,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -805,6 +859,8 @@ fn should_add_two_numbers() {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: true,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -832,6 +888,8 @@ fn helper() -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -872,6 +930,8 @@ fn foo(a: i32) -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -900,6 +960,8 @@ fn foo(a: i32, c: i32) -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -933,6 +995,8 @@ struct Point {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -966,6 +1030,8 @@ struct Point {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -996,6 +1062,8 @@ fn foo(/* count */ a: i32) -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1028,6 +1096,8 @@ impl Foo {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1060,6 +1130,8 @@ impl Foo {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1092,6 +1164,8 @@ enum Color {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1123,6 +1197,8 @@ trait Greeter {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1159,6 +1235,8 @@ trait Greeter {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1207,6 +1285,8 @@ trait Repo {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1244,6 +1324,8 @@ const X: i32 = 1;
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }],
     )]
     fn extract_changed_symbols_selective_cases(
@@ -1305,6 +1387,8 @@ fn foo(a: i32) -> i32 {
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
+            classification: None,
+            previous_signature: None,
         }];
         let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1357,6 +1441,8 @@ func foo(a int) int {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1386,6 +1472,8 @@ func foo(a int, c int) int {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1422,6 +1510,8 @@ type Repo struct {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1455,6 +1545,8 @@ type Repo struct {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1492,6 +1584,8 @@ type Fetcher interface {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1530,6 +1624,8 @@ type Repo interface {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1593,6 +1689,8 @@ func (r *Repo) Save(id string) error {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1627,6 +1725,8 @@ func (r Repo) Label() string {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1702,6 +1802,8 @@ func (r *Repo) Save(id string) error {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -1736,6 +1838,8 @@ def foo(a):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1762,6 +1866,8 @@ def foo(a, c):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1796,6 +1902,8 @@ def top_level(a, b):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1842,6 +1950,8 @@ def decorated(a):
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1877,6 +1987,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1912,6 +2024,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1940,6 +2054,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -1968,6 +2084,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2004,6 +2122,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2068,6 +2188,8 @@ class Point:
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -2102,6 +2224,8 @@ function foo(a: number): number {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2129,6 +2253,8 @@ function foo(a: number, c: number): number {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2157,6 +2283,8 @@ const arrow = (a: number): number => {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2214,6 +2342,8 @@ interface Shape {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2251,6 +2381,8 @@ interface Repo {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2280,6 +2412,8 @@ type Point = {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2310,6 +2444,8 @@ enum Color {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2343,6 +2479,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2378,6 +2516,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2410,6 +2550,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2442,6 +2584,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2476,6 +2620,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2540,6 +2686,8 @@ function foo(a: number): number {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_file.changed_ranges);
 
@@ -2574,6 +2722,8 @@ abstract class Shape {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2606,6 +2756,8 @@ abstract class Shape {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2648,6 +2800,8 @@ class Circle {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -2678,6 +2832,8 @@ const Component = () => {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
             }];
             let actual = extract_changed_symbols(source, lang, &changed_ranges);
 

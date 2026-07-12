@@ -47,6 +47,13 @@ pub struct ChangedFile {
     /// New-side line ranges containing added lines. Empty for deletions
     /// and for renames with no content change (pure rename, 100% similar).
     pub changed_ranges: Vec<LineRange>,
+    /// Old-side line ranges containing removed lines (ADR 0014's `removed`
+    /// classification: a base-side symbol overlapping one of these ranges
+    /// is reported as removed, rather than every base-only symbol in the
+    /// file — which would flood output on a diff that touches only a small
+    /// part of a large file). Empty for additions (there is no old side)
+    /// and for renames with no content change, same as `changed_ranges`.
+    pub old_changed_ranges: Vec<LineRange>,
     /// True when git reported this as a binary file patch; `changed_ranges`
     /// is always empty in that case since there is no line-level diff.
     pub is_binary: bool,
@@ -131,15 +138,18 @@ fn parse_file_entry(lines: &[&str], start: usize) -> Result<(ChangedFile, usize)
     }
 
     let mut changed_ranges = Vec::new();
+    let mut old_changed_ranges = Vec::new();
     while i < lines.len() && lines[i].starts_with("@@") {
         if !lines[i].starts_with("@@ ") {
             return Err(ParseError::MalformedHunkHeader(lines[i].to_string()));
         }
-        let (hunk_ranges, next) = parse_hunk(lines, i)?;
+        let (hunk_ranges, hunk_old_ranges, next) = parse_hunk(lines, i)?;
         changed_ranges.extend(hunk_ranges);
+        old_changed_ranges.extend(hunk_old_ranges);
         i = next;
     }
     let changed_ranges = merge_adjacent_ranges(changed_ranges);
+    let old_changed_ranges = merge_adjacent_ranges(old_changed_ranges);
 
     Ok((
         ChangedFile {
@@ -147,6 +157,7 @@ fn parse_file_entry(lines: &[&str], start: usize) -> Result<(ChangedFile, usize)
             old_path,
             kind,
             changed_ranges,
+            old_changed_ranges,
             is_binary,
         },
         i,
@@ -170,20 +181,35 @@ fn extract_git_header_paths(line: &str) -> (String, String) {
 }
 
 /// Parses one `@@ -a,b +c,d @@` hunk starting at `start`, returning the
-/// added-line ranges it contains and the index of the line following the
-/// hunk body.
-fn parse_hunk(lines: &[&str], start: usize) -> Result<(Vec<LineRange>, usize), ParseError> {
+/// added-line ranges (new side) and removed-line ranges (old side) it
+/// contains, plus the index of the line following the hunk body.
+///
+/// Old- and new-side line counters advance symmetrically: a `+` line
+/// advances only the new-side counter (and starts/extends a new-side run),
+/// a `-` line advances only the old-side counter (and starts/extends an
+/// old-side run), and a context line advances both while closing out
+/// whichever run(s) were open — mirroring how git itself interleaves the two
+/// sides in a hunk body.
+fn parse_hunk(
+    lines: &[&str],
+    start: usize,
+) -> Result<(Vec<LineRange>, Vec<LineRange>, usize), ParseError> {
     let header = lines[start];
-    let (mut new_line, new_count) = parse_hunk_header(header)?;
+    let (mut old_line, old_count, mut new_line, new_count) = parse_hunk_header(header)?;
     let hunk_end_new_line = new_line
         .checked_add(new_count)
         .ok_or_else(|| ParseError::MalformedHunkHeader(header.to_string()))?;
+    let hunk_end_old_line = old_line
+        .checked_add(old_count)
+        .ok_or_else(|| ParseError::MalformedHunkHeader(header.to_string()))?;
 
     let mut ranges = Vec::new();
+    let mut old_ranges = Vec::new();
     let mut run_start: Option<usize> = None;
+    let mut old_run_start: Option<usize> = None;
     let mut i = start + 1;
 
-    while i < lines.len() && new_line < hunk_end_new_line {
+    while i < lines.len() && (new_line < hunk_end_new_line || old_line < hunk_end_old_line) {
         let line = lines[i];
         if line.starts_with("diff --git ") {
             // The hunk body ended (next file's header started) before the
@@ -192,30 +218,52 @@ fn parse_hunk(lines: &[&str], start: usize) -> Result<(Vec<LineRange>, usize), P
             return Err(ParseError::HunkBodyMismatch(header.to_string()));
         }
         if line.starts_with('+') {
+            if let Some(s) = old_run_start.take() {
+                old_ranges.push(LineRange {
+                    start: s,
+                    end: old_line - 1,
+                });
+            }
             if run_start.is_none() {
                 run_start = Some(new_line);
             }
             new_line += 1;
         } else if line.starts_with('\\') {
             // "\ No newline at end of file" - not a content line.
-        } else {
+        } else if line.starts_with('-') {
             if let Some(s) = run_start.take() {
                 ranges.push(LineRange {
                     start: s,
                     end: new_line - 1,
                 });
             }
-            if line.starts_with('-') {
-                // Removed line: doesn't advance the new-side counter.
-            } else {
-                new_line += 1;
+            if old_run_start.is_none() {
+                old_run_start = Some(old_line);
             }
+            old_line += 1;
+        } else {
+            // Context line: closes out any run on either side and advances
+            // both counters.
+            if let Some(s) = run_start.take() {
+                ranges.push(LineRange {
+                    start: s,
+                    end: new_line - 1,
+                });
+            }
+            if let Some(s) = old_run_start.take() {
+                old_ranges.push(LineRange {
+                    start: s,
+                    end: old_line - 1,
+                });
+            }
+            new_line += 1;
+            old_line += 1;
         }
         i += 1;
     }
-    if new_line < hunk_end_new_line {
-        // Input ran out before the declared new-side line count was
-        // reached.
+    if new_line < hunk_end_new_line || old_line < hunk_end_old_line {
+        // Input ran out before the declared line count was reached, on
+        // either side.
         return Err(ParseError::HunkBodyMismatch(header.to_string()));
     }
     if let Some(s) = run_start.take() {
@@ -224,13 +272,19 @@ fn parse_hunk(lines: &[&str], start: usize) -> Result<(Vec<LineRange>, usize), P
             end: new_line - 1,
         });
     }
+    if let Some(s) = old_run_start.take() {
+        old_ranges.push(LineRange {
+            start: s,
+            end: old_line - 1,
+        });
+    }
 
-    Ok((ranges, i))
+    Ok((ranges, old_ranges, i))
 }
 
-/// Parses a `@@ -a,b +c,d @@` header, returning the new-side start line and
-/// line count. The old-side range is not needed by this module.
-fn parse_hunk_header(header: &str) -> Result<(usize, usize), ParseError> {
+/// Parses a `@@ -a,b +c,d @@` header, returning `(old_start, old_count,
+/// new_start, new_count)`.
+fn parse_hunk_header(header: &str) -> Result<(usize, usize, usize, usize), ParseError> {
     let malformed = || ParseError::MalformedHunkHeader(header.to_string());
 
     let body = header
@@ -246,14 +300,10 @@ fn parse_hunk_header(header: &str) -> Result<(usize, usize), ParseError> {
     let old = old.strip_prefix('-').ok_or_else(malformed)?;
     let new = new.strip_prefix('+').ok_or_else(malformed)?;
 
-    // Old-side numbers are validated even though this module only needs
-    // the new side: a header with a malformed old-side range is not a
-    // well-formed hunk header and should be rejected rather than silently
-    // accepted.
-    parse_range(old).ok_or_else(malformed)?;
-    let (start, count) = parse_range(new).ok_or_else(malformed)?;
+    let (old_start, old_count) = parse_range(old).ok_or_else(malformed)?;
+    let (new_start, new_count) = parse_range(new).ok_or_else(malformed)?;
 
-    Ok((start, count))
+    Ok((old_start, old_count, new_start, new_count))
 }
 
 /// Parses a `start[,count]` range as used on either side of a hunk header.
@@ -318,6 +368,7 @@ index e69de29..4b825dc 100644
             old_path: None,
             kind: ChangeKind::Modified,
             changed_ranges: vec![LineRange { start: 2, end: 3 }],
+            old_changed_ranges: vec![],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -350,6 +401,7 @@ index e69de29..4b825dc 100644
                 LineRange { start: 2, end: 2 },
                 LineRange { start: 12, end: 13 },
             ],
+            old_changed_ranges: vec![],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -373,6 +425,7 @@ index 0000000..4b825dc
             old_path: None,
             kind: ChangeKind::Added,
             changed_ranges: vec![LineRange { start: 1, end: 2 }],
+            old_changed_ranges: vec![],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -396,6 +449,7 @@ index 4b825dc..0000000
             old_path: None,
             kind: ChangeKind::Deleted,
             changed_ranges: vec![],
+            old_changed_ranges: vec![LineRange { start: 1, end: 2 }],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -422,6 +476,7 @@ index e69de29..4b825dc 100644
             old_path: Some("src/old_name.rs".to_string()),
             kind: ChangeKind::Renamed,
             changed_ranges: vec![LineRange { start: 2, end: 2 }],
+            old_changed_ranges: vec![],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -441,6 +496,7 @@ rename to src/new_name.rs
             old_path: Some("src/old_name.rs".to_string()),
             kind: ChangeKind::Renamed,
             changed_ranges: vec![],
+            old_changed_ranges: vec![],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -459,6 +515,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             old_path: None,
             kind: ChangeKind::Modified,
             changed_ranges: vec![],
+            old_changed_ranges: vec![],
             is_binary: true,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -484,6 +541,7 @@ index e69de29..4b825dc 100644
             old_path: None,
             kind: ChangeKind::Modified,
             changed_ranges: vec![LineRange { start: 2, end: 2 }],
+            old_changed_ranges: vec![LineRange { start: 2, end: 2 }],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -514,6 +572,7 @@ index e69de29..4b825dc 100644
                 old_path: None,
                 kind: ChangeKind::Modified,
                 changed_ranges: vec![LineRange { start: 2, end: 2 }],
+                old_changed_ranges: vec![],
                 is_binary: false,
             },
             ChangedFile {
@@ -521,6 +580,7 @@ index e69de29..4b825dc 100644
                 old_path: None,
                 kind: ChangeKind::Modified,
                 changed_ranges: vec![LineRange { start: 2, end: 2 }],
+                old_changed_ranges: vec![],
                 is_binary: false,
             },
         ];
@@ -609,6 +669,7 @@ index e69de29..4b825dc 100644
             old_path: Some("src/old_name.rs".to_string()),
             kind: ChangeKind::Copied,
             changed_ranges: vec![LineRange { start: 2, end: 2 }],
+            old_changed_ranges: vec![],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -628,6 +689,7 @@ copy to src/new_name.rs
             old_path: Some("src/old_name.rs".to_string()),
             kind: ChangeKind::Copied,
             changed_ranges: vec![],
+            old_changed_ranges: vec![],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
@@ -651,6 +713,37 @@ new mode 100755
             old_path: None,
             kind: ChangeKind::Modified,
             changed_ranges: vec![],
+            old_changed_ranges: vec![],
+            is_binary: false,
+        }];
+        let actual = parse_unified_diff(input).expect("parse should succeed");
+        assert_eq!(expected, actual);
+    }
+
+    // ADR 0014: a hunk that replaces one line with another (a `-` line
+    // followed by a `+` line, not a pure addition or pure deletion) must
+    // report both an old-side and a new-side range, tracked independently —
+    // this is the shape `classify_symbols`'s "removed" detection depends on
+    // to find which base-side symbols were actually touched.
+    #[test]
+    fn should_track_old_and_new_side_ranges_independently_when_hunk_replaces_a_line() {
+        let input = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn a() {}
+-fn old_name() {}
++fn new_name() {}
+ fn c() {}
+";
+        let expected = vec![ChangedFile {
+            path: "src/lib.rs".to_string(),
+            old_path: None,
+            kind: ChangeKind::Modified,
+            changed_ranges: vec![LineRange { start: 2, end: 2 }],
+            old_changed_ranges: vec![LineRange { start: 2, end: 2 }],
             is_binary: false,
         }];
         let actual = parse_unified_diff(input).expect("parse should succeed");
