@@ -147,6 +147,13 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
+        // Uppercase specifically: `j`/`k` already move the tree cursor, so
+        // the right-pane scroll needs a key that doesn't collide with
+        // them. Shift+j/k arrives here as the distinct `Char('J')`/`Char('K')`
+        // values (crossterm folds Shift into the char itself for plain
+        // letter keys), so this needs no separate modifier check.
+        KeyCode::Char('J') => Some(InputKey::ScrollDown),
+        KeyCode::Char('K') => Some(InputKey::ScrollUp),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
@@ -207,5 +214,38 @@ mod tests {
         let actual = translate_key(KeyCode::Esc, KeyModifiers::NONE, &app);
 
         assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_uppercase_j_to_scroll_down() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('J'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ScrollDown), actual);
+    }
+
+    #[test]
+    fn should_translate_uppercase_k_to_scroll_up() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('K'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ScrollUp), actual);
+    }
+
+    #[test]
+    fn should_translate_lowercase_j_to_down_not_scroll() {
+        // Regression guard: lowercase j/k must keep moving the tree cursor
+        // (InputKey::Down/Up) rather than being swallowed by the new
+        // uppercase-only scroll bindings.
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('j'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::Down), actual);
     }
 }
