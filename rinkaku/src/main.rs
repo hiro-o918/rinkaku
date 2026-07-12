@@ -212,6 +212,11 @@ fn main() -> anyhow::Result<()> {
         let report = analyze_diff(
             &diff_text,
             read_working_tree_file,
+            // Pure stdin-pipe input has no known base commit (see this
+            // module's own doc comment on stdin mode), so ADR 0014's
+            // classification stays unknown for every symbol rather than
+            // guessing one from partial information.
+            None,
             resolver
                 .as_ref()
                 .map(|r| r as &dyn rinkaku_core::deps::Resolver),
@@ -355,12 +360,25 @@ fn run_base_pipeline(
             },
             tests: Vec::new(),
             hotspots: Vec::new(),
+            removed: Vec::new(),
         });
     }
 
     let read_file = {
         let head = head.to_string();
         move |path: &str| read_git_show_file(cwd, &head, path)
+    };
+    // ADR 0014: `--base`/`--pr` mode always knows a base commit, so unlike
+    // stdin mode (see `main`'s own `analyze_diff` call), a `read_base_file`
+    // port is always supplied here rather than `None` — reusing the same
+    // `git show <rev>:<path>` strategy `read_file` already uses for the
+    // head side, just pointed at `base` instead. A path that doesn't exist
+    // on the base side (e.g. a brand-new file) fails this read, which
+    // `analyze_diff` treats as "no base content for this file" rather than
+    // an error (see its own doc comment).
+    let read_base_file = {
+        let base = base.to_string();
+        move |path: &str| read_git_show_file(cwd, &base, path)
     };
     let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd)?;
     let changed_paths = changed_paths(&diff_text)?;
@@ -369,6 +387,7 @@ fn run_base_pipeline(
     let report = analyze_diff(
         &diff_text,
         read_file,
+        Some(&read_base_file),
         resolver
             .as_ref()
             .map(|r| r as &dyn rinkaku_core::deps::Resolver),
@@ -3133,6 +3152,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
                 },
                 tests: Vec::new(),
                 hotspots: Vec::new(),
+                removed: Vec::new(),
             },
             actual.expect("empty diff must not touch the repository-wide index scan")
         );
@@ -3201,6 +3221,50 @@ fn should_add_two_numbers() {
         );
     }
 
+    // ADR 0014 end-to-end: `run_base_pipeline` must actually wire a
+    // `read_base_file` port backed by `git show <base>:<path>` into
+    // `analyze_diff`, so a real `--base`/`--pr` run classifies a
+    // signature-changing edit as `signature_changed` — not just that the
+    // pure `classify_symbols`/`analyze_diff` functions can do so when fed a
+    // base reader directly (already covered by
+    // `extract::tests::classification_tests` and
+    // `pipeline::tests::classification_wiring_tests`).
+    #[test]
+    fn should_classify_symbol_as_signature_changed_via_real_base_commit() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(dir.path(), "fn foo(a: i32) -> i32 {\n    a\n}\n");
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "fn foo(a: i32, b: i32) -> i32 {\n    a\n}\n",
+        )
+        .expect("edit src/lib.rs");
+        run_git(dir.path(), &["add", "src/lib.rs"]);
+        run_git(dir.path(), &["commit", "-m", "widen foo's signature"]);
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: Format::Md,
+            deps: 0,
+            include_tests: false,
+            include_generated: false,
+        };
+        let actual = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
+            .expect("run_base_pipeline should succeed");
+
+        let symbol = &actual.files[0].symbols[0];
+        assert_eq!(
+            Some(rinkaku_core::extract::Classification::SignatureChanged),
+            symbol.classification
+        );
+        assert_eq!(
+            Some("fn foo(a: i32) -> i32".to_string()),
+            symbol.previous_signature
+        );
+    }
+
     mod garbage_input_note_tests {
         use super::*;
         use pretty_assertions::assert_eq;
@@ -3221,6 +3285,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             }
         }
 
@@ -3234,6 +3299,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             }
         }
 
@@ -3279,6 +3345,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
@@ -3303,6 +3370,7 @@ fn should_add_two_numbers() {
                     symbol_count: 1,
                 }],
                 hotspots: vec![],
+                removed: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
@@ -3339,6 +3407,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
