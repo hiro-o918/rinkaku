@@ -247,8 +247,15 @@ fn find_roots(nodes: &[Node], edges: &[Edge]) -> Vec<NodeId> {
             continue;
         }
         // Representative = earliest in source order (smallest node index).
-        let representative = *scc.iter().min().expect("an SCC always has >=1 member");
-        roots.push(nodes[representative].id.clone());
+        // `tarjan_sccs` never produces an empty component (each `component`
+        // it pushes starts from a freshly-visited node and is only pushed
+        // after collecting at least that node), so `min()` always finds a
+        // value in practice; `if let` avoids asserting that invariant via
+        // `.expect()` in library code and simply skips a component that
+        // somehow turned out empty rather than panicking.
+        if let Some(&representative) = scc.iter().min() {
+            roots.push(nodes[representative].id.clone());
+        }
     }
 
     // sccs are discovered in reverse-postorder-ish order depending on the
@@ -332,10 +339,10 @@ fn dfs_mark_back_edges(
     visited[start] = true;
     on_path[start] = true;
 
-    while let Some(&(v, child_i)) = work.last() {
-        if child_i < adjacency[v].len() {
-            let (w, edge_index) = adjacency[v][child_i];
-            work.last_mut().unwrap().1 += 1;
+    while let Some(&mut (v, ref mut child_i)) = work.last_mut() {
+        if *child_i < adjacency[v].len() {
+            let (w, edge_index) = adjacency[v][*child_i];
+            *child_i += 1;
 
             if on_path[w] {
                 cycle_edge_indices.push(edge_index);
@@ -383,14 +390,26 @@ fn tarjan_sccs(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
                 on_stack[v] = true;
             }
 
+            let Some(frame) = work.last_mut() else {
+                // Unreachable in practice (the `while let Some(...) =
+                // work.last()` guard above just matched this same frame),
+                // but avoiding `.unwrap()` here keeps this library function
+                // panic-free even if that invariant is ever broken by a
+                // future edit — an empty `work` simply ends the loop for
+                // this `start` rather than panicking.
+                break;
+            };
+
             if child_i < adjacency[v].len() {
                 let w = adjacency[v][child_i];
-                work.last_mut().unwrap().1 += 1;
+                frame.1 += 1;
 
-                if indices[w].is_none() {
-                    work.push((w, 0));
-                } else if on_stack[w] {
-                    lowlink[v] = lowlink[v].min(indices[w].unwrap());
+                match indices[w] {
+                    None => work.push((w, 0)),
+                    Some(w_index) if on_stack[w] => {
+                        lowlink[v] = lowlink[v].min(w_index);
+                    }
+                    Some(_) => {}
                 }
             } else {
                 work.pop();
@@ -398,13 +417,21 @@ fn tarjan_sccs(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
                     lowlink[parent] = lowlink[parent].min(lowlink[v]);
                 }
 
-                if lowlink[v] == indices[v].unwrap() {
+                // `indices[v]` was set to `Some(_)` unconditionally above
+                // (at `child_i == 0`, the first time `v` was visited) and
+                // is never cleared afterward, so it is always `Some` here;
+                // `if let` reads that invariant without asserting it via
+                // `.expect()`. A `None` (unreachable in practice) simply
+                // skips emitting an SCC for `v` instead of panicking.
+                if let Some(v_index) = indices[v]
+                    && lowlink[v] == v_index
+                {
                     let mut component = Vec::new();
-                    loop {
-                        let w = stack.pop().expect("stack must contain v's SCC members");
+                    while let Some(w) = stack.pop() {
                         on_stack[w] = false;
+                        let is_v = w == v;
                         component.push(w);
-                        if w == v {
+                        if is_v {
                             break;
                         }
                     }
