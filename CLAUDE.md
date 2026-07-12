@@ -67,7 +67,7 @@ Design rationale for the choices above is recorded in
 ## Reviewing changes (dogfooding)
 
 When reviewing a branch or PR of this repository (directly or via
-review subagents), always run **two complementary passes** — see
+review subagents), always cover **three complementary angles** — see
 [`docs/experiments/0001-map-assisted-llm-review.md`](docs/experiments/0001-map-assisted-llm-review.md)
 for why:
 
@@ -80,10 +80,17 @@ for why:
 2. **Independent pass**: a plain review without the map, covering
    line-level correctness and repo conventions (assert style, no
    library-code `unwrap`/`expect`, comment discipline).
+3. **Dynamic verification** (mandatory, not left to reviewer
+   discretion): build and actually execute the changed surface,
+   including failure-mode invocations — non-TTY stdin/stdout, empty
+   input, conflicting flags, missing files. Experiment 0001 round 2's
+   best finding (a non-TTY panic) came from an *uninstructed* decision
+   to run the binary; do not rely on that luck. Either reviewing pass
+   may carry this step, but someone must.
 
 The map allocates attention; it is not a verifier. Behavioral bugs do
 not show up on the signature surface, so neither pass may skip reading
-the code it flags.
+the code it flags — and none of the three angles may be skipped.
 
 ## Toolchain
 
