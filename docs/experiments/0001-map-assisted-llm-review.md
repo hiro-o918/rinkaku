@@ -279,9 +279,77 @@ through 19 test literals).
   matching `TagsResolver::new`) cheap to check and marked
   pre-existing code as safe to skip.
 
+## Results (round 5)
+
+Same two-pass method, fifth subject: right-pane scrolling in the TUI
+(4 files, +493/−15 — new scroll state in `App`, draw-time clamping and
+an overflow indicator in `ui.rs`). The first subject to contain
+genuine blockers.
+
+| Metric              | A (map)     | B (control) |
+| ------------------- | ----------- | ----------- |
+| Output tokens       | 115.2k      | 108.1k      |
+| Tool calls          | 66          | 53          |
+| Wall clock          | 558s        | 397s        |
+| Blocker findings    | 2           | 2           |
+| Should-fix findings | 1           | 2           |
+| Nit findings        | 0           | 1           |
+
+- **Both arms independently found — and live-reproduced — the same
+  two blockers**: (1) the scroll clamp and indicator count logical
+  lines while ratatui's `Paragraph` scrolls wrapped rows, so any
+  wrapped long line makes tail content permanently unreachable while
+  the indicator claims everything is shown; (2) collapse/expand/select
+  never reset the scroll offset even though a collapse can re-target
+  the cursor to a different node, opening the new content pre-scrolled
+  past its own header. First full cross-arm convergence in five
+  rounds, and it happened on the first subject with real blockers —
+  encouraging evidence that the process converges on defects that
+  matter regardless of reading strategy.
+- Both discoveries were made by **interacting with the running
+  binary** (narrow terminals, scroll-then-collapse sequences), then
+  explained by code reading. The orchestrator's own third-angle
+  spot-check had exercised only short lines and cursor-reset paths
+  and pronounced the feature working — a concrete demonstration that
+  a hands-on smoke test by the coordinating agent is not a substitute
+  for adversarial reviewers with time to probe edges.
+- Map metadata cuts both ways this round: the map's dependency edges
+  under `draw_detail_pane` pointed A at `cycle_edges`' full-path lines
+  — exactly the realistic trigger for blocker 1 — but the defect's
+  *mechanism* lives in the ratatui dependency's wrap-vs-scroll
+  semantics, outside anything a change map can show. And blocker 2's
+  mechanism (`nav.rs`'s cursor re-targeting) sits in **unchanged**
+  code, which the change map by design does not draw — the map
+  actively lacked the one edge that made the regression provable. A
+  change-scoped map cannot flag regressions whose mechanism is
+  pre-existing; only reading beyond the diff does.
+- Unique findings were extensions rather than independent defects:
+  A added the `ToggleOrder` reset gap (same root cause as blocker 2);
+  B added missing-test observations and a clone-per-frame nit.
+- Both blockers (and the reset gap) were fixed before merge; the fix
+  re-verified against each pass's original reproduction steps.
+
+## Conclusions (after 5 rounds)
+
+- On the first subject with genuine blockers, both arms found both,
+  independently and with live reproductions — the two-pass design's
+  redundancy paid off as confidence, not just coverage.
+- The strongest single predictor of finding real defects across all
+  five rounds is **hands-on execution with hostile inputs** (narrow
+  terminals, malformed diffs, non-TTY environments), not reading
+  strategy. The map's role stays what round 4 concluded:
+  verification routing and attention allocation.
+- New limit identified: the change map cannot surface regressions
+  whose mechanism lies in unchanged code or in a dependency's
+  semantics — both blockers this round had exactly that shape.
+  Reviewer instructions should explicitly license reading beyond the
+  diff (and the CLAUDE.md three-angle policy already does).
+
 ## Next
 
-- Document the map-first recipe in the README's LLM usage section
-  (map from a trusted build, paired with an independent pass).
 - Consider a map feature flagging cross-crate duplicate-domain
   symbols (round 3 hypothesis, still open).
+- The round-5 blockers suggest a second tool hypothesis: listing the
+  *unchanged* symbols that changed symbols newly depend on (the map
+  currently draws edges only among changed/1-hop symbols) might have
+  surfaced `retarget_cursor` as blast-radius context for `handle_key`.

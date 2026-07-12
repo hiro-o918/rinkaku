@@ -44,6 +44,13 @@ pub enum InputKey {
     /// then moving the cursor keeps showing the diff pane for the newly
     /// selected row instead of resetting on every cursor move.
     ToggleDiff,
+    /// `J`: scroll the right-hand pane (Detail/Diff) down by one line.
+    /// Uppercase specifically so it does not collide with `j`'s existing
+    /// cursor-move binding (`crate::run`'s `translate_key` matches
+    /// `KeyCode::Char` case-sensitively).
+    ScrollDown,
+    /// `K`: scroll the right-hand pane up by one line (see [`Self::ScrollDown`]).
+    ScrollUp,
     /// Esc or `q` while in the source view: return to the entry view.
     /// A no-op on the entry view itself (`q`'s quit behavior on the entry
     /// view is `InputKey::Quit`, a separate variant, since Esc has no
@@ -123,6 +130,21 @@ pub struct App {
     order_mode: OrderMode,
     screen: Screen,
     right_pane: RightPane,
+    /// The user's requested scroll offset (in lines) into the right-hand
+    /// pane's content, as an unclamped "how far down would the user like to
+    /// be" value rather than an authoritative display position: `App` has
+    /// no notion of the pane's rendered height (that is a `ratatui::Rect`
+    /// only `crate::ui` sees at draw time), so clamping this to
+    /// `content_len.saturating_sub(pane_height)` is `crate::ui`'s
+    /// responsibility (`ui::clamp_scroll`) — keeping this module free of
+    /// any layout concern, matching the rest of `App`'s pure-state
+    /// discipline. Reset to 0 by every key `handle_key` processes *except*
+    /// `InputKey::ScrollDown`/`ScrollUp` on [`Screen::Entry`] (`handle_key`'s
+    /// own doc comment on why this is a blanket rule rather than an
+    /// enumerated list of "actions that change the pane's content" — the
+    /// cursor can move *indirectly*, e.g. a collapse retargeting it onto a
+    /// different row, which an enumerated list is prone to missing).
+    right_pane_scroll: usize,
     /// A transient message for the status line (e.g. a source-read
     /// failure) — cleared on the next action that doesn't re-set it, so a
     /// stale error doesn't linger forever once the user has moved on.
@@ -151,6 +173,7 @@ impl App {
             order_mode,
             screen: Screen::Entry,
             right_pane: RightPane::default(),
+            right_pane_scroll: 0,
             status: None,
             should_quit: false,
         }
@@ -183,6 +206,13 @@ impl App {
 
     pub fn right_pane(&self) -> RightPane {
         self.right_pane
+    }
+
+    /// The user's requested scroll offset into the right-hand pane — see
+    /// the `right_pane_scroll` field's own doc comment on why this is an
+    /// unclamped request rather than an authoritative display position.
+    pub fn right_pane_scroll(&self) -> usize {
+        self.right_pane_scroll
     }
 
     pub fn status(&self) -> Option<&str> {
@@ -264,8 +294,25 @@ impl App {
     /// cursor is a present symbol before switching screens — the actual
     /// file read happens later, in `crate::run`, once `Screen::Source` is
     /// active) and is otherwise unused.
+    ///
+    /// `right_pane_scroll` is reset to 0 by every key *except*
+    /// `ScrollDown`/`ScrollUp` on [`Screen::Entry`] — a uniform rule applied
+    /// once below, rather than each action deciding individually whether it
+    /// might change the right pane's content. The per-action approach used
+    /// to miss cases where the cursor moves *indirectly*: collapsing a
+    /// directory (`Select`/`CollapseAll`) can retarget the cursor onto a
+    /// different row via `Nav::retarget_cursor`, and reordering
+    /// (`ToggleOrder`) can do the same simply by changing which row now
+    /// sits at the same cursor index — both used to leave a stale nonzero
+    /// scroll offset pointing into the *new* row's unrelated content. Only
+    /// `ScrollDown`/`ScrollUp` are exempt, since they are the two actions
+    /// whose entire purpose is to set this value.
     pub fn handle_key(mut self, key: InputKey) -> Self {
         self.status = None;
+        let preserve_scroll = matches!(
+            (&self.screen, key),
+            (Screen::Entry, InputKey::ScrollDown) | (Screen::Entry, InputKey::ScrollUp)
+        );
 
         match (&self.screen, key) {
             (Screen::Source { .. }, InputKey::Back) => {
@@ -319,11 +366,21 @@ impl App {
                     RightPane::Diff => RightPane::Detail,
                 };
             }
+            (Screen::Entry, InputKey::ScrollDown) => {
+                self.right_pane_scroll = self.right_pane_scroll.saturating_add(1);
+            }
+            (Screen::Entry, InputKey::ScrollUp) => {
+                self.right_pane_scroll = self.right_pane_scroll.saturating_sub(1);
+            }
             (Screen::Entry, InputKey::Back) => {
                 // No-op: Esc/q-as-back on the entry view has nowhere to
                 // return to. Quitting from the entry view is the
                 // dedicated `InputKey::Quit` variant instead.
             }
+        }
+
+        if !preserve_scroll {
+            self.right_pane_scroll = 0;
         }
 
         self
@@ -667,5 +724,215 @@ mod tests {
             }),
             actual
         );
+    }
+
+    #[test]
+    fn should_start_with_zero_right_pane_scroll() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_increment_right_pane_scroll_when_scroll_down_is_pressed() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let app = app
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+
+        assert_eq!(2, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_decrement_right_pane_scroll_when_scroll_up_is_pressed() {
+        let report = empty_report();
+        let app = App::new(&report)
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ScrollUp);
+
+        assert_eq!(1, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_not_scroll_up_past_zero() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let app = app.handle_key(InputKey::ScrollUp);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_cursor_moves_down() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Down);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_cursor_moves_up() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Up);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_toggling_diff_pane() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ToggleDiff);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_returning_from_source_screen() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::Source);
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string()
+            },
+            *app.screen()
+        );
+
+        let app = app.handle_key(InputKey::Back);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_ignore_scroll_keys_while_source_screen_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+
+        let app = app.handle_key(InputKey::ScrollDown);
+
+        assert_eq!(0, app.right_pane_scroll());
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string()
+            },
+            *app.screen()
+        );
+    }
+
+    /// Two independent top-level directories, each with one file holding
+    /// one symbol — deep/wide enough that `Nav::retarget_cursor` can land
+    /// the cursor on a genuinely different node after a collapse, matching
+    /// `nav.rs`'s own `should_not_move_cursor_when_collapse_happens_elsewhere_in_the_tree`
+    /// fixture shape. Expanded row order: a(0), a/one.rs(1), foo(2), b(3),
+    /// b/two.rs(4), bar(5).
+    fn report_with_two_directories() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![
+                FileReport {
+                    path: "a/one.rs".to_string(),
+                    symbols: vec![symbol("a/one.rs::foo", "foo")],
+                },
+                FileReport {
+                    path: "b/two.rs".to_string(),
+                    symbols: vec![symbol("b/two.rs::bar", "bar")],
+                },
+            ],
+            ..empty_report()
+        }
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_select_collapses_the_row_under_the_cursor() {
+        // Row 0 is "a" itself; collapsing it via `Select` hides its
+        // children but the cursor's own row survives unmoved — still a
+        // case the blanket reset rule must cover, since a directory row's
+        // own detail content (fan-in/badges) does not depend on which of
+        // its children are currently shown, but this pins the simplest
+        // Select case regardless.
+        let report = report_with_two_directories();
+        let app = App::new(&report).handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Select);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_collapse_all_retargets_cursor_onto_a_different_node() {
+        // Cursor starts on "bar" (row 5, under "b/two.rs"); CollapseAll
+        // hides every file/symbol row, and `Nav::retarget_cursor` lands the
+        // cursor on "b" (the nearest still-visible ancestor) — a genuinely
+        // different node's detail than the one the pre-collapse scroll
+        // offset was scrolled into.
+        let report = report_with_two_directories();
+        let mut app = App::new(&report);
+        for _ in 0..5 {
+            app = app.handle_key(InputKey::Down);
+        }
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b/two.rs", rows[app.nav().cursor()].node.path);
+        let app = app
+            .handle_key(InputKey::ScrollDown)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::CollapseAll);
+
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b", rows[app.nav().cursor()].node.path);
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_expand_all_is_pressed() {
+        let report = report_with_two_directories();
+        let app = App::new(&report)
+            .handle_key(InputKey::CollapseAll)
+            .handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ExpandAll);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_toggle_order_is_pressed() {
+        // ToggleOrder can change which row now sits at the same cursor
+        // index (reordering siblings), so it must reset the scroll offset
+        // even though it never calls into `Nav` at all.
+        let report = report_with_two_directories();
+        let app = App::new(&report).handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::ToggleOrder);
+
+        assert_eq!(0, app.right_pane_scroll());
     }
 }

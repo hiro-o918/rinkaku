@@ -23,6 +23,7 @@ rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
 # version internally (see ratatui-crossterm) — declaring it here too would
 # just be a second, redundant version to keep in sync.
 ratatui = { workspace = true }
+unicode-width = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
