@@ -383,6 +383,21 @@ release tag (`v{version}`, no component prefix) triggers
 (`rinkaku-core-v{version}`) so a `rinkaku-core`-only release doesn't spin
 up the binary build/publish pipeline.
 
+`separate-pull-requests: true` is set for a reason that isn't obvious
+from the config alone: with more than one non-root `packages` entry (no
+`.` path), release-please's PR-merging step can't find a "root" release
+candidate to base the combined PR's title on, and falls back to a title
+that omits the version entirely (`chore: release main`). That title
+doesn't match what the *next* run expects when looking up the
+already-merged PR to tag, so tagging silently finds nothing to do and
+`release-main.yaml` aborts with "untagged, merged release PRs
+outstanding" -- this bit us for both the v0.2.0 and v0.3.0 releases,
+each requiring a manual `gh release create` + relabeling the PR
+`autorelease: tagged` to recover. `separate-pull-requests: true` sidesteps
+this entirely: each package gets its own PR (and its own title, correctly
+including that package's version), so there's no combined-PR title to
+compute in the first place.
+
 ## License
 
 MIT
