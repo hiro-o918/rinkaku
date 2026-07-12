@@ -641,6 +641,7 @@ mod tests {
                 referenced_names: referenced_names.into_iter().map(str::to_string).collect(),
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
+                is_test: false,
             }
         }
 

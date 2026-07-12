@@ -65,11 +65,36 @@ impl LanguageSupport for PythonSupport {
     fn reference_query(&self) -> &str {
         REFERENCE_QUERY
     }
+
+    /// pytest's own file-discovery convention (`test_*.py` / `*_test.py`,
+    /// see the pytest docs' "Conventions for Python test discovery") plus a
+    /// `tests/` directory anywhere in the path — the latter catches
+    /// fixture/helper modules inside a test suite that don't themselves
+    /// match the filename pattern (e.g. `tests/factories.py`).
+    fn is_test_path(&self, path: &str) -> bool {
+        is_in_tests_dir(path) || is_python_test_filename(path)
+    }
+}
+
+/// Whether `path` contains a `tests/` path segment anywhere (not just as
+/// the immediate parent), so `tests/unit/factories.py` is caught the same
+/// as `tests/factories.py`.
+fn is_in_tests_dir(path: &str) -> bool {
+    path.split('/').any(|segment| segment == "tests")
+}
+
+/// Whether the file name (last `/`-separated segment) matches pytest's
+/// `test_*.py` / `*_test.py` discovery convention.
+fn is_python_test_filename(path: &str) -> bool {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    file_name.starts_with("test_") && file_name.ends_with(".py") || file_name.ends_with("_test.py")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[test]
     fn should_report_python_as_name() {
@@ -107,5 +132,26 @@ mod tests {
 
         tree_sitter::Query::new(&support.grammar(), support.reference_query())
             .expect("REFERENCE_QUERY must be valid against the Python grammar");
+    }
+
+    #[rstest]
+    #[case::should_return_true_when_filename_starts_with_test_prefix("test_repo.py", true)]
+    #[case::should_return_true_when_filename_ends_with_test_suffix("repo_test.py", true)]
+    #[case::should_return_true_when_path_has_tests_directory_segment(
+        "src/tests/factories.py",
+        true
+    )]
+    #[case::should_return_true_when_tests_directory_is_nested("tests/unit/factories.py", true)]
+    #[case::should_return_false_when_path_is_ordinary_module("src/repo.py", false)]
+    #[case::should_return_false_when_filename_merely_contains_test_substring(
+        "src/contest.py",
+        false
+    )]
+    fn is_test_path_cases(#[case] path: &str, #[case] expected: bool) {
+        let support = PythonSupport;
+
+        let actual = support.is_test_path(path);
+
+        assert_eq!(expected, actual);
     }
 }

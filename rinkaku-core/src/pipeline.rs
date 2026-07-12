@@ -9,10 +9,10 @@
 
 use crate::deps::{Resolver, resolve_dependencies};
 use crate::diff::{ChangeKind, parse_unified_diff};
-use crate::extract::extract_changed_symbols;
+use crate::extract::{ExtractedSymbol, extract_changed_symbols};
 use crate::graph::{build_graph, stamp_ids};
-use crate::language::language_for_path;
-use crate::render::{FileReport, Report, SkipReason, SkippedFile};
+use crate::language::{LanguageSupport, language_for_path};
+use crate::render::{FileReport, Report, SkipReason, SkippedFile, TestFileSummary};
 use thiserror::Error;
 
 /// Errors that can occur while running the pipeline.
@@ -50,6 +50,30 @@ pub enum AnalyzeError {
 /// resolution entirely — no `Resolver::resolve` calls are made — which is
 /// how the CLI's `--deps 0` is wired (`main.rs`).
 ///
+/// `include_tests` controls ADR 0009's test-symbol exclusion: `false` (the
+/// CLI's default) drops every symbol a file's
+/// [`crate::language::LanguageSupport`] considers a test — by path
+/// ([`LanguageSupport::is_test_path`], the whole file) or by AST context
+/// ([`ExtractedSymbol::is_test`], set per-definition during extraction) —
+/// from `files` before dependency resolution and graph-building run, and
+/// summarizes the excluded counts per file in the returned `Report`'s
+/// `tests`. `true` (`--include-tests`) keeps every symbol in `files` as
+/// before and leaves `tests` empty. Filtering happens before
+/// `resolve_dependencies`/`build_graph` rather than at render time so test
+/// symbols are excluded from the dependency graph and 1-hop resolution too,
+/// not just hidden from the rendered "Change graph"/"Definitions" sections.
+///
+/// `generated_paths` (ADR 0010) is the set of changed paths `main.rs`
+/// resolved as `-diff`/`linguist-generated` via `git check-attr` at the
+/// process boundary — this module stays pure and never runs `git` itself,
+/// so the set is computed by the caller and passed in as plain data, same
+/// as `read_file`. A path in this set is reported as
+/// `SkipReason::Generated` before any other check (deleted/binary/
+/// unsupported-language) runs for it, and `read_file` is never called for
+/// it. Empty when `--include-generated` is given or no local repository was
+/// available to resolve attributes against (`main.rs` degrades to an empty
+/// set rather than erroring in that case).
+///
 /// Known inefficiency: a changed file is parsed here (via
 /// `extract_changed_symbols`) and, when `resolver` is `TagsResolver`,
 /// parsed *again* while building that resolver's index
@@ -63,6 +87,8 @@ pub fn analyze_diff(
     diff_text: &str,
     read_file: impl Fn(&str) -> std::io::Result<String>,
     resolver: Option<&dyn Resolver>,
+    include_tests: bool,
+    generated_paths: &std::collections::HashSet<String>,
 ) -> Result<Report, AnalyzeError> {
     let changed_files = parse_unified_diff(diff_text)?;
 
@@ -70,6 +96,13 @@ pub fn analyze_diff(
     let mut skipped = Vec::new();
 
     for changed_file in changed_files {
+        if generated_paths.contains(&changed_file.path) {
+            skipped.push(SkippedFile {
+                path: changed_file.path,
+                reason: SkipReason::Generated,
+            });
+            continue;
+        }
         if changed_file.kind == ChangeKind::Deleted {
             skipped.push(SkippedFile {
                 path: changed_file.path,
@@ -116,6 +149,11 @@ pub fn analyze_diff(
         });
     }
 
+    let mut tests = Vec::new();
+    if !include_tests {
+        (files, tests) = partition_test_symbols(files);
+    }
+
     let mut files = match resolver {
         Some(resolver) => resolve_dependencies(files, resolver),
         None => files,
@@ -133,7 +171,56 @@ pub fn analyze_diff(
         files,
         skipped,
         graph,
+        tests,
     })
+}
+
+/// Splits `files` into (non-test symbols, per-file test-symbol counts) for
+/// ADR 0009's default test-symbol exclusion. A symbol is a test if its
+/// file's [`LanguageSupport::is_test_path`] says the whole file is a test
+/// file, or if [`ExtractedSymbol::is_test`] says so by AST context (Rust's
+/// `#[cfg(test)]`/`#[test]`, set during extraction).
+///
+/// A file that had symbols before filtering but ends up with none after
+/// (every symbol it changed was a test) is dropped from the returned
+/// `files` entirely — it contributes only a [`TestFileSummary`], not an
+/// empty `FileReport` (which would otherwise render under "Other changed
+/// files" as if it were an uninteresting pure rename, which it is not). A
+/// file that already had no symbols *before* filtering (a genuine pure
+/// rename, see `analyze_diff`'s doc comment) is left alone and still kept,
+/// since filtering removed nothing from it.
+fn partition_test_symbols(files: Vec<FileReport>) -> (Vec<FileReport>, Vec<TestFileSummary>) {
+    let mut kept = Vec::new();
+    let mut tests = Vec::new();
+
+    for file in files {
+        let had_symbols = !file.symbols.is_empty();
+        let is_test_path = language_for_path(&file.path)
+            .is_some_and(|lang: &dyn LanguageSupport| lang.is_test_path(&file.path));
+
+        let (non_test, test): (Vec<ExtractedSymbol>, Vec<ExtractedSymbol>) = if is_test_path {
+            (Vec::new(), file.symbols)
+        } else {
+            file.symbols.into_iter().partition(|symbol| !symbol.is_test)
+        };
+
+        if !test.is_empty() {
+            tests.push(TestFileSummary {
+                path: file.path.clone(),
+                symbol_count: test.len(),
+            });
+        }
+        // Drop the file only if filtering actually emptied it — a file
+        // that had no symbols to begin with (pure rename) must stay.
+        if !had_symbols || !non_test.is_empty() {
+            kept.push(FileReport {
+                path: file.path,
+                symbols: non_test,
+            });
+        }
+    }
+
+    (kept, tests)
 }
 
 /// Parses `diff_text` and collects every name referenced by any changed
@@ -192,7 +279,7 @@ mod tests {
     use crate::diff::LineRange;
     use crate::extract::{ExtractedSymbol, SymbolKind};
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     /// Builds a `read_file` port backed by an in-memory map, so tests never
     /// touch the real filesystem.
@@ -224,8 +311,10 @@ mod tests {
             files: vec![],
             skipped: vec![],
             graph: empty_graph(),
+            tests: vec![],
         };
-        let actual = analyze_diff("", read_file, None).expect("analyze should succeed");
+        let actual = analyze_diff("", read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -263,6 +352,7 @@ fn foo(a: i32) -> i32 {
                     referenced_names: vec![],
                     dependencies: vec![],
                     omitted_dependency_matches: 0,
+                    is_test: false,
                 }],
             }],
             skipped: vec![],
@@ -275,8 +365,10 @@ fn foo(a: i32) -> i32 {
                 edges: vec![],
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
+            tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -304,8 +396,10 @@ index 4b825dc..0000000
                 reason: SkipReason::Deleted,
             }],
             graph: empty_graph(),
+            tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -326,8 +420,10 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                 reason: SkipReason::Binary,
             }],
             graph: empty_graph(),
+            tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -356,8 +452,10 @@ index e69de29..4b825dc 100644
                 reason: SkipReason::UnsupportedLanguage,
             }],
             graph: empty_graph(),
+            tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -390,8 +488,10 @@ rename to src/new_name.rs
             }],
             skipped: vec![],
             graph: empty_graph(),
+            tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -408,7 +508,7 @@ index e69de29..4b825dc 100644
 ";
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file, None);
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new());
 
         assert!(matches!(actual, Err(AnalyzeError::Diff(_))));
     }
@@ -427,7 +527,7 @@ index e69de29..4b825dc 100644
         // Map has no entry for src/lib.rs, so the fake reader returns Err.
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file, None);
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new());
 
         assert!(matches!(
             actual,
@@ -471,6 +571,7 @@ index e69de29..4b825dc 100644
                     referenced_names: vec![],
                     dependencies: vec![],
                     omitted_dependency_matches: 0,
+                    is_test: false,
                 }],
             }],
             skipped: vec![SkippedFile {
@@ -486,8 +587,10 @@ index e69de29..4b825dc 100644
                 edges: vec![],
                 roots: vec!["src/lib.rs::a".to_string()],
             },
+            tests: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
     }
@@ -535,7 +638,8 @@ fn foo(p: Point) -> i32 {
 ";
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-        let report = analyze_diff(diff, read_file, None).expect("analyze should succeed");
+        let report = analyze_diff(diff, read_file, None, true, &HashSet::new())
+            .expect("analyze should succeed");
 
         // No resolver was passed, so every symbol's dependencies must stay
         // empty — this is `--deps 0`'s contract (main.rs), not merely "the
@@ -567,7 +671,8 @@ fn foo(p: Point) -> i32 {
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
         let resolver = CountingResolver::new();
 
-        analyze_diff(diff, read_file, Some(&resolver)).expect("analyze should succeed");
+        analyze_diff(diff, read_file, Some(&resolver), true, &HashSet::new())
+            .expect("analyze should succeed");
 
         let mut expected = vec!["Point".to_string(), "helper".to_string()];
         let mut actual = resolver.calls.borrow().clone();
@@ -575,6 +680,256 @@ fn foo(p: Point) -> i32 {
         actual.sort();
 
         assert_eq!(expected, actual);
+    }
+
+    mod test_symbol_exclusion_tests {
+        use super::*;
+        use crate::render::TestFileSummary;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_exclude_rust_symbol_from_files_and_summarize_it_when_include_tests_is_false() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@
+ #[test]
+ fn should_add_two_numbers() {
+-    assert_eq!(1, 1 + 0);
++    assert_eq!(2, 1 + 1);
+ }
+";
+            let source = "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(2, 1 + 1);
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+                .expect("analyze should succeed");
+
+            let expected_files: Vec<FileReport> = Vec::new();
+            let expected_tests = vec![TestFileSummary {
+                path: "src/lib.rs".to_string(),
+                symbol_count: 1,
+            }];
+            assert_eq!(expected_files, report.files);
+            assert_eq!(expected_tests, report.tests);
+        }
+
+        #[test]
+        fn should_keep_test_symbol_in_files_and_leave_tests_empty_when_include_tests_is_true() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@
+ #[test]
+ fn should_add_two_numbers() {
+-    assert_eq!(1, 1 + 0);
++    assert_eq!(2, 1 + 1);
+ }
+";
+            let source = "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(2, 1 + 1);
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let report = analyze_diff(diff, read_file, None, true, &HashSet::new())
+                .expect("analyze should succeed");
+
+            let expected_tests: Vec<TestFileSummary> = Vec::new();
+            assert_eq!(1, report.files.len());
+            assert_eq!(1, report.files[0].symbols.len());
+            assert_eq!(expected_tests, report.tests);
+        }
+
+        #[test]
+        fn should_drop_whole_file_from_files_when_go_test_file_has_only_test_symbols() {
+            let diff = "\
+diff --git a/repo_test.go b/repo_test.go
+index e69de29..4b825dc 100644
+--- a/repo_test.go
++++ b/repo_test.go
+@@ -1,5 +1,5 @@
+ package main
+
+ func TestFoo(t *testing.T) {
+-	old()
++	new_()
+ }
+";
+            let source = "\
+package main
+
+func TestFoo(t *testing.T) {
+	new_()
+}
+";
+            let read_file = fake_reader(HashMap::from([("repo_test.go", source)]));
+
+            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+                .expect("analyze should succeed");
+
+            let expected_files: Vec<FileReport> = Vec::new();
+            let expected_tests = vec![TestFileSummary {
+                path: "repo_test.go".to_string(),
+                symbol_count: 1,
+            }];
+            assert_eq!(expected_files, report.files);
+            assert_eq!(expected_tests, report.tests);
+        }
+
+        // Regression test: a genuine pure rename produces a `FileReport`
+        // with an empty `symbols` list *before* test filtering ever runs
+        // (see `analyze_diff`'s doc comment) — that emptiness has nothing
+        // to do with tests, so `partition_test_symbols` must not drop it
+        // the same way it drops a file that became empty *because of*
+        // filtering (the Go all-test-file case above). Dropping it here
+        // would wrongly hide it from "Other changed files".
+        #[test]
+        fn should_keep_file_with_no_symbols_when_it_was_a_pure_rename_not_a_test_file() {
+            let diff = "\
+diff --git a/src/old_name.rs b/src/new_name.rs
+similarity index 100%
+rename from src/old_name.rs
+rename to src/new_name.rs
+";
+            let read_file = fake_reader(HashMap::new());
+
+            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+                .expect("analyze should succeed");
+
+            let expected_files = vec![FileReport {
+                path: "src/new_name.rs".to_string(),
+                symbols: vec![],
+            }];
+            let expected_tests: Vec<TestFileSummary> = Vec::new();
+            assert_eq!(expected_files, report.files);
+            assert_eq!(expected_tests, report.tests);
+        }
+
+        #[test]
+        fn should_keep_non_test_symbols_and_summarize_test_symbols_when_file_mixes_both() {
+            // A Rust file with one production function and one
+            // `#[cfg(test)] mod tests` function both changed in the same
+            // diff — the production symbol stays in `files`, the test
+            // symbol is summarized in `tests`, and the file is not dropped
+            // entirely (unlike the all-test-file case above).
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,9 +1,9 @@
+ fn add(a: i32, b: i32) -> i32 {
+-    a - b
++    a + b
+ }
+
+ #[cfg(test)]
+ mod tests {
+     #[test]
+     fn should_add_two_numbers() {
+-        assert_eq!(2, add(1, 1));
++        assert_eq!(3, add(1, 2));
+     }
+ }
+";
+            let source = "\
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn should_add_two_numbers() {
+        assert_eq!(3, add(1, 2));
+    }
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let report = analyze_diff(diff, read_file, None, false, &HashSet::new())
+                .expect("analyze should succeed");
+
+            let expected_tests = vec![TestFileSummary {
+                path: "src/lib.rs".to_string(),
+                symbol_count: 1,
+            }];
+            assert_eq!(1, report.files.len());
+            assert_eq!(1, report.files[0].symbols.len());
+            assert_eq!("add", report.files[0].symbols[0].name);
+            assert_eq!(expected_tests, report.tests);
+        }
+    }
+
+    mod generated_path_exclusion_tests {
+        use super::*;
+        use crate::render::{SkipReason, SkippedFile};
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_skip_path_as_generated_when_in_generated_paths_set() {
+            let diff = "\
+diff --git a/Cargo.lock b/Cargo.lock
+index e69de29..4b825dc 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1,1 +1,1 @@
+-version = 1
++version = 2
+";
+            // No entry in the map: if the pipeline tried to read a
+            // generated file, this would return an Err and fail the test.
+            let read_file = fake_reader(HashMap::new());
+            let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
+
+            let report = analyze_diff(diff, read_file, None, true, &generated_paths)
+                .expect("analyze should succeed");
+
+            let expected = vec![SkippedFile {
+                path: "Cargo.lock".to_string(),
+                reason: SkipReason::Generated,
+            }];
+            assert_eq!(expected, report.skipped);
+        }
+
+        #[test]
+        fn should_not_skip_path_when_generated_paths_set_is_empty() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(a: i32) -> i32 {
+-    a
++    a + 1
+ }
+";
+            let source = "\
+fn foo(a: i32) -> i32 {
+    a + 1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let report = analyze_diff(diff, read_file, None, true, &HashSet::new())
+                .expect("analyze should succeed");
+
+            let expected: Vec<SkippedFile> = Vec::new();
+            assert_eq!(expected, report.skipped);
+        }
     }
 
     mod collect_referenced_names_tests {
