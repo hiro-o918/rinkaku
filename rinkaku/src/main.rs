@@ -492,7 +492,19 @@ fn garbage_input_note(
 /// default `analyze_diff` uses for the diff's own symbols — without this, a
 /// changed production symbol's "Depends on:" could resolve to a same-named
 /// test helper/fixture elsewhere in the repo, which is almost always a
-/// false match rather than a real dependency.
+/// false match rather than a real dependency. `cli.include_generated` is
+/// threaded the same way, alongside a `generated_paths` set resolved for
+/// every tracked path via `check_generated_paths_batch` (ADR 0010's
+/// `.gitattributes` check, run once over the whole index rather than the
+/// diff's changed paths — see that function's doc comment for why it
+/// streams paths over stdin instead of passing them as CLI arguments the
+/// way `resolve_generated_paths` does for the diff). `TagsResolver::new`
+/// additionally runs ADR 0011's content-marker check itself once each
+/// file's content is available. Without either exclusion, a changed
+/// production symbol's "Depends on:" could just as easily resolve to a
+/// generated file's definition (e.g. an ORM's model struct, dragging in
+/// every column as noise) as a test helper — see ADR 0010/0011's
+/// Consequences.
 fn build_resolver(
     cli: &Cli,
     diff_text: &str,
@@ -512,6 +524,11 @@ fn build_resolver(
         "building dependency index over {} tracked files",
         paths.len()
     );
+    let generated_paths = if cli.include_generated {
+        std::collections::HashSet::new()
+    } else {
+        check_generated_paths_batch(cwd, &paths)
+    };
     let files: Vec<(String, String)> = match head {
         // One `git cat-file --batch` child process serves every path
         // (see `read_git_show_files_batch`'s doc comment for why this
@@ -541,6 +558,8 @@ fn build_resolver(
         language_for_path,
         &reference_names,
         cli.include_tests,
+        &generated_paths,
+        cli.include_generated,
     )))
 }
 
@@ -605,6 +624,109 @@ fn check_generated_paths(
         return std::collections::HashSet::new();
     };
     parse_generated_paths(&stdout)
+}
+
+/// `check_generated_paths`'s sibling for [`build_resolver`]'s repo-wide
+/// index: resolves the same `.gitattributes` generated-file set (ADR
+/// 0010), but for `paths` drawn from `git ls-files`'s full tracked-file
+/// list rather than a diff's changed files — potentially thousands of
+/// paths, large enough that passing them as CLI arguments the way
+/// `check_generated_paths` does risks exceeding the OS's `ARG_MAX`. Streams
+/// them to `git check-attr --stdin -z diff linguist-generated` over stdin
+/// instead, which accepts the exact same NUL-separated encoding on input
+/// that `-z` alone produces on output (verified against a real
+/// `git check-attr --stdin -z` run), so [`parse_generated_paths`] parses
+/// this call's stdout unchanged.
+///
+/// Same best-effort contract as `check_generated_paths`: any failure (not
+/// a git repository, `git` not runnable, a non-UTF-8 stream) degrades to
+/// an empty set rather than propagating an error, since this powers an aid
+/// (the dependency index) rather than the primary diff-condensation flow.
+///
+/// Writes to stdin on a dedicated thread while reading stdout on the main
+/// thread, rather than writing everything up front and reading afterward —
+/// same deadlock-avoidance rationale as `read_git_show_files_batch`'s doc
+/// comment: with thousands of paths, `git check-attr`'s stdout (an OS pipe
+/// with a bounded buffer) can fill up while this process is still writing
+/// stdin, and neither side would ever unblock the other without a
+/// concurrent reader/writer split.
+fn check_generated_paths_batch(
+    cwd: Option<&std::path::Path>,
+    paths: &[String],
+) -> std::collections::HashSet<String> {
+    if paths.is_empty() {
+        return std::collections::HashSet::new();
+    }
+
+    let mut command = std::process::Command::new("git");
+    command
+        .args(["check-attr", "--stdin", "-z", "diff", "linguist-generated"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let Ok(mut child) = command.spawn() else {
+        return std::collections::HashSet::new();
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        return std::collections::HashSet::new();
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        return std::collections::HashSet::new();
+    };
+    // Drained on its own thread for the same reason
+    // `read_git_show_files_batch` drains stderr concurrently: an unread
+    // pipe that fills up would otherwise be a second way for this call to
+    // deadlock, independent of the stdin/stdout split above.
+    let stderr = child.stderr.take();
+    let stderr_reader = stderr.map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stderr, &mut buf);
+            buf
+        })
+    });
+
+    let paths_owned: Vec<String> = paths.to_vec();
+    let writer = std::thread::spawn(move || -> std::io::Result<()> {
+        for path in &paths_owned {
+            stdin.write_all(path.as_bytes())?;
+            stdin.write_all(b"\0")?;
+        }
+        // Dropping `stdin` here (end of scope) closes the pipe, which is
+        // what makes `git check-attr --stdin` stop waiting for more input
+        // and start producing output.
+        Ok(())
+    });
+
+    let mut stdout_bytes = Vec::new();
+    if std::io::Read::read_to_end(&mut stdout, &mut stdout_bytes).is_err() {
+        return std::collections::HashSet::new();
+    }
+
+    // Propagate a stdin-write failure (thread panic, or the write itself
+    // returning `Err`) as "nothing resolved" rather than unwrapping —
+    // best-effort, same as every other failure mode here.
+    let Ok(Ok(())) = writer.join() else {
+        return std::collections::HashSet::new();
+    };
+
+    let status = child.wait();
+    if let Some(reader) = stderr_reader {
+        let _ = reader.join();
+    }
+    let Ok(status) = status else {
+        return std::collections::HashSet::new();
+    };
+    if !status.success() {
+        return std::collections::HashSet::new();
+    }
+    let Ok(stdout_text) = String::from_utf8(stdout_bytes) else {
+        return std::collections::HashSet::new();
+    };
+    parse_generated_paths(&stdout_text)
 }
 
 /// Parses `git check-attr -z diff linguist-generated -- <paths...>`'s
@@ -2336,6 +2458,89 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
 
         let expected: HashSet<String> = HashSet::new();
         assert_eq!(expected, actual);
+    }
+
+    // check_generated_paths_batch is check_generated_paths's sibling for
+    // TagsResolver's repo-wide index: the same git check-attr resolution,
+    // but paths are streamed via --stdin -z instead of passed as CLI
+    // arguments, since the index covers every git-ls-files-tracked path
+    // (potentially thousands) rather than just a diff's changed files —
+    // large enough to risk ARG_MAX if passed as argv.
+    #[test]
+    fn should_report_paths_marked_generated_via_stdin_batch() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            "Cargo.lock -diff\ngen/*.go linguist-generated=true\n",
+        )
+        .expect("write .gitattributes");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+        std::fs::write(dir.path().join("normal.rs"), "").expect("write normal.rs");
+        std::fs::create_dir_all(dir.path().join("gen")).expect("create gen dir");
+        std::fs::write(dir.path().join("gen/foo.go"), "").expect("write gen/foo.go");
+
+        let paths = vec![
+            "Cargo.lock".to_string(),
+            "normal.rs".to_string(),
+            "gen/foo.go".to_string(),
+        ];
+        let actual = check_generated_paths_batch(Some(dir.path()), &paths);
+
+        let expected: HashSet<String> = ["Cargo.lock".to_string(), "gen/foo.go".to_string()]
+            .into_iter()
+            .collect();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_set_when_batch_cwd_is_not_a_git_repository() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        std::fs::write(dir.path().join("Cargo.lock"), "").expect("write Cargo.lock");
+
+        let actual = check_generated_paths_batch(Some(dir.path()), &["Cargo.lock".to_string()]);
+
+        let expected: HashSet<String> = HashSet::new();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_empty_set_when_batch_paths_is_empty() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+
+        let actual = check_generated_paths_batch(Some(dir.path()), &[]);
+
+        let expected: HashSet<String> = HashSet::new();
+        assert_eq!(expected, actual);
+    }
+
+    // Regression case: a large path count must not exceed argv limits
+    // since paths are streamed via stdin, not passed as CLI arguments —
+    // this pins down that the batch path actually works at a scale that
+    // would risk ARG_MAX if passed as argv (check_generated_paths's own
+    // approach), not just that it works for a handful of paths.
+    #[test]
+    fn should_handle_many_paths_via_stdin_without_hitting_arg_limits() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            "gen/*.go linguist-generated=true\n",
+        )
+        .expect("write .gitattributes");
+        std::fs::create_dir_all(dir.path().join("gen")).expect("create gen dir");
+
+        let mut paths = Vec::new();
+        for i in 0..5000 {
+            let path = format!("gen/file{i}.go");
+            std::fs::write(dir.path().join(&path), "").expect("write generated file");
+            paths.push(path);
+        }
+
+        let actual = check_generated_paths_batch(Some(dir.path()), &paths);
+
+        assert_eq!(paths.len(), actual.len());
     }
 
     // resolve_generated_paths takes already-parsed changed paths (a
