@@ -8,6 +8,7 @@
 use crate::diff::LineRange;
 use crate::language::LanguageSupport;
 use serde::Serialize;
+use std::collections::HashMap;
 use tree_sitter::StreamingIterator;
 
 /// The kind of symbol a definition node represents, expressed in
@@ -215,6 +216,101 @@ pub fn extract_all_symbols(source: &str, lang: &dyn LanguageSupport) -> Vec<Extr
             .filter_map(|node| build_symbol(*node, source_bytes, reference_query, lang))
             .collect()
     })
+}
+
+/// A symbol present on the base side of a diff but absent (by name and
+/// container) from the head side — ADR 0014's `removed` classification,
+/// reported separately from `ExtractedSymbol` since a removed symbol has no
+/// head-side signature, range, or dependencies to speak of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RemovedSymbol {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub path: String,
+    /// The base-side symbol's comment-stripped, normalized signature —
+    /// the same text that would have been `previous_signature` on the head
+    /// symbol had one still existed to attach it to.
+    pub signature: String,
+}
+
+/// Classifies every symbol in `head_symbols` by contract impact (ADR 0014),
+/// setting its `classification`/`previous_signature` in place, and returns
+/// the base-side symbols this file had that no longer exist on the head
+/// side at all (`removed`).
+///
+/// Matches head and base symbols within the same file by `(name,
+/// container)` — the same identity `graph::collect_nodes` uses for a
+/// symbol's stable id, one file at a time rather than by any cross-file
+/// index, since ADR 0014 only classifies a *changed* file's own symbols
+/// against that same file's base content.
+///
+/// - A head symbol with no base-side match at all → [`Classification::Added`].
+/// - A head symbol with a base-side match whose comment-stripped,
+///   normalized signature differs → [`Classification::SignatureChanged`],
+///   with `previous_signature` set to the base signature.
+/// - A head symbol with a base-side match whose signature is identical →
+///   [`Classification::BodyOnly`].
+/// - A base symbol with no head-side match, whose base-side range overlaps
+///   `old_changed_ranges` (the diff's old-side hunk ranges for this file) →
+///   returned as a [`RemovedSymbol`]. A base-only symbol *outside* every
+///   changed range is not reported: nothing in the diff actually touched
+///   it, so it is unrelated to this change (e.g. a symbol that merely moved
+///   later in the file because of an unrelated edit above it) — restricting
+///   to overlapping ranges is what keeps this from flooding output on a
+///   diff that only touches a small part of a large file.
+///
+/// Pure: takes both sides' already-extracted symbol lists and matches them
+/// in memory, no IO. `lang` is not needed here — `head_symbols` and
+/// `base_symbols` are both already the output of `extract_changed_symbols`/
+/// `extract_all_symbols`, whose signatures are already comment-stripped and
+/// normalized (ADR 0014's first change) — so signature comparison is a
+/// plain string comparison, not a second parse.
+pub fn classify_symbols(
+    head_symbols: &mut [ExtractedSymbol],
+    base_symbols: &[ExtractedSymbol],
+    old_changed_ranges: &[LineRange],
+    path: &str,
+) -> Vec<RemovedSymbol> {
+    let base_by_identity: HashMap<(&str, Option<&str>), &ExtractedSymbol> = base_symbols
+        .iter()
+        .map(|s| ((s.name.as_str(), s.container.as_deref()), s))
+        .collect();
+
+    let mut matched_base_identities: std::collections::HashSet<(&str, Option<&str>)> =
+        std::collections::HashSet::new();
+
+    for symbol in head_symbols.iter_mut() {
+        let identity = (symbol.name.as_str(), symbol.container.as_deref());
+        match base_by_identity.get(&identity) {
+            None => {
+                symbol.classification = Some(Classification::Added);
+            }
+            Some(base_symbol) => {
+                matched_base_identities.insert(identity);
+                if base_symbol.signature == symbol.signature {
+                    symbol.classification = Some(Classification::BodyOnly);
+                } else {
+                    symbol.classification = Some(Classification::SignatureChanged);
+                    symbol.previous_signature = Some(base_symbol.signature.clone());
+                }
+            }
+        }
+    }
+
+    base_symbols
+        .iter()
+        .filter(|base_symbol| {
+            let identity = (base_symbol.name.as_str(), base_symbol.container.as_deref());
+            !matched_base_identities.contains(&identity)
+        })
+        .filter(|base_symbol| overlaps_any(base_symbol.range, old_changed_ranges))
+        .map(|base_symbol| RemovedSymbol {
+            name: base_symbol.name.clone(),
+            kind: base_symbol.kind,
+            path: path.to_string(),
+            signature: base_symbol.signature.clone(),
+        })
+        .collect()
 }
 
 /// Parses `source`, runs `lang`'s `definition_query` to find every
@@ -2838,6 +2934,260 @@ const Component = () => {
             let actual = extract_changed_symbols(source, lang, &changed_ranges);
 
             assert_eq!(expected, actual);
+        }
+    }
+
+    mod classification_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        /// Builds an `ExtractedSymbol` for classification tests: `id`,
+        /// `dependencies`, `omitted_dependency_matches`, `referenced_names`
+        /// stay at their inert defaults since matching/classification never
+        /// reads them — only `name`/`kind`/`signature`/`range`/`container`
+        /// matter here.
+        fn symbol(
+            name: &str,
+            container: Option<&str>,
+            signature: &str,
+            range: LineRange,
+        ) -> ExtractedSymbol {
+            ExtractedSymbol {
+                id: String::new(),
+                name: name.to_string(),
+                kind: SymbolKind::Function,
+                signature: signature.to_string(),
+                range,
+                container: container.map(str::to_string),
+                referenced_names: vec![],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: false,
+                classification: None,
+                previous_signature: None,
+            }
+        }
+
+        #[test]
+        fn should_classify_as_added_when_no_base_side_match_exists() {
+            let mut head = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base: Vec<ExtractedSymbol> = vec![];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected[0].classification = Some(Classification::Added);
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_classify_as_signature_changed_when_base_signature_differs() {
+            let mut head = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32, b: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32, b: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected[0].classification = Some(Classification::SignatureChanged);
+            expected[0].previous_signature = Some("fn foo(a: i32) -> i32".to_string());
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_classify_as_body_only_when_base_signature_is_identical() {
+            let mut head = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 4 },
+            )];
+            let base = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 3 },
+            )];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "foo",
+                None,
+                "fn foo(a: i32) -> i32",
+                LineRange { start: 1, end: 4 },
+            )];
+            expected[0].classification = Some(Classification::BodyOnly);
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        // Matching is by (name, container), not name alone: a base-side
+        // method of a different container must not be treated as this
+        // head symbol's base counterpart, even though the bare name
+        // matches.
+        #[test]
+        fn should_classify_as_added_when_base_match_has_different_container() {
+            let mut head = vec![symbol(
+                "save",
+                Some("impl Foo"),
+                "fn save(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base = vec![symbol(
+                "save",
+                Some("impl Bar"),
+                "fn save(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+
+            let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+            let mut expected = vec![symbol(
+                "save",
+                Some("impl Foo"),
+                "fn save(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected[0].classification = Some(Classification::Added);
+            // The base's "save" (impl Bar) never matched any head symbol,
+            // and its range does overlap `old_changed_ranges` in this case
+            // — but this test passes an empty range set, so nothing
+            // qualifies as removed either. See the dedicated removed-symbol
+            // tests below for that path.
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+            assert_eq!(expected, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_report_removed_when_base_only_symbol_overlaps_old_changed_ranges() {
+            let mut head: Vec<ExtractedSymbol> = vec![];
+            let base = vec![symbol(
+                "deprecated_helper",
+                None,
+                "fn deprecated_helper()",
+                LineRange { start: 5, end: 7 },
+            )];
+            let old_changed_ranges = vec![LineRange { start: 6, end: 6 }];
+
+            let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+
+            let expected_head: Vec<ExtractedSymbol> = vec![];
+            let expected_removed = vec![RemovedSymbol {
+                name: "deprecated_helper".to_string(),
+                kind: SymbolKind::Function,
+                path: "src/lib.rs".to_string(),
+                signature: "fn deprecated_helper()".to_string(),
+            }];
+
+            assert_eq!(expected_head, head);
+            assert_eq!(expected_removed, removed);
+        }
+
+        #[test]
+        fn should_not_report_removed_when_base_only_symbol_does_not_overlap_old_changed_ranges() {
+            let mut head: Vec<ExtractedSymbol> = vec![];
+            let base = vec![symbol(
+                "unrelated_helper",
+                None,
+                "fn unrelated_helper()",
+                LineRange { start: 50, end: 52 },
+            )];
+            // The diff touched line 6 only, nowhere near this symbol's
+            // base-side range — an edit elsewhere in the file must not
+            // make every other base-only symbol show up as "removed".
+            let old_changed_ranges = vec![LineRange { start: 6, end: 6 }];
+
+            let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+
+            let expected_removed: Vec<RemovedSymbol> = Vec::new();
+            assert_eq!(expected_removed, removed);
+        }
+
+        // Regression: matching must key on (name, container), not name
+        // alone. Two base-side symbols share the bare name "helper" but
+        // have different containers; only one has a head-side match. If
+        // matching were name-only, the matched "impl Foo" head symbol
+        // could wrongly be treated as also covering "impl Bar"'s base
+        // symbol, silently dropping it instead of reporting it removed.
+        #[test]
+        fn should_report_removed_when_a_second_base_symbol_of_same_name_has_no_head_match() {
+            // Base has two distinct "helper" symbols distinguished by
+            // container; head only kept the "impl Foo" one.
+            let mut head = vec![symbol(
+                "helper",
+                Some("impl Foo"),
+                "fn helper(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            let base = vec![
+                symbol(
+                    "helper",
+                    Some("impl Foo"),
+                    "fn helper(&self)",
+                    LineRange { start: 1, end: 3 },
+                ),
+                symbol(
+                    "helper",
+                    Some("impl Bar"),
+                    "fn helper(&self)",
+                    LineRange { start: 10, end: 12 },
+                ),
+            ];
+            let old_changed_ranges = vec![LineRange { start: 11, end: 11 }];
+
+            let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+
+            let mut expected_head = vec![symbol(
+                "helper",
+                Some("impl Foo"),
+                "fn helper(&self)",
+                LineRange { start: 1, end: 3 },
+            )];
+            expected_head[0].classification = Some(Classification::BodyOnly);
+            let expected_removed = vec![RemovedSymbol {
+                name: "helper".to_string(),
+                kind: SymbolKind::Function,
+                path: "src/lib.rs".to_string(),
+                signature: "fn helper(&self)".to_string(),
+            }];
+
+            assert_eq!(expected_head, head);
+            assert_eq!(expected_removed, removed);
         }
     }
 }

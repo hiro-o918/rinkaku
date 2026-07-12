@@ -58,6 +58,14 @@ pub struct Report {
     /// consumers get it without recomputing the aggregation themselves,
     /// matching how `graph` itself is already exposed alongside `files`.
     pub hotspots: Vec<Hotspot>,
+    /// Symbols present on the base side of a diff but absent from the head
+    /// side entirely (ADR 0014's `removed` classification) — reported
+    /// separately from `files` since a removed symbol has no head-side
+    /// signature/range/dependencies of its own. Always empty when no base
+    /// content was available to classify against (see
+    /// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter),
+    /// same as every symbol's `classification` staying `None` in that case.
+    pub removed: Vec<crate::extract::RemovedSymbol>,
 }
 
 /// Extracted symbols for a single changed file.
@@ -777,6 +785,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "".to_string();
@@ -809,6 +818,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -853,6 +863,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -899,6 +910,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -931,6 +943,7 @@ fn foo()
                 symbol_count: 1,
             }],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -960,6 +973,7 @@ fn foo()
                 symbol_count: 3,
             }],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -998,6 +1012,7 @@ fn foo()
                 symbol_count: 2,
             }],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1049,6 +1064,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "".to_string();
@@ -1081,6 +1097,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1115,6 +1132,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1132,7 +1150,8 @@ fn foo()
     \"roots\": []
   },
   \"tests\": [],
-  \"hotspots\": []
+  \"hotspots\": [],
+  \"removed\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
@@ -1160,6 +1179,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1211,6 +1231,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1246,6 +1267,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1289,6 +1311,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1352,6 +1375,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1422,6 +1446,7 @@ fn foo(a: i32, b: i32)
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1503,6 +1528,7 @@ fn resolve_pr_base_sha() -> Result<String>
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1590,6 +1616,7 @@ fn c()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1657,6 +1684,7 @@ fn bar()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1766,6 +1794,7 @@ fn resolve_pr_base_sha()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1878,6 +1907,7 @@ struct Config { path: String }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -1972,6 +2002,7 @@ type UpsertItemsResponse struct { Count int }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2053,6 +2084,7 @@ struct Dup { b: i32 }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2115,6 +2147,7 @@ fn bar()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2190,6 +2223,7 @@ struct Config { path: String }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2269,6 +2303,7 @@ struct Inner { x: i32 }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2324,6 +2359,7 @@ struct Node { next: Option<Box<Node>> }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2375,6 +2411,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2434,6 +2471,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2489,6 +2527,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2546,6 +2585,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2596,6 +2636,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2646,6 +2687,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2684,6 +2726,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2731,6 +2774,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2824,6 +2868,7 @@ fn foo()
                 name: "UpsertItemsRequest".to_string(),
                 used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
             }],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2893,6 +2938,7 @@ func HandleBar(req UpsertItemsRequest) error
                 name: "ghost".to_string(),
                 used_by: vec!["a".to_string(), "b".to_string()],
             }],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2939,6 +2985,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -2972,6 +3019,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -3023,6 +3071,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -3070,6 +3119,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
 
         let expected = "\
@@ -3114,7 +3164,8 @@ fn foo()
     ]
   },
   \"tests\": [],
-  \"hotspots\": []
+  \"hotspots\": [],
+  \"removed\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");

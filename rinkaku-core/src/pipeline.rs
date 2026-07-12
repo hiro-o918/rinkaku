@@ -9,11 +9,22 @@
 
 use crate::deps::{Resolver, is_generated_content, resolve_dependencies};
 use crate::diff::{ChangeKind, parse_unified_diff};
-use crate::extract::{ExtractedSymbol, extract_changed_symbols};
+use crate::extract::{
+    ExtractedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
+};
 use crate::graph::{build_graph, compute_hotspots, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
 use crate::render::{FileReport, Report, SkipReason, SkippedFile, TestFileSummary};
 use thiserror::Error;
+
+/// A `read_file`-shaped port for fetching a changed file's *base*-side
+/// content (ADR 0014) — see `analyze_diff`'s `read_base_file` parameter.
+/// Named so the parameter's type doesn't trip clippy's `type_complexity`
+/// lint at the call site; the shape itself intentionally mirrors
+/// `read_file`'s own `impl Fn(&str) -> std::io::Result<String>>`, just as a
+/// trait object (`&dyn Fn`) so it can be threaded through as `Option<_>`,
+/// which `impl Trait` cannot be.
+pub type ReadBaseFile<'a> = &'a dyn Fn(&str) -> std::io::Result<String>;
 
 /// Errors that can occur while running the pipeline.
 #[derive(Debug, Error)]
@@ -95,9 +106,30 @@ pub enum AnalyzeError {
 /// pays for indexing (see the performance note at the top of `deps.rs`),
 /// so left unaddressed for now rather than adding a cache purely on
 /// suspicion.
+///
+/// `read_base_file` (ADR 0014), when `Some`, is used the same way as
+/// `read_file` but for a changed file's *base*-side content — mirroring
+/// `read_file`'s own shape (a plain closure/fn port, not a trait object) so
+/// the two ports read the same way at every call site. For each changed
+/// file this loop reaches (i.e. not already skipped, and with a non-empty
+/// `changed_ranges`), the base content it returns is parsed with the same
+/// `LanguageSupport` and run through [`extract_all_symbols`], then
+/// [`classify_symbols`] compares the two sides to set each head symbol's
+/// `classification`/`previous_signature` and collect this file's `removed`
+/// entries. `None` — the pure-stdin-pipe case, where no base commit is
+/// known — leaves every symbol's `classification` at its default `None`
+/// ("not attempted") and `removed` empty; this function never guesses a
+/// classification from partial information. A `read_base_file` call
+/// failing (`Err`, e.g. the path didn't exist on the base side — brand new
+/// file — or any other IO error) is treated the same as "no base content
+/// available" for that one file rather than propagated as an
+/// [`AnalyzeError`]: the base commit not having this exact path is an
+/// expected, common case (every `Added` file hits it), not a failure of
+/// the run.
 pub fn analyze_diff(
     diff_text: &str,
     read_file: impl Fn(&str) -> std::io::Result<String>,
+    read_base_file: Option<ReadBaseFile>,
     resolver: Option<&dyn Resolver>,
     include_tests: bool,
     generated_paths: &std::collections::HashSet<String>,
@@ -107,6 +139,7 @@ pub fn analyze_diff(
 
     let mut files = Vec::new();
     let mut skipped = Vec::new();
+    let mut removed = Vec::new();
 
     for changed_file in changed_files {
         if changed_file.kind == ChangeKind::Deleted {
@@ -166,7 +199,25 @@ pub fn analyze_diff(
             });
             continue;
         }
-        let symbols = extract_changed_symbols(&source, lang, &changed_file.changed_ranges);
+        let mut symbols = extract_changed_symbols(&source, lang, &changed_file.changed_ranges);
+
+        // ADR 0014: classify each symbol's contract impact against the
+        // base side, when base content is available and readable for this
+        // path. Left at `None`/empty (classify_symbols never runs) when
+        // `read_base_file` is absent or its call fails for this file.
+        if let Some(read_base_file) = read_base_file
+            && let Ok(base_source) = read_base_file(&changed_file.path)
+        {
+            let base_symbols = extract_all_symbols(&base_source, lang);
+            let file_removed = classify_symbols(
+                &mut symbols,
+                &base_symbols,
+                &changed_file.old_changed_ranges,
+                &changed_file.path,
+            );
+            removed.extend(file_removed);
+        }
+
         files.push(FileReport {
             path: changed_file.path,
             symbols,
@@ -201,6 +252,7 @@ pub fn analyze_diff(
         graph,
         tests,
         hotspots,
+        removed,
     })
 }
 
@@ -342,8 +394,9 @@ mod tests {
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
-        let actual = analyze_diff("", read_file, None, true, &HashSet::new(), true)
+        let actual = analyze_diff("", read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -399,8 +452,9 @@ fn foo(a: i32) -> i32 {
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -431,8 +485,9 @@ index 4b825dc..0000000
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -456,8 +511,9 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -489,8 +545,9 @@ index e69de29..4b825dc 100644
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -526,8 +583,9 @@ rename to src/new_name.rs
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -545,7 +603,7 @@ index e69de29..4b825dc 100644
 ";
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true);
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true);
 
         assert!(matches!(actual, Err(AnalyzeError::Diff(_))));
     }
@@ -564,7 +622,7 @@ index e69de29..4b825dc 100644
         // Map has no entry for src/lib.rs, so the fake reader returns Err.
         let read_file = fake_reader(HashMap::new());
 
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true);
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true);
 
         assert!(matches!(
             actual,
@@ -628,8 +686,9 @@ index e69de29..4b825dc 100644
             },
             tests: vec![],
             hotspots: vec![],
+            removed: vec![],
         };
-        let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         assert_eq!(expected, actual);
@@ -682,7 +741,7 @@ func (r *repoImpl) Save(id string) error {
 ";
         let read_file = fake_reader(HashMap::from([("repo.go", source)]));
 
-        let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
         let markdown = crate::render::render(&report, crate::render::OutputFormat::Markdown)
             .expect("markdown render should succeed");
@@ -759,7 +818,7 @@ fn foo(p: Point) -> i32 {
 ";
         let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-        let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+        let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
 
         // No resolver was passed, so every symbol's dependencies must stay
@@ -795,6 +854,7 @@ fn foo(p: Point) -> i32 {
         analyze_diff(
             diff,
             read_file,
+            None,
             Some(&resolver),
             true,
             &HashSet::new(),
@@ -900,7 +960,7 @@ fn should_add_two_numbers() {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
+            let report = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected_files: Vec<FileReport> = Vec::new();
@@ -964,8 +1024,9 @@ fn should_add_two_numbers() {
                 },
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             };
-            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+            let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             assert_eq!(expected, actual);
@@ -995,7 +1056,7 @@ func TestFoo(t *testing.T) {
 ";
             let read_file = fake_reader(HashMap::from([("repo_test.go", source)]));
 
-            let report = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
+            let report = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected_files: Vec<FileReport> = Vec::new();
@@ -1024,7 +1085,7 @@ rename to src/new_name.rs
 ";
             let read_file = fake_reader(HashMap::new());
 
-            let report = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
+            let report = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected_files = vec![FileReport {
@@ -1111,8 +1172,9 @@ mod tests {
                     symbol_count: 1,
                 }],
                 hotspots: vec![],
+                removed: vec![],
             };
-            let actual = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
+            let actual = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             assert_eq!(expected, actual);
@@ -1140,7 +1202,7 @@ index e69de29..4b825dc 100644
             let read_file = fake_reader(HashMap::new());
             let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-            let report = analyze_diff(diff, read_file, None, true, &generated_paths, true)
+            let report = analyze_diff(diff, read_file, None, None, true, &generated_paths, true)
                 .expect("analyze should succeed");
 
             let expected = vec![SkippedFile {
@@ -1173,7 +1235,7 @@ index 4b825dc..0000000
             let read_file = fake_reader(HashMap::new());
             let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-            let report = analyze_diff(diff, read_file, None, true, &generated_paths, true)
+            let report = analyze_diff(diff, read_file, None, None, true, &generated_paths, true)
                 .expect("analyze should succeed");
 
             let expected = vec![SkippedFile {
@@ -1203,7 +1265,7 @@ fn foo(a: i32) -> i32 {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+            let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected: Vec<SkippedFile> = Vec::new();
@@ -1234,7 +1296,7 @@ package models
 ";
             let read_file = fake_reader(HashMap::from([("models/user.go", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+            let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
                 .expect("analyze should succeed");
 
             let expected_files: Vec<FileReport> = Vec::new();
@@ -1296,8 +1358,9 @@ func Foo() int { return 2 }
                 },
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             };
-            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+            let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             assert_eq!(expected, actual);
@@ -1353,8 +1416,9 @@ fn foo(a: i32) -> i32 {
                 },
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             };
-            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+            let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
                 .expect("analyze should succeed");
 
             assert_eq!(expected, actual);
@@ -1420,8 +1484,9 @@ index e69de29..4b825dc 100644
                 },
                 tests: vec![],
                 hotspots: vec![],
+                removed: vec![],
             };
-            let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
+            let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
                 .expect("analyze should succeed");
 
             assert_eq!(expected, actual);
@@ -1449,7 +1514,7 @@ index e69de29..4b825dc 100644
             let read_file = fake_reader(HashMap::new());
             let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-            let report = analyze_diff(diff, read_file, None, true, &generated_paths, false)
+            let report = analyze_diff(diff, read_file, None, None, true, &generated_paths, false)
                 .expect("analyze should succeed");
 
             let expected = vec![SkippedFile {
@@ -1513,7 +1578,7 @@ fn caller_two() -> i32 {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+            let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected = vec![Hotspot {
@@ -1547,11 +1612,193 @@ fn foo(a: i32) -> i32 {
 ";
             let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+            let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
 
             let expected: Vec<Hotspot> = Vec::new();
             assert_eq!(expected, report.hotspots);
+        }
+    }
+
+    mod classification_wiring_tests {
+        use super::*;
+        use crate::extract::{Classification, RemovedSymbol};
+        use pretty_assertions::assert_eq;
+
+        // ADR 0014 end-to-end: a signature-changing edit on a Rust function,
+        // with base content supplied via `read_base_file`, must set the
+        // reported symbol's `classification`/`previous_signature` — proves
+        // `analyze_diff` actually wires `classify_symbols` into the
+        // pipeline, not just that the pure function itself works (already
+        // covered by `extract::tests::classification_tests`).
+        #[test]
+        fn should_classify_symbol_as_signature_changed_when_base_file_reader_is_some() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+-fn foo(a: i32) -> i32 {
++fn foo(a: i32, b: i32) -> i32 {
+     a
+ }
+";
+            let base_source = "\
+fn foo(a: i32) -> i32 {
+    a
+}
+";
+            let head_source = "\
+fn foo(a: i32, b: i32) -> i32 {
+    a
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", head_source)]));
+            let read_base_file = fake_reader(HashMap::from([("src/lib.rs", base_source)]));
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let symbol = &report.files[0].symbols[0];
+            assert_eq!(
+                Some(Classification::SignatureChanged),
+                symbol.classification
+            );
+            assert_eq!(
+                Some("fn foo(a: i32) -> i32".to_string()),
+                symbol.previous_signature
+            );
+        }
+
+        // Without a base reader (stdin-pipe mode's contract), classification
+        // must stay `None` — "not attempted" — rather than defaulting to
+        // some guessed value.
+        #[test]
+        fn should_leave_classification_none_when_read_base_file_is_none() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(a: i32) -> i32 {
+-    a
++    a + 1
+ }
+";
+            let source = "\
+fn foo(a: i32) -> i32 {
+    a + 1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
+                .expect("analyze should succeed");
+
+            let symbol = &report.files[0].symbols[0];
+            assert_eq!(None, symbol.classification);
+            assert_eq!(None, symbol.previous_signature);
+        }
+
+        // A base symbol removed entirely (no head-side match, and its
+        // base-side range overlaps the diff's old-side hunk range) must
+        // surface in `report.removed`.
+        #[test]
+        fn should_populate_removed_when_a_base_symbol_has_no_head_side_match() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+-fn old_name() -> i32 {
++fn new_name() -> i32 {
+     1
+ }
+";
+            let base_source = "\
+fn old_name() -> i32 {
+    1
+}
+";
+            let head_source = "\
+fn new_name() -> i32 {
+    1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", head_source)]));
+            let read_base_file = fake_reader(HashMap::from([("src/lib.rs", base_source)]));
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let expected = vec![RemovedSymbol {
+                name: "old_name".to_string(),
+                kind: crate::extract::SymbolKind::Function,
+                path: "src/lib.rs".to_string(),
+                signature: "fn old_name() -> i32".to_string(),
+            }];
+            assert_eq!(expected, report.removed);
+        }
+
+        // A `read_base_file` call failing for one path (e.g. the file is
+        // brand new and has no base-side content at all) must not fail the
+        // whole run — that file's symbols simply stay unclassified.
+        #[test]
+        fn should_leave_classification_none_when_read_base_file_errs_for_a_path() {
+            let diff = "\
+diff --git a/src/new.rs b/src/new.rs
+new file mode 100644
+index 0000000..4b825dc 100644
+--- /dev/null
++++ b/src/new.rs
+@@ -0,0 +1,3 @@
++fn foo() -> i32 {
++    1
++}
+";
+            let source = "\
+fn foo() -> i32 {
+    1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/new.rs", source)]));
+            // No entry for "src/new.rs": the base reader errs for this path,
+            // same as a real `git show <base>:src/new.rs` would for a file
+            // that doesn't exist on the base side.
+            let read_base_file = fake_reader(HashMap::new());
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let symbol = &report.files[0].symbols[0];
+            assert_eq!(None, symbol.classification);
         }
     }
 
