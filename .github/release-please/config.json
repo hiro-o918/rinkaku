@@ -42,12 +42,10 @@
   ],
   "packages": {
     "rinkaku-core": {
-      "component": "rinkaku-core",
-      "release-as": "0.1.0"
+      "component": "rinkaku-core"
     },
     "rinkaku": {
-      "component": "rinkaku",
-      "release-as": "0.1.0"
+      "component": "rinkaku"
     }
   },
   "plugins": [
