@@ -50,3 +50,10 @@ matching ADR 0010's best-effort stance.
   hatch and the pattern set can be tightened without a format change.
 - The marker list is a subset by design; files linguist detects through
   other rules will still appear until a marker is added here.
+- A pure rename (or mode-change-only diff, no hunks) never reaches the
+  content check: the pipeline already skips reading such a file's
+  content, since it has nothing to extract symbols from either way. A
+  renamed generated file therefore keeps appearing under "Other changed
+  files" rather than being detected — an accepted gap rather than an
+  extra read solely to satisfy this check, consistent with the pipeline's
+  existing IO-avoidance for that case.
