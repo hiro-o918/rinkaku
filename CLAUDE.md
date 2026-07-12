@@ -64,6 +64,27 @@ Design rationale for the choices above is recorded in
 - Run `make test` before committing; it must pass together with
   `make lint`.
 
+## Reviewing changes (dogfooding)
+
+When reviewing a branch or PR of this repository (directly or via
+review subagents), always run **two complementary passes** — see
+[`docs/experiments/0001-map-assisted-llm-review.md`](docs/experiments/0001-map-assisted-llm-review.md)
+for why:
+
+1. **Map-assisted pass**: generate rinkaku's own output for the diff
+   (`rinkaku --base main`, built from a **trusted `main` checkout**,
+   never from the branch under review) and use its hotspots, contract
+   markers, and entry-point trees to pick deep-reading targets —
+   this pass is best at integration seams and architecture-level
+   defects.
+2. **Independent pass**: a plain review without the map, covering
+   line-level correctness and repo conventions (assert style, no
+   library-code `unwrap`/`expect`, comment discipline).
+
+The map allocates attention; it is not a verifier. Behavioral bugs do
+not show up on the signature surface, so neither pass may skip reading
+the code it flags.
+
 ## Toolchain
 
 ```sh
