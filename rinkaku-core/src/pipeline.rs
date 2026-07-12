@@ -110,22 +110,21 @@ pub enum AnalyzeError {
 /// `read_base_file` (ADR 0014), when `Some`, is used the same way as
 /// `read_file` but for a changed file's *base*-side content — mirroring
 /// `read_file`'s own shape (a plain closure/fn port, not a trait object) so
-/// the two ports read the same way at every call site. For each changed
-/// file this loop reaches (i.e. not already skipped, and with a non-empty
-/// `changed_ranges`), the base content it returns is parsed with the same
-/// `LanguageSupport` and run through [`extract_all_symbols`], then
-/// [`classify_symbols`] compares the two sides to set each head symbol's
-/// `classification`/`previous_signature` and collect this file's `removed`
-/// entries. `None` — the pure-stdin-pipe case, where no base commit is
-/// known — leaves every symbol's `classification` at its default `None`
-/// ("not attempted") and `removed` empty; this function never guesses a
-/// classification from partial information. A `read_base_file` call
-/// failing (`Err`, e.g. the path didn't exist on the base side — brand new
-/// file — or any other IO error) is treated the same as "no base content
-/// available" for that one file rather than propagated as an
-/// [`AnalyzeError`]: the base commit not having this exact path is an
-/// expected, common case (every `Added` file hits it), not a failure of
-/// the run.
+/// the two ports read the same way at every call site. See
+/// [`classify_against_base`]'s doc comment for the exact rules: a brand-new
+/// file (`ChangeKind::Added`) classifies every symbol `Added` directly from
+/// the diff's own knowledge, without ever calling `read_base_file` (there is
+/// no base side to read); a renamed/copied file reads base content from
+/// `old_path`, since that is where it actually lived on the base side, while
+/// still reporting any `removed` symbols under the new-side `path`; every
+/// other kind reads `path` itself. `None` — the pure-stdin-pipe case, where
+/// no base commit is known — leaves every symbol's `classification` at its
+/// default `None` ("not attempted") and `removed` empty. Beyond the
+/// diff-attested `Added` case, this function never guesses a classification
+/// from partial information: a `read_base_file` call failing (`Err`, e.g. a
+/// transient git failure) is treated as "no base content available" for
+/// that one file rather than propagated as an [`AnalyzeError`] or guessed
+/// at.
 pub fn analyze_diff(
     diff_text: &str,
     read_file: impl Fn(&str) -> std::io::Result<String>,
@@ -171,6 +170,15 @@ pub fn analyze_diff(
             continue;
         };
 
+        // Base-side content lives at `old_path` for a rename/copy (the
+        // pre-rename path — the new-side `path` never existed on the base
+        // side under a rename, so reading it there would always fail), and
+        // at `path` itself for every other kind.
+        let read_path = changed_file
+            .old_path
+            .as_deref()
+            .unwrap_or(&changed_file.path);
+
         // No new-side hunks means no new-side content change (a pure
         // rename, a mode-change-only diff, or — ADR 0014's case — a hunk
         // that only *removes* lines with nothing added back):
@@ -187,6 +195,8 @@ pub fn analyze_diff(
                 &mut no_head_symbols,
                 read_base_file,
                 lang,
+                changed_file.kind,
+                read_path,
                 &changed_file.path,
                 &changed_file.old_changed_ranges,
             ));
@@ -215,13 +225,16 @@ pub fn analyze_diff(
         let mut symbols = extract_changed_symbols(&source, lang, &changed_file.changed_ranges);
 
         // ADR 0014: classify each symbol's contract impact against the
-        // base side, when base content is available and readable for this
-        // path. Left at `None`/empty (classify_symbols never runs) when
+        // base side. `ChangeKind::Added` classifies every symbol `Added`
+        // directly (see `classify_against_base`'s doc comment); every other
+        // kind is left at `None`/empty (classify_symbols never runs) when
         // `read_base_file` is absent or its call fails for this file.
         removed.extend(classify_against_base(
             &mut symbols,
             read_base_file,
             lang,
+            changed_file.kind,
+            read_path,
             &changed_file.path,
             &changed_file.old_changed_ranges,
         ));
@@ -268,37 +281,68 @@ pub fn analyze_diff(
 /// classification for one file: the ordinary case (`head_symbols` already
 /// extracted from a non-empty `changed_ranges`) and the "removal-only hunk"
 /// case (`head_symbols` empty by construction, since there was no new-side
-/// content to extract from — see `analyze_diff`'s doc comment). Reads
-/// `path`'s base-side content via `read_base_file`, extracts every base
-/// symbol via [`extract_all_symbols`], and runs [`classify_symbols`] to set
+/// content to extract from — see `analyze_diff`'s doc comment).
+///
+/// `ChangeKind::Added` is special-cased using the diff's own knowledge
+/// rather than an IO outcome: an added file has no base side *by
+/// construction* (git itself says so via the `new file mode`/`+++ b/...`
+/// header this parsed from), so every one of `head_symbols` is classified
+/// `Added` directly, without ever calling `read_base_file` — there is
+/// nothing to read, and a base commit that happened to independently
+/// contain a same-path file (e.g. a re-add after an unrelated delete)
+/// must not be confused for this file's own history. Every other kind
+/// (`Modified`, `Renamed`, `Copied`) reads `read_path`'s content via
+/// `read_base_file`, extracts every base symbol via
+/// [`extract_all_symbols`], and runs [`classify_symbols`] to set
 /// `head_symbols`' classification fields in place and collect this file's
-/// removed symbols.
+/// removed symbols. `read_path` and `report_path` are split because a
+/// rename/copy's base content lives at the pre-rename path
+/// (`changed_file.old_path`) while a removed symbol should still be
+/// reported under the file's current, new-side path — the one path a
+/// reviewer looking at this diff actually has open — not the path history
+/// happens to read the comparison content from.
+///
+/// For every non-`Added` kind, a `read_base_file` call failing (`None` port,
+/// or an `Err` result — e.g. a transient git failure, or a rename/copy
+/// resolving to a base path this repository never actually had) leaves
+/// `head_symbols` untouched (`classification` stays `None`, "not
+/// attempted") rather than guessing — ADR 0014's "never guess" contract
+/// applies to every case except the diff-attested `Added` one above, which
+/// isn't a guess at all.
 ///
 /// No-ops (returns an empty `Vec`, `head_symbols` untouched) when
-/// `read_base_file` is `None`, the read fails for `path`, or
-/// `old_changed_ranges` is empty and `head_symbols` is also empty — the
-/// last case is a pure optimization (an empty `head_symbols` with no
-/// old-side ranges to check for removals can never produce anything from
-/// `classify_symbols`), sparing a base-content read/parse that would
-/// otherwise be pure waste for e.g. a mode-change-only diff.
+/// `old_changed_ranges` is empty and `head_symbols` is also empty — a pure
+/// optimization (nothing from `classify_symbols` could possibly result),
+/// sparing a base-content read/parse that would otherwise be pure waste
+/// for e.g. a mode-change-only diff.
+#[allow(clippy::too_many_arguments)]
 fn classify_against_base(
     head_symbols: &mut [ExtractedSymbol],
     read_base_file: Option<ReadBaseFile>,
     lang: &dyn LanguageSupport,
-    path: &str,
+    kind: ChangeKind,
+    read_path: &str,
+    report_path: &str,
     old_changed_ranges: &[crate::diff::LineRange],
 ) -> Vec<RemovedSymbol> {
+    if kind == ChangeKind::Added {
+        for symbol in head_symbols.iter_mut() {
+            symbol.classification = Some(crate::extract::Classification::Added);
+        }
+        return Vec::new();
+    }
+
     if head_symbols.is_empty() && old_changed_ranges.is_empty() {
         return Vec::new();
     }
     let Some(read_base_file) = read_base_file else {
         return Vec::new();
     };
-    let Ok(base_source) = read_base_file(path) else {
+    let Ok(base_source) = read_base_file(read_path) else {
         return Vec::new();
     };
     let base_symbols = extract_all_symbols(&base_source, lang);
-    classify_symbols(head_symbols, &base_symbols, old_changed_ranges, path)
+    classify_symbols(head_symbols, &base_symbols, old_changed_ranges, report_path)
 }
 
 /// Splits `files` into (non-test symbols, per-file test-symbol counts) for
@@ -1872,11 +1916,18 @@ fn kept() -> i32 {
             assert_eq!(expected_files, report.files);
         }
 
-        // A `read_base_file` call failing for one path (e.g. the file is
-        // brand new and has no base-side content at all) must not fail the
-        // whole run — that file's symbols simply stay unclassified.
+        // A brand-new file (`ChangeKind::Added`) must classify every symbol
+        // `Added` using the diff's own knowledge (a `new file mode`/
+        // `+++ b/...` header already says there is no base side), not by
+        // attempting a base read and treating the resulting failure as
+        // "unknown" — `read_base_file` here has no entry for the path at
+        // all, so if it were ever called this test would still pass
+        // classification as `Added` only by accident of the fallback
+        // behavior; the dedicated regression test below
+        // (`should_never_call_read_base_file_for_an_added_file`) pins that
+        // `read_base_file` is not called at all for this kind.
         #[test]
-        fn should_leave_classification_none_when_read_base_file_errs_for_a_path() {
+        fn should_classify_as_added_when_file_is_brand_new() {
             let diff = "\
 diff --git a/src/new.rs b/src/new.rs
 new file mode 100644
@@ -1894,9 +1945,96 @@ fn foo() -> i32 {
 }
 ";
             let read_file = fake_reader(HashMap::from([("src/new.rs", source)]));
-            // No entry for "src/new.rs": the base reader errs for this path,
-            // same as a real `git show <base>:src/new.rs` would for a file
-            // that doesn't exist on the base side.
+            // No entry for "src/new.rs": proves classification does not
+            // depend on this port succeeding for an Added file.
+            let read_base_file = fake_reader(HashMap::new());
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let symbol = &report.files[0].symbols[0];
+            assert_eq!(Some(Classification::Added), symbol.classification);
+        }
+
+        // Regression test: `classify_against_base` must special-case
+        // `ChangeKind::Added` by classifying directly from the diff's own
+        // knowledge, never by calling `read_base_file` and interpreting an
+        // IO failure — a `read_base_file` that panics if called proves it
+        // genuinely never runs for this file, rather than merely happening
+        // to return `Err` the way `fake_reader` over an empty map would.
+        #[test]
+        fn should_never_call_read_base_file_for_an_added_file() {
+            let diff = "\
+diff --git a/src/new.rs b/src/new.rs
+new file mode 100644
+index 0000000..4b825dc 100644
+--- /dev/null
++++ b/src/new.rs
+@@ -0,0 +1,3 @@
++fn foo() -> i32 {
++    1
++}
+";
+            let source = "\
+fn foo() -> i32 {
+    1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/new.rs", source)]));
+            let read_base_file = |_: &str| -> std::io::Result<String> {
+                panic!("must not be called for an Added file")
+            };
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let symbol = &report.files[0].symbols[0];
+            assert_eq!(Some(Classification::Added), symbol.classification);
+        }
+
+        // Sibling case: a `Modified` file (unlike `Added`) has no
+        // diff-attested "no base side" fact to fall back on, so a
+        // `read_base_file` failure here (a transient git failure, in
+        // practice) must still leave classification unattempted rather than
+        // guessing — ADR 0014's "never guess" contract, preserved for every
+        // kind except the diff-attested `Added` case above.
+        #[test]
+        fn should_leave_classification_none_when_modified_files_base_read_errs() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(a: i32) -> i32 {
+-    a
++    a + 1
+ }
+";
+            let source = "\
+fn foo(a: i32) -> i32 {
+    a + 1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+            // No entry for "src/lib.rs": the base reader errs for this
+            // path, same as a real `git show <base>:src/lib.rs` failing.
             let read_base_file = fake_reader(HashMap::new());
 
             let report = analyze_diff(
@@ -1912,6 +2050,127 @@ fn foo() -> i32 {
 
             let symbol = &report.files[0].symbols[0];
             assert_eq!(None, symbol.classification);
+        }
+
+        // ADR 0014: a renamed file's base content lives at `old_path`, not
+        // at the new-side `path` (which never existed on the base side
+        // under a rename) — `read_base_file` must be called with
+        // `old_path`, not `path`, so a signature change survives the rename
+        // and still classifies as `signature_changed`.
+        #[test]
+        fn should_classify_as_signature_changed_when_renamed_file_has_a_signature_change() {
+            let diff = "\
+diff --git a/src/old_name.rs b/src/new_name.rs
+similarity index 90%
+rename from src/old_name.rs
+rename to src/new_name.rs
+index e69de29..4b825dc 100644
+--- a/src/old_name.rs
++++ b/src/new_name.rs
+@@ -1,3 +1,3 @@
+-fn foo(a: i32) -> i32 {
++fn foo(a: i32, b: i32) -> i32 {
+     a
+ }
+";
+            let base_source = "\
+fn foo(a: i32) -> i32 {
+    a
+}
+";
+            let head_source = "\
+fn foo(a: i32, b: i32) -> i32 {
+    a
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/new_name.rs", head_source)]));
+            // Keyed by the *old* path: proves `read_base_file` is called
+            // with `old_path`, not the new-side `path` (which would miss
+            // here, since there is no "src/new_name.rs" entry at all).
+            let read_base_file = fake_reader(HashMap::from([("src/old_name.rs", base_source)]));
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let symbol = &report.files[0].symbols[0];
+            assert_eq!(
+                Some(Classification::SignatureChanged),
+                symbol.classification
+            );
+            assert_eq!(
+                Some("fn foo(a: i32) -> i32".to_string()),
+                symbol.previous_signature
+            );
+        }
+
+        // Sibling case: a symbol present at the old path but no longer
+        // present after the rename (e.g. the rename hunk also deletes a
+        // second function outright) must be reported as `removed`, under
+        // the file's new-side path — the path a reviewer looking at this
+        // diff actually has open, not the pre-rename path the comparison
+        // content happened to be read from.
+        #[test]
+        fn should_report_removed_when_symbol_at_old_path_is_gone_after_rename() {
+            let diff = "\
+diff --git a/src/old_name.rs b/src/new_name.rs
+similarity index 60%
+rename from src/old_name.rs
+rename to src/new_name.rs
+index e69de29..4b825dc 100644
+--- a/src/old_name.rs
++++ b/src/new_name.rs
+@@ -1,7 +1,3 @@
+ fn kept() -> i32 {
+     1
+ }
+-
+-fn old_helper() -> i32 {
+-    2
+-}
+";
+            let base_source = "\
+fn kept() -> i32 {
+    1
+}
+
+fn old_helper() -> i32 {
+    2
+}
+";
+            let head_source = "\
+fn kept() -> i32 {
+    1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/new_name.rs", head_source)]));
+            let read_base_file = fake_reader(HashMap::from([("src/old_name.rs", base_source)]));
+
+            let report = analyze_diff(
+                diff,
+                read_file,
+                Some(&read_base_file),
+                None,
+                true,
+                &HashSet::new(),
+                true,
+            )
+            .expect("analyze should succeed");
+
+            let expected = vec![RemovedSymbol {
+                name: "old_helper".to_string(),
+                kind: crate::extract::SymbolKind::Function,
+                path: "src/new_name.rs".to_string(),
+                signature: "fn old_helper() -> i32".to_string(),
+            }];
+            assert_eq!(expected, report.removed);
         }
     }
 
