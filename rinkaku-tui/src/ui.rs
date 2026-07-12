@@ -19,7 +19,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 use rinkaku_core::extract::Classification;
 use rinkaku_core::render::{Report, ReportOrigin};
 use unicode_width::UnicodeWidthChar;
@@ -854,7 +854,18 @@ fn draw_source_screen(
     let source = match load_symbol_source(report, symbol_id, repo_root) {
         Ok(source) => source,
         Err(message) => {
-            let paragraph = Paragraph::new(message).block(block);
+            // `.wrap(Wrap { trim: false })`: the error message (full path +
+            // io error + the "not present in the working tree" hint added
+            // alongside repo-root resolution) routinely exceeds one line at
+            // ordinary pane widths. Without wrapping, `Paragraph` silently
+            // truncates instead of overflowing, cutting the hint off
+            // exactly where it explains the failure. `trim: false` keeps
+            // the message's own leading whitespace (there isn't any here,
+            // but matches this pane's other `Paragraph` usages that don't
+            // opt into trimming either).
+            let paragraph = Paragraph::new(message)
+                .block(block)
+                .wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
             return;
         }
@@ -1623,6 +1634,53 @@ index e69de29..4b825dc 100644
         assert!(text.contains("Source: lib.rs::foo"));
         assert!(text.contains("failed to read"));
         assert!(text.contains("back"));
+    }
+
+    #[test]
+    fn should_wrap_source_error_message_instead_of_truncating_it_in_a_narrow_pane() {
+        // Regression test: `source::load_symbol_source`'s error message
+        // (full path + io error + the "not present in the working tree"
+        // hint) routinely exceeds one line, and `Paragraph` without
+        // `.wrap(...)` silently truncates rather than overflowing — cutting
+        // the hint off exactly where it explains the failure. A narrow
+        // (40-column) pane makes the message wrap across multiple rows
+        // whether or not `.wrap(...)` is set, but only *with* it does the
+        // hint's text actually appear anywhere in the buffer; without it,
+        // the trailing text is simply dropped.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Source);
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        // `buffer_text` joins rows with `\n`, so a phrase that happens to
+        // wrap exactly at a row boundary (as "in the" / "present" do at
+        // this width) would not appear as one contiguous substring even
+        // though every word is visible — asserting on words rather than a
+        // multi-word phrase keeps this test robust to exactly where the
+        // wrap point falls, while still failing if `.wrap(...)` were
+        // removed (the words after "working tree" would be dropped
+        // entirely, not just split across rows).
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Source: lib.rs::foo"));
+        assert!(text.contains("present"));
+        assert!(text.contains("working tree"));
+        assert!(text.contains("historical commit not checked out"));
+        assert!(text.contains("locally)"));
     }
 
     // --- clamp_scroll / scroll_indicator (pure helpers) ---

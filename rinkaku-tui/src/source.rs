@@ -99,7 +99,20 @@ pub fn load_symbol_source(
 /// reads the right file regardless of the process's current directory.
 /// Split out as its own pure function so the join logic is unit-testable
 /// without touching disk.
+///
+/// Relies on `relative_path` genuinely being relative: `PathBuf::join`
+/// silently *discards* `repo_root` entirely and returns `relative_path`
+/// unchanged whenever it is itself absolute (`Path::join`'s documented
+/// behavior) — every producer of `Report` (`git diff`/`git ls-files`
+/// output, see this module's doc comment) upholds that today, so this
+/// isn't reachable in practice, but the `debug_assert!` below turns a
+/// future violation of that premise into a loud failure in tests/debug
+/// builds instead of a silent wrong-file read.
 fn resolve_source_path(repo_root: &std::path::Path, relative_path: &str) -> std::path::PathBuf {
+    debug_assert!(
+        std::path::Path::new(relative_path).is_relative(),
+        "Report paths are always repository-root-relative, got absolute path: {relative_path}"
+    );
     repo_root.join(relative_path)
 }
 
@@ -325,6 +338,19 @@ mod tests {
         let actual = resolve_source_path(std::path::Path::new("/repo/root"), "src/lib.rs");
 
         assert_eq!(std::path::PathBuf::from("/repo/root/src/lib.rs"), actual);
+    }
+
+    #[test]
+    #[should_panic(expected = "Report paths are always repository-root-relative")]
+    fn should_panic_in_debug_builds_when_relative_path_is_actually_absolute() {
+        // Pins the `debug_assert!`'s intent: `PathBuf::join` silently
+        // *discards* `repo_root` and returns the absolute path unchanged
+        // when the "relative" argument isn't actually relative
+        // (`resolve_source_path`'s own doc comment) — every `Report`
+        // producer upholds relativity today, so this only guards against a
+        // future regression, but that regression must fail loudly in
+        // debug/test builds rather than silently reading the wrong file.
+        resolve_source_path(std::path::Path::new("/repo/root"), "/etc/passwd");
     }
 
     #[test]

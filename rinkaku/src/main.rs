@@ -190,6 +190,16 @@ fn main() -> anyhow::Result<()> {
         return self_update::run_self_update(yes);
     }
 
+    // Tracks the same `cwd`/`workdir` each branch below already resolves for
+    // its own `git`/`gh` calls, so the TUI's source view (`repo_root`,
+    // below) reads files from the repository the `Report` was actually
+    // built from rather than always the process's current directory —
+    // `--pr` in particular can run entirely against a ghq/cache clone
+    // elsewhere on disk (`resolve_pr_workdir`), and `resolve_repo_root(None)`
+    // would silently resolve the *process's* repo instead, showing an
+    // unrelated file if one happens to exist at the same relative path
+    // there.
+    let mut resolved_workdir: Option<std::path::PathBuf> = None;
     let (report, diff_text) = if let Some(pr_arg) = &cli.pr {
         // Validate the arg and derive the fetch refspec's PR number, but
         // pass the original (trimmed) value — not the parsed number — to
@@ -197,6 +207,7 @@ fn main() -> anyhow::Result<()> {
         let parsed = parse_pr_arg(pr_arg)?;
         let number = parsed.number();
         let workdir = resolve_pr_workdir(&parsed)?;
+        resolved_workdir = workdir.clone();
         log::info!("resolving PR #{number} via gh");
         let pr_info = fetch_pr_info(pr_arg.trim())?;
         let cwd = workdir.as_deref();
@@ -314,7 +325,7 @@ fn main() -> anyhow::Result<()> {
     let stdout_is_tty = std::io::stdout().is_terminal();
     match resolve_display_mode(cli.tui, cli.format, stdout_is_tty) {
         DisplayMode::Tui => {
-            let repo_root = resolve_repo_root(None);
+            let repo_root = resolve_repo_root(resolved_workdir.as_deref());
             rinkaku_tui::run(&report, &diff_text, cli.entry.as_deref(), &repo_root)?
         }
         DisplayMode::Output(format) => {
@@ -1439,17 +1450,23 @@ fn run_git_fetch(refspec: &str, cwd: Option<&std::path::Path>) -> anyhow::Result
 /// from there.
 ///
 /// Runs `git rev-parse --show-toplevel` in `cwd` (or the process's current
-/// directory when `None`, the only production caller — the TUI always
-/// reads the working tree it was launched in, see
-/// `source::load_symbol_source`'s doc comment on why it never reads from
-/// `--base`/`--pr`'s resolved commit instead). Falls back to `cwd`
-/// unchanged (or the process's actual current directory, via
-/// `std::env::current_dir`, when `cwd` is `None`) when the command fails —
-/// stdin-diff mode reaches the TUI without ever requiring a git repository
-/// (`main`'s stdin arm calls `read_working_tree_file` directly, with no
-/// `list_git_files`-style gate), so this must degrade gracefully rather
-/// than erroring out for a use case ADR 0016/0017 already treat as
-/// legitimate.
+/// directory when `None`) and returns its output — `cwd` here must be the
+/// exact same directory the `Report` passed to `rinkaku_tui::run` was
+/// built against, i.e. `main`'s own `resolved_workdir` (mirroring
+/// `--pr`/`--base`'s `git diff`/`git show` calls, which already run
+/// scoped to that same `cwd`/`workdir`). Passing `None` (meaning "the
+/// process's current directory") when the `Report` actually came from a
+/// `--pr`-resolved ghq/cache clone elsewhere on disk would silently
+/// resolve the *process's* repository root instead — the source view
+/// would then read whatever unrelated file happens to sit at the same
+/// relative path there, rather than erroring, if the process's cwd is
+/// itself some other git repository. Falls back to `cwd` unchanged (or the
+/// process's actual current directory, via `std::env::current_dir`, when
+/// `cwd` is `None`) when the command fails — stdin-diff mode reaches the
+/// TUI without ever requiring a git repository at all (`main`'s stdin arm
+/// calls `read_working_tree_file` directly, with no `list_git_files`-style
+/// gate), so this must degrade gracefully rather than erroring out for a
+/// use case ADR 0016/0017 already treat as legitimate.
 fn resolve_repo_root(cwd: Option<&std::path::Path>) -> std::path::PathBuf {
     let mut command = std::process::Command::new("git");
     command.args(["rev-parse", "--show-toplevel"]);
@@ -3463,6 +3480,53 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
         let actual = resolve_repo_root(Some(dir.path()));
 
         assert_eq!(dir.path(), actual);
+    }
+
+    // Regression test for the review blocker: `main`'s `DisplayMode::Tui`
+    // arm used to call `resolve_repo_root(None)` unconditionally, ignoring
+    // `--pr`'s resolved `workdir` (a ghq/cache clone that can be anywhere
+    // on disk, `resolve_pr_workdir`). If the process's own current
+    // directory happened to be a *different* git repository, the TUI's
+    // source view would silently resolve *that* repository's root and read
+    // whatever unrelated file sits at the same relative path there,
+    // instead of erroring or reading the PR's actual clone.
+    //
+    // This proves the mechanism `main` must use (pass the resolved
+    // `workdir`/`cwd`, not `None`, whenever the `Report` was built from
+    // one) actually reaches the other repository rather than falling back
+    // to `pr_repo`: two independent repositories are set up, each with its
+    // own `src/lib.rs` at the same relative path, and `resolve_repo_root`
+    // is called with `pr_repo`'s path while the *process's* current
+    // directory is left at `process_repo` — `resolve_repo_root(None)`
+    // (the pre-fix call) would resolve `process_repo`, while
+    // `resolve_repo_root(Some(pr_repo))` (the fix) must resolve `pr_repo`.
+    #[test]
+    fn should_resolve_pr_workdir_root_not_process_cwd_repo_when_both_are_git_repos() {
+        let process_repo = tempfile::TempDir::new().expect("create process repo tempdir");
+        init_repo_with_committed_file(process_repo.path(), "fn process_repo_marker() {}\n");
+        let pr_repo = tempfile::TempDir::new().expect("create pr repo tempdir");
+        init_repo_with_committed_file(pr_repo.path(), "fn pr_repo_marker() {}\n");
+
+        // `None` (the pre-fix call the blocker flagged) would have resolved
+        // wherever the test process's actual cwd happens to sit — not
+        // asserted here since that is the whole point of the bug, only
+        // exercised for contrast against the fixed call below.
+        let actual = resolve_repo_root(Some(pr_repo.path()));
+
+        let expected = pr_repo
+            .path()
+            .canonicalize()
+            .expect("canonicalize expected");
+        let actual = actual.canonicalize().expect("canonicalize actual");
+        assert_eq!(expected, actual);
+        assert_ne!(
+            process_repo
+                .path()
+                .canonicalize()
+                .expect("canonicalize process_repo"),
+            actual,
+            "must not resolve the unrelated process-cwd repository"
+        );
     }
 
     // Regression test for the must-fix performance bug: `build_resolver`
