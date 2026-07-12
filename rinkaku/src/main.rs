@@ -46,8 +46,10 @@ use rinkaku_core::deps::TagsResolver;
 use rinkaku_core::language::language_for_path;
 use rinkaku_core::pipeline::analyze_diff;
 use rinkaku_core::render::{OutputFormat, render};
+use std::io::BufRead;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::io::Write;
 
 /// rinkaku (輪郭) — condense PR diffs into signatures and their dependencies.
 #[derive(Parser, Debug, PartialEq, Eq)]
@@ -373,11 +375,12 @@ fn garbage_input_note(
 /// parsing changed files a second time for its index.
 ///
 /// `head`, when `Some`, matches `--base` mode's read strategy: file
-/// content is read via `git show <head>:<path>` rather than the working
-/// tree, so the index and the diff being analyzed are consistent with the
-/// same commit regardless of the working tree's state (same rationale as
-/// `read_git_show_file`, applied here to the whole repo rather than just
-/// the changed files).
+/// content is read via a single `git cat-file --batch` process
+/// (`read_git_show_files_batch` — one process for every tracked file,
+/// rather than one `git show` subprocess per file) so the index and the
+/// diff being analyzed are consistent with the same commit regardless of
+/// the working tree's state (same rationale as `read_git_show_file`,
+/// applied here to the whole repo rather than just the changed files).
 /// `cwd` selects the repository `list_git_files` runs `git ls-files` in
 /// (same rationale as `read_git_show_file`'s `cwd`: `None` uses the
 /// process's current directory for production callers, `Some(dir)` pins
@@ -401,18 +404,25 @@ fn build_resolver(
         rinkaku_core::pipeline::collect_referenced_names(diff_text, diff_read_file)?;
 
     let paths = list_git_files(cwd)?;
-    let files = paths.into_iter().filter_map(|path| {
-        let content = match head {
-            Some(head) => read_git_show_file(cwd, head, &path),
-            None => read_working_tree_file(&path),
-        };
-        // A file listed by `git ls-files` can still fail to read (e.g.
-        // deleted in the working tree but not yet staged, a submodule
-        // gitlink entry) — skipped rather than failing the whole run,
-        // since the resolver's index is a best-effort aid, not a
-        // correctness-critical input.
-        content.ok().map(|content| (path, content))
-    });
+    let files: Vec<(String, String)> = match head {
+        // One `git cat-file --batch` child process serves every path
+        // (see `read_git_show_files_batch`'s doc comment for why this
+        // replaces a `git show` subprocess per file).
+        Some(head) => read_git_show_files_batch(cwd, head, paths)?,
+        None => paths
+            .into_iter()
+            .filter_map(|path| {
+                // A file listed by `git ls-files` can still fail to read
+                // (e.g. deleted in the working tree but not yet staged, a
+                // submodule gitlink entry) — skipped rather than failing
+                // the whole run, since the resolver's index is a
+                // best-effort aid, not a correctness-critical input.
+                read_working_tree_file(&path)
+                    .ok()
+                    .map(|content| (path, content))
+            })
+            .collect(),
+    };
     Ok(Some(TagsResolver::new(
         files,
         language_for_path,
@@ -987,6 +997,142 @@ fn read_git_show_file(
     }
     String::from_utf8(output.stdout)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Reads every path in `paths` at `head` (`git show <head>:<path>`'s
+/// content, for each path) via a single long-lived `git cat-file --batch`
+/// child process, instead of spawning one `git show` subprocess per path
+/// (`read_git_show_file`'s approach — fine for the handful of files a diff
+/// actually changes, but prohibitively slow for `build_resolver`'s
+/// repository-wide index, which reads every tracked file: a repository
+/// with a few thousand tracked files previously meant a few thousand
+/// process spawns just to build the dependency index).
+///
+/// Protocol: `git cat-file --batch` reads `<object>\n` requests from
+/// stdin and writes one of two response shapes to stdout per request,
+/// documented in `git help cat-file`:
+/// - found: `<oid> <type> <size>\n` followed by exactly `size` content
+///   bytes and a trailing `\n`;
+/// - not found: `<object> missing\n`.
+///
+/// Requests and responses are sent one at a time (write a request, then
+/// immediately read its response) rather than writing every request up
+/// front: `git cat-file --batch`'s stdout is a pipe with a bounded OS
+/// buffer, and with ~thousands of paths the parent could deadlock writing
+/// requests while the child blocks trying to write responses into an
+/// already-full pipe that nobody is draining. One-at-a-time interleaving
+/// avoids that entirely while still cutting the process count from one
+/// per file to exactly one for the whole index — the actual cost this
+/// change targets.
+///
+/// A path that doesn't resolve (`missing` — e.g. a submodule gitlink
+/// entry `git ls-files` still lists) or whose content isn't valid UTF-8
+/// (a binary tracked file) is skipped rather than failing the whole call,
+/// matching `build_resolver`'s existing best-effort handling of
+/// `read_git_show_file` failures for the working-tree read path.
+fn read_git_show_files_batch(
+    cwd: Option<&std::path::Path>,
+    head: &str,
+    paths: Vec<String>,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let mut command = std::process::Command::new("git");
+    command
+        .args(["cat-file", "--batch"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|source| anyhow::anyhow!("failed to start git cat-file --batch: {source}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .expect("stdin is piped, so it must be present");
+    let stdout = child
+        .stdout
+        .take()
+        .expect("stdout is piped, so it must be present");
+    let mut reader = std::io::BufReader::new(stdout);
+
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let object = format!("{head}:{path}");
+        writeln!(stdin, "{object}").map_err(|source| {
+            anyhow::anyhow!("failed to write to git cat-file --batch: {source}")
+        })?;
+        stdin.flush().map_err(|source| {
+            anyhow::anyhow!("failed to flush git cat-file --batch stdin: {source}")
+        })?;
+
+        match read_cat_file_batch_response(&mut reader, &object)? {
+            Some(content) => files.push((path, content)),
+            None => continue,
+        }
+    }
+
+    // Dropping `stdin` here (end of scope) closes the pipe, which is what
+    // makes `git cat-file --batch` exit; `wait()` then just reaps it.
+    drop(stdin);
+    let status = child
+        .wait()
+        .map_err(|source| anyhow::anyhow!("failed to wait on git cat-file --batch: {source}"))?;
+    if !status.success() {
+        anyhow::bail!("git cat-file --batch exited with {status}");
+    }
+    Ok(files)
+}
+
+/// Reads and parses one `git cat-file --batch` response for `object`
+/// (`<head>:<path>`, used only for the "missing" line's exact echo). See
+/// `read_git_show_files_batch`'s doc comment for the two response shapes.
+///
+/// `Ok(None)` for a `missing` response or non-UTF-8 content (both treated
+/// as "skip this path", matching the working-tree read path's `.ok()`
+/// handling); `Err` only for a genuinely malformed/unexpected response,
+/// which would mean the batch stream itself has desynchronized and every
+/// subsequent read in the loop would be garbage.
+fn read_cat_file_batch_response(
+    reader: &mut impl BufRead,
+    object: &str,
+) -> anyhow::Result<Option<String>> {
+    let mut header = String::new();
+    reader.read_line(&mut header).map_err(|source| {
+        anyhow::anyhow!("failed to read git cat-file --batch header: {source}")
+    })?;
+    let header = header.trim_end_matches('\n');
+
+    if header == format!("{object} missing") {
+        return Ok(None);
+    }
+
+    // Found: "<oid> <type> <size>".
+    let size: usize = header
+        .rsplit(' ')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!("unexpected git cat-file --batch response for {object}: {header:?}")
+        })?;
+
+    let mut content = vec![0u8; size];
+    reader.read_exact(&mut content).map_err(|source| {
+        anyhow::anyhow!("failed to read git cat-file --batch content: {source}")
+    })?;
+    // Every found response is followed by exactly one trailing newline
+    // after the content bytes, regardless of whether the content itself
+    // ends in one.
+    let mut trailing_newline = [0u8; 1];
+    reader.read_exact(&mut trailing_newline).map_err(|source| {
+        anyhow::anyhow!("failed to read git cat-file --batch trailing newline: {source}")
+    })?;
+
+    match String::from_utf8(content) {
+        Ok(content) => Ok(Some(content)),
+        Err(_) => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -1644,6 +1790,118 @@ mod tests {
             .expect("git show should succeed for a committed file");
 
         assert_eq!(committed, actual);
+    }
+
+    // Integration test for the perf fix: a single `git cat-file --batch`
+    // process must return the same content `read_git_show_file` would
+    // have returned per-file, for every tracked path in one pass.
+    #[test]
+    fn should_read_every_path_via_a_single_cat_file_batch_process() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        run_git(dir.path(), &["config", "user.email", "test@example.com"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").expect("write a.rs");
+        std::fs::write(dir.path().join("b.rs"), "fn b() {}\n").expect("write b.rs");
+        run_git(dir.path(), &["add", "a.rs", "b.rs"]);
+        run_git(dir.path(), &["commit", "-m", "initial commit"]);
+
+        let mut actual = read_git_show_files_batch(
+            Some(dir.path()),
+            "HEAD",
+            vec!["a.rs".to_string(), "b.rs".to_string()],
+        )
+        .expect("git cat-file --batch should succeed for tracked files");
+        actual.sort();
+
+        assert_eq!(
+            vec![
+                ("a.rs".to_string(), "fn a() {}\n".to_string()),
+                ("b.rs".to_string(), "fn b() {}\n".to_string()),
+            ],
+            actual
+        );
+    }
+
+    // Sibling case: a dirty working tree must not affect what the batch
+    // read returns, same guarantee `read_git_show_file` already provides
+    // per-file (`should_read_committed_content_when_working_tree_is_dirty`
+    // above).
+    #[test]
+    fn should_read_committed_content_via_batch_when_working_tree_is_dirty() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        let committed = "fn foo(a: i32) -> i32 {\n    a\n}\n";
+        init_repo_with_committed_file(dir.path(), committed);
+
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "fn foo(a: i32) -> i32 {\n    a + 999\n}\n",
+        )
+        .expect("dirty the working tree");
+
+        let actual =
+            read_git_show_files_batch(Some(dir.path()), "HEAD", vec!["src/lib.rs".to_string()])
+                .expect("git cat-file --batch should succeed for a committed file");
+
+        assert_eq!(
+            vec![("src/lib.rs".to_string(), committed.to_string())],
+            actual
+        );
+    }
+
+    // A path `git ls-files` lists but that doesn't resolve to a blob at
+    // `head` (e.g. a submodule gitlink entry, or here simply a path that
+    // was never committed) must be skipped rather than failing the whole
+    // batch — matching `build_resolver`'s existing best-effort handling of
+    // per-file read failures.
+    #[test]
+    fn should_skip_missing_paths_when_reading_via_batch() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(dir.path(), "fn foo() {}\n");
+
+        let actual = read_git_show_files_batch(
+            Some(dir.path()),
+            "HEAD",
+            vec!["src/lib.rs".to_string(), "does/not/exist.rs".to_string()],
+        )
+        .expect("git cat-file --batch should succeed even with a missing path");
+
+        assert_eq!(
+            vec![("src/lib.rs".to_string(), "fn foo() {}\n".to_string())],
+            actual
+        );
+    }
+
+    // A tracked file whose committed content isn't valid UTF-8 (a binary
+    // file) must be skipped rather than failing the batch or the whole
+    // resolver build — matching `build_resolver`'s existing best-effort
+    // handling (content.ok() drops read failures, and a `String::from_utf8`
+    // failure is exactly the same kind of "can't use this as source text"
+    // situation).
+    #[test]
+    fn should_skip_non_utf8_content_when_reading_via_batch() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        run_git(dir.path(), &["config", "user.email", "test@example.com"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        std::fs::write(dir.path().join("text.rs"), "fn ok() {}\n").expect("write text.rs");
+        std::fs::write(dir.path().join("binary.dat"), [0xff_u8, 0xfe, 0x00, 0x01])
+            .expect("write binary.dat");
+        run_git(dir.path(), &["add", "text.rs", "binary.dat"]);
+        run_git(dir.path(), &["commit", "-m", "initial commit"]);
+
+        let mut actual = read_git_show_files_batch(
+            Some(dir.path()),
+            "HEAD",
+            vec!["text.rs".to_string(), "binary.dat".to_string()],
+        )
+        .expect("git cat-file --batch should succeed even with binary content present");
+        actual.sort();
+
+        assert_eq!(
+            vec![("text.rs".to_string(), "fn ok() {}\n".to_string())],
+            actual
+        );
     }
 
     // Integration test for `--pr` URL mode's cwd-vs-cache decision (ADR
