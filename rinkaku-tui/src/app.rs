@@ -47,7 +47,8 @@ pub enum InputKey {
     /// `p`/`P`: toggle the right-hand pane between [`RightPane::Pivot`] and
     /// whichever mode was active before ([`RightPane::Detail`] or
     /// [`RightPane::Diff`]) — ADR 0019's entry-path pivot. Pressing `p`
-    /// again while already in `Pivot` mode returns to the prior mode,
+    /// again while already in `Pivot` mode returns to the prior mode (stored
+    /// in `App`'s `pivot_return_pane` field the moment `Pivot` was entered),
     /// mirroring `d`'s own toggle rather than a one-way "enter pivot mode"
     /// action, since the ADR describes `p` as a per-row toggle.
     TogglePivot,
@@ -157,6 +158,18 @@ pub struct App {
     order_mode: OrderMode,
     screen: Screen,
     right_pane: RightPane,
+    /// Which non-`Pivot` [`RightPane`] to return to when the user leaves
+    /// [`RightPane::Pivot`] via a `p` re-press (`InputKey::TogglePivot`) —
+    /// always [`RightPane::Detail`] or [`RightPane::Diff`], never `Pivot`
+    /// itself, since it exists only to answer "what was showing right
+    /// before the user pivoted". Updated the moment `right_pane` transitions
+    /// *into* `Pivot` (capturing whatever it was showing at that instant),
+    /// left untouched while already in `Pivot` (so moving the cursor or
+    /// scrolling while pivoted does not disturb it), and consulted only by
+    /// `TogglePivot`'s own re-press branch — `ToggleDiff` pressed from
+    /// `Pivot` is a distinct, unconditional "go to Diff" gesture (see that
+    /// branch's own comment) and does not read this field at all.
+    pivot_return_pane: RightPane,
     /// The user's requested scroll offset (in lines) into the right-hand
     /// pane's content, as an unclamped "how far down would the user like to
     /// be" value rather than an authoritative display position: `App` has
@@ -200,6 +213,7 @@ impl App {
             order_mode,
             screen: Screen::Entry,
             right_pane: RightPane::default(),
+            pivot_return_pane: RightPane::default(),
             right_pane_scroll: 0,
             status: None,
             should_quit: false,
@@ -431,17 +445,31 @@ impl App {
             (Screen::Entry, InputKey::ToggleDiff) => {
                 self.right_pane = match self.right_pane {
                     RightPane::Diff => RightPane::Detail,
-                    // From Detail or Pivot, `d` always lands on Diff —
-                    // Pivot has no dedicated "previous mode" of its own to
-                    // return to (see `RightPane`'s own doc comment), so `d`
-                    // simply picks Diff same as it would from Detail.
+                    // From Detail or Pivot, `d` always lands on Diff — a
+                    // deliberate, unconditional "go to Diff" gesture rather
+                    // than consulting `pivot_return_pane`. Only `p`'s own
+                    // re-press (`TogglePivot` below) restores the
+                    // pre-pivot pane; `d` pressed while pivoted is its own
+                    // independent choice of destination, matching this
+                    // arm's existing "from Detail, `d` always lands on
+                    // Diff" behavior rather than growing a second "restore
+                    // the previous pane" rule that would only apply to
+                    // some keys and not others.
                     RightPane::Detail | RightPane::Pivot => RightPane::Diff,
                 };
             }
             (Screen::Entry, InputKey::TogglePivot) => {
                 self.right_pane = match self.right_pane {
-                    RightPane::Pivot => RightPane::Detail,
-                    RightPane::Detail | RightPane::Diff => RightPane::Pivot,
+                    // Restore whichever pane was showing right before this
+                    // pivot session started, rather than unconditionally
+                    // Detail — `pivot_return_pane` was captured below the
+                    // moment `Pivot` was entered, so e.g. `d` -> `p` -> `p`
+                    // returns to Diff, not Detail.
+                    RightPane::Pivot => self.pivot_return_pane,
+                    RightPane::Detail | RightPane::Diff => {
+                        self.pivot_return_pane = self.right_pane;
+                        RightPane::Pivot
+                    }
                 };
             }
             (Screen::Entry, InputKey::ScrollDown) => {
@@ -741,9 +769,11 @@ mod tests {
 
     #[test]
     fn should_switch_from_pivot_to_diff_when_toggle_diff_is_pressed() {
-        // ADR 0019: "p" re-press or "d" both leave pivot mode — "d" lands
-        // on Diff specifically (Pivot has no "previous mode" of its own to
-        // return to, per `RightPane`'s own doc comment).
+        // ADR 0019: "p" re-press or "d" both leave pivot mode — "d" always
+        // lands on Diff regardless of `pivot_return_pane` (a deliberate,
+        // unconditional gesture — see `handle_key`'s `ToggleDiff` arm), even
+        // though the pane pivoted from here (Detail, `App::new`'s default)
+        // happens to differ from Diff.
         let report = empty_report();
         let app = App::new(&report).handle_key(InputKey::TogglePivot);
         assert_eq!(RightPane::Pivot, app.right_pane());
@@ -762,6 +792,40 @@ mod tests {
         let app = app.handle_key(InputKey::TogglePivot);
 
         assert_eq!(RightPane::Pivot, app.right_pane());
+    }
+
+    #[test]
+    fn should_return_to_diff_when_pivot_is_toggled_off_after_entering_from_diff() {
+        // Regression: `d` -> `p` -> `p` used to always land on Detail
+        // regardless of which pane the user pivoted from, silently
+        // discarding the Diff pane the user had open — this test pins `p`'s
+        // re-press restoring the pane pivot was entered from (`d`'s own
+        // arm, tested above, still always lands on Diff unconditionally).
+        let report = empty_report();
+        let app = App::new(&report)
+            .handle_key(InputKey::ToggleDiff)
+            .handle_key(InputKey::TogglePivot);
+        assert_eq!(RightPane::Pivot, app.right_pane());
+
+        let app = app.handle_key(InputKey::TogglePivot);
+
+        assert_eq!(RightPane::Diff, app.right_pane());
+    }
+
+    #[test]
+    fn should_return_to_detail_when_pivot_is_toggled_off_after_entering_from_detail() {
+        // Companion to the Diff-return-pane test above: pivoting from the
+        // default Detail pane must still restore Detail specifically (not
+        // just "whatever the default happens to be"), pinning that
+        // `pivot_return_pane` is actually captured on entry rather than
+        // this behavior being a coincidence of `RightPane::default()`.
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+        assert_eq!(RightPane::Pivot, app.right_pane());
+
+        let app = app.handle_key(InputKey::TogglePivot);
+
+        assert_eq!(RightPane::Detail, app.right_pane());
     }
 
     #[test]
