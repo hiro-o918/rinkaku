@@ -133,10 +133,21 @@ jobs:
 
       # x86_64-apple-darwin is the tarball macOS Homebrew installs from
       # (see awsctx's homebrew-release.yml, same convention).
+      #
+      # push-to is set explicitly to hiro-o918/homebrew-tap: without it,
+      # the action decides whether to fork by checking
+      # `repos.get(homebrew-tap).permissions.push` on the token, and a
+      # GitHub App installation token doesn't populate that field the
+      # way the action expects. That made it treat the token as
+      # read-only and attempt `POST /repos/.../forks`, which the App
+      # isn't permitted to do (HTTP 403). Declaring push-to short-
+      # circuits that permission probe and pushes directly, matching
+      # the actual (write) access the token has.
       - uses: mislav/bump-homebrew-formula-action@v3
         with:
           formula-name: rinkaku
           formula-path: Formula/rinkaku.rb
+          push-to: hiro-o918/homebrew-tap
           homebrew-tap: hiro-o918/homebrew-tap
           base-branch: main
           tag-name: ${{ github.ref_name }}
