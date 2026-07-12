@@ -57,3 +57,11 @@ matching ADR 0010's best-effort stance.
   files" rather than being detected — an accepted gap rather than an
   extra read solely to satisfy this check, consistent with the pipeline's
   existing IO-avoidance for that case.
+- The same content-marker check also runs while `TagsResolver` builds its
+  repo-wide dependency index (ADR 0003): every indexed file's content is
+  already being read for parsing, so the check is essentially free there
+  too, and excludes generated files from "Depends on:" resolution the
+  same way ADR 0010's `.gitattributes` exclusion does (see that ADR's
+  Consequences) — covering the common case where a repository relies on
+  linguist's content-based detection rather than declaring
+  `.gitattributes` at all, exactly the gap this ADR exists to close.

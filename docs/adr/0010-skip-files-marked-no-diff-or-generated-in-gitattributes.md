@@ -56,3 +56,14 @@ behavior (no filtering at all, in either output format), mirroring
   simply not compete for attention in the primary, human-facing rendering.
 - Pure-stdin-outside-a-repo input keeps generated files; documented
   limitation rather than a fragile homegrown attribute parser.
+- The same `.gitattributes` exclusion also applies to `TagsResolver`'s
+  repo-wide dependency index (ADR 0003), not just the diff's own skip
+  list: by default it skips every tracked path `.gitattributes` marks
+  generated, resolved once for the whole index via a stdin-batched
+  `git check-attr --stdin -z` (rather than the diff-scoped, argv-based
+  call used for `Report.skipped`, since the index covers every
+  `git ls-files` path and could exceed `ARG_MAX` as CLI arguments), so a
+  changed production symbol's "Depends on:" cannot resolve to a
+  definition living in a generated file (e.g. an ORM's model struct,
+  dragging in every column/tag as noise). `--include-generated` restores
+  the previous full-index behavior for this too.
