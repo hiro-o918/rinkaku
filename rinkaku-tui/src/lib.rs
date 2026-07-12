@@ -34,6 +34,7 @@ pub mod diff_view;
 pub mod highlight;
 pub mod nav;
 pub mod order;
+pub mod pivot;
 pub mod row_view;
 pub mod source;
 pub mod tree;
@@ -153,6 +154,7 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
+        KeyCode::Char('p') | KeyCode::Char('P') => Some(InputKey::TogglePivot),
         // Uppercase specifically: `j`/`k` already move the tree cursor, so
         // the right-pane scroll needs a key that doesn't collide with
         // them. Shift+j/k arrives here as the distinct `Char('J')`/`Char('K')`

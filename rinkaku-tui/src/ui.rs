@@ -9,7 +9,7 @@
 //! is covered separately... kept few and coarse — enough to catch a broken
 //! layout, not to pin every pixel").
 
-use crate::app::{App, DiffTarget, RightPane, Screen, SelectedDetail};
+use crate::app::{App, DiffTarget, PivotSelection, RightPane, Screen, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
 use crate::diff_view::{DiffLine, DiffLineKind, FileHunks, Hunk, file_hunks, hunks_for_range};
 use crate::highlight::{self, HighlightedFile, PALETTE, TokenSpan};
@@ -75,6 +75,7 @@ fn draw_entry_screen(
         RightPane::Diff => {
             draw_diff_pane(frame, app, report, diff_files, diff_highlights, right_area)
         }
+        RightPane::Pivot => draw_pivot_pane(frame, app, report, right_area),
     }
 }
 
@@ -179,6 +180,70 @@ fn draw_diff_pane(
 
     let lines = diff_pane_lines(&hunks, source_file_hunks, highlighted_file);
     render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
+}
+
+/// Draws the pivot pane (ADR 0019, [`RightPane::Pivot`]): the entry-tree
+/// text rooted at the directory/file row under the cursor, following the
+/// cursor as it moves (`App::selected_pivot_view` re-derives the tree from
+/// the current row every draw, per that method's own doc comment on why
+/// this is cheap enough to not cache). A symbol row shows a placeholder
+/// asking for a directory/file row instead — pivoting on a single symbol
+/// has no directory-scoped meaning (ADR 0019's `path_prefix` is meant to
+/// carve out a layer, not re-derive what a single symbol's own detail pane
+/// already shows). A directory/file row whose path matches no symbol shows
+/// its own "no symbols under `<path>`" message, mirroring `main.rs`'s
+/// `--entry` CLI note.
+fn draw_pivot_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
+    match app.selected_pivot_view(report) {
+        PivotSelection::NotApplicable => {
+            let block = Block::bordered().title(" Pivot ");
+            let paragraph = Paragraph::new("(select a directory or file row to pivot)")
+                .block(block)
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+        }
+        PivotSelection::Empty { path } => {
+            let block = Block::bordered().title(" Pivot ");
+            let paragraph = Paragraph::new(format!("(no symbols under {path})"))
+                .block(block)
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+        }
+        PivotSelection::View(view) => {
+            let lines = pivot_pane_lines(&view);
+            render_scrollable_pane(frame, " Pivot ", &lines, app.right_pane_scroll(), area);
+        }
+    }
+}
+
+/// Formats a [`crate::pivot::PivotView`]'s flattened [`crate::pivot::PivotLine`]s
+/// into styled [`Line`]s: indentation by depth (same `INDENT_WIDTH`-per-level
+/// convention as `crate::row_view::entry_row_line`), a dimmed style for
+/// `outside_prefix` lines (reached only by expanding a dependency edge past
+/// the pivoted path), a `(see above)` suffix for `already_printed` lines
+/// (matching `rinkaku-core::render`'s Markdown tree), and yellow/bold for a
+/// cycle-warning line (matching `entry_row_line`'s existing `(cycle)`
+/// marker styling).
+fn pivot_pane_lines(view: &crate::pivot::PivotView) -> Vec<Line<'static>> {
+    const INDENT_WIDTH: usize = 2;
+    view.lines
+        .iter()
+        .map(|line| {
+            let indent = " ".repeat(line.depth * INDENT_WIDTH);
+            let mut style = Style::default();
+            if line.is_cycle_warning {
+                style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+            } else if line.outside_prefix {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            let text = if line.already_printed {
+                format!("{indent}- {} (see above)", line.label)
+            } else {
+                format!("{indent}- {}", line.label)
+            };
+            Line::from(Span::styled(text, style))
+        })
+        .collect()
 }
 
 /// Renders `lines` into a bordered pane titled `title`, scrolled to
@@ -800,7 +865,7 @@ fn source_lines(source: &SourceView, start: usize, end: usize) -> Vec<Line<'stat
 fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
     let help = match app.screen() {
         Screen::Entry => {
-            "j/k: move  enter/space: expand  e/c: expand/collapse  o: order  d: diff  J/K: scroll  s: source  q: quit"
+            "j/k: move  enter/space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  J/K: scroll  s: source  q: quit"
         }
         Screen::Source { .. } => "esc/q: back",
     };
@@ -1025,6 +1090,62 @@ index e69de29..4b825dc 100644
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"));
         assert!(text.contains("+fn foo() {}"));
+    }
+
+    #[test]
+    fn should_draw_pivot_pane_with_tree_lines_when_toggled_on_a_file_row() {
+        // Same fixture shape as `report_with_one_symbol`, but with a graph
+        // actually populated (that fixture leaves `graph` empty since most
+        // of this module's tests don't need one) so pivoting on "lib.rs"
+        // yields a real `PivotSelection::View` instead of `Empty`.
+        let report = Report {
+            graph: SymbolGraph {
+                nodes: vec![rinkaku_core::graph::Node {
+                    id: "lib.rs::foo".to_string(),
+                    path: "lib.rs".to_string(),
+                    name: "foo".to_string(),
+                }],
+                edges: vec![],
+                roots: vec!["lib.rs::foo".to_string()],
+            },
+            ..report_with_one_symbol()
+        };
+        // Row 0 is the "lib.rs" file row itself (cursor starts there).
+        let app = App::new(&report).handle_key(crate::app::InputKey::TogglePivot);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Pivot"));
+        assert!(text.contains("fn foo (lib.rs)"));
+    }
+
+    #[test]
+    fn should_draw_pivot_placeholder_when_cursor_is_on_a_symbol_row() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::TogglePivot);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[], &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Pivot"));
+        // Not the full placeholder sentence: the pane is narrow enough
+        // (40% of an 80-column terminal) that `Paragraph`'s word-wrapping
+        // splits it across rows, and `buffer_text` joins rows with `\n` —
+        // a multi-row substring would never match. "directory" alone fits
+        // on one wrapped line and is unique enough to confirm the
+        // placeholder rendered, mirroring this module's other coarse
+        // fragment checks (e.g. `should_draw_entry_and_detail_panes_...`'s
+        // "Symbols" check).
+        assert!(text.contains("directory"));
     }
 
     /// Finds the buffer cell for `token`'s first character within the row
@@ -1276,11 +1397,11 @@ index e69de29..4b825dc 100644
         let report = report_with_one_symbol();
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
-        // module: the full help text (now including the J/K scroll hint)
-        // is ~104 columns and would otherwise be truncated (the status
-        // line intentionally does not wrap), hiding the "quit" fragment
-        // this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(110, 20)).expect("terminal");
+        // module: the full help text (now including the J/K scroll hint and
+        // the `p: pivot` hint, ADR 0019) is ~114 columns and would
+        // otherwise be truncated (the status line intentionally does not
+        // wrap), hiding the "quit" fragment this test checks for.
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).expect("terminal");
 
         terminal
             .draw(|frame| draw(frame, &app, &report, &[], &[]))

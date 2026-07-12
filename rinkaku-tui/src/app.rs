@@ -44,6 +44,13 @@ pub enum InputKey {
     /// then moving the cursor keeps showing the diff pane for the newly
     /// selected row instead of resetting on every cursor move.
     ToggleDiff,
+    /// `p`/`P`: toggle the right-hand pane between [`RightPane::Pivot`] and
+    /// whichever mode was active before ([`RightPane::Detail`] or
+    /// [`RightPane::Diff`]) — ADR 0019's entry-path pivot. Pressing `p`
+    /// again while already in `Pivot` mode returns to the prior mode,
+    /// mirroring `d`'s own toggle rather than a one-way "enter pivot mode"
+    /// action, since the ADR describes `p` as a per-row toggle.
+    TogglePivot,
     /// `J`: scroll the right-hand pane (Detail/Diff) down by one line.
     /// Uppercase specifically so it does not collide with `j`'s existing
     /// cursor-move binding (`crate::run`'s `translate_key` matches
@@ -78,15 +85,26 @@ pub enum Screen {
 }
 
 /// Which content the right-hand pane shows on [`Screen::Entry`] (TUI
-/// iteration 2): the existing signature/used-by/callers detail, or the raw
-/// diff hunks touching the selected row. Independent of [`Screen`] — it is
+/// iteration 2/ADR 0019): the existing signature/used-by/callers detail,
+/// the raw diff hunks touching the selected row, or the pivot tree rooted
+/// at the selected directory/file's path. Independent of [`Screen`] — it is
 /// a display mode for the entry view's right pane, not a separate screen
 /// reached via drill-down the way [`Screen::Source`] is.
+///
+/// [`RightPane::Pivot`] carries no path of its own — unlike a hypothetical
+/// `Pivot(String)` variant, the pivoted path is always read fresh off the
+/// cursor's current row (`App::selected_pivot_view`) each time the pane is
+/// drawn, the same way [`RightPane::Detail`]/[`RightPane::Diff`] already
+/// derive their content from the cursor rather than storing it. This is
+/// what makes "follow the cursor while pivoted" (ADR 0019) free: moving the
+/// cursor while already in `Pivot` mode need not touch `RightPane` at all,
+/// only re-run the lookup the next time `crate::ui` draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RightPane {
     #[default]
     Detail,
     Diff,
+    Pivot,
 }
 
 /// The right-hand pane's content for the row currently under the cursor
@@ -115,6 +133,15 @@ pub enum DiffTarget {
     File {
         path: String,
     },
+}
+
+/// What [`App::selected_pivot_view`] resolved the cursor's row to (ADR
+/// 0019) — see that method's own doc comment for the three-way split.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PivotSelection {
+    NotApplicable,
+    Empty { path: String },
+    View(crate::pivot::PivotView),
 }
 
 /// The whole interactive application's state: the stage-A view-models
@@ -289,6 +316,42 @@ impl App {
         }
     }
 
+    /// What the pivot pane ([`RightPane::Pivot`], ADR 0019) should show for
+    /// the row currently under the cursor: [`PivotSelection::View`] when the
+    /// cursor sits on a directory or file row and at least one symbol falls
+    /// under that row's path, [`PivotSelection::Empty`] for a directory/file
+    /// row whose path matches no symbol at all (still a valid selection,
+    /// just nothing to draw a tree from), or [`PivotSelection::NotApplicable`]
+    /// on a symbol row or when there are no rows at all — mirroring
+    /// `selected_diff_target`'s three-way split between "not this kind of
+    /// row", "this kind of row but nothing to show", and "here is the
+    /// content", except pivot additionally needs to render its own "no
+    /// symbols under `<path>`" message rather than reuse a diff-pane-style
+    /// generic placeholder, hence the extra variant instead of `Option`.
+    ///
+    /// Recomputed on every call rather than cached on `App` — the same
+    /// recompute-not-cache stance ADR 0019 states explicitly (cost is
+    /// O(V+E) per call, see `crate::pivot::build_pivot_view`'s own doc
+    /// comment), and this is only invoked when `crate::ui` actually draws
+    /// the pivot pane, not on every keystroke or idle poll tick.
+    pub fn selected_pivot_view(&self, report: &Report) -> PivotSelection {
+        let rows = self.nav.rows(&self.tree);
+        let Some(row) = rows.get(self.nav.cursor()) else {
+            return PivotSelection::NotApplicable;
+        };
+        match &row.node.kind {
+            NodeKind::Symbol(_) => PivotSelection::NotApplicable,
+            NodeKind::Dir | NodeKind::File => {
+                match crate::pivot::build_pivot_view(report, &row.node.path) {
+                    Some(view) => PivotSelection::View(view),
+                    None => PivotSelection::Empty {
+                        path: row.node.path.clone(),
+                    },
+                }
+            }
+        }
+    }
+
     /// Applies one [`InputKey`] and returns the next `App`. `report` is
     /// needed only for [`InputKey::Source`] (to confirm the row under the
     /// cursor is a present symbol before switching screens — the actual
@@ -362,8 +425,18 @@ impl App {
             }
             (Screen::Entry, InputKey::ToggleDiff) => {
                 self.right_pane = match self.right_pane {
-                    RightPane::Detail => RightPane::Diff,
                     RightPane::Diff => RightPane::Detail,
+                    // From Detail or Pivot, `d` always lands on Diff —
+                    // Pivot has no dedicated "previous mode" of its own to
+                    // return to (see `RightPane`'s own doc comment), so `d`
+                    // simply picks Diff same as it would from Detail.
+                    RightPane::Detail | RightPane::Pivot => RightPane::Diff,
+                };
+            }
+            (Screen::Entry, InputKey::TogglePivot) => {
+                self.right_pane = match self.right_pane {
+                    RightPane::Pivot => RightPane::Detail,
+                    RightPane::Detail | RightPane::Diff => RightPane::Pivot,
                 };
             }
             (Screen::Entry, InputKey::ScrollDown) => {
@@ -646,6 +719,163 @@ mod tests {
 
         let app = app.handle_key(InputKey::ToggleDiff);
         assert_eq!(RightPane::Detail, app.right_pane());
+    }
+
+    #[test]
+    fn should_toggle_right_pane_between_detail_and_pivot() {
+        let report = empty_report();
+        let app = App::new(&report);
+        assert_eq!(RightPane::Detail, app.right_pane());
+
+        let app = app.handle_key(InputKey::TogglePivot);
+        assert_eq!(RightPane::Pivot, app.right_pane());
+
+        let app = app.handle_key(InputKey::TogglePivot);
+        assert_eq!(RightPane::Detail, app.right_pane());
+    }
+
+    #[test]
+    fn should_switch_from_pivot_to_diff_when_toggle_diff_is_pressed() {
+        // ADR 0019: "p" re-press or "d" both leave pivot mode — "d" lands
+        // on Diff specifically (Pivot has no "previous mode" of its own to
+        // return to, per `RightPane`'s own doc comment).
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+        assert_eq!(RightPane::Pivot, app.right_pane());
+
+        let app = app.handle_key(InputKey::ToggleDiff);
+
+        assert_eq!(RightPane::Diff, app.right_pane());
+    }
+
+    #[test]
+    fn should_switch_from_diff_to_pivot_when_toggle_pivot_is_pressed() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleDiff);
+        assert_eq!(RightPane::Diff, app.right_pane());
+
+        let app = app.handle_key(InputKey::TogglePivot);
+
+        assert_eq!(RightPane::Pivot, app.right_pane());
+    }
+
+    #[test]
+    fn should_ignore_toggle_pivot_while_source_screen_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+        assert_eq!(RightPane::Detail, app.right_pane());
+
+        let app = app.handle_key(InputKey::TogglePivot);
+
+        assert_eq!(RightPane::Detail, app.right_pane());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_when_toggling_pivot_pane() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ScrollDown);
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::TogglePivot);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_return_not_applicable_pivot_selection_when_cursor_is_on_a_symbol_row() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        let actual = app.selected_pivot_view(&report);
+
+        assert_eq!(PivotSelection::NotApplicable, actual);
+    }
+
+    #[test]
+    fn should_return_pivot_view_when_cursor_is_on_a_directory_row() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol("src/lib.rs::foo", "foo")],
+            }],
+            graph: rinkaku_core::graph::SymbolGraph {
+                nodes: vec![rinkaku_core::graph::Node {
+                    id: "src/lib.rs::foo".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    name: "foo".to_string(),
+                }],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            ..empty_report()
+        };
+        // Row 0 is the "src" directory itself (a single-child directory
+        // collapsed with "src/lib.rs" would still leave "src" as the
+        // top-level row — see `crate::tree::build_tree`'s collapsing rule;
+        // this fixture's one file under one directory does not collapse
+        // further since "src/lib.rs" is a file, not a subdirectory).
+        let app = App::new(&report);
+
+        let actual = app.selected_pivot_view(&report);
+
+        match actual {
+            PivotSelection::View(view) => assert_eq!("src".to_string(), view.path),
+            other => panic!("expected PivotSelection::View, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn should_return_empty_pivot_selection_when_directory_path_matches_no_symbol() {
+        // Defensive: `crate::pivot::build_pivot_view` only returns `None`
+        // when no node matches the prefix, which should not happen for a
+        // path the tree itself produced — but `selected_pivot_view`'s
+        // `Empty` branch must still exist and report something sane rather
+        // than silently falling through, in case tree/graph ever disagree.
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = app.selected_pivot_view(&report);
+
+        assert_eq!(PivotSelection::NotApplicable, actual);
+    }
+
+    /// Same shape as `report_with_two_directories`, but with a populated
+    /// `graph` (that fixture leaves `graph` empty since none of its own
+    /// nav-focused tests need one) — required for `selected_pivot_view` to
+    /// return `PivotSelection::View` rather than `Empty` for either
+    /// directory.
+    fn report_with_two_directories_and_graph() -> Report {
+        let report = report_with_two_directories();
+        let graph = rinkaku_core::graph::build_graph(&report.files);
+        Report { graph, ..report }
+    }
+
+    #[test]
+    fn should_follow_cursor_when_moving_between_directory_rows_while_pivoted() {
+        let report = report_with_two_directories_and_graph();
+        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+
+        let first = match app.selected_pivot_view(&report) {
+            PivotSelection::View(view) => view.path,
+            other => panic!("expected PivotSelection::View, got {other:?}"),
+        };
+        assert_eq!("a".to_string(), first);
+
+        // Row 0 is "a", row 3 is "b" (per report_with_two_directories's own
+        // doc comment on expanded row order) — three Down presses land the
+        // cursor on "b".
+        let app = app
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down);
+        let second = match app.selected_pivot_view(&report) {
+            PivotSelection::View(view) => view.path,
+            other => panic!("expected PivotSelection::View, got {other:?}"),
+        };
+        assert_eq!("b".to_string(), second);
     }
 
     #[test]
