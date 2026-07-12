@@ -30,7 +30,7 @@
 //! signatures are noise (ADR 0009).
 
 use crate::extract::{ExtractedSymbol, SymbolKind};
-use crate::graph::{Node, NodeId, SymbolGraph};
+use crate::graph::{Hotspot, Node, NodeId, SymbolGraph};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -51,6 +51,13 @@ pub struct Report {
     /// being summarized here. Source order (the order files were first
     /// encountered in the diff), same as `files`.
     pub tests: Vec<TestFileSummary>,
+    /// Fan-in hotspots (ADR 0013): changed symbols referenced by two or more
+    /// other changed symbols, sorted by fan-in descending. Derived from
+    /// `graph` via [`crate::graph::compute_hotspots`] and kept as its own
+    /// `Report` field (rather than recomputed at render time) so JSON
+    /// consumers get it without recomputing the aggregation themselves,
+    /// matching how `graph` itself is already exposed alongside `files`.
+    pub hotspots: Vec<Hotspot>,
 }
 
 /// Extracted symbols for a single changed file.
@@ -209,6 +216,21 @@ fn render_markdown(report: &Report) -> Result<String, RenderError> {
         writeln!(out)?;
         render_change_graph(&mut out, &report.graph, &children, &lookup)?;
         writeln!(out)?;
+
+        if !report.hotspots.is_empty() {
+            writeln!(out, "## Hotspots")?;
+            writeln!(out)?;
+            for hotspot in &report.hotspots {
+                writeln!(
+                    out,
+                    "- {} — used by {}: {}",
+                    hotspot_label(hotspot, &lookup),
+                    hotspot.used_by.len(),
+                    hotspot.used_by.join(", ")
+                )?;
+            }
+            writeln!(out)?;
+        }
 
         writeln!(out, "## Definitions")?;
         writeln!(out)?;
@@ -530,6 +552,25 @@ fn tree_label(path: &str, symbol: &ExtractedSymbol) -> String {
     )
 }
 
+/// Builds the "Hotspots" line label for a [`Hotspot`], reusing
+/// [`tree_label`] via `lookup` so a hotspot's label is identical to how the
+/// same symbol is labeled in "Change graph"/"Definitions" (ADR 0013's
+/// requirement that labels stay consistent across sections) — including
+/// the `:{start_line}` disambiguation suffix when applicable.
+///
+/// Falls back to a bare `{name} ({path})` (no kind prefix) when `lookup` has
+/// no matching `ExtractedSymbol` for `hotspot.id` — defensive, since
+/// `pipeline::analyze_diff` always builds `hotspots` from the same `graph`
+/// whose node ids match `files`' stamped symbol ids (same invariant
+/// `render_tree_node`'s own lookup-miss guards rely on), so this branch is
+/// not expected to trigger in practice.
+fn hotspot_label(hotspot: &Hotspot, lookup: &SymbolLookup) -> String {
+    match lookup.get(&hotspot.id) {
+        Some((path, symbol)) => tree_label(path, symbol),
+        None => format!("{} ({})", hotspot.name, hotspot.path),
+    }
+}
+
 /// The `(path)` or `(path:start_line)` portion shared by [`tree_label`] and
 /// folded `— uses: ...` annotations (see `render_tree_node`).
 ///
@@ -733,6 +774,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "".to_string();
@@ -764,6 +806,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -807,6 +850,7 @@ mod tests {
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -852,6 +896,7 @@ fn foo()
                 roots: vec![],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -883,6 +928,7 @@ fn foo()
                 path: "src/lib.rs".to_string(),
                 symbol_count: 1,
             }],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -911,6 +957,7 @@ fn foo()
                 path: "src/lib.rs".to_string(),
                 symbol_count: 3,
             }],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -948,6 +995,7 @@ fn foo()
                 path: "src/lib.rs".to_string(),
                 symbol_count: 2,
             }],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -998,6 +1046,7 @@ fn foo()
                 roots: vec![],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "".to_string();
@@ -1029,6 +1078,7 @@ fn foo()
                 roots: vec![],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1062,6 +1112,7 @@ fn foo()
                 roots: vec![],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1078,7 +1129,8 @@ fn foo()
     \"edges\": [],
     \"roots\": []
   },
-  \"tests\": []
+  \"tests\": [],
+  \"hotspots\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
@@ -1105,6 +1157,7 @@ fn foo()
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1155,6 +1208,7 @@ fn foo(a: i32) -> i32
                 ],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1189,6 +1243,7 @@ fn foo(a: i32) -> i32
                 roots: vec!["src/lib.rs::a".to_string(), "src/lib.rs::b".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1231,6 +1286,7 @@ fn foo(a: i32) -> i32
                 ],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1293,6 +1349,7 @@ fn foo(a: i32) -> i32
                 ],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1362,6 +1419,7 @@ fn foo(a: i32, b: i32)
                 roots: vec!["src/main.rs::handle_pr".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1442,6 +1500,7 @@ fn resolve_pr_base_sha() -> Result<String>
                 roots: vec!["src/lib.rs::a".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1528,6 +1587,7 @@ fn c()
                 roots: vec!["src/lib.rs::foo".to_string(), "src/lib.rs::bar".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1594,6 +1654,7 @@ fn bar()
                 roots: vec!["src/git.rs::resolve_pr_base_sha".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1702,6 +1763,7 @@ fn resolve_pr_base_sha()
                 ],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1813,6 +1875,7 @@ struct Config { path: String }
                 roots: vec!["store/items.go::UpsertItems".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1906,6 +1969,7 @@ type UpsertItemsResponse struct { Count int }
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -1986,6 +2050,7 @@ struct Dup { b: i32 }
                 roots: vec!["src/lib.rs::foo".to_string(), "src/lib.rs::bar".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2047,6 +2112,7 @@ fn bar()
                 roots: vec!["src/config.rs::Config".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2121,6 +2187,7 @@ struct Config { path: String }
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2199,6 +2266,7 @@ struct Inner { x: i32 }
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2253,6 +2321,7 @@ struct Node { next: Option<Box<Node>> }
                 roots: vec!["src/lib.rs::bar".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2303,6 +2372,7 @@ fn bar(&self) -> i32
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2361,6 +2431,7 @@ Depends on:
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2415,6 +2486,7 @@ Depends on:
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2471,6 +2543,7 @@ Depends on:
                 roots: vec!["src/lib.rs::example_macro".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2520,6 +2593,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
                 roots: vec!["src/lib.rs::bar".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2569,6 +2643,7 @@ fn bar(&self) -> i32
                 roots: vec![],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2606,6 +2681,7 @@ fn bar(&self) -> i32
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2626,6 +2702,209 @@ fn foo()
 ## Skipped files
 
 - assets/logo.png (binary)
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_omit_hotspots_section_when_hotspots_is_empty() {
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    SymbolKind::Function,
+                    "fn foo()",
+                )],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![],
+            hotspots: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_hotspots_section_between_change_graph_and_definitions_when_hotspots_is_non_empty()
+     {
+        // `UpsertItemsRequest` (a struct) is referenced by two changed
+        // functions — the label reuses tree_label's `{kind} {name}
+        // ({path})` form, so the line reads
+        // "struct UpsertItemsRequest (store/items.go) — used by 2: ..."
+        // exactly as the ADR spec requires, and used_by names are joined
+        // in the order `compute_hotspots` already sorted them in (not
+        // re-sorted here).
+        let report = Report {
+            files: vec![FileReport {
+                path: "store/items.go".to_string(),
+                symbols: vec![
+                    symbol(
+                        "store/items.go::HandleFoo",
+                        "HandleFoo",
+                        SymbolKind::Function,
+                        "func HandleFoo(req UpsertItemsRequest) error",
+                    ),
+                    symbol(
+                        "store/items.go::HandleBar",
+                        "HandleBar",
+                        SymbolKind::Function,
+                        "func HandleBar(req UpsertItemsRequest) error",
+                    ),
+                    symbol(
+                        "store/items.go::UpsertItemsRequest",
+                        "UpsertItemsRequest",
+                        SymbolKind::Struct,
+                        "type UpsertItemsRequest struct { Items []Item }",
+                    ),
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("store/items.go::HandleFoo", "store/items.go", "HandleFoo"),
+                    node("store/items.go::HandleBar", "store/items.go", "HandleBar"),
+                    node(
+                        "store/items.go::UpsertItemsRequest",
+                        "store/items.go",
+                        "UpsertItemsRequest",
+                    ),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "store/items.go::HandleFoo".to_string(),
+                        to: "store/items.go::UpsertItemsRequest".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "store/items.go::HandleBar".to_string(),
+                        to: "store/items.go::UpsertItemsRequest".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec![
+                    "store/items.go::HandleFoo".to_string(),
+                    "store/items.go::HandleBar".to_string(),
+                ],
+            },
+            tests: vec![],
+            hotspots: vec![Hotspot {
+                id: "store/items.go::UpsertItemsRequest".to_string(),
+                path: "store/items.go".to_string(),
+                name: "UpsertItemsRequest".to_string(),
+                used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
+            }],
+        };
+
+        let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn HandleFoo (store/items.go) — uses: UpsertItemsRequest
+- fn HandleBar (store/items.go) — uses: UpsertItemsRequest
+
+## Hotspots
+
+- struct UpsertItemsRequest (store/items.go) — used by 2: HandleBar, HandleFoo
+
+## Definitions
+
+### fn HandleFoo (store/items.go)
+
+```
+func HandleFoo(req UpsertItemsRequest) error
+```
+
+### struct UpsertItemsRequest (store/items.go)
+
+```
+type UpsertItemsRequest struct { Items []Item }
+```
+
+### fn HandleBar (store/items.go)
+
+```
+func HandleBar(req UpsertItemsRequest) error
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_hotspot_line_for_symbol_with_no_matching_definition() {
+        // Same defensive rationale as the "NOTE" block below: `hotspots`
+        // could in principle reference a node id with no corresponding
+        // `ExtractedSymbol` in `files` (the node is present in `graph`, so
+        // the empty-output guard does not short-circuit, but `files` itself
+        // has no matching symbol — mirroring the other lookup-miss tests'
+        // setup). Unlike "Change graph"/"Definitions" (which use
+        // `SymbolLookup`, keyed by symbol id, to find the container/
+        // signature and skip the line entirely on a miss), the "Hotspots"
+        // line still renders on a lookup miss, falling back to a bare
+        // `{name} ({path})` label with no kind prefix, rather than being
+        // dropped outright.
+        let report = Report {
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::ghost", "src/lib.rs", "ghost")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::ghost".to_string()],
+            },
+            tests: vec![],
+            hotspots: vec![Hotspot {
+                id: "src/lib.rs::ghost".to_string(),
+                path: "src/lib.rs".to_string(),
+                name: "ghost".to_string(),
+                used_by: vec!["a".to_string(), "b".to_string()],
+            }],
+        };
+
+        let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+
+## Hotspots
+
+- ghost (src/lib.rs) — used by 2: a, b
+
+## Definitions
+
 "
         .to_string();
         let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
@@ -2657,6 +2936,7 @@ fn foo()
                 roots: vec!["src/lib.rs::ghost".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2689,6 +2969,7 @@ fn foo()
                 roots: vec!["src/lib.rs::ghost".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2739,6 +3020,7 @@ fn foo()
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2785,6 +3067,7 @@ fn foo()
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
 
         let expected = "\
@@ -2828,7 +3111,8 @@ fn foo()
       \"src/lib.rs::foo\"
     ]
   },
-  \"tests\": []
+  \"tests\": [],
+  \"hotspots\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");

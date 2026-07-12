@@ -354,6 +354,7 @@ fn run_base_pipeline(
                 roots: Vec::new(),
             },
             tests: Vec::new(),
+            hotspots: Vec::new(),
         });
     }
 
@@ -3131,6 +3132,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
                     roots: Vec::new(),
                 },
                 tests: Vec::new(),
+                hotspots: Vec::new(),
             },
             actual.expect("empty diff must not touch the repository-wide index scan")
         );
@@ -3218,6 +3220,7 @@ fn should_add_two_numbers() {
                 skipped: vec![],
                 graph: empty_graph(),
                 tests: vec![],
+                hotspots: vec![],
             }
         }
 
@@ -3230,6 +3233,7 @@ fn should_add_two_numbers() {
                 skipped: vec![],
                 graph: empty_graph(),
                 tests: vec![],
+                hotspots: vec![],
             }
         }
 
@@ -3274,6 +3278,7 @@ fn should_add_two_numbers() {
                 }],
                 graph: empty_graph(),
                 tests: vec![],
+                hotspots: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
@@ -3297,6 +3302,7 @@ fn should_add_two_numbers() {
                     path: "src/lib.rs".to_string(),
                     symbol_count: 1,
                 }],
+                hotspots: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
@@ -3332,6 +3338,7 @@ fn should_add_two_numbers() {
                 ],
                 graph: empty_graph(),
                 tests: vec![],
+                hotspots: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
