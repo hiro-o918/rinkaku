@@ -136,7 +136,13 @@ impl From<Format> for OutputFormat {
 }
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    // Default to `info`-level progress output on stderr (env_logger's own
+    // default is error-only, which meant `--pr`/`--base` runs — the ones
+    // slow enough to want a heartbeat, see the dependency-index build
+    // below — gave no feedback at all while running). `RUST_LOG` still
+    // overrides this, same as any other `env_logger::Builder::from_env`
+    // setup.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
 
     if let Some(Command::SelfUpdate { yes }) = cli.command {
@@ -150,8 +156,11 @@ fn main() -> anyhow::Result<()> {
         let parsed = parse_pr_arg(pr_arg)?;
         let number = parsed.number();
         let workdir = resolve_pr_workdir(&parsed)?;
+        log::info!("resolving PR #{number} via gh");
         let pr_info = fetch_pr_info(pr_arg.trim())?;
-        let head_sha = fetch_pr_head(number, workdir.as_deref())?;
+        let cwd = workdir.as_deref();
+        log::info!("fetching PR #{number} head");
+        let head_sha = fetch_pr_head(number, cwd)?;
         if head_sha != pr_info.head_ref_oid {
             anyhow::bail!(
                 "fetched PR #{number} head ({head_sha}) does not match `gh`'s reported head \
@@ -161,7 +170,7 @@ fn main() -> anyhow::Result<()> {
                 expected = pr_info.head_ref_oid,
             );
         }
-        let cwd = workdir.as_deref();
+        log::info!("resolving PR #{number} base commit");
         let (base_sha, used_fallback) = resolve_pr_base_sha(
             &pr_info.base_ref_oid,
             |oid| object_exists_locally(cwd, oid),
@@ -178,7 +187,7 @@ fn main() -> anyhow::Result<()> {
                 base_branch = pr_info.base_ref_name,
             );
         }
-        run_base_pipeline(&cli, &base_sha, &head_sha, workdir.as_deref())?
+        run_base_pipeline(&cli, &base_sha, &head_sha, cwd)?
     } else if let Some(base) = &cli.base {
         run_base_pipeline(&cli, base, &cli.head, None)?
     } else {
@@ -187,6 +196,7 @@ fn main() -> anyhow::Result<()> {
             eprintln!("note: diff is empty, nothing to analyze");
         }
         let resolver = build_resolver(&cli, &diff_text, read_working_tree_file, None, None)?;
+        log::info!("analyzing diff");
         let report = analyze_diff(
             &diff_text,
             read_working_tree_file,
@@ -241,6 +251,7 @@ fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBu
     if let Some(origin) = git_remote_origin_url(None)?
         && github_remote_matches(&origin, owner, repo)
     {
+        log::info!("using the current directory as a clone of {owner}/{repo}");
         return Ok(None);
     }
 
@@ -251,6 +262,10 @@ fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBu
         owner,
         repo,
     ) {
+        log::info!(
+            "using ghq-managed clone of {owner}/{repo} at {}",
+            discovered.display()
+        );
         return Ok(Some(discovered));
     }
 
@@ -271,7 +286,13 @@ fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBu
                 dir.display()
             )
         })?;
+        log::info!(
+            "cloning {owner}/{repo} into cache at {} (first run against this repository)",
+            dir.display()
+        );
         clone_repo_into_cache(owner, repo, &dir)?;
+    } else {
+        log::info!("using cache clone of {owner}/{repo} at {}", dir.display());
     }
     Ok(Some(dir))
 }
@@ -305,6 +326,7 @@ fn run_base_pipeline(
     head: &str,
     cwd: Option<&std::path::Path>,
 ) -> anyhow::Result<rinkaku_core::render::Report> {
+    log::info!("diffing {base}...{head}");
     let diff_text = run_git_diff(base, head, cwd)?;
     if diff_text.trim().is_empty() {
         eprintln!("note: diff is empty, nothing to analyze");
@@ -319,6 +341,7 @@ fn run_base_pipeline(
         move |path: &str| read_git_show_file(cwd, &head, path)
     };
     let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd)?;
+    log::info!("analyzing diff");
     let report = analyze_diff(
         &diff_text,
         read_file,
@@ -404,6 +427,10 @@ fn build_resolver(
         rinkaku_core::pipeline::collect_referenced_names(diff_text, diff_read_file)?;
 
     let paths = list_git_files(cwd)?;
+    log::info!(
+        "building dependency index over {} tracked files",
+        paths.len()
+    );
     let files: Vec<(String, String)> = match head {
         // One `git cat-file --batch` child process serves every path
         // (see `read_git_show_files_batch`'s doc comment for why this
