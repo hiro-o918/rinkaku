@@ -460,10 +460,10 @@ rather than combining with it.
 | --- | --- |
 | `j` / `k` / `↓` / `↑` | Move the cursor |
 | `enter` / `space` | Expand or collapse a directory/file row |
-| `e` | Expand every row |
-| `c` | Collapse every row |
-| `o` | Toggle topological / alphabetical ordering |
-| `s` | Open the source view for the symbol under the cursor |
+| `e` / `E` | Expand every row |
+| `c` / `C` | Collapse every row |
+| `o` / `O` | Toggle topological / alphabetical ordering |
+| `s` / `S` | Open the source view for the symbol under the cursor |
 | `esc` / `q` | Return to the entry view (from the source view) |
 | `q` / `ctrl-c` | Quit (from the entry view) |
 
