@@ -151,7 +151,7 @@ rinkaku --base main
 rinkaku --base main --format json
 
 # A human-oriented call/dependency graph as a mermaid flowchart (ADR
-# 0020) — opt-in, meant for pasting into a GitHub PR comment/description
+# 0021) — opt-in, meant for pasting into a GitHub PR comment/description
 # where mermaid renders natively, not for piping into an LLM
 rinkaku --base main --format mermaid
 

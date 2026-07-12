@@ -169,7 +169,7 @@ pub enum OutputFormat {
     Markdown,
     Json,
     /// A human-oriented call/dependency graph rendered as a mermaid
-    /// `flowchart` document (ADR 0020) — opt-in, aimed at GitHub's native
+    /// `flowchart` document (ADR 0021) — opt-in, aimed at GitHub's native
     /// mermaid rendering (PR comments/descriptions), not the default
     /// Markdown output ADR 0013/0015 keep machine-facing.
     Mermaid,
@@ -929,12 +929,12 @@ fn skip_reason_label(reason: SkipReason) -> &'static str {
 }
 
 /// Node count above which [`render_mermaid`] falls back to a file-level
-/// graph (ADR 0020) instead of one node per symbol. Chosen as a size a
+/// graph (ADR 0021) instead of one node per symbol. Chosen as a size a
 /// `flowchart` still renders legibly in a PR comment's viewport; see the
 /// ADR's Consequences for the judgment-call caveat.
 const MERMAID_NODE_BUDGET: usize = 30;
 
-/// Renders a [`Report`] as a mermaid `flowchart LR` document (ADR 0020): a
+/// Renders a [`Report`] as a mermaid `flowchart LR` document (ADR 0021): a
 /// human-oriented call/dependency graph, opt-in via `--format mermaid`,
 /// separate from the machine-facing Markdown/JSON paths (`render_markdown`
 /// is untouched by this function).
@@ -1015,7 +1015,7 @@ fn render_mermaid(report: &Report) -> String {
 
     // Class assignment: a node that is both `changed` (SignatureChanged)
     // and a hotspot gets `hotspot` styling, not `changed` — see this
-    // function's doc comment / ADR 0020's Decision on precedence. `added`
+    // function's doc comment / ADR 0021's Decision on precedence. `added`
     // never overlaps with `hotspot` in practice (a hotspot is referenced by
     // >= 2 other changed symbols, which requires base-side symbols to
     // compare against, the same data `Added` vs `SignatureChanged`
@@ -1042,7 +1042,7 @@ fn render_mermaid(report: &Report) -> String {
 }
 
 /// [`render_mermaid`]'s fallback for a graph over [`MERMAID_NODE_BUDGET`]
-/// nodes (ADR 0020): one node per file rather than per symbol, edges
+/// nodes (ADR 0021): one node per file rather than per symbol, edges
 /// aggregated between files and deduplicated with a count label, so the
 /// output stays legible instead of degrading into a hairball. A leading
 /// `%% aggregated to file level` comment marks that this fallback fired.
@@ -1144,7 +1144,7 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// [`render_mermaid_file_level`]. Colors are chosen with explicit
 /// dark-on-light text (rather than relying on mermaid's theme defaults) so
 /// they stay legible under both GitHub's light and dark PR-comment themes
-/// (ADR 0020) — `stroke-width` on `hotspot` gives it a heavier outline on
+/// (ADR 0021) — `stroke-width` on `hotspot` gives it a heavier outline on
 /// top of its own fill, in addition to `changed`'s (SignatureChanged)
 /// styling, since `hotspot` styling takes precedence over `changed` for a
 /// node that qualifies as both (see `render_mermaid`'s class-assignment

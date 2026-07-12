@@ -1,4 +1,4 @@
-# 0020. `--format mermaid`: an opt-in, GitHub-native graph output
+# 0021. `--format mermaid`: an opt-in, GitHub-native graph output
 
 - Status: accepted
 - Date: 2026-07-13

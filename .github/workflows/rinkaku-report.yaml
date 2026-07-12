@@ -1,6 +1,6 @@
 name: rinkaku PR report
 
-# Dogfoods this repository's own action (ADR 0020): posts a mermaid
+# Dogfoods this repository's own action (ADR 0021): posts a mermaid
 # call/dependency graph plus a collapsed Markdown outline as a sticky PR
 # comment.
 #
