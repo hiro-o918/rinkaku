@@ -73,11 +73,19 @@ pub fn entry_row_line(
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
             spans.push(Span::raw(" "));
             spans.push(badges_span(&row.node.badges));
+            // `skip_reason`/`test_symbol_count` are mutually exclusive by
+            // construction (`crate::tree::TreeNode`'s own doc comment, and
+            // `TreeBuilder::insert_file`'s `debug_assert` in `tree.rs`), so
+            // this `if`/`else if` never actually has to choose between the
+            // two badges — but the priority (skip reason first) is kept
+            // explicit and matches `crate::ui::file_detail_lines`'s own
+            // skip-reason-first early return, so the two panes never
+            // disagree about which explanation wins if that invariant were
+            // ever violated upstream.
             if let Some(reason) = row.node.skip_reason {
                 spans.push(Span::raw(" "));
                 spans.push(skip_reason_span(reason));
-            }
-            if let Some(count) = row.node.test_symbol_count {
+            } else if let Some(count) = row.node.test_symbol_count {
                 spans.push(Span::raw(" "));
                 spans.push(test_badge_span(count));
             }

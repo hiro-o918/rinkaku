@@ -709,13 +709,6 @@ fn dir_detail_lines(detail: &DirDetail, origin: ReportOrigin) -> Vec<Line<'stati
     lines
 }
 
-/// Formats a [`FileDetail`] into displayable lines: every symbol in this
-/// file (changed symbols for a diff, every symbol for a whole-repo
-/// outline — ADR 0017), with the same classification marker convention
-/// `crate::row_view::entry_row_line` uses on symbol rows, plus fan-in. The
-/// "Symbols (N)" label itself is already origin-neutral, unlike
-/// `dir_detail_lines`'s first badge line, so no `origin` parameter is
-/// needed here.
 /// Formats a [`FileDetail`] into displayable lines: a `File <path>` header,
 /// then either a skipped-file explanation, a whole-test-file explanation, or
 /// the ordinary "Symbols (N)" listing — the three are mutually exclusive by

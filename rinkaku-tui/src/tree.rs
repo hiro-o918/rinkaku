@@ -261,6 +261,25 @@ impl<'a> TreeBuilder<'a> {
     fn insert_file(&mut self, path: &str, symbols: &[rinkaku_core::extract::ExtractedSymbol]) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
+        // `pipeline::analyze_diff`'s own invariant is that a path is either
+        // kept in `report.files`, summarized in `report.tests`, or listed
+        // in `report.skipped` — never more than one (see `build_tree`'s doc
+        // comment). This is unreachable from that pipeline today, but
+        // `build_tree` is a public, pure function any caller (e.g. a future
+        // non-`analyze_diff` JSON-input path) could feed a `Report` that
+        // violates it — silently the later insert would win, producing a
+        // `File` row that both lists symbols and claims to be
+        // skipped/test-only, a display contradiction (`row_view` would show
+        // a skip/test badge alongside real symbol children; the detail pane
+        // would drop the symbols entirely, see `file_detail_lines`'s
+        // mutually-exclusive branches). Debug-only since this is a caller
+        // contract violation, not a condition `build_tree` itself needs to
+        // handle gracefully in release builds.
+        debug_assert!(
+            file_builder.skip_reason.is_none() && file_builder.test_symbol_count.is_none(),
+            "path {path:?} has real symbols but was already marked skipped/test-only — \
+             report.files/report.tests/report.skipped must not overlap on the same path"
+        );
         for symbol in symbols {
             file_builder.symbols.push(SymbolRef {
                 id: symbol.id.clone(),
@@ -291,6 +310,16 @@ impl<'a> TreeBuilder<'a> {
     fn insert_test_file(&mut self, path: &str, symbol_count: usize) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
+        // Same overlap contract as `insert_file`'s debug_assert, mirrored
+        // here: a path already carrying real symbols must not also be
+        // marked test-only, or `file_detail_lines`'s early-return on
+        // `test_symbol_count` would silently drop those symbols from the
+        // detail pane.
+        debug_assert!(
+            file_builder.symbols.is_empty(),
+            "path {path:?} already has real symbols but was also summarized in report.tests — \
+             report.files/report.tests must not overlap on the same path"
+        );
         file_builder.test_symbol_count = Some(symbol_count);
     }
 
@@ -299,6 +328,12 @@ impl<'a> TreeBuilder<'a> {
     fn insert_skipped(&mut self, path: &str, reason: SkipReason) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
+        // Same overlap contract as `insert_file`'s debug_assert.
+        debug_assert!(
+            file_builder.symbols.is_empty(),
+            "path {path:?} already has real symbols but was also listed in report.skipped — \
+             report.files/report.skipped must not overlap on the same path"
+        );
         file_builder.skip_reason = Some(reason);
     }
 
@@ -1251,5 +1286,51 @@ mod tests {
 
         assert_eq!(None, tree.roots[0].skip_reason);
         assert_eq!(None, tree.roots[0].test_symbol_count);
+    }
+
+    // `pipeline::analyze_diff` never produces a `Report` where the same
+    // path appears in more than one of `files`/`tests`/`skipped` (see
+    // `build_tree`'s doc comment), so `#[cfg(debug_assertions)]` keeps this
+    // panic-path test out of release builds, matching the `debug_assert!`s
+    // themselves — this only guards a caller contract, not a condition
+    // `build_tree` needs to handle gracefully at runtime.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "report.files/report.skipped must not overlap")]
+    fn should_panic_when_the_same_path_appears_in_files_and_skipped() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::foo", "foo", SymbolKind::Function)],
+            }],
+            skipped: vec![SkippedFile {
+                path: "lib.rs".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            ..empty_report()
+        };
+
+        build_tree(&report);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "report.files/report.tests must not overlap")]
+    fn should_panic_when_the_same_path_appears_in_files_and_tests() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::foo", "foo", SymbolKind::Function)],
+            }],
+            tests: vec![TestFileSummary {
+                path: "lib.rs".to_string(),
+                symbol_count: 1,
+            }],
+            ..empty_report()
+        };
+
+        build_tree(&report);
     }
 }
