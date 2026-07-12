@@ -8,6 +8,9 @@
 //! process/network IO tied to how *this specific binary* is distributed
 //! (GitHub Releases asset naming), not part of the pure diff-condensation
 //! core.
+//!
+//! See README's Release section for how `rinkaku` and `rinkaku-core` are
+//! versioned and tagged independently.
 
 use anyhow::{Context, Result};
 use std::io::IsTerminal;
