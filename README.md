@@ -469,7 +469,11 @@ placeholder.
   unified-diff hunks instead of the detail view — every hunk of the file
   for a file row, or just the hunks intersecting a symbol's own line range
   for a symbol row (a directory row has no single diff to show, since it
-  spans multiple files).
+  spans multiple files). Hunks in the four built-in languages are
+  syntax-highlighted (keywords, strings, types, ...); added/removed lines
+  keep their green/red diff signal as a background tint so it doesn't
+  compete with token colors, and any other file falls back to plain
+  green/red text.
 - **Scrolling the right-hand pane:** `J`/`K` scroll the Detail/Diff pane
   down/up by one line when its content is too long to fit — the pane's
   title grows a `(first-last/total)` suffix (e.g. `Detail (1-17/43)`)

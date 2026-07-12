@@ -24,6 +24,16 @@ rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
 # just be a second, redundant version to keep in sync.
 ratatui = { workspace = true }
 unicode-width = { workspace = true }
+# Diff-pane syntax highlighting (ADR 0018): a TUI-only presentation
+# concern, so the grammar crates are duplicated here rather than adding a
+# highlight-query method to rinkaku-core's `LanguageSupport` port (ADR
+# 0018's rejected "extend core" alternative).
+tree-sitter = { workspace = true }
+tree-sitter-highlight = "0.26"
+tree-sitter-rust = { workspace = true }
+tree-sitter-go = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

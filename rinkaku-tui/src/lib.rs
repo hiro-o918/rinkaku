@@ -31,6 +31,7 @@
 pub mod app;
 pub mod detail;
 pub mod diff_view;
+pub mod highlight;
 pub mod nav;
 pub mod order;
 pub mod row_view;
@@ -87,9 +88,14 @@ fn run_app(
     // re-walk the whole diff (unbounded in PR size) roughly ten times a
     // second even while idle.
     let diff_hunks = diff_view::parse_diff_hunks(diff_text);
+    // Highlighted once immediately after, for the same reason (ADR 0018):
+    // highlighting is a full tree-sitter parse per hunk side, strictly
+    // more expensive than the hunk parse above, so it must not run inside
+    // the render loop either.
+    let diff_highlights = highlight::highlight_diff_files(&diff_hunks);
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, &app, report, &diff_hunks))?;
+        terminal.draw(|frame| ui::draw(frame, &app, report, &diff_hunks, &diff_highlights))?;
 
         if app.should_quit() {
             return Ok(());
