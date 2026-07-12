@@ -69,9 +69,21 @@ use std::time::Duration;
 /// crate never runs `git` itself (ADR 0016: `rinkaku-core`/adapters own IO,
 /// not `rinkaku-tui`'s view layer beyond the one source-file read
 /// `crate::source` already makes).
-pub fn run(report: &Report, diff_text: &str) -> std::io::Result<()> {
+///
+/// `entry_path` is `main.rs`'s `--entry <path>` flag (ADR 0019), passed
+/// through unchanged when the user combines it with `--tui`: `None` when
+/// `--entry` was not given (the ordinary case), `Some(path)` to open
+/// straight into [`app::RightPane::Pivot`] with the cursor already on the
+/// matching tree row (`App::with_entry_pivot`) instead of requiring the
+/// reviewer to hunt for the row and press `p` themselves. Note this crate
+/// does *not* itself re-root `report.graph` — `main.rs` already applied
+/// `--entry`'s `pivot_graph` re-rooting to `report` before calling here (the
+/// same `Report` both the TUI and Markdown/JSON render from), so this
+/// parameter only drives where the TUI *starts*, not what the underlying
+/// graph looks like.
+pub fn run(report: &Report, diff_text: &str, entry_path: Option<&str>) -> std::io::Result<()> {
     let mut terminal = ratatui::try_init()?;
-    let result = run_app(&mut terminal, report, diff_text);
+    let result = run_app(&mut terminal, report, diff_text, entry_path);
     ratatui::restore();
     result
 }
@@ -80,8 +92,12 @@ fn run_app(
     terminal: &mut ratatui::DefaultTerminal,
     report: &Report,
     diff_text: &str,
+    entry_path: Option<&str>,
 ) -> std::io::Result<()> {
     let mut app = App::new(report);
+    if let Some(path) = entry_path {
+        app = app.with_entry_pivot(path);
+    }
     // Parsed once up front rather than inside the draw loop: `diff_text`
     // does not change for the lifetime of this session, but the loop below
     // redraws on every ~100ms poll timeout (not just on an actual key
@@ -94,7 +110,7 @@ fn run_app(
     // more expensive than the hunk parse above, so it must not run inside
     // the render loop either.
     let diff_highlights = highlight::highlight_diff_files(&diff_hunks);
-    // Computed on demand below (once per handled key, not once up front —
+    // Computed once up front (then on demand below, once per handled key —
     // unlike `diff_hunks`/`diff_highlights` above, the pivot view depends on
     // `app`'s cursor position and right-pane mode, both of which change as
     // keys are handled) and cached here across idle poll ticks for the same
@@ -104,7 +120,16 @@ fn run_app(
     // walk — recomputing it on every one of those idle ticks while the
     // pivot pane merely sits on screen was the per-frame recompute bug this
     // cache exists to fix (`App::selected_pivot_view`'s own doc comment).
-    let mut pivot_selection = PivotSelection::NotApplicable;
+    // The up-front computation (rather than starting at `NotApplicable`
+    // unconditionally) matters specifically for `--entry --tui`: when
+    // `entry_path` above already opened `RightPane::Pivot`, the very first
+    // frame must show the pivot tree immediately, not an empty placeholder
+    // until the first key press recomputes it.
+    let mut pivot_selection = if should_recompute_pivot_selection(&app) {
+        app.selected_pivot_view(report)
+    } else {
+        PivotSelection::NotApplicable
+    };
 
     loop {
         terminal.draw(|frame| {

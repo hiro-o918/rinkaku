@@ -133,8 +133,11 @@ struct Cli {
     /// not a filter — symbols outside `path` are neither hidden nor
     /// excluded from analysis, only no longer eligible to be roots
     /// themselves. Compatible with every input mode (stdin/`--base`/`--pr`/
-    /// whole-repo) and with `--tui` (the TUI's own `p` pivot is the
-    /// interactive equivalent of this flag, see `rinkaku-tui`).
+    /// whole-repo) and with `--tui`: combined, the TUI opens with the
+    /// cursor already on the tree row matching `path` and the right pane
+    /// already in Pivot mode (`rinkaku_tui::run`'s `entry_path` parameter),
+    /// rather than requiring the reviewer to find the row and press `p`
+    /// themselves.
     #[arg(long)]
     entry: Option<String>,
 }
@@ -299,17 +302,18 @@ fn main() -> anyhow::Result<()> {
     };
 
     let report = if let Some(entry) = &cli.entry {
-        if let Some(note) = entry_pivot_empty_note(&report, entry) {
+        let pivoted = apply_entry_pivot(report, entry);
+        if let Some(note) = entry_pivot_empty_note(&pivoted, entry) {
             eprintln!("{note}");
         }
-        apply_entry_pivot(report, entry)
+        pivoted
     } else {
         report
     };
 
     let stdout_is_tty = std::io::stdout().is_terminal();
     match resolve_display_mode(cli.tui, cli.format, stdout_is_tty) {
-        DisplayMode::Tui => rinkaku_tui::run(&report, &diff_text)?,
+        DisplayMode::Tui => rinkaku_tui::run(&report, &diff_text, cli.entry.as_deref())?,
         DisplayMode::Output(format) => {
             let output = render(&report, format.into())?;
             print!("{output}");
@@ -340,12 +344,20 @@ fn apply_entry_pivot(
 /// pivoting to an empty graph is not a pivot-specific problem worth a
 /// separate note — `garbage_input_note`/`repo_outline_empty_note` already
 /// cover that case for their respective input modes).
+///
+/// Takes the *already-pivoted* `report` (i.e. `apply_entry_pivot`'s own
+/// output) rather than re-running `graph::pivot_roots` itself: the call
+/// site used to run `pivot_roots` here and then `pivot_graph` (which
+/// internally calls `pivot_roots` again) in `apply_entry_pivot`, computing
+/// the same root set twice. `graph.roots` on the pivoted report already
+/// *is* that root set (`pivot_graph`'s own doc comment), and `graph.nodes`
+/// is untouched by pivoting either way, so checking `nodes.is_empty()` for
+/// the "no symbols at all" case is equally valid before or after.
 fn entry_pivot_empty_note(report: &rinkaku_core::render::Report, path: &str) -> Option<String> {
     if report.graph.nodes.is_empty() {
         return None;
     }
-    let roots = rinkaku_core::graph::pivot_roots(&report.graph, path);
-    if roots.is_empty() {
+    if report.graph.roots.is_empty() {
         Some(format!("note: no symbols under {path}"))
     } else {
         None
@@ -3851,7 +3863,14 @@ fn should_add_two_numbers() {
 
         #[test]
         fn should_return_no_symbols_under_path_note_when_prefix_matches_nothing() {
-            let report = report_with_api_and_util();
+            // `entry_pivot_empty_note` now reads `report.graph.roots`
+            // directly rather than recomputing `pivot_roots` itself (item 6:
+            // avoid pivot-root selection running twice per `--entry`
+            // invocation), so its contract requires an already-pivoted
+            // report — the same one `apply_entry_pivot` just produced —
+            // rather than the raw `build_graph` output `report_with_api_and_util`
+            // returns.
+            let report = apply_entry_pivot(report_with_api_and_util(), "no/such/path");
 
             let actual = entry_pivot_empty_note(&report, "no/such/path");
 
@@ -3863,7 +3882,7 @@ fn should_add_two_numbers() {
 
         #[test]
         fn should_return_none_when_prefix_matches_at_least_one_symbol() {
-            let report = report_with_api_and_util();
+            let report = apply_entry_pivot(report_with_api_and_util(), "src/api");
 
             let actual = entry_pivot_empty_note(&report, "src/api");
 

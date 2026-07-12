@@ -98,6 +98,33 @@ impl Nav {
         rows
     }
 
+    /// Moves the cursor to the first visible [`Dir`](NodeKind::Dir)/
+    /// [`File`](NodeKind::File) row whose path exactly equals `path`, or
+    /// leaves the cursor untouched (returning `false`) when no such row is
+    /// currently visible — either because no row's path matches at all, or
+    /// because a matching row exists but sits under a collapsed ancestor
+    /// (`Nav::new`'s everything-expanded default means this only happens if
+    /// the caller collapsed something first). Deliberately excludes
+    /// [`NodeKind::Symbol`] rows even though a symbol row's own `node.path`
+    /// equals its containing file's path (`TreeNode::path`'s own doc
+    /// comment) — this method exists for `--entry`-style directory/file
+    /// pivoting (`crate::app::App`'s own entry-path wiring), which has no
+    /// single-symbol-scoped meaning (ADR 0019, mirroring
+    /// `App::selected_pivot_view`'s symbol-row `NotApplicable` case), so
+    /// landing on a same-path symbol row instead of the file/dir row itself
+    /// would silently change what the pivot pane shows.
+    pub fn move_cursor_to_path(&mut self, tree: &Tree, path: &str) -> bool {
+        let rows = self.rows(tree);
+        let Some(index) = rows
+            .iter()
+            .position(|row| row.node.path == path && !matches!(row.node.kind, NodeKind::Symbol(_)))
+        else {
+            return false;
+        };
+        self.cursor = index;
+        true
+    }
+
     fn push_rows<'a>(&self, node: &'a TreeNode, depth: usize, rows: &mut Vec<Row<'a>>) {
         let has_children = !node.children.is_empty();
         let expanded = has_children && !self.collapsed.contains(&node.path);
@@ -324,6 +351,55 @@ mod tests {
                 )],
             )],
         }
+    }
+
+    #[test]
+    fn should_move_cursor_to_matching_dir_row_when_path_matches_a_directory() {
+        let tree = sample_tree();
+        let mut nav = Nav::new();
+
+        let actual = nav.move_cursor_to_path(&tree, "src");
+
+        assert!(actual);
+        assert_eq!(0, nav.cursor());
+    }
+
+    #[test]
+    fn should_move_cursor_to_matching_file_row_when_path_matches_a_file() {
+        let tree = sample_tree();
+        let mut nav = Nav::new();
+
+        let actual = nav.move_cursor_to_path(&tree, "src/lib.rs");
+
+        assert!(actual);
+        // Row 1 is the File row itself, not either of its two Symbol rows
+        // (2, 3) which share the same `node.path` — `move_cursor_to_path`
+        // must land on the File row specifically.
+        assert_eq!(1, nav.cursor());
+    }
+
+    #[test]
+    fn should_not_move_cursor_when_no_row_matches_the_path() {
+        let tree = sample_tree();
+        let mut nav = Nav::new().handle(Action::CursorDown, &tree);
+        assert_eq!(1, nav.cursor());
+
+        let actual = nav.move_cursor_to_path(&tree, "no/such/path");
+
+        assert!(!actual);
+        assert_eq!(1, nav.cursor());
+    }
+
+    #[test]
+    fn should_not_move_cursor_to_a_matching_row_hidden_under_a_collapsed_ancestor() {
+        let tree = sample_tree();
+        let mut nav = Nav::new().handle(Action::ToggleExpand, &tree); // collapse "src"
+        assert_eq!(vec!["src"], row_paths(&nav.rows(&tree)));
+
+        let actual = nav.move_cursor_to_path(&tree, "src/lib.rs");
+
+        assert!(!actual);
+        assert_eq!(0, nav.cursor());
     }
 
     #[test]

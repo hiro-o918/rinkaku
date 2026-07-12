@@ -442,7 +442,14 @@ rinkaku --base main --entry src/api
 ```
 
 Works with every input mode (stdin / `--base` / `--pr` / whole-repo) and
-combines with `--tui` (the interactive equivalent is the `p` pivot below).
+combines with `--tui`: the TUI opens with the cursor already on the tree
+row matching `path` and the right-hand pane already in Pivot mode (the `p`
+pivot below) — the interactive session starts exactly where `--entry`
+would have rooted the Markdown/JSON tree, rather than requiring you to
+locate the row and press `p` yourself. If no tree row's path matches `path`
+exactly, the TUI opens normally (cursor on the first row, Detail pane) with
+a status-line note instead.
+
 Prints `note: no symbols under <path>` to stderr and renders an empty tree
 when no symbol's path falls under `path`.
 

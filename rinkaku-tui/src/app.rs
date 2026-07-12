@@ -220,6 +220,35 @@ impl App {
         }
     }
 
+    /// Applies `--entry <path>`'s TUI wiring on top of an already-built
+    /// `App` (`crate::run`'s composition root calls this once, right after
+    /// [`App::new`], only when `main.rs`'s `--entry` flag was passed):
+    /// moves the cursor onto the tree row matching `path`
+    /// (`Nav::move_cursor_to_path`) and switches straight to
+    /// [`RightPane::Pivot`], so the TUI opens exactly where the CLI's own
+    /// `--entry` would have rooted the Markdown/JSON tree, rather than
+    /// requiring the reviewer to hunt for the row and press `p` themselves.
+    ///
+    /// When no visible row's path matches `path` exactly (wrong path, a
+    /// typo, or a path that only exists nested under a collapsed ancestor —
+    /// not possible from a fresh `App::new`, which starts fully expanded,
+    /// but kept as a defensive case rather than panicking), the cursor and
+    /// right pane are left at `App::new`'s own defaults and a status-line
+    /// note is set instead, mirroring `main.rs`'s `entry_pivot_empty_note`
+    /// for the non-TUI path — this is what keeps `--entry <path> --tui` from
+    /// being a silent no-op (previously: the flag never touched `App` at
+    /// all, since `apply_entry_pivot` only re-roots `report.graph`, which
+    /// the tree/nav pane and Detail's fan-in do not read).
+    pub fn with_entry_pivot(mut self, path: &str) -> Self {
+        if self.nav.move_cursor_to_path(&self.tree, path) {
+            self.right_pane = RightPane::Pivot;
+            self.pivot_return_pane = RightPane::Detail;
+        } else {
+            self.status = Some(format!("note: no tree row matches {path}"));
+        }
+        self
+    }
+
     pub fn tree(&self) -> &Tree {
         &self.tree
     }
@@ -945,6 +974,37 @@ mod tests {
             other => panic!("expected PivotSelection::View, got {other:?}"),
         };
         assert_eq!("b".to_string(), second);
+    }
+
+    #[test]
+    fn should_move_cursor_and_open_pivot_pane_when_entry_pivot_path_matches_a_row() {
+        let report = report_with_two_directories_and_graph();
+        let app = App::new(&report);
+
+        let app = app.with_entry_pivot("b");
+
+        // Row 3 is "b" (per `report_with_two_directories`'s own doc comment
+        // on expanded row order).
+        assert_eq!(3, app.nav().cursor());
+        assert_eq!(RightPane::Pivot, app.right_pane());
+        assert_eq!(None, app.status());
+        let selected = match app.selected_pivot_view(&report) {
+            PivotSelection::View(view) => view.path,
+            other => panic!("expected PivotSelection::View, got {other:?}"),
+        };
+        assert_eq!("b".to_string(), selected);
+    }
+
+    #[test]
+    fn should_set_status_note_and_leave_defaults_when_entry_pivot_path_matches_no_row() {
+        let report = report_with_two_directories_and_graph();
+        let app = App::new(&report);
+
+        let app = app.with_entry_pivot("no/such/path");
+
+        assert_eq!(0, app.nav().cursor());
+        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(Some("note: no tree row matches no/such/path"), app.status());
     }
 
     #[test]
