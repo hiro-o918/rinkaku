@@ -10,7 +10,7 @@
 use crate::deps::{Resolver, is_generated_content, resolve_dependencies};
 use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::{ExtractedSymbol, extract_changed_symbols};
-use crate::graph::{build_graph, stamp_ids};
+use crate::graph::{build_graph, compute_hotspots, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
 use crate::render::{FileReport, Report, SkipReason, SkippedFile, TestFileSummary};
 use thiserror::Error;
@@ -190,12 +190,17 @@ pub fn analyze_diff(
     // avoids relying on that invariant holding forever).
     let graph = build_graph(&files);
     stamp_ids(&mut files, &graph);
+    // Computed from the same final `graph` as everything else above, so a
+    // hotspot's `used_by` names always match the stamped ids/nodes
+    // (ADR 0013).
+    let hotspots = compute_hotspots(&graph);
 
     Ok(Report {
         files,
         skipped,
         graph,
         tests,
+        hotspots,
     })
 }
 
@@ -336,6 +341,7 @@ mod tests {
             skipped: vec![],
             graph: empty_graph(),
             tests: vec![],
+            hotspots: vec![],
         };
         let actual = analyze_diff("", read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
@@ -390,6 +396,7 @@ fn foo(a: i32) -> i32 {
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
@@ -421,6 +428,7 @@ index 4b825dc..0000000
             }],
             graph: empty_graph(),
             tests: vec![],
+            hotspots: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
@@ -445,6 +453,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             }],
             graph: empty_graph(),
             tests: vec![],
+            hotspots: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
@@ -477,6 +486,7 @@ index e69de29..4b825dc 100644
             }],
             graph: empty_graph(),
             tests: vec![],
+            hotspots: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
@@ -513,6 +523,7 @@ rename to src/new_name.rs
             skipped: vec![],
             graph: empty_graph(),
             tests: vec![],
+            hotspots: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
@@ -612,6 +623,7 @@ index e69de29..4b825dc 100644
                 roots: vec!["src/lib.rs::a".to_string()],
             },
             tests: vec![],
+            hotspots: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
             .expect("analyze should succeed");
@@ -945,6 +957,7 @@ fn should_add_two_numbers() {
                     roots: vec!["src/lib.rs::should_add_two_numbers".to_string()],
                 },
                 tests: vec![],
+                hotspots: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
@@ -1089,6 +1102,7 @@ mod tests {
                     path: "src/lib.rs".to_string(),
                     symbol_count: 1,
                 }],
+                hotspots: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, false, &HashSet::new(), true)
                 .expect("analyze should succeed");
@@ -1271,6 +1285,7 @@ func Foo() int { return 2 }
                     roots: vec!["models/user.go::Foo".to_string()],
                 },
                 tests: vec![],
+                hotspots: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
                 .expect("analyze should succeed");
@@ -1325,6 +1340,7 @@ fn foo(a: i32) -> i32 {
                     roots: vec!["src/lib.rs::foo".to_string()],
                 },
                 tests: vec![],
+                hotspots: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
                 .expect("analyze should succeed");
@@ -1389,6 +1405,7 @@ index e69de29..4b825dc 100644
                     roots: vec!["src/lib.rs::foo".to_string()],
                 },
                 tests: vec![],
+                hotspots: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, true, &HashSet::new(), false)
                 .expect("analyze should succeed");
@@ -1426,6 +1443,94 @@ index e69de29..4b825dc 100644
                 reason: SkipReason::Generated,
             }];
             assert_eq!(expected, report.skipped);
+        }
+    }
+
+    mod hotspots_tests {
+        use super::*;
+        use crate::graph::Hotspot;
+        use pretty_assertions::assert_eq;
+
+        // ADR 0013 end-to-end: two changed functions ("caller_one",
+        // "caller_two") both call "shared_helper" in the same file — fan-in
+        // 2 qualifies "shared_helper" as a hotspot, and `analyze_diff` must
+        // populate `Report::hotspots` from the graph it builds, not leave
+        // it empty.
+        #[test]
+        fn should_populate_hotspots_when_diff_has_a_symbol_with_fan_in_of_two() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,11 +1,11 @@
+ fn shared_helper() -> i32 {
+-    0
++    1
+ }
+
+ fn caller_one() -> i32 {
+-    0
++    shared_helper()
+ }
+
+ fn caller_two() -> i32 {
+-    0
++    shared_helper()
+ }
+";
+            let source = "\
+fn shared_helper() -> i32 {
+    1
+}
+
+fn caller_one() -> i32 {
+    shared_helper()
+}
+
+fn caller_two() -> i32 {
+    shared_helper()
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+                .expect("analyze should succeed");
+
+            let expected = vec![Hotspot {
+                id: "src/lib.rs::shared_helper".to_string(),
+                path: "src/lib.rs".to_string(),
+                name: "shared_helper".to_string(),
+                used_by: vec!["caller_one".to_string(), "caller_two".to_string()],
+            }];
+            assert_eq!(expected, report.hotspots);
+        }
+
+        #[test]
+        fn should_return_empty_hotspots_when_no_node_has_fan_in_of_two() {
+            let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(a: i32) -> i32 {
+-    a
++    a + 1
+ }
+";
+            let source = "\
+fn foo(a: i32) -> i32 {
+    a + 1
+}
+";
+            let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+
+            let report = analyze_diff(diff, read_file, None, true, &HashSet::new(), true)
+                .expect("analyze should succeed");
+
+            let expected: Vec<Hotspot> = Vec::new();
+            assert_eq!(expected, report.hotspots);
         }
     }
 
