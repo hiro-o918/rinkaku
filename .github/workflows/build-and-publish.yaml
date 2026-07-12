@@ -4,24 +4,33 @@ on:
   push:
     tags:
       - "v*"
-  # Manual re-run, e.g. when only publish-homebrew failed and needs
-  # retrying without repeating publish-crates. Trigger against the tag
-  # itself (`gh workflow run build-and-publish.yaml --ref v0.1.0`) so
-  # the default checkout ref is already correct; the `tag` input only
-  # documents/records which release this dispatch is for.
+  # Manual re-run. Unlike a plain `--ref <tag>` dispatch (which would run
+  # whatever workflow definition is checked in at that tag -- e.g. an old
+  # version missing a bugfix made after the tag was cut), this is meant to
+  # be dispatched with `--ref main` so the *current* workflow definition on
+  # main always runs, and the `tag` input says which release to (re-)act
+  # on. `env.RELEASE_TAG` below resolves to that input on workflow_dispatch
+  # or to `github.ref_name` on a real tag push, so every job/step that
+  # needs "the tag being published" reads one place instead of assuming
+  # `github.ref_name` is meaningful in both trigger types.
+  #
   # publish-crates guards itself against re-publishing a version that's
   # already on crates.io, so a full re-run is safe even after a partial
-  # success.
+  # success; publish-release's `--clobber` makes re-uploading release
+  # assets safe too.
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag being (re-)published, e.g. v0.1.0 -- must match the ref this workflow is dispatched against"
+        description: "Release tag to (re-)publish, e.g. v0.2.0 -- dispatch this against --ref main so the current workflow definition runs"
         required: true
         type: string
 
 concurrency:
   group: ${{ github.workflow }}--${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
   rust-test:
@@ -45,7 +54,14 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
     steps:
+      # Explicit ref: on workflow_dispatch (typically run with --ref main
+      # so the current workflow definition is used, see the top-level
+      # comment), the default checkout would build main's HEAD rather than
+      # the actual release tag's content. RELEASE_TAG resolves correctly
+      # for both trigger types.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust toolchain
         run: |
@@ -102,7 +118,7 @@ jobs:
         run: |
           # --clobber makes this safe to re-run via workflow_dispatch
           # against a tag whose assets were already uploaded.
-          gh release upload "${{ github.ref_name }}" dist/* \
+          gh release upload "${{ env.RELEASE_TAG }}" dist/* \
             --repo "${{ github.repository }}" \
             --clobber
 
@@ -111,7 +127,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # See the `build` job's checkout step: same reasoning for pinning
+      # ref explicitly rather than trusting the default (main) checkout.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
@@ -121,15 +141,29 @@ jobs:
       # rerun) can safely repeat it after a partial release failure:
       # crates.io rejects re-publishing an existing version, so skip
       # ahead instead of letting `cargo publish` fail the whole job.
+      #
+      # Published-version checks use the crates.io *sparse index*
+      # (index.crates.io) rather than the crates.io API
+      # (crates.io/api/v1/crates/...): the API requires a compliant
+      # User-Agent header and returns 403 without one (see
+      # https://crates.io/data-access), which previously made this guard
+      # always read "not published" and `cargo publish` fail with "crate
+      # already exists". The sparse index has no such requirement. Index
+      # path layout for a crate name of 4+ characters is
+      # `{name[0:2]}/{name[2:4]}/{name}` (both `rinkaku` and
+      # `rinkaku-core` fall in this case); each line of the response body
+      # is one published version as a JSON object containing `"vers":
+      # "X.Y.Z"`. A 404 (crate not published at all yet) also means "not
+      # published" for our purposes, so no special-casing needed --
+      # `grep` simply won't match either way.
       - name: Check whether rinkaku-core is already published
         id: check-core
         run: |
           version=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "rinkaku-core") | .version')
-          status=$(curl -s -o /dev/null -w "%{http_code}" \
-            "https://crates.io/api/v1/crates/rinkaku-core/${version}")
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          if [ "$status" = "200" ]; then
+          if curl -sf "https://index.crates.io/ri/nk/rinkaku-core" \
+              | grep -q "\"vers\":\"${version}\""; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
@@ -154,9 +188,8 @@ jobs:
         run: |
           version=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "rinkaku") | .version')
-          status=$(curl -s -o /dev/null -w "%{http_code}" \
-            "https://crates.io/api/v1/crates/rinkaku/${version}")
-          if [ "$status" = "200" ]; then
+          if curl -sf "https://index.crates.io/ri/nk/rinkaku" \
+              | grep -q "\"vers\":\"${version}\""; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
@@ -202,7 +235,7 @@ jobs:
           push-to: hiro-o918/homebrew-tap
           homebrew-tap: hiro-o918/homebrew-tap
           base-branch: main
-          tag-name: ${{ github.ref_name }}
-          download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rinkaku-x86_64-apple-darwin.tar.gz
+          tag-name: ${{ env.RELEASE_TAG }}
+          download-url: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/rinkaku-x86_64-apple-darwin.tar.gz
         env:
           COMMITTER_TOKEN: ${{ steps.app-token.outputs.token }}
