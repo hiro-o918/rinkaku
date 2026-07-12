@@ -1032,7 +1032,9 @@ mod tests {
     #[test]
     fn should_draw_entry_and_detail_panes_with_titles_on_entry_screen() {
         let report = report_with_one_symbol();
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1076,7 +1078,10 @@ mod tests {
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff, whose own placeholder
+        // text differs ("select a symbol or file row..."); `ToggleDiff`
+        // switches to Detail, whose placeholder is what this test checks.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1115,7 +1120,12 @@ mod tests {
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises. (A directory
+        // row has no diff-specific content of its own, so leaving it on the
+        // default Diff pane would just show that pane's placeholder rather
+        // than the dir-detail content this test checks for.)
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1162,7 +1172,9 @@ mod tests {
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // See the sibling test above for why `ToggleDiff` is needed to
+        // reach the Detail pane this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1290,9 +1302,9 @@ mod tests {
     #[test]
     fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_symbol_row() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1583,9 +1595,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_apply_added_background_tint_and_keyword_foreground_in_diff_pane() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1628,9 +1640,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_apply_removed_background_tint_in_diff_pane() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1666,9 +1678,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_keep_context_line_unstyled_background_in_diff_pane() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1711,9 +1723,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_keep_hunk_header_dim_when_diff_pane_is_highlighted() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1769,9 +1781,9 @@ index e69de29..4b825dc 100644
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/config.yaml b/config.yaml
 index e69de29..4b825dc 100644
@@ -1815,7 +1827,11 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_draw_detail_pane_content_when_cursor_is_on_a_symbol_row() {
         let report = report_with_one_symbol();
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2048,7 +2064,9 @@ index e69de29..4b825dc 100644
         // then all 40 symbols (43 lines total) — comfortably more than a
         // 20-row terminal's inner pane height can show at once.
         let report = report_with_many_symbols(40);
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2077,7 +2095,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_not_show_overflow_indicator_when_content_fits_the_viewport() {
         let report = report_with_one_symbol();
-        let app = App::new(&report);
+        // See the test above for why `ToggleDiff` is needed to reach the
+        // Detail pane this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2104,9 +2124,12 @@ index e69de29..4b825dc 100644
         let report = report_with_many_symbols(40);
         // `Open` on the file row (cursor starts there) reaches Focus::Right
         // (ADR 0020) without changing the selected row itself, so `Down`
-        // afterward scrolls instead of moving the cursor.
+        // afterward scrolls instead of moving the cursor. `ToggleDiff`
+        // switches from the default Diff pane to Detail, which is what this
+        // test actually exercises.
         let app = App::new(&report)
             .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff)
             .handle_key(crate::app::InputKey::Down);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
@@ -2139,7 +2162,11 @@ index e69de29..4b825dc 100644
         // report; the pane must clamp to its last full page rather than
         // showing a mostly-blank pane past the end of the content.
         let report = report_with_many_symbols(40);
-        let mut app = App::new(&report).handle_key(crate::app::InputKey::Open);
+        // `ToggleDiff` switches from the default Diff pane to Detail, which
+        // is what this test actually exercises.
+        let mut app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         for _ in 0..1000 {
             app = app.handle_key(crate::app::InputKey::Down);
         }
@@ -2171,8 +2198,11 @@ index e69de29..4b825dc 100644
         // the newly selected row's own (short) detail must render from the
         // top, not carry over the file row's scroll offset.
         let report = report_with_many_symbols(40);
+        // `ToggleDiff` switches from the default Diff pane to Detail, which
+        // is what this test actually exercises.
         let app = App::new(&report)
             .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff)
             .handle_key(crate::app::InputKey::Down)
             .handle_key(crate::app::InputKey::Down)
             .handle_key(crate::app::InputKey::FocusLeft)
@@ -2330,7 +2360,14 @@ index e69de29..4b825dc 100644
             hotspots: vec![],
             removed: vec![],
         };
-        let mut app = App::new(&report).handle_key(crate::app::InputKey::Open);
+        // ADR 0020 defaults the right pane to Diff, whose own placeholder
+        // text also happens to embed the file path (`"(no diff hunks found
+        // for <path>)"`) — but not through this test's actual target,
+        // `render_scrollable_pane`'s wrap-before-scroll behavior, so
+        // `ToggleDiff` switches to Detail to keep exercising that.
+        let mut app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         // Scroll far enough down to reach the wrapped tail of the long path
         // line, however many wrapped rows that turns out to be.
         for _ in 0..200 {
@@ -2383,7 +2420,9 @@ index e69de29..4b825dc 100644
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 
         terminal

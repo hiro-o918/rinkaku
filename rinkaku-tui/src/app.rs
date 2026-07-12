@@ -141,10 +141,17 @@ pub enum Screen {
 /// what makes "follow the cursor while pivoted" (ADR 0019) free: moving the
 /// cursor while already in `Pivot` mode need not touch `RightPane` at all,
 /// only re-run the lookup the next time `crate::ui` draws.
+///
+/// Defaults to [`Self::Diff`] (ADR 0020): "what changed" is what a
+/// reviewer wants to see first, ahead of the aggregated used-by/callers
+/// view `Detail` shows. `App::with_entry_pivot` (the `--entry --tui`
+/// startup path) still overrides this default unconditionally by setting
+/// `right_pane` to `Pivot` itself right after `App::new`, so this default
+/// only matters for the ordinary (non-`--entry`) startup path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RightPane {
-    #[default]
     Detail,
+    #[default]
     Diff,
     Pivot,
 }
@@ -299,6 +306,13 @@ impl App {
     pub fn with_entry_pivot(mut self, path: &str) -> Self {
         if self.nav.move_cursor_to_path(&self.tree, path) {
             self.right_pane = RightPane::Pivot;
+            // Deliberately `RightPane::Detail`, not `RightPane::default()`
+            // (ADR 0020 made the default `Diff`): this session never
+            // actually showed a pane before pivoting straight in at
+            // startup, so there is no real "what was showing before" to
+            // restore — `Detail` is this method's own independent choice
+            // of `p`-re-press destination, unaffected by `RightPane`'s
+            // default changing.
             self.pivot_return_pane = RightPane::Detail;
         } else {
             self.status = Some(format!("note: no tree row matches {path}"));
@@ -919,40 +933,53 @@ mod tests {
     }
 
     #[test]
-    fn should_toggle_right_pane_between_detail_and_diff() {
+    fn should_default_right_pane_to_diff() {
+        // ADR 0020: "what changed" is what a reviewer wants first, ahead of
+        // the aggregated used-by/callers view Detail shows.
         let report = empty_report();
         let app = App::new(&report);
-        assert_eq!(RightPane::Detail, app.right_pane());
 
-        let app = app.handle_key(InputKey::ToggleDiff);
+        assert_eq!(RightPane::Diff, app.right_pane());
+    }
+
+    #[test]
+    fn should_toggle_right_pane_between_diff_and_detail() {
+        let report = empty_report();
+        let app = App::new(&report);
         assert_eq!(RightPane::Diff, app.right_pane());
 
         let app = app.handle_key(InputKey::ToggleDiff);
         assert_eq!(RightPane::Detail, app.right_pane());
+
+        let app = app.handle_key(InputKey::ToggleDiff);
+        assert_eq!(RightPane::Diff, app.right_pane());
     }
 
     #[test]
-    fn should_toggle_right_pane_between_detail_and_pivot() {
+    fn should_toggle_right_pane_between_diff_and_pivot() {
         let report = empty_report();
         let app = App::new(&report);
-        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(RightPane::Diff, app.right_pane());
 
         let app = app.handle_key(InputKey::TogglePivot);
         assert_eq!(RightPane::Pivot, app.right_pane());
 
         let app = app.handle_key(InputKey::TogglePivot);
-        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(RightPane::Diff, app.right_pane());
     }
 
     #[test]
     fn should_switch_from_pivot_to_diff_when_toggle_diff_is_pressed() {
         // ADR 0019: "p" re-press or "d" both leave pivot mode — "d" always
         // lands on Diff regardless of `pivot_return_pane` (a deliberate,
-        // unconditional gesture — see `handle_key`'s `ToggleDiff` arm), even
-        // though the pane pivoted from here (Detail, `App::new`'s default)
-        // happens to differ from Diff.
+        // unconditional gesture — see `handle_key`'s `ToggleDiff` arm). Uses
+        // Detail (not the default Diff) as the pane pivoted from, so this
+        // test still shows something once "d" is pressed even though the
+        // destination is unconditional either way.
         let report = empty_report();
-        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+        let app = App::new(&report)
+            .handle_key(InputKey::ToggleDiff) // Diff -> Detail
+            .handle_key(InputKey::TogglePivot);
         assert_eq!(RightPane::Pivot, app.right_pane());
 
         let app = app.handle_key(InputKey::ToggleDiff);
@@ -961,10 +988,10 @@ mod tests {
     }
 
     #[test]
-    fn should_switch_from_diff_to_pivot_when_toggle_pivot_is_pressed() {
+    fn should_switch_from_detail_to_pivot_when_toggle_pivot_is_pressed() {
         let report = empty_report();
-        let app = App::new(&report).handle_key(InputKey::ToggleDiff);
-        assert_eq!(RightPane::Diff, app.right_pane());
+        let app = App::new(&report).handle_key(InputKey::ToggleDiff); // Diff -> Detail
+        assert_eq!(RightPane::Detail, app.right_pane());
 
         let app = app.handle_key(InputKey::TogglePivot);
 
@@ -972,16 +999,13 @@ mod tests {
     }
 
     #[test]
-    fn should_return_to_diff_when_pivot_is_toggled_off_after_entering_from_diff() {
-        // Regression: `d` -> `p` -> `p` used to always land on Detail
-        // regardless of which pane the user pivoted from, silently
-        // discarding the Diff pane the user had open — this test pins `p`'s
-        // re-press restoring the pane pivot was entered from (`d`'s own
-        // arm, tested above, still always lands on Diff unconditionally).
+    fn should_return_to_diff_when_pivot_is_toggled_off_after_entering_from_the_default_diff_pane() {
+        // Pivoting straight from `App::new`'s own default (Diff, ADR 0020)
+        // must restore Diff specifically on `p`'s re-press, pinning that
+        // `pivot_return_pane` is actually captured on entry rather than
+        // this behavior being a coincidence of `RightPane::default()`.
         let report = empty_report();
-        let app = App::new(&report)
-            .handle_key(InputKey::ToggleDiff)
-            .handle_key(InputKey::TogglePivot);
+        let app = App::new(&report).handle_key(InputKey::TogglePivot);
         assert_eq!(RightPane::Pivot, app.right_pane());
 
         let app = app.handle_key(InputKey::TogglePivot);
@@ -991,13 +1015,13 @@ mod tests {
 
     #[test]
     fn should_return_to_detail_when_pivot_is_toggled_off_after_entering_from_detail() {
-        // Companion to the Diff-return-pane test above: pivoting from the
-        // default Detail pane must still restore Detail specifically (not
-        // just "whatever the default happens to be"), pinning that
-        // `pivot_return_pane` is actually captured on entry rather than
-        // this behavior being a coincidence of `RightPane::default()`.
+        // Companion to the Diff-return-pane test above: pivoting from
+        // Detail (reached via `d`, not the default) must still restore
+        // Detail specifically, not "whatever the default happens to be".
         let report = empty_report();
-        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+        let app = App::new(&report)
+            .handle_key(InputKey::ToggleDiff) // Diff -> Detail
+            .handle_key(InputKey::TogglePivot);
         assert_eq!(RightPane::Pivot, app.right_pane());
 
         let app = app.handle_key(InputKey::TogglePivot);
@@ -1011,11 +1035,11 @@ mod tests {
         let app = App::new(&report)
             .handle_key(InputKey::Down)
             .handle_key(InputKey::Source);
-        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(RightPane::Diff, app.right_pane());
 
         let app = app.handle_key(InputKey::TogglePivot);
 
-        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(RightPane::Diff, app.right_pane());
     }
 
     #[test]
@@ -1161,6 +1185,11 @@ mod tests {
     fn should_move_cursor_and_open_pivot_pane_when_entry_pivot_path_matches_a_row() {
         let report = report_with_two_directories_and_graph();
         let app = App::new(&report);
+        // ADR 0020 made Diff the default right pane; this pins that
+        // `with_entry_pivot` still unconditionally overrides it to Pivot
+        // regardless, since it sets `right_pane` directly after `App::new`
+        // rather than consulting `RightPane::default()`.
+        assert_eq!(RightPane::Diff, app.right_pane());
 
         let app = app.with_entry_pivot("b");
 
@@ -1184,7 +1213,7 @@ mod tests {
         let app = app.with_entry_pivot("no/such/path");
 
         assert_eq!(0, app.nav().cursor());
-        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(RightPane::Diff, app.right_pane());
         assert_eq!(Some("note: no tree row matches no/such/path"), app.status());
     }
 
@@ -1194,11 +1223,11 @@ mod tests {
         let app = App::new(&report)
             .handle_key(InputKey::Down)
             .handle_key(InputKey::Source);
-        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(RightPane::Diff, app.right_pane());
 
         let app = app.handle_key(InputKey::ToggleDiff);
 
-        assert_eq!(RightPane::Detail, app.right_pane());
+        assert_eq!(RightPane::Diff, app.right_pane());
         assert_eq!(
             Screen::Source {
                 symbol_id: "lib.rs::foo".to_string()
