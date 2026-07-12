@@ -10,6 +10,7 @@
 use crate::deps::{Resolver, resolve_dependencies};
 use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::extract_changed_symbols;
+use crate::graph::{build_graph, stamp_ids};
 use crate::language::language_for_path;
 use crate::render::{FileReport, Report, SkipReason, SkippedFile};
 use thiserror::Error;
@@ -115,12 +116,24 @@ pub fn analyze_diff(
         });
     }
 
-    let files = match resolver {
+    let mut files = match resolver {
         Some(resolver) => resolve_dependencies(files, resolver),
         None => files,
     };
 
-    Ok(Report { files, skipped })
+    // Built last, over the final `files`: the graph's node IDs must match
+    // whatever symbols actually end up in the report (dependency
+    // resolution does not add/remove/reorder symbols, but building the
+    // graph from the post-resolution list rather than an intermediate one
+    // avoids relying on that invariant holding forever).
+    let graph = build_graph(&files);
+    stamp_ids(&mut files, &graph);
+
+    Ok(Report {
+        files,
+        skipped,
+        graph,
+    })
 }
 
 /// Parses `diff_text` and collects every name referenced by any changed
@@ -194,6 +207,15 @@ mod tests {
         }
     }
 
+    /// An empty `SymbolGraph`, for tests where no changed symbols exist.
+    fn empty_graph() -> crate::graph::SymbolGraph {
+        crate::graph::SymbolGraph {
+            nodes: vec![],
+            edges: vec![],
+            roots: vec![],
+        }
+    }
+
     #[test]
     fn should_return_empty_report_when_diff_is_empty() {
         let read_file = fake_reader(HashMap::new());
@@ -201,6 +223,7 @@ mod tests {
         let expected = Report {
             files: vec![],
             skipped: vec![],
+            graph: empty_graph(),
         };
         let actual = analyze_diff("", read_file, None).expect("analyze should succeed");
 
@@ -231,6 +254,7 @@ fn foo(a: i32) -> i32 {
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
+                    id: "src/lib.rs::foo".to_string(),
                     name: "foo".to_string(),
                     kind: SymbolKind::Function,
                     signature: "fn foo(a: i32) -> i32".to_string(),
@@ -242,6 +266,15 @@ fn foo(a: i32) -> i32 {
                 }],
             }],
             skipped: vec![],
+            graph: crate::graph::SymbolGraph {
+                nodes: vec![crate::graph::Node {
+                    id: "src/lib.rs::foo".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    name: "foo".to_string(),
+                }],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
         };
         let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
@@ -270,6 +303,7 @@ index 4b825dc..0000000
                 path: "src/old.rs".to_string(),
                 reason: SkipReason::Deleted,
             }],
+            graph: empty_graph(),
         };
         let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
@@ -291,6 +325,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                 path: "assets/logo.png".to_string(),
                 reason: SkipReason::Binary,
             }],
+            graph: empty_graph(),
         };
         let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
@@ -320,6 +355,7 @@ index e69de29..4b825dc 100644
                 path: "src/main.rb".to_string(),
                 reason: SkipReason::UnsupportedLanguage,
             }],
+            graph: empty_graph(),
         };
         let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
@@ -353,6 +389,7 @@ rename to src/new_name.rs
                 symbols: vec![],
             }],
             skipped: vec![],
+            graph: empty_graph(),
         };
         let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 
@@ -425,6 +462,7 @@ index e69de29..4b825dc 100644
             files: vec![FileReport {
                 path: "src/lib.rs".to_string(),
                 symbols: vec![ExtractedSymbol {
+                    id: "src/lib.rs::a".to_string(),
                     name: "a".to_string(),
                     kind: SymbolKind::Function,
                     signature: "fn a() -> i32".to_string(),
@@ -439,6 +477,15 @@ index e69de29..4b825dc 100644
                 path: "src/main.rb".to_string(),
                 reason: SkipReason::UnsupportedLanguage,
             }],
+            graph: crate::graph::SymbolGraph {
+                nodes: vec![crate::graph::Node {
+                    id: "src/lib.rs::a".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    name: "a".to_string(),
+                }],
+                edges: vec![],
+                roots: vec!["src/lib.rs::a".to_string()],
+            },
         };
         let actual = analyze_diff(diff, read_file, None).expect("analyze should succeed");
 

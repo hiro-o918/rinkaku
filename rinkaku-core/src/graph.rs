@@ -78,6 +78,28 @@ pub fn build_graph(files: &[FileReport]) -> SymbolGraph {
     }
 }
 
+/// Assigns each symbol in `files` its [`ExtractedSymbol::id`] to match the
+/// [`NodeId`] `build_graph` gave its corresponding [`Node`] (ADR 0008: JSON
+/// consumers need to correlate a symbol with `SymbolGraph`'s
+/// `nodes`/`edges`/`roots` without recomputing the `{path}::{name}` scheme
+/// themselves). Iterates `files` in the same source order `collect_nodes`
+/// used to build `graph.nodes`, so `graph.nodes[i]` and the i-th symbol
+/// encountered here always correspond to the same definition — this
+/// ordering coupling is why `stamp_ids` takes the already-built `graph`
+/// rather than recomputing IDs independently, which could drift out of
+/// sync if the two ID-assignment schemes were ever edited separately.
+pub fn stamp_ids(files: &mut [FileReport], graph: &SymbolGraph) {
+    let mut node_index = 0;
+    for file in files.iter_mut() {
+        for symbol in file.symbols.iter_mut() {
+            if let Some(node) = graph.nodes.get(node_index) {
+                symbol.id = node.id.clone();
+            }
+            node_index += 1;
+        }
+    }
+}
+
 /// Assigns a stable [`NodeId`] to every symbol in source order. A `(path,
 /// name)` pair disambiguates with `@{start_line}` only when it is not
 /// already unique within `files` — the common case (no duplicate names)
@@ -401,6 +423,7 @@ mod tests {
     /// only care about the graph-building fields.
     fn symbol(name: &str, referenced_names: Vec<&str>) -> ExtractedSymbol {
         ExtractedSymbol {
+            id: String::new(),
             name: name.to_string(),
             kind: SymbolKind::Function,
             signature: format!("fn {name}()"),
@@ -658,5 +681,60 @@ mod tests {
         let actual = build_graph(&files);
 
         assert_eq!(expected_roots, actual.roots);
+    }
+
+    #[test]
+    fn should_stamp_each_symbol_id_when_graph_has_no_duplicate_names() {
+        let mut files = vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![symbol("foo", vec!["bar"]), symbol("bar", vec![])],
+        }];
+        let graph = build_graph(&files);
+
+        stamp_ids(&mut files, &graph);
+
+        let expected = vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![
+                ExtractedSymbol {
+                    id: "src/lib.rs::foo".to_string(),
+                    ..symbol("foo", vec!["bar"])
+                },
+                ExtractedSymbol {
+                    id: "src/lib.rs::bar".to_string(),
+                    ..symbol("bar", vec![])
+                },
+            ],
+        }];
+
+        assert_eq!(expected, files);
+    }
+
+    #[test]
+    fn should_stamp_disambiguated_id_when_duplicate_path_and_name() {
+        let mut files = vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![
+                ExtractedSymbol {
+                    range: LineRange { start: 1, end: 2 },
+                    ..symbol("foo", vec![])
+                },
+                ExtractedSymbol {
+                    range: LineRange { start: 10, end: 12 },
+                    ..symbol("foo", vec![])
+                },
+            ],
+        }];
+        let graph = build_graph(&files);
+
+        stamp_ids(&mut files, &graph);
+
+        let expected_ids = vec![
+            "src/lib.rs::foo@1".to_string(),
+            "src/lib.rs::foo@10".to_string(),
+        ];
+        let actual_ids: Vec<String> = files[0].symbols.iter().map(|s| s.id.clone()).collect();
+
+        assert_eq!(expected_ids, actual_ids);
     }
 }
