@@ -21,6 +21,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use rinkaku_core::extract::Classification;
 use rinkaku_core::render::{Report, ReportOrigin};
+use unicode_width::UnicodeWidthChar;
 
 /// Draws one full frame: the entry view (tree + right pane split) or the
 /// source drill-down, depending on `app.screen()`, with a status/help line
@@ -171,6 +172,19 @@ fn draw_diff_pane(
 /// Both the Detail and Diff panes share this one function rather than each
 /// duplicating the clamp-then-scroll-then-indicator sequence, since the two
 /// panes' only difference is which `Vec<Line>` and title they pass in.
+///
+/// `lines` is wrapped (via [`wrap_lines`]) to the pane's inner width
+/// *before* `clamp_scroll`/`scroll_indicator` run and *before* handing it to
+/// `Paragraph`, and `Paragraph::wrap` is deliberately not used here: that
+/// widget's own line-wrapping happens after `Paragraph::scroll` has already
+/// consumed `scroll.y` as an offset into the *unwrapped* logical lines, so
+/// any logical line long enough to wrap desyncs the scroll unit from the
+/// rendered unit — content past the first wrapped line of such a line
+/// becomes unreachable at any scroll offset, and the overflow indicator
+/// (computed from logical line count) undercounts and falsely claims
+/// everything is visible. Wrapping first makes every one of
+/// `clamp_scroll`/`scroll_indicator`/`Paragraph::scroll` operate on the same
+/// "one rendered terminal row" unit.
 fn render_scrollable_pane(
     frame: &mut Frame,
     title: &str,
@@ -178,27 +192,110 @@ fn render_scrollable_pane(
     requested_scroll: usize,
     area: Rect,
 ) {
-    // 2 rows for the top/bottom border, matching `draw_source_screen`'s
-    // own `saturating_sub(2)` convention for a bordered pane's inner
-    // height.
+    // 2 columns/rows for the left/right and top/bottom border, matching
+    // `draw_source_screen`'s own `saturating_sub(2)` convention for a
+    // bordered pane's inner height.
+    let viewport_width = area.width.saturating_sub(2) as usize;
     let viewport_height = area.height.saturating_sub(2) as usize;
-    let scroll = clamp_scroll(lines.len(), viewport_height, requested_scroll);
+    let wrapped = wrap_lines(lines, viewport_width);
+    let scroll = clamp_scroll(wrapped.len(), viewport_height, requested_scroll);
 
     // Callers pass a title already padded with a leading/trailing space
     // (e.g. `" Detail "`, matching every other `Block` title in this
     // module) — trim the trailing one before appending the indicator so
     // the two don't produce a double space (`"Detail  (1-17/43)"`).
-    let title = match scroll_indicator(lines.len(), viewport_height, scroll) {
+    let title = match scroll_indicator(wrapped.len(), viewport_height, scroll) {
         Some(indicator) => format!("{}{indicator} ", title.trim_end()),
         None => title.to_string(),
     };
 
     let block = Block::bordered().title(title);
-    let paragraph = Paragraph::new(lines.to_vec())
+    let paragraph = Paragraph::new(wrapped)
         .block(block)
-        .wrap(ratatui::widgets::Wrap { trim: false })
         .scroll((scroll as u16, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// Wraps each of `lines` to `width` display columns, splitting a logical
+/// [`Line`] into as many output lines as needed while keeping each [`Span`]'s
+/// style attached to the fragment it contributed (a wrap point can fall
+/// mid-span, in which case the span itself is split and both fragments keep
+/// the original span's style). Width is measured with
+/// [`UnicodeWidthChar::width`] (falling back to 1 column for the zero-width/
+/// control-character case `width()` returns `None` for) rather than byte or
+/// `char` count, so a wide (e.g. full-width CJK) character that would
+/// overflow `width` on its own wraps onto the next line instead of being
+/// sliced in half.
+///
+/// A pure, unit-testable stand-in for `ratatui::widgets::Wrap`'s own
+/// char-wrapping (`trim: false` mode) — needed because this crate must know
+/// the *wrapped* line count up front, before `Paragraph::scroll` ever runs
+/// (see `render_scrollable_pane`'s doc comment on why `Paragraph::wrap`
+/// itself cannot be used for a scrollable pane). Deliberately does not
+/// attempt `ratatui::widgets::Wrap`'s word-boundary trimming behavior —
+/// content here is source/diff text, not prose, so a plain character wrap
+/// (breaking wherever the width limit is hit, mid-word if needed) is the
+/// right fidelity, not an approximation to chase.
+///
+/// `width == 0` returns `lines` unchanged (nothing meaningful to wrap
+/// into — an actual zero-width pane cannot render any column anyway, and
+/// looping without ever advancing would otherwise be a defensive infinite-
+/// loop risk).
+fn wrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return lines.to_vec();
+    }
+
+    let mut output = Vec::new();
+    for line in lines {
+        output.extend(wrap_one_line(line, width));
+    }
+    output
+}
+
+/// Wraps a single logical [`Line`] into one or more output lines, per
+/// [`wrap_lines`]'s doc comment. A line with no spans at all (a blank line)
+/// produces exactly one empty output line, matching `ratatui::widgets::Wrap`
+/// rendering a blank logical line as one blank row rather than zero rows.
+fn wrap_one_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
+    let mut result_lines = Vec::new();
+    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_width = 0usize;
+
+    for span in &line.spans {
+        let style = span.style;
+        let mut fragment = String::new();
+        let mut fragment_width = 0usize;
+
+        for ch in span.content.chars() {
+            let char_width = ch.width().unwrap_or(1);
+
+            if current_width + fragment_width + char_width > width {
+                // Flush the fragment accumulated so far (if any) onto the
+                // current output line, then start a brand-new output line —
+                // the char that overflowed becomes the first char of the
+                // next fragment.
+                if !fragment.is_empty() {
+                    current_spans.push(Span::styled(fragment.clone(), style));
+                    fragment.clear();
+                    fragment_width = 0;
+                }
+                result_lines.push(Line::from(std::mem::take(&mut current_spans)).style(line.style));
+                current_width = 0;
+            }
+
+            fragment.push(ch);
+            fragment_width += char_width;
+        }
+
+        if !fragment.is_empty() {
+            current_spans.push(Span::styled(fragment, style));
+            current_width += fragment_width;
+        }
+    }
+
+    result_lines.push(Line::from(current_spans).style(line.style));
+    result_lines
 }
 
 /// Clamps a requested scroll offset (lines) to `[0, content_len -
@@ -998,5 +1095,192 @@ index e69de29..4b825dc 100644
         // appear even though the file row's detail definitely overflowed.
         assert!(text.contains(" Detail "));
         assert!(!text.contains("Detail ("));
+    }
+
+    // --- wrap_lines (pure helper) ---
+
+    #[test]
+    fn should_return_lines_unchanged_when_width_is_zero() {
+        let lines = vec![Line::raw("hello world")];
+
+        let actual = wrap_lines(&lines, 0);
+
+        assert_eq!(lines, actual);
+    }
+
+    #[test]
+    fn should_return_one_empty_line_when_input_line_is_blank() {
+        let lines = vec![Line::raw("")];
+
+        let actual = wrap_lines(&lines, 10);
+
+        assert_eq!(vec![Line::raw("")], actual);
+    }
+
+    #[test]
+    fn should_not_wrap_when_line_fits_exactly_within_width() {
+        let lines = vec![Line::raw("abcde")];
+
+        let actual = wrap_lines(&lines, 5);
+
+        assert_eq!(vec![Line::raw("abcde")], actual);
+    }
+
+    #[test]
+    fn should_split_long_ascii_line_into_multiple_lines_at_the_width_boundary() {
+        let lines = vec![Line::raw("abcdefghij")];
+
+        let actual = wrap_lines(&lines, 4);
+
+        assert_eq!(
+            vec![Line::raw("abcd"), Line::raw("efgh"), Line::raw("ij"),],
+            actual
+        );
+    }
+
+    #[test]
+    fn should_wrap_full_width_characters_without_splitting_a_double_width_char_across_lines() {
+        // Each "あ" is 2 columns wide; a width-3 pane can fit "あ" (2) plus
+        // one more column, but the second "あ" would overflow to column 4,
+        // so it wraps onto the next line rather than being sliced in half.
+        let lines = vec![Line::raw("ああa")];
+
+        let actual = wrap_lines(&lines, 3);
+
+        assert_eq!(vec![Line::raw("あ"), Line::raw("あa")], actual);
+    }
+
+    #[test]
+    fn should_preserve_span_style_on_both_fragments_when_a_styled_span_is_split_by_wrapping() {
+        let style = Style::default().fg(Color::Red);
+        let lines = vec![Line::from(vec![Span::styled("abcdef", style)])];
+
+        let actual = wrap_lines(&lines, 4);
+
+        assert_eq!(
+            vec![
+                Line::from(vec![Span::styled("abcd", style)]),
+                Line::from(vec![Span::styled("ef", style)]),
+            ],
+            actual
+        );
+    }
+
+    #[test]
+    fn should_preserve_distinct_span_styles_when_a_multi_span_line_wraps_across_span_boundaries() {
+        // "ab" (unstyled) + "cdef" (red): a width-3 wrap must split after
+        // "abc" (2 unstyled chars + 1 red char) and carry each fragment's
+        // own style into the split, not just the first span's.
+        let red = Style::default().fg(Color::Red);
+        let lines = vec![Line::from(vec![Span::raw("ab"), Span::styled("cdef", red)])];
+
+        let actual = wrap_lines(&lines, 3);
+
+        assert_eq!(
+            vec![
+                Line::from(vec![Span::raw("ab"), Span::styled("c", red)]),
+                Line::from(vec![Span::styled("def", red)]),
+            ],
+            actual
+        );
+    }
+
+    #[test]
+    fn should_wrap_each_logical_line_independently_when_multiple_lines_are_passed() {
+        let lines = vec![Line::raw("abcdef"), Line::raw("xy")];
+
+        let actual = wrap_lines(&lines, 4);
+
+        assert_eq!(
+            vec![Line::raw("abcd"), Line::raw("ef"), Line::raw("xy")],
+            actual
+        );
+    }
+
+    // --- long-line scroll reachability regression (TestBackend) ---
+
+    #[test]
+    fn should_reach_the_last_wrapped_line_of_content_via_scrolling_when_a_logical_line_is_long_enough_to_wrap()
+     {
+        // A narrow pane (30 inner columns after the 2-column border) with a
+        // single logical line far longer than that — mirrors a real fan-in
+        // entry's full path being too long for the pane. Before wrapping was
+        // applied before the scroll offset, the scroll unit (logical lines)
+        // and the render unit (wrapped rows) disagreed, so a marker placed
+        // near the end of this one long logical line was unreachable at any
+        // scroll offset. Regression coverage for that desync.
+        let long_line = format!("{}TAIL_MARKER", "x".repeat(200));
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: long_line.clone(),
+                symbols: vec![],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let mut app = App::new(&report);
+        // Scroll far enough down to reach the wrapped tail of the long path
+        // line, however many wrapped rows that turns out to be.
+        for _ in 0..200 {
+            app = app.handle_key(crate::app::InputKey::ScrollDown);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("TAIL_MARKER"));
+    }
+
+    #[test]
+    fn should_report_indicator_total_as_wrapped_row_count_not_logical_line_count_when_a_line_wraps()
+    {
+        // Same narrow pane/long-path setup as the reachability regression
+        // above: the file row's detail is exactly 2 logical lines ("File
+        // <path>" plus a blank line, since this report has no symbols), but
+        // the long path line wraps into several rows — the indicator's
+        // "/total" must count wrapped rows, not the 2 logical lines, or the
+        // indicator would (wrongly) claim everything fits and hide it
+        // entirely.
+        let long_line = format!("{}TAIL_MARKER", "x".repeat(200));
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: long_line,
+                symbols: vec![],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &app, &report, &[]))
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // Inner width is 34 - 2 = 32 columns; the long line alone wraps into
+        // ceil(211 / 32) = 7 rows, well over the "/2" a logical-line count
+        // would have produced.
+        assert!(text.contains("Detail (1-"));
+        assert!(!text.contains("/2)"));
     }
 }
