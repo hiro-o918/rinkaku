@@ -42,7 +42,8 @@
   ],
   "packages": {
     "rinkaku-core": {
-      "component": "rinkaku-core"
+      "component": "rinkaku-core",
+      "include-component-in-tag": true
     },
     "rinkaku": {
       "component": "rinkaku"
@@ -52,11 +53,6 @@
     {
       "type": "cargo-workspace",
       "merge": false
-    },
-    {
-      "type": "linked-versions",
-      "groupName": "rinkaku",
-      "components": ["rinkaku-core", "rinkaku"]
     }
   ]
 }

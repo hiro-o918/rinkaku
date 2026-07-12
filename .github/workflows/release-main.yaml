@@ -6,6 +6,12 @@ on:
       - main
     types:
       - closed
+  # Manual re-run, e.g. when release-please-action aborts without creating
+  # a tag/release (see the manifest/GitHub-Releases reconciliation issue
+  # fixed by this workflow's tag-scheme change) and `gh run rerun` doesn't
+  # help because it replays the same event payload. Dispatching directly
+  # re-invokes release-please against the current state of `main` instead.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}--${{ github.ref }}
@@ -13,7 +19,7 @@ concurrency:
 
 jobs:
   release-please:
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
