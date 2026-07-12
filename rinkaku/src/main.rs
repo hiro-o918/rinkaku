@@ -1665,6 +1665,18 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_format_and_tui_given_together_regardless_of_argument_order() {
+        // clap's conflicts_with is declared on `format` (see Cli's own
+        // `#[arg(...)]` attribute), but conflicts are symmetric regardless
+        // of which flag declares the attribute or which one is passed
+        // first on the command line — this pins that symmetry rather than
+        // only ever exercising the --tui-first ordering above.
+        let actual = Cli::try_parse_from(["rinkaku", "--format", "json", "--tui"]);
+
+        assert!(actual.is_err());
+    }
+
+    #[test]
     fn should_set_base_when_base_flag_given() {
         let expected = Cli {
             command: None,
