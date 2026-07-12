@@ -212,9 +212,76 @@ executed the binary rather than leaving execution to chance.
   same-named or same-domain symbols appearing in multiple crates —
   where today it needs a reviewer to happen to know both sides exist.
 
+## Results (round 4)
+
+Same two-pass method (dynamic verification mandatory for both arms),
+fourth subject: whole-repo mode per ADR 0017 (4 files, +710/−29 — a
+new pure core entry point `analyze_repo`, a mode-selection change in
+`main.rs`, and a `Format` → `Option<Format>` CLI refactor rippling
+through 19 test literals).
+
+| Metric              | A (map)     | B (control) |
+| ------------------- | ----------- | ----------- |
+| Output tokens       | 98.0k       | 100.5k      |
+| Tool calls          | 37          | 39          |
+| Wall clock          | 288s        | 274s        |
+| Blocker findings    | 0           | 0           |
+| Should-fix findings | 2           | 0           |
+| Nit findings        | 1           | 2           |
+
+- **First cross-arm overlap** in four rounds: both arms found the
+  redundant `is_none()` guard in the new input-mode branch — but
+  rated it differently. A rated it should-fix because it read the
+  surrounding comment and noticed it describes a provably unreachable
+  path (and that the stdin TTY bail it references had become dead
+  code); B rated the same redundancy a harmless nit. Same line,
+  different severity, decided by how much *surrounding contract* each
+  reviewer read — a reminder that finding overlap does not mean
+  judgment overlap.
+- A's second should-fix (whole-repo output saying "N changed symbols"
+  when nothing changed) and its nit (raw `git ls-files` error on the
+  new default invocation path) both came from **executing the
+  binary**, not from the map — as did both of B's nits (silent empty
+  output on an empty repository; deleted-file-between-list-and-read
+  resilience, which passed). With both static surfaces reviewed
+  clean, dynamic verification produced every unique finding this
+  round, on both arms.
+- The map's contribution this round was **negative space**: A
+  reported the map's dependency listing under `fn main` told it which
+  helpers were pre-existing and not worth re-auditing, and its
+  hotspots sent it straight to the `analyze_repo` ↔ `TagsResolver`
+  filter-order parity check (which came back clean, verifying the
+  ADR's core claim cheaply). Attention allocation showed up as
+  *cheaper verification of the contract that mattered*, not as
+  unique findings.
+- Round 3's arm profiles partially inverted: the map arm won the
+  line-level control-flow finding this round. The stable pattern
+  across four rounds is not "map = architecture, control =
+  line-level" but weaker and more durable: **the arms rarely
+  duplicate each other's unique findings, and severity judgment
+  varies even on shared ones** — the case for two passes is
+  redundancy of judgment, not partition of territory.
+
+## Conclusions (after 4 rounds)
+
+- Two-pass review remains justified, but the mechanism is now better
+  understood: independent judgment (severity, contract reading)
+  diverges even when raw findings overlap, and each arm keeps
+  producing unique findings the other misses.
+- Dynamic verification has become the dominant source of unique
+  findings as the codebase's static review surface gets cleaner
+  (rounds 3–4: every should-fix/nit unique to an arm traced to
+  either execution or cross-file contract reading, none to the diff
+  text alone). The CLAUDE.md rule making it mandatory for both arms
+  is doing the heavy lifting.
+- The map's measurable value at this diff size is verification
+  routing: it made the ADR's central parity claim (filter order
+  matching `TagsResolver::new`) cheap to check and marked
+  pre-existing code as safe to skip.
+
 ## Next
 
 - Document the map-first recipe in the README's LLM usage section
   (map from a trusted build, paired with an independent pass).
 - Consider a map feature flagging cross-crate duplicate-domain
-  symbols (see round 3's new hypothesis).
+  symbols (round 3 hypothesis, still open).
