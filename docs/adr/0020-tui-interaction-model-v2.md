@@ -1,6 +1,4 @@
-# 0020. TUI interaction model v2: focus, default diff, selection-scoped
-
-# content, and a help overlay
+# 0020. TUI interaction model v2: focus, default diff, selection-scoped content, and a help overlay
 
 - Status: accepted
 - Date: 2026-07-13
