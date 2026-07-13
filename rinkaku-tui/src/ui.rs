@@ -404,11 +404,11 @@ fn draw_diff_pane(
 /// directory-scoped meaning (ADR 0019's `path_prefix` is meant to carve out
 /// a layer, not re-derive what a single symbol's own detail pane already
 /// shows). A directory/file row whose path matches no symbol shows its own
-/// "no symbols under `<path>`" message, mirroring `main.rs`'s `--entry` CLI
-/// note.
+/// "nothing under `<path>` is reachable" message, mirroring `main.rs`'s
+/// `--entry` CLI note.
 ///
 /// The pane's title states the question the tree answers ("Blast radius of
-/// `<path>`") rather than the re-rooting mechanism, per ADR 0022's own
+/// `<path>`") rather than the re-rooting mechanism, per ADR 0023's own
 /// rationale for the rename — a reviewer opening the pane for the first
 /// time should not need `?`'s glossary to understand what it shows.
 fn draw_blast_radius_pane(
@@ -428,7 +428,7 @@ fn draw_blast_radius_pane(
         }
         BlastRadiusSelection::Empty { path } => {
             let block = Block::bordered().title(format!(" Blast radius of {path} "));
-            let paragraph = Paragraph::new(format!("(nothing under {path} depends on anything)"))
+            let paragraph = Paragraph::new(format!("(nothing under {path} is reachable)"))
                 .block(block)
                 .wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(paragraph, area);
@@ -2426,6 +2426,52 @@ index e69de29..4b825dc 100644
         // fragment checks (e.g. `should_draw_entry_and_detail_panes_...`'s
         // "Symbols" check).
         assert!(text.contains("directory"));
+    }
+
+    #[test]
+    fn should_draw_blast_radius_empty_message_when_file_row_path_matches_no_graph_node() {
+        // `report_with_one_symbol`'s `graph.nodes` is empty (that fixture
+        // exists for Detail/Diff pane tests that don't need a populated
+        // graph), so the cursor's default position on the "lib.rs" file row
+        // matches no graph node — the real-world trigger for
+        // `BlastRadiusSelection::Empty` (`App`'s own
+        // `should_return_empty_blast_radius_selection_when_file_row_path_matches_no_graph_node`
+        // test pins the same fixture shape at the `App` layer; this test
+        // pins the rendered pane text ADR 0023 promises, which nothing
+        // previously asserted).
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleBlastRadius);
+        let blast_radius_selection = app.selected_blast_radius_view(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &blast_radius_selection,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Blast radius of lib.rs"));
+        // NOTE: asserting a substring, not the full parenthesized sentence —
+        // the pane is narrow enough (40% of an 80-column terminal) that
+        // `Paragraph`'s word-wrapping can split the sentence across rows,
+        // and `buffer_text` joins rows with `\n`, so a wrapped multi-row
+        // substring would never match a single-line `contains` check
+        // (mirroring `should_draw_blast_radius_placeholder_when_cursor_is_on_a_symbol_row`'s
+        // own "directory" fragment check just above, for the same reason).
+        // Still pins the exact wording ADR 0023 specifies ("is reachable",
+        // not the earlier "depends on anything" this test was added to
+        // catch a future drift away from).
+        assert!(text.contains("nothing under lib.rs is"));
+        assert!(text.contains("reachable"));
     }
 
     /// Finds the buffer cell for `token`'s first character within the row
