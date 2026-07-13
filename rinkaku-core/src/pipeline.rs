@@ -131,6 +131,22 @@ pub enum AnalyzeError {
 /// transient git failure) is treated as "no base content available" for
 /// that one file rather than propagated as an [`AnalyzeError`] or guessed
 /// at.
+///
+/// `on_progress` (ADR 0033, amended), when `Some`, is called with
+/// `(files_done, changed_files.len())` as this function's sequential
+/// per-file loop below works through the diff's changed files —
+/// approximately every [`crate::progress::PROGRESS_REPORT_STRIDE`] files
+/// ([`crate::progress::should_report_progress`]), always including a final
+/// `(total, total)` call. Unlike [`analyze_repo`]'s parallel loop, this
+/// loop is already sequential, so a plain `usize` counter is incremented
+/// in place — no `AtomicUsize` is needed. "Files done" counts every file
+/// the loop looks at, including ones it skips (deleted/generated/binary/
+/// unsupported-language), matching `analyze_repo`'s own "looked at" —not
+/// "produced a report for"— convention so a caller watching the callback
+/// sees the same meaning regardless of which pipeline entry point produced
+/// it. `None` (every caller before this parameter existed) skips all
+/// counting overhead, leaving behavior and output byte-for-byte unchanged.
+#[allow(clippy::too_many_arguments)]
 pub fn analyze_diff(
     diff_text: &str,
     read_file: impl Fn(&str) -> std::io::Result<String>,
@@ -139,8 +155,11 @@ pub fn analyze_diff(
     include_tests: bool,
     generated_paths: &std::collections::HashSet<String>,
     include_generated: bool,
+    on_progress: Option<OnProgress>,
 ) -> Result<Report, AnalyzeError> {
     let changed_files = parse_unified_diff(diff_text)?;
+    let total = changed_files.len();
+    let mut done = 0usize;
 
     let mut files = Vec::new();
     let mut skipped = Vec::new();
@@ -153,58 +172,109 @@ pub fn analyze_diff(
     let mut sized_files: Vec<(String, usize)> = Vec::new();
 
     for changed_file in changed_files {
-        if changed_file.kind == ChangeKind::Deleted {
-            skipped.push(SkippedFile {
-                path: changed_file.path,
-                reason: SkipReason::Deleted,
-            });
-            continue;
-        }
-        if generated_paths.contains(&changed_file.path) {
-            skipped.push(SkippedFile {
-                path: changed_file.path,
-                reason: SkipReason::Generated,
-            });
-            continue;
-        }
-        if changed_file.is_binary {
-            skipped.push(SkippedFile {
-                path: changed_file.path,
-                reason: SkipReason::Binary,
-            });
-            continue;
-        }
-        let Some(lang) = language_for_path(&changed_file.path) else {
-            skipped.push(SkippedFile {
-                path: changed_file.path,
-                reason: SkipReason::UnsupportedLanguage,
-            });
-            continue;
-        };
+        // ADR 0033 (amended): the per-file body is wrapped in a labeled
+        // block so every early exit below (`break 'file`, replacing what
+        // used to be a bare `continue`) still falls through to the single
+        // progress report at the bottom of the loop — "files done" counts
+        // every changed file the loop looks at, including skipped ones,
+        // matching `analyze_repo`'s own "looked at" convention (see this
+        // function's doc comment).
+        'file: {
+            if changed_file.kind == ChangeKind::Deleted {
+                skipped.push(SkippedFile {
+                    path: changed_file.path,
+                    reason: SkipReason::Deleted,
+                });
+                break 'file;
+            }
+            if generated_paths.contains(&changed_file.path) {
+                skipped.push(SkippedFile {
+                    path: changed_file.path,
+                    reason: SkipReason::Generated,
+                });
+                break 'file;
+            }
+            if changed_file.is_binary {
+                skipped.push(SkippedFile {
+                    path: changed_file.path,
+                    reason: SkipReason::Binary,
+                });
+                break 'file;
+            }
+            let Some(lang) = language_for_path(&changed_file.path) else {
+                skipped.push(SkippedFile {
+                    path: changed_file.path,
+                    reason: SkipReason::UnsupportedLanguage,
+                });
+                break 'file;
+            };
 
-        // Base-side content lives at `old_path` for a rename/copy (the
-        // pre-rename path — the new-side `path` never existed on the base
-        // side under a rename, so reading it there would always fail), and
-        // at `path` itself for every other kind.
-        let read_path = changed_file
-            .old_path
-            .as_deref()
-            .unwrap_or(&changed_file.path);
+            // Base-side content lives at `old_path` for a rename/copy (the
+            // pre-rename path — the new-side `path` never existed on the base
+            // side under a rename, so reading it there would always fail), and
+            // at `path` itself for every other kind.
+            let read_path = changed_file
+                .old_path
+                .as_deref()
+                .unwrap_or(&changed_file.path);
 
-        // No new-side hunks means no new-side content change (a pure
-        // rename, a mode-change-only diff, or — ADR 0014's case — a hunk
-        // that only *removes* lines with nothing added back):
-        // extract_changed_symbols would return no symbols for an empty
-        // changed_ranges anyway, so the head-side read is skipped entirely
-        // rather than paying IO for a result already known to be empty.
-        // `old_changed_ranges` can still be non-empty in the removal case,
-        // though, so classification against the base side still runs when
-        // a base reader is available — a whole-function deletion is
-        // exactly the case ADR 0014's `removed` classification exists for.
-        if changed_file.changed_ranges.is_empty() {
-            let mut no_head_symbols: Vec<ExtractedSymbol> = Vec::new();
+            // No new-side hunks means no new-side content change (a pure
+            // rename, a mode-change-only diff, or — ADR 0014's case — a hunk
+            // that only *removes* lines with nothing added back):
+            // extract_changed_symbols would return no symbols for an empty
+            // changed_ranges anyway, so the head-side read is skipped entirely
+            // rather than paying IO for a result already known to be empty.
+            // `old_changed_ranges` can still be non-empty in the removal case,
+            // though, so classification against the base side still runs when
+            // a base reader is available — a whole-function deletion is
+            // exactly the case ADR 0014's `removed` classification exists for.
+            if changed_file.changed_ranges.is_empty() {
+                let mut no_head_symbols: Vec<ExtractedSymbol> = Vec::new();
+                removed.extend(classify_against_base(
+                    &mut no_head_symbols,
+                    read_base_file,
+                    lang,
+                    changed_file.kind,
+                    read_path,
+                    &changed_file.path,
+                    &changed_file.old_changed_ranges,
+                ));
+                files.push(FileReport {
+                    path: changed_file.path,
+                    symbols: Vec::new(),
+                });
+                break 'file;
+            }
+
+            let source =
+                read_file(&changed_file.path).map_err(|source| AnalyzeError::ReadFile {
+                    path: changed_file.path.clone(),
+                    source,
+                })?;
+            // ADR 0011: content-marker detection, checked after the read but
+            // before parsing — a file already excluded by an attribute
+            // (generated_paths, above) never reaches here, so this only ever
+            // adds coverage on top of ADR 0010, never duplicates it.
+            if !include_generated && is_generated_content(&source) {
+                skipped.push(SkippedFile {
+                    path: changed_file.path,
+                    reason: SkipReason::Generated,
+                });
+                break 'file;
+            }
+            // ADR 0028: measure line count once the file's content has cleared
+            // every skip check above. `str::lines()` returns a sensible count
+            // whether or not the final line ends in a newline.
+            sized_files.push((changed_file.path.clone(), source.lines().count()));
+            let mut symbols = extract_changed_symbols(&source, lang, &changed_file.changed_ranges);
+
+            // ADR 0014: classify each symbol's contract impact against the
+            // base side. `ChangeKind::Added` classifies every symbol `Added`
+            // directly (see `classify_against_base`'s doc comment); every other
+            // kind is left at `None`/empty (classify_symbols never runs) when
+            // `read_base_file` is absent or its call fails for this file.
             removed.extend(classify_against_base(
-                &mut no_head_symbols,
+                &mut symbols,
                 read_base_file,
                 lang,
                 changed_file.kind,
@@ -212,53 +282,19 @@ pub fn analyze_diff(
                 &changed_file.path,
                 &changed_file.old_changed_ranges,
             ));
+
             files.push(FileReport {
                 path: changed_file.path,
-                symbols: Vec::new(),
+                symbols,
             });
-            continue;
         }
 
-        let source = read_file(&changed_file.path).map_err(|source| AnalyzeError::ReadFile {
-            path: changed_file.path.clone(),
-            source,
-        })?;
-        // ADR 0011: content-marker detection, checked after the read but
-        // before parsing — a file already excluded by an attribute
-        // (generated_paths, above) never reaches here, so this only ever
-        // adds coverage on top of ADR 0010, never duplicates it.
-        if !include_generated && is_generated_content(&source) {
-            skipped.push(SkippedFile {
-                path: changed_file.path,
-                reason: SkipReason::Generated,
-            });
-            continue;
+        if let Some(on_progress) = on_progress {
+            done += 1;
+            if should_report_progress(done, total) {
+                on_progress(done, total);
+            }
         }
-        // ADR 0028: measure line count once the file's content has cleared
-        // every skip check above. `str::lines()` returns a sensible count
-        // whether or not the final line ends in a newline.
-        sized_files.push((changed_file.path.clone(), source.lines().count()));
-        let mut symbols = extract_changed_symbols(&source, lang, &changed_file.changed_ranges);
-
-        // ADR 0014: classify each symbol's contract impact against the
-        // base side. `ChangeKind::Added` classifies every symbol `Added`
-        // directly (see `classify_against_base`'s doc comment); every other
-        // kind is left at `None`/empty (classify_symbols never runs) when
-        // `read_base_file` is absent or its call fails for this file.
-        removed.extend(classify_against_base(
-            &mut symbols,
-            read_base_file,
-            lang,
-            changed_file.kind,
-            read_path,
-            &changed_file.path,
-            &changed_file.old_changed_ranges,
-        ));
-
-        files.push(FileReport {
-            path: changed_file.path,
-            symbols,
-        });
     }
 
     let mut tests = Vec::new();

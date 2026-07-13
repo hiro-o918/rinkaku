@@ -28,7 +28,7 @@ fn should_return_empty_report_when_diff_is_empty() {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff("", read_file, None, None, true, &HashSet::new(), true)
+    let actual = analyze_diff("", read_file, None, None, true, &HashSet::new(), true, None)
         .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
@@ -88,8 +88,17 @@ fn foo(a: i32) -> i32 {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -123,8 +132,17 @@ index 4b825dc..0000000
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -151,8 +169,17 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -187,8 +214,17 @@ index e69de29..4b825dc 100644
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -227,8 +263,17 @@ rename to src/new_name.rs
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -245,7 +290,16 @@ index e69de29..4b825dc 100644
 ";
     let read_file = fake_reader(HashMap::new());
 
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true);
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    );
 
     assert!(matches!(actual, Err(AnalyzeError::Diff(_))));
 }
@@ -264,7 +318,16 @@ index e69de29..4b825dc 100644
     // Map has no entry for src/lib.rs, so the fake reader returns Err.
     let read_file = fake_reader(HashMap::new());
 
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true);
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    );
 
     assert!(matches!(
         actual,
@@ -332,8 +395,17 @@ index e69de29..4b825dc 100644
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -385,8 +457,17 @@ func (r *repoImpl) Save(id string) error {
 ";
     let read_file = fake_reader(HashMap::from([("repo.go", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
     let markdown = crate::render::render(&report, crate::render::OutputFormat::Markdown)
         .expect("markdown render should succeed");
 
@@ -462,8 +543,17 @@ fn foo(p: Point) -> i32 {
 ";
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     // No resolver was passed, so every symbol's dependencies must stay
     // empty — this is `--deps 0`'s contract (main.rs), not merely "the
@@ -503,6 +593,7 @@ fn foo(p: Point) -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -562,8 +653,17 @@ fn caller_two() -> i32 {
 ";
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected = vec![FanIn {
         id: "src/lib.rs::shared_helper".to_string(),
@@ -596,9 +696,94 @@ fn foo(a: i32) -> i32 {
 ";
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected: Vec<FanIn> = Vec::new();
     assert_eq!(expected, report.fan_ins);
+}
+
+// ADR 0033 (amended): `on_progress` must be called with `(files_done,
+// total)` as the sequential per-file loop works through the diff's
+// changed files — mirroring `analyze_repo`'s own progress contract
+// (`crate::progress::should_report_progress`'s stride-16-plus-final
+// rule). `Mutex` rather than `RefCell`: `OnProgress`'s `Sync` bound
+// applies to the type regardless of how many threads actually call
+// through it, and `analyze_diff`'s loop only ever calls it from one
+// (this test's single-threaded call still has to satisfy the same
+// `&(dyn Fn(usize, usize) + Sync)` type `analyze_repo`'s rayon workers
+// require).
+#[test]
+fn should_report_file_progress_for_every_changed_file_including_skipped_ones() {
+    // Three changed files: one deleted (skipped, no read), one
+    // unsupported-language (skipped, no read), one Rust file actually
+    // analyzed — proves "files done" counts every file the loop looks
+    // at, not just ones that produce a `FileReport`. With only 3 files
+    // and `PROGRESS_REPORT_STRIDE` at 16, `should_report_progress` only
+    // fires on the final file (3 == total), so a single `(3, 3)` call
+    // is the entire expected sequence.
+    let diff = "\
+diff --git a/src/old.rs b/src/old.rs
+deleted file mode 100644
+index 4b825dc..0000000
+--- a/src/old.rs
++++ /dev/null
+@@ -1,2 +0,0 @@
+-fn a() {}
+-fn b() {}
+diff --git a/README.rb b/README.rb
+index e69de29..4b825dc 100644
+--- a/README.rb
++++ b/README.rb
+@@ -1,1 +1,1 @@
+-old
++new
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn foo(a: i32) -> i32 {
+-    a
++    a + 1
+ }
+";
+    let source = "\
+fn foo(a: i32) -> i32 {
+    a + 1
+}
+";
+    let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
+    let calls: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+    let on_progress = |done: usize, total: usize| {
+        calls
+            .lock()
+            .expect("lock must not be poisoned")
+            .push((done, total));
+    };
+
+    analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        Some(&on_progress),
+    )
+    .expect("analyze should succeed");
+
+    let expected = vec![(3usize, 3usize)];
+    let actual = calls.into_inner().expect("lock must not be poisoned");
+    assert_eq!(expected, actual);
 }

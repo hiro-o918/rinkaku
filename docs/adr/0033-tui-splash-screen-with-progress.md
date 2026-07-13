@@ -333,3 +333,40 @@ when the note lands.
   screen, even without remembering to call the explicit teardown method —
   matching the same "belt and braces" precedent `rinkaku_tui::run`'s own
   panic-hook layering already sets.
+
+## Amendment (2026-07-13)
+
+The "fake/animated progress bar" rejection above (Alternatives) listed
+`AnalyzingDiff` alongside `ResolvingPr`/`Diffing` as a phase with "no real
+signal" — true at the time, since `analyze_diff`'s per-file loop had no
+progress port at all. That has changed: `analyze_diff` now takes the same
+`on_progress: Option<rinkaku_core::progress::OnProgress>` port
+`analyze_repo` and `TagsResolver::new` already had, reporting
+`(files_done, total)` as its sequential loop over the diff's changed files
+progresses, gated by the same `should_report_progress` stride rule. `main.rs`
+wires this through `AnalysisProgress::report_file_progress` exactly as it
+already did for the other two phases, so `AnalyzingDiff` now draws a real
+determinate gauge in `--tui` mode instead of a label-only splash — closing
+the one phase this ADR originally could not give real progress to.
+
+This does not change any decision above: it exercises the same
+`OnProgress`/`should_report_progress` port `analyze_repo` established,
+extended to a second, sequential (not rayon-parallel) call site, so no new
+concurrency primitive is introduced (a plain `usize` counter suffices,
+where `analyze_repo` needs `AtomicUsize` for its parallel workers). "Files
+done" counts every changed file the loop looks at, including ones it skips
+(deleted/generated/binary/unsupported-language/pure-rename), matching
+`analyze_repo`'s own "looked at" — not "produced a report for" — convention,
+so a caller watching the callback sees the same meaning regardless of
+which pipeline entry point produced it.
+
+- **Core API**: `rinkaku_core::pipeline::analyze_diff` gains the same
+  `on_progress: Option<OnProgress>` last parameter `analyze_repo` already
+  has. Every existing call site (tests included) is updated to pass
+  `None`; behavior and output are unchanged when it is `None` — same
+  breaking-but-additive signature change class this ADR's original
+  Consequences section already accepted for `analyze_repo`.
+- **UX**: `--base`/`--pr`/stdin modes under `--tui` now show a real gauge
+  during "Analyzing diff..." instead of a static label, matching the
+  whole-repo-outline and dependency-index phases. Every non-TUI display
+  mode is unaffected, same as the original decision.

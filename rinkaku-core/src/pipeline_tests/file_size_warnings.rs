@@ -50,8 +50,17 @@ index e69de29..4b825dc 100644
         Box::leak(big_source.into_boxed_str()) as &'static str,
     )]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected = vec![FileSizeWarning {
         path: "src/big.rs".to_string(),
@@ -74,8 +83,17 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
 ";
     let read_file = fake_reader(HashMap::new());
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected: Vec<FileSizeWarning> = vec![];
     assert_eq!(expected, report.file_size_warnings);

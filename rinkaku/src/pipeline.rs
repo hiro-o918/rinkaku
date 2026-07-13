@@ -74,6 +74,12 @@ pub(crate) fn run_base_pipeline(
     let generated_paths = resolve_generated_paths(cli, &changed_paths, cwd);
     log::debug!("analyzing diff");
     progress.set_phase(AnalysisPhase::AnalyzingDiff);
+    // ADR 0033 (amended): reports `(files_done, total)` back through
+    // `progress` as `analyze_diff`'s sequential per-file loop works through
+    // the diff's changed files — same closure shape as `build_resolver`'s
+    // own `on_file_progress` above, since `rinkaku_core::progress::OnProgress`
+    // is exactly the `Fn(usize, usize) + Sync` shape `analyze_diff` expects.
+    let on_file_progress = |done: usize, total: usize| progress.report_file_progress(done, total);
     let report = analyze_diff(
         &diff_text,
         read_file,
@@ -86,6 +92,7 @@ pub(crate) fn run_base_pipeline(
         !cli.exclude_tests,
         &generated_paths,
         cli.include_generated,
+        Some(&on_file_progress),
     )?;
     if let Some(note) = garbage_input_note(&diff_text, &report) {
         progress.note(note.to_string());
