@@ -194,6 +194,10 @@ const GLOSSARY: &[GlossaryEntry] = &[
         term: "jumplist",
         explanation: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it",
     },
+    GlossaryEntry {
+        term: "chg: / api: / ref:",
+        explanation: "Tree row badges: changed symbols, contract changes (signature-changed or deleted, shown in yellow), and fan-in references",
+    },
 ];
 
 /// The whole help overlay's content (module doc comment).
@@ -278,6 +282,17 @@ mod tests {
             .collect();
 
         assert!(terms.contains(&"jumplist"));
+    }
+
+    #[test]
+    fn should_include_a_glossary_entry_for_tree_row_badges() {
+        let terms: Vec<&str> = HELP_CONTENT
+            .glossary
+            .iter()
+            .map(|entry| entry.term)
+            .collect();
+
+        assert!(terms.contains(&"chg: / api: / ref:"));
     }
 
     #[test]

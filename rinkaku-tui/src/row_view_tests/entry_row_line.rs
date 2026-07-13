@@ -16,11 +16,12 @@ fn should_render_plain_text_for_zero_badges_and_no_classification() {
 
 #[test]
 fn should_include_badge_labels_for_nonzero_badges_on_a_dir_row() {
-    // ADR 0013 amendment (2026-07-13): the changed-symbol and fan-in
-    // badges use `chg:` / `ref:` text labels instead of the original
-    // `~` / `^` glyphs. `!{N}` (contract-change count) is
-    // intentionally left as a compact glyph — see `push_badge_spans`'
-    // doc comment for the scope split.
+    // ADR 0013 amendments (2026-07-13): all three badges use text labels
+    // (`chg:` / `api:` / `ref:`) instead of glyphs — the first amendment
+    // relabeled changed-symbol/fan-in, the second (feat/label-contract-
+    // changes-badge) relabeled contract-change from a bare `!` after
+    // user testing showed it read as generic "warning" with no hint of
+    // what changed.
     let node = dir_node(
         "src",
         Badges {
@@ -39,7 +40,7 @@ fn should_include_badge_labels_for_nonzero_badges_on_a_dir_row() {
 
     let line = entry_row_line(&row, "src", &HashMap::new(), false);
 
-    assert_eq!("v src chg:2 !1 ref:3", line_text(&line));
+    assert_eq!("v src chg:2 api:1 ref:3", line_text(&line));
 }
 
 #[test]
