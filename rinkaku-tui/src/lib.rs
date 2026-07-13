@@ -72,7 +72,14 @@ use std::time::Duration;
 /// this one and both run on panic — see `try_init`'s own doc comment: "set
 /// a panic hook that restores the terminal") to disable mouse capture on
 /// panic too, mirroring the guarantee `try_init` already gives raw mode/
-/// alternate screen.
+/// alternate screen. `EnableMouseCapture` failing outright (as opposed to
+/// panicking) is handled the same way: `try_init` has already put the
+/// terminal into raw mode/the alternate screen by that point, so this
+/// function calls `ratatui::restore()` itself on that path before
+/// propagating the error, rather than relying on `?` to skip straight to
+/// the caller (which would strand the terminal mid-setup, since that
+/// particular failure is a plain `Err`, not a panic the installed hook
+/// would catch).
 ///
 /// This is the only function in the crate that touches a real terminal or
 /// blocks on input; everything it calls into (`App`, `row_view`, `ui`,
@@ -124,7 +131,17 @@ pub fn run(
     }));
 
     let mut terminal = ratatui::try_init()?;
-    execute!(std::io::stdout(), event::EnableMouseCapture)?;
+    // Restore explicitly on this `?`'s early-return path (rather than
+    // letting `?` skip straight past the `ratatui::restore()` call below):
+    // `try_init` above already left raw mode/the alternate screen active,
+    // and a plain `EnableMouseCapture` IO failure is not a panic, so the
+    // panic-hook layer just installed does not run either — without this,
+    // that combination would strand the caller's terminal in raw mode/
+    // alternate screen with no cleanup at all.
+    if let Err(err) = execute!(std::io::stdout(), event::EnableMouseCapture) {
+        ratatui::restore();
+        return Err(err);
+    }
     let result = run_app(&mut terminal, report, diff_text, entry_path, repo_root);
     let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
     ratatui::restore();
