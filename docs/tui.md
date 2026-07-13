@@ -18,7 +18,7 @@ only becomes load-bearing when the output would otherwise not be TUI
 
 - **Tree pane (left)** — a directory tree of *changed files*, mirroring
   your repository layout. Rows carry badges: `chg:N` changed symbols,
-  `!N` contract changes (added / removed / signature-changed), `ref:N`
+  `api:N` contract changes (added / removed / signature-changed), `ref:N`
   fan-in (hotspot aggregate); directories in a dependency cycle are
   marked `(cycle)`. Symbol rows show a kind abbreviation (`fn`, `struct`, ...)
   and a classification marker: `+` added, `~` signature-changed, `x`

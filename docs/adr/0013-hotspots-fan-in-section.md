@@ -144,3 +144,32 @@ Change: add `id` as a fourth, final tie-break key
 (`collect_nodes`'s contract), so this fully determines the order in every
 case. Purely an internal ordering fix — `Hotspot`'s fields and the
 Markdown/JSON output shapes are unchanged.
+
+## Amendment (2026-07-13, feat/label-contract-changes-badge)
+
+The 2026-07-13 amendment above deliberately left `!N` (contract-change
+count) as a bare glyph, scoping the `chg:`/`ref:` relabeling to only the
+two badges that shipped alongside ADR 0028's file-size warnings. User
+testing on the resulting tree row (`chg:2 !1 ref:3`) showed this
+prediction was wrong: `!` reads as generic "warning/attention" with no
+hint of *what* changed, unlike `~`/`^` which at least visually echoed
+the diff-marker glyphs (`~` signature-changed) they were replaced for
+being illegible — `!` was never even that. The asymmetry of a labeled
+`chg:`/`ref:` pair next to one unlabeled glyph also made the row read as
+inconsistent on its own.
+
+Change: the contract-change badge is relabeled `api:N`, following the
+same split-span pattern as the other text-label badges (only the
+numeric N is colored, the label stays default). `api` was chosen over a
+literal `contract:` truncation because it is shorter (keeping the
+tree column compact, the same concern that motivated `chg:`/`ref:`
+over spelling out "changed"/"references" in full) while still legible
+on first read — `Badges.contract_changes` counts symbols whose change
+altered their public signature/API surface, which rinkaku's own project
+description (CLAUDE.md's "grasp the API surface of a change") already
+treats as synonymous with "contract" (ADR 0014's own language, "that
+inclusion *is* the contract"). The `!` glyph itself is dropped; `api:N`
+replaces it entirely rather than prefixing it, matching how `chg:`/
+`ref:` fully replaced `~`/`^` rather than combining with them.
+`Badges.contract_changes` (the field name) is unchanged — as with the
+prior amendment, this is purely presentational.

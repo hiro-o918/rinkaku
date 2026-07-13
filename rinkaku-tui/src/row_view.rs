@@ -207,17 +207,16 @@ enum BadgeContext {
 /// quiet).
 ///
 /// Badge encoding rationale:
-/// - The changed-symbol and fan-in badges use text labels
-///   (`chg:` / `ref:`) matching the file-size badges' `lines:` / `warn:`
-///   / `split:` convention (see ADR 0013 amendment 2026-07-13). The
-///   single-glyph prefixes they replaced (`~` for changed, `^` for
+/// - All three badges use text labels (`chg:` / `api:` / `ref:`)
+///   matching the file-size badges' `lines:` / `warn:` / `split:`
+///   convention (see ADR 0013 amendments 2026-07-13 and
+///   feat/label-contract-changes-badge). The single-glyph prefixes they
+///   replaced (`~` for changed, `!` for contract change, `^` for
 ///   fan-in) conveyed no semantic hint on their own to a first-time
-///   reviewer. Only the numeric N picks up cyan; the label stays
-///   default so the eye lands on the number, matching the file-size
-///   badges' split-span pattern.
-/// - `!{N}` (contract-change count) keeps its compact `!` glyph — the
-///   ADR 0013 amendment that added `chg:`/`ref:` explicitly scopes the
-///   rename to `~` and `^`, so `!N` is left untouched.
+///   reviewer — `!` in particular read as generic "warning" rather than
+///   pointing at *what* changed. Only the numeric N picks up cyan; the
+///   label stays default so the eye lands on the number, matching the
+///   file-size badges' split-span pattern.
 /// - The file-size warnings (ADR 0028) deliberately use **text labels
 ///   plus color** rather than an emoji glyph (`⚠` / `🚨`): terminal
 ///   emoji rendering width is inconsistent enough to distort the tree
@@ -237,7 +236,8 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
         if wrote_any_ascii_badge {
             spans.push(Span::raw(" "));
         }
-        spans.push(Span::styled(format!("!{}", badges.contract_changes), cyan));
+        spans.push(Span::raw("api:"));
+        spans.push(Span::styled(badges.contract_changes.to_string(), cyan));
         wrote_any_ascii_badge = true;
     }
     if badges.fan_in > 0 {

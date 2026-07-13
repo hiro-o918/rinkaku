@@ -7,8 +7,9 @@
 //! - `relative_labels` — `relative_labels`' ancestor-prefix stripping
 //! - `file_size_badges` — ADR 0028 file-size warning badges on file and
 //!   dir rows (`lines:N`, `warn:N split:N`)
-//! - `chg_ref_badges` — ADR 0013 amendment (2026-07-13) split-span
-//!   coloring for `chg:N` / `ref:N` badges
+//! - `chg_ref_badges` — ADR 0013 amendments (2026-07-13,
+//!   feat/label-contract-changes-badge) split-span coloring for
+//!   `chg:N` / `api:N` / `ref:N` badges
 
 use super::*;
 use crate::tree::{NodeKind, TreeNode};
