@@ -64,14 +64,25 @@ Implementation:
   plus a pure `AnalysisPhase` enum and `phase_message` function mapping
   each phase to its stderr text — kept pure and unit-tested
   (`rstest` + `pretty_assertions`) per this project's IO-boundary
-  testing convention, with the `indicatif`-touching `Spinner` type kept
-  thin and untested (same treatment `self_update.rs` gives its own
-  process/network IO wrapper).
+  testing convention. The `indicatif`-touching `Spinner` type itself is
+  kept thin (no branching logic beyond forwarding to `ProgressBar`) and
+  left untested, per CLAUDE.md's "no mocking of external processes"
+  test strategy — there is no real terminal to assert against in a unit
+  test, so the pure `phase_message` split is what carries the test
+  coverage instead.
 - `main()` starts one `Spinner` right after the `SelfUpdate` early
   return and threads a `&Spinner` through `run_base_pipeline` and
   `build_resolver` so each can update the message as its own sub-phase
   starts, mirroring the existing `log::info!` call sites at each of
   those same milestones.
+
+An early `?`-propagated error (e.g. a failing `git`/`gh` subprocess call
+inside `run_base_pipeline`/`build_resolver`) drops the `Spinner` before
+`finish_and_clear()` is ever reached. This is not a gap: `indicatif`'s
+`BarState` clears the line on `Drop` unless the bar was already finished,
+using `ProgressFinish::AndClear` — the crate's documented default — so a
+spinner is guaranteed to be cleared from the terminal one way or another
+before the process's error message reaches stderr.
 
 Non-TTY stderr (piped, redirected, CI) needs no special-casing:
 `indicatif`'s `ProgressDrawTarget::stderr()` (the default target
@@ -130,3 +141,7 @@ before the Markdown/TUI output starts.
   private to `main.rs`) gain a `&Spinner` parameter; their existing test
   call sites in `main.rs`'s own test module were updated to pass a
   `Spinner::start(...)` instance. No change to any public crate API.
+- **Error-path cleanup**: no explicit `finish_and_clear()` call is needed
+  on any early-return error path — `indicatif`'s `Drop` impl for
+  `BarState` clears the line by default, so an early `?` return leaves
+  no visual artifact on stderr either.
