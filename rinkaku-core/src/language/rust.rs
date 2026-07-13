@@ -23,8 +23,7 @@ const DEFINITION_QUERY: &str = "\
 /// - `call_expression function: (identifier)` captures free function calls
 ///   (`helper(x)`) and tuple-struct/enum-variant constructors used as
 ///   calls. Method/UFCS calls (`function: (field_expression ...)` for
-///   `x.bar()`, `function: (scoped_identifier ...)` for `Type::method()`)
-///   are intentionally not captured: their callee is not a bare
+///   `x.bar()`) are intentionally not captured: their callee is not a bare
 ///   identifier, and resolving them would need type information v1 does
 ///   not have (ADR 0003).
 /// - `type_identifier` captures every named type reference (parameter
@@ -35,6 +34,15 @@ const DEFINITION_QUERY: &str = "\
 ///   pattern. Rust's primitive types (`i32`, `str`, `bool`, ...) parse as
 ///   the distinct `primitive_type` node kind, so they are already excluded
 ///   by construction rather than needing an explicit exclusion list.
+/// - `scoped_identifier path: (identifier)` captures the left-hand type of
+///   a scoped path — `OutputFormat` in `OutputFormat::Markdown`, `Type` in
+///   a UFCS call's `Type::method()` — without capturing the `name` field
+///   (the method/variant/associated-item on the right), which stays
+///   unresolved for the same reason UFCS callees are excluded above. A
+///   path with three or more segments nests an inner `scoped_identifier`
+///   in `path` instead of a bare identifier, so only its outermost
+///   segment is reached this way; deeper segments are a known, accepted
+///   gap rather than a resolved case.
 /// - `trait_item body: (declaration_list (function_signature_item name:
 ///   (identifier)))` and the same shape for `function_item` capture a
 ///   trait's method names — both the common bodiless `fn name(...);` form
@@ -52,6 +60,7 @@ const REFERENCE_QUERY: &str = "\
 [
   (call_expression function: (identifier) @reference.call)
   (type_identifier) @reference.type
+  (scoped_identifier path: (identifier) @reference.type)
   (trait_item body: (declaration_list (function_signature_item name: (identifier) @reference.call)))
   (trait_item body: (declaration_list (function_item name: (identifier) @reference.call)))
 ]";

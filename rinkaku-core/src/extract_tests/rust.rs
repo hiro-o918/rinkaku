@@ -108,6 +108,71 @@ fn foo() -> i32 {
     assert_eq!(expected, actual);
 }
 
+#[rstest]
+#[case::should_capture_path_type_when_enum_variant_constructed_via_scoped_path(
+    "\
+fn build() -> Format {
+    OutputFormat::Markdown
+}
+",
+    vec!["Format".to_string(), "OutputFormat".to_string()],
+)]
+#[case::should_capture_path_type_but_not_method_name_for_ufcs_call(
+    "\
+fn build() -> Format {
+    Format::default()
+}
+",
+    vec!["Format".to_string()],
+)]
+#[case::should_capture_self_when_used_as_scoped_path(
+    "\
+fn build() -> Format {
+    Self::Default
+}
+",
+    vec!["Format".to_string(), "Self".to_string()],
+)]
+#[case::should_capture_only_the_outermost_module_segment_for_a_three_segment_path(
+    // A three-segment scoped path parses as nested `scoped_identifier`s,
+    // each layer's `path` field holding the next one out; the query only
+    // matches a `scoped_identifier` whose own `path` field is a bare
+    // `identifier`, true only for the innermost `mods::sub` pair.
+    // `Format` sits one level too deep and is not captured — a known,
+    // accepted gap, not an oversight.
+    "\
+fn build() -> Format {
+    mods::sub::Format::default()
+}
+",
+    vec!["Format".to_string(), "mods".to_string()],
+)]
+fn should_collect_scoped_identifier_path_references(
+    #[case] source: &str,
+    #[case] referenced_names: Vec<String>,
+) {
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "build".to_string(),
+        kind: SymbolKind::Function,
+        signature: "fn build() -> Format".to_string(),
+        range: LineRange { start: 1, end: 3 },
+        container: None,
+        referenced_names,
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn should_mark_symbol_as_test_when_nested_inside_cfg_test_mod() {
     let source = "\
