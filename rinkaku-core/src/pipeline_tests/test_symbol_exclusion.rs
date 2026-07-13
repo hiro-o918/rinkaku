@@ -33,8 +33,17 @@ fn should_add_two_numbers() {
 ";
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        false,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected_files: Vec<FileReport> = Vec::new();
     let expected_tests = vec![TestFileSummary {
@@ -101,8 +110,17 @@ fn should_add_two_numbers() {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -131,8 +149,17 @@ func TestFoo(t *testing.T) {
 ";
     let read_file = fake_reader(HashMap::from([("repo_test.go", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        false,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected_files: Vec<FileReport> = Vec::new();
     let expected_tests = vec![TestFileSummary {
@@ -160,8 +187,17 @@ rename to src/new_name.rs
 ";
     let read_file = fake_reader(HashMap::new());
 
-    let report = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        false,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected_files = vec![FileReport {
         path: "src/new_name.rs".to_string(),
@@ -251,8 +287,17 @@ mod tests {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        false,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }

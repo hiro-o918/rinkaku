@@ -376,6 +376,12 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         let generated_paths = resolve_generated_paths(cli, &changed_paths, None);
         log::debug!("analyzing diff");
         progress.set_phase(AnalysisPhase::AnalyzingDiff);
+        // ADR 0033 (amended): same `on_file_progress` shape as the
+        // `analyze_repo`/`build_resolver` calls above — reports
+        // `(files_done, total)` back through `progress` as `analyze_diff`'s
+        // sequential per-file loop works through the diff's changed files.
+        let on_file_progress =
+            |done: usize, total: usize| progress.report_file_progress(done, total);
         let report = rinkaku_core::pipeline::analyze_diff(
             &diff_text,
             read_working_tree_file,
@@ -393,6 +399,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
             !cli.exclude_tests,
             &generated_paths,
             cli.include_generated,
+            Some(&on_file_progress),
         )?;
         if let Some(note) = garbage_input_note(&diff_text, &report) {
             progress.note(note.to_string());

@@ -51,6 +51,7 @@ fn foo(a: i32, b: i32) -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -88,8 +89,17 @@ fn foo(a: i32) -> i32 {
 ";
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let symbol = &report.files[0].symbols[0];
     assert_eq!(None, symbol.classification);
@@ -133,6 +143,7 @@ fn new_name() -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -194,6 +205,7 @@ fn kept() -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -254,6 +266,7 @@ fn foo() -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -297,6 +310,7 @@ fn foo() -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -341,6 +355,7 @@ fn foo(a: i32) -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -393,6 +408,7 @@ fn foo(a: i32, b: i32) -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 
@@ -457,6 +473,7 @@ fn kept() -> i32 {
         true,
         &HashSet::new(),
         true,
+        None,
     )
     .expect("analyze should succeed");
 

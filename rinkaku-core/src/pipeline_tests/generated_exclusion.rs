@@ -28,8 +28,17 @@ index e69de29..4b825dc 100644
     let read_file = fake_reader(HashMap::new());
     let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-    let report = analyze_diff(diff, read_file, None, None, true, &generated_paths, true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &generated_paths,
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected = vec![SkippedFile {
         path: "Cargo.lock".to_string(),
@@ -61,8 +70,17 @@ index 4b825dc..0000000
     let read_file = fake_reader(HashMap::new());
     let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-    let report = analyze_diff(diff, read_file, None, None, true, &generated_paths, true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &generated_paths,
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected = vec![SkippedFile {
         path: "Cargo.lock".to_string(),
@@ -91,8 +109,17 @@ fn foo(a: i32) -> i32 {
 ";
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected: Vec<SkippedFile> = Vec::new();
     assert_eq!(expected, report.skipped);
@@ -116,8 +143,17 @@ package models
 ";
     let read_file = fake_reader(HashMap::from([("models/user.go", source)]));
 
-    let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        false,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected_files: Vec<FileReport> = Vec::new();
     let expected_skipped = vec![SkippedFile {
@@ -182,8 +218,17 @@ func Foo() int { return 2 }
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -242,8 +287,17 @@ fn foo(a: i32) -> i32 {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        false,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -312,8 +366,17 @@ index e69de29..4b825dc 100644
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
-        .expect("analyze should succeed");
+    let actual = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        false,
+        None,
+    )
+    .expect("analyze should succeed");
 
     assert_eq!(expected, actual);
 }
@@ -340,8 +403,17 @@ index e69de29..4b825dc 100644
     let read_file = fake_reader(HashMap::new());
     let generated_paths: HashSet<String> = ["Cargo.lock".to_string()].into_iter().collect();
 
-    let report = analyze_diff(diff, read_file, None, None, true, &generated_paths, false)
-        .expect("analyze should succeed");
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &generated_paths,
+        false,
+        None,
+    )
+    .expect("analyze should succeed");
 
     let expected = vec![SkippedFile {
         path: "Cargo.lock".to_string(),
