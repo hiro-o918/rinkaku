@@ -118,23 +118,65 @@ if [ -n "${MERMAID_PATH:-}" ] && [ -f "${MERMAID_PATH}" ]; then
   fi
 fi
 
-# No legend appended here (ADR 0039): the diagram itself now carries a
-# self-describing `Legend` subgraph, styled with its own real `classDef`s,
-# so this script has nothing to compose alongside it — a hand-written
-# prose legend risked drifting out of sync with the actual node styles
-# (the exact problem ADR 0039 fixes), which a legend built from those same
-# `classDef`s cannot do. The oversized-mermaid fallback below has no
-# legend either, since there is no diagram at all in that case.
+# Hand-maintained class-name -> description text (ADR 0040), the one part
+# of the legend that can't be derived from the diagram itself. `case`, not
+# `declare -A`, for bash 3.2 compatibility (macOS's stock `/bin/bash`).
+legend_description() {
+  case "$1" in
+  added) echo "added — new symbol" ;;
+  changed) echo "API changed — signature changed" ;;
+  removed) echo "removed (dashed border in graph)" ;;
+  fan-in) echo "fan-in — highly referenced, thick border, label shows (in:N)" ;;
+  *) echo "" ;;
+  esac
+}
+
+# Builds the Markdown Legend section (ADR 0040) from `classDef` lines in
+# `$1` (raw mermaid source), so its colors can't drift from the diagram's
+# real styles. Swatches use GitHub's inline math rendering
+# (`$`{\color{#hex}\blacksquare}`$`) to show the actual color.
+render_legend() {
+  local mermaid_source="$1"
+  local class_defs
+  class_defs=$(printf '%s\n' "${mermaid_source}" | grep -oE 'classDef[[:space:]]+[A-Za-z0-9_-]+[[:space:]]+fill:#[0-9a-fA-F]{6}' || true)
+
+  if [ -z "${class_defs}" ]; then
+    return 0
+  fi
+
+  local rows=""
+  local class_name hex description
+  while IFS= read -r line; do
+    class_name=$(printf '%s\n' "${line}" | sed -E 's/^classDef[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]+.*/\1/')
+    hex=$(printf '%s\n' "${line}" | sed -E 's/.*fill:#([0-9a-fA-F]{6})/\1/')
+    description=$(legend_description "${class_name}")
+    if [ -z "${description}" ]; then
+      echo "::warning::no legend description for mermaid classDef '${class_name}'; skipping its Legend row" >&2
+      continue
+    fi
+    rows="${rows}| \$\`{\\color{#${hex}}\\blacksquare}\`\$ | ${description} |
+"
+  done <<<"${class_defs}"
+
+  if [ -z "${rows}" ]; then
+    return 0
+  fi
+
+  printf '\n### Legend\n\n| | Meaning |\n|---|---|\n%s' "${rows}"
+}
+
 mermaid_section=""
 if [ -n "${mermaid_content}" ] && [ "${mermaid_oversized}" -eq 1 ]; then
   mermaid_section="
 ${mermaid_content}
 "
 elif [ -n "${mermaid_content}" ]; then
+  legend_section=$(render_legend "${mermaid_content}")
   mermaid_section="
 \`\`\`mermaid
 ${mermaid_content}
 \`\`\`
+${legend_section}
 "
 fi
 
