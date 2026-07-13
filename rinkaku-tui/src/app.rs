@@ -31,10 +31,14 @@ pub enum InputKey {
     /// its target changes.
     Up,
     Down,
-    /// Space, or Enter on a directory row: expand/collapse a directory row
-    /// (`App::handle_key`'s doc comment) — never changes focus. Kept as a
-    /// distinct variant from [`Self::Open`] (ADR 0020) because Space must
-    /// never move focus even on a file/symbol row, only Enter does.
+    /// Space while [`Focus::Tree`], or Enter on a directory row: expand/
+    /// collapse a directory row (`App::handle_key`'s doc comment) — never
+    /// changes focus. A no-op while [`Focus::Right`] (matching
+    /// [`Self::Open`]'s own Tree-only reach, ADR 0020 finding: this used to
+    /// fire regardless of focus, silently toggling the tree cursor's row
+    /// behind whichever right-pane content was actually on screen). Kept as
+    /// a distinct variant from [`Self::Open`] because Space must never move
+    /// focus even on a file/symbol row, only Enter does.
     Select,
     /// Enter on a file/symbol row: opens the source view on a symbol row
     /// (unchanged from before ADR 0020) and additionally moves focus to
@@ -555,9 +559,26 @@ impl App {
             (Screen::Entry, Focus::Right, InputKey::Down) => {
                 self.right_pane_scroll = self.right_pane_scroll.saturating_add(1);
             }
-            (Screen::Entry, _, InputKey::Select) => {
+            (Screen::Entry, Focus::Tree, InputKey::Select) => {
                 self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
             }
+            // Gated on `Focus::Tree`, matching `InputKey::Open`'s own focus
+            // requirement (finding: Space used to fire regardless of focus,
+            // inconsistent with Enter's own Tree-only reach for the same
+            // "act on the row under the tree cursor" family of keys).
+            // While `Focus::Right`, the tree cursor is always parked on
+            // whichever file/symbol row is being previewed (only a
+            // File/Symbol row's `Open` moves focus to `Right` at all, never
+            // a `Dir` row's — see the `Open` arm below), so this can never
+            // cut off a "collapse a directory while previewing its content"
+            // workflow; there is no reachable state where the parked cursor
+            // is a directory row here. What it *does* remove is Space
+            // silently toggling that file/symbol row's own expand state
+            // behind the currently-visible right pane — a change with no
+            // visible effect until the user returns to `Focus::Tree`
+            // (`h`/Esc), which is the kind of spooky-action-at-a-distance
+            // this gate closes off.
+            (Screen::Entry, Focus::Right, InputKey::Select) => {}
             (Screen::Entry, _, InputKey::Open) => {
                 let rows = self.nav.rows(&self.tree);
                 match rows.get(self.nav.cursor()).map(|row| &row.node.kind) {
@@ -1416,6 +1437,41 @@ mod tests {
         let app = app.handle_key(InputKey::Select);
 
         assert_eq!(Focus::Tree, app.focus());
+    }
+
+    #[test]
+    fn should_not_toggle_expand_when_select_is_pressed_while_right_focused() {
+        // Finding-5 regression: Space used to fire regardless of focus, so
+        // pressing it while Focus::Right silently toggled the expand state
+        // of whichever file/symbol row the tree cursor was parked on (the
+        // one currently being previewed in the right pane) — a change with
+        // no visible effect until the user returned to Focus::Tree. Gated
+        // to match InputKey::Open's own Tree-only reach for the same
+        // "act on the row under the tree cursor" family of keys.
+        let report = report_with_one_symbol();
+        let app = App::new(&report); // cursor on the "lib.rs" file row
+        let rows_before: Vec<String> = app
+            .nav()
+            .rows(app.tree())
+            .iter()
+            .map(|r| r.node.path.clone())
+            .collect();
+        let app = app.handle_key(InputKey::Open); // focus -> Right
+        assert_eq!(Focus::Right, app.focus());
+
+        let app = app.handle_key(InputKey::Select);
+
+        assert_eq!(Focus::Right, app.focus());
+        let rows_after: Vec<String> = app
+            .nav()
+            .rows(app.tree())
+            .iter()
+            .map(|r| r.node.path.clone())
+            .collect();
+        assert_eq!(
+            rows_before, rows_after,
+            "Select while Right-focused must not change which rows are visible"
+        );
     }
 
     #[test]

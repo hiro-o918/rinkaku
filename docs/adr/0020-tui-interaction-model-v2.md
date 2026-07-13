@@ -68,8 +68,11 @@ rather than always targeting the tree:
   unchanged). `Enter` on a file/symbol row *additionally* moves focus to
   `Right` — drilling into a row's content is also a focus change, since
   that is the point of pressing Enter on a leaf. `Space` toggles
-  expand/collapse on any row regardless of kind, exactly as today
-  (unaffected by this ADR).
+  expand/collapse on any row regardless of kind, same as today, and is
+  scoped to `Focus::Tree` for the same reason `Enter`'s row-acting half
+  is: a no-op while `Focus::Right`, rather than silently toggling
+  whichever file/symbol row the cursor is parked behind the right pane
+  currently being viewed.
 - **Right focus**: `j`/`k` scroll the right pane by one line, reusing
   the existing `right_pane_scroll` state and its clamp-at-draw-time
   design (PR #54) rather than introducing a second scroll mechanism.

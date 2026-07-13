@@ -346,7 +346,13 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
         // Space always means "expand/collapse", never "drill in" — kept
         // distinct from Enter's own `InputKey::Open` (ADR 0020) so Space on
-        // a file/symbol row never moves focus.
+        // a file/symbol row never moves focus. Translated unconditionally
+        // here regardless of `app.focus()`, same as every other key this
+        // function maps context-free — `App::handle_key`'s own
+        // `Focus::Tree`-only arm for `Select` is where the actual
+        // Tree-focus requirement lives (mirroring how `NextHunk`/`PrevHunk`
+        // are also translated unconditionally but only acted on under
+        // certain conditions elsewhere).
         KeyCode::Char(' ') => Some(InputKey::Select),
         KeyCode::Enter => Some(InputKey::Open),
         KeyCode::Char('e') | KeyCode::Char('E') => Some(InputKey::ExpandAll),
