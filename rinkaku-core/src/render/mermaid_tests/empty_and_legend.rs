@@ -38,18 +38,15 @@ fn should_render_class_defs_with_no_legend_subgraph_when_graph_has_symbols() {
         }],
     );
 
+    let expected = concat!(
+        "flowchart LR\n",
+        "  subgraph sub0[\"src/lib.rs\"]\n",
+        "    n0[\"foo\"]\n",
+        "  end\n",
+    )
+    .to_string()
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
-    assert!(
-        actual.ends_with(CLASS_DEFS),
-        "expected output to end with the classDef trailer, got:\n{actual}"
-    );
-    assert!(
-        !actual.contains("subgraph Legend"),
-        "expected no in-diagram Legend subgraph (ADR 0040), got:\n{actual}"
-    );
-    assert!(
-        !actual.contains("legend_"),
-        "expected no legend_* node ids (ADR 0040), got:\n{actual}"
-    );
+    assert_eq!(expected, actual);
 }
