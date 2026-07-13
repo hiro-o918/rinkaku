@@ -600,7 +600,7 @@ instead of reconstructing the change's structure itself.
 3. Run an **independent pass without the map** alongside the map-assisted
    one. Across repeated trials, the two passes consistently surface
    different findings rather than one being a superset of the other — see
-   [`docs/experiments/0001-map-assisted-llm-review.md`](docs/experiments/0001-map-assisted-llm-review.md).
+   [`docs/experiments/0001-map-assisted-llm-review/`](docs/experiments/0001-map-assisted-llm-review/README.md).
 
 4. Whichever pass(es) you run, always add a **dynamic verification**
    step: build and actually execute the changed code, including
