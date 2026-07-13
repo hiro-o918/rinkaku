@@ -1,7 +1,8 @@
 # Experiment 0001: rinkaku change maps as an entry point for LLM code review
 
-- Status: 17 rounds complete (index/conclusions cover rounds 1-10 and
-  17; rounds 11-16 are recorded under `rounds/` but not yet folded in)
+- Status: 22 rounds complete (index/conclusions cover rounds 1-10, 17,
+  and 22; rounds 11-16 and 18-21 are recorded under `rounds/` but not
+  yet folded in)
 - Date: 2026-07-13
 
 ## Hypothesis
@@ -68,9 +69,11 @@ that file so future rounds are conflict-free:
 | [009](rounds/009.md) | TUI entry tree: skipped/test-only files | Zero overlap, zero shared theme — the cleanest complementary-findings round yet |
 | [010](rounds/010.md) | This PR's own diff: `--format mermaid` + GitHub Action | Mostly non-Rust surface; map's best signal was naming its own blind spot; neither arm caught a first-PR bootstrap bug the orchestrator found post-merge |
 | [017](rounds/017.md) | Minimal `env_logger` config change in `fn main` (PR #79) | Map was correctly silent on a body-only diff whose entire risk lives in rendered log text, not any signature; reviewer fell back to manual consumer tracing, dynamic verification carried the confirmation |
+| [022](rounds/022.md) | Tests excluded from entry-tree ranking + trailing Tests section (ADR 0035, PR #112) | Map caught two review-blockers as pure bookkeeping (stale ADR status, a mid-PR file-size warning); dynamic verification found a pre-existing bug (`is_test_path` blind to this repo's own `*_tests/` convention) that no unit test in the PR's 1121-test suite could reach |
 
-Rounds 11-16 are recorded under `rounds/` but not yet folded into this
-index; that backlog is tracked separately from this round's follow-up.
+Rounds 11-16 and 18-21 are recorded under `rounds/` but not yet folded
+into this index; that backlog is tracked separately from this round's
+follow-up.
 
 ## Threats to validity
 
@@ -89,8 +92,11 @@ index; that backlog is tracked separately from this round's follow-up.
   tool-call/wall-clock metrics collected); it records the review this
   PR actually received before merge, in the per-round format used for
   continuity, not as comparable experimental data.
+- Round 22, like round 17, was a single-reviewer session recording the
+  review a PR actually received before merge, not a harness-timed A/B
+  pair; no token/tool-call/wall-clock metrics were collected.
 
-## Conclusions (after rounds 1-10 and 17)
+## Conclusions (after rounds 1-10, 17, and 22)
 
 - The map is a **complement, not a substitute**. Across ten rounds,
   neither arm has ever produced a superset of the other's findings;
@@ -151,6 +157,27 @@ index; that backlog is tracked separately from this round's follow-up.
   what neither review arm's prompt currently does: quantitative
   measurement, distrust of self-reported compliance, and verifying
   a merged workflow's actual first live run.
+- **The map's value extends to mechanical compliance checks, not just
+  logic-level attention routing** (round 22): a stale ADR status field
+  and a file-size warning crossing this repo's own warn threshold
+  mid-PR were both caught as pure bookkeeping the report already
+  tracks, resolved without any deep code reading — consistent with
+  CLAUDE.md's own framing of the file-size warning as "authoritative,"
+  not merely advisory.
+- **The map can be defeated by its own coverage heuristics being
+  wrong, not just incomplete** (round 22, sharpening rounds 7-9's
+  "wrong value on a data-flow wire" one level further): a test-only
+  helper function outranked real production hotspots in the fan-in
+  report because the underlying `is_test_path` classification silently
+  misclassified an entire directory convention (`*_tests/`) as
+  production code — a defect in what feeds the map, not in how the map
+  presents what it's given. No unit test in the PR's own 1121-test
+  suite could have caught this, because every test fixture in that
+  suite hand-sets its `is_test` flags rather than deriving them from a
+  real path through `is_test_path`; only running the actual report
+  generator against the repository's own real directory layout
+  exercised the gap, reinforcing dynamic verification's role as the
+  check no amount of unit testing substitutes for.
 
 ## Next
 
@@ -190,3 +217,9 @@ index; that backlog is tracked separately from this round's follow-up.
   isolate whether the attention-routing benefit this round attributes
   to the map specifically requires the full report or would come from
   just knowing the coverage boundary.
+- Round 22's `is_test_path` gap (issue #114 — the Rust `LanguageSupport`
+  impl doesn't recognize this repo's own `*_tests/` directory
+  convention as test code) is itself a candidate future subject: once
+  fixed, a follow-up round could confirm the fan-in hotspot list no
+  longer surfaces `nav_tests`/`tree_tests`/`order_tests` helper
+  functions ahead of real production hotspots.
