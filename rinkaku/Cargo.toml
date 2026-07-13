@@ -8,6 +8,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Condense PR diffs into signatures and their dependencies for LLM-friendly review"
+documentation = "https://docs.rs/rinkaku"
 readme = "../README.md"
 keywords = ["diff", "tree-sitter", "code-review", "llm"]
 categories = ["command-line-utilities", "development-tools"]
