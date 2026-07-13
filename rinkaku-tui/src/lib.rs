@@ -166,10 +166,11 @@ fn run_app(
         diff_shape::DiffPaneContent::Empty
     };
     // ADR 0027 decision 2: apply the same "auto-scroll to the focused
-    // symbol's section" rule the loop below runs after every diff-content
-    // recompute, so `--tui` startup on a symbol row (e.g. `App::new`'s
-    // default cursor when the first row happens to be a symbol) already
-    // opens with the correct scroll offset rather than an unrelated 0.
+    // symbol's section" rule the loop below runs on selection change, so
+    // `--tui` startup on a symbol row (e.g. `App::new`'s default cursor
+    // when the first row happens to be a symbol) already opens with the
+    // correct scroll offset rather than an unrelated 0.
+    let mut last_diff_focus: Option<app::DiffFocus> = app.selected_diff_focus(report);
     if let Some(target_scroll) = auto_scroll_for_diff_focus(&app, report, &diff_pane_content) {
         app = app.with_right_pane_scroll(target_scroll);
     }
@@ -319,19 +320,26 @@ fn run_app(
                     &diff_hunks,
                     app.selected_diff_target(report).as_ref(),
                 );
-                // ADR 0027 decision 2: after the shaped content is rebuilt
-                // for the new selection, auto-scroll the diff pane to the
-                // focused symbol's section start (if any). `App::handle_key`
-                // has already reset `right_pane_scroll` to 0 as part of its
-                // blanket rule (see that method's `preserve_scroll`
-                // exception list) — this override runs after that, so the
-                // reset-then-retarget order matches every other
-                // selection-derived recompute in this loop (blast radius,
-                // diff content).
-                if let Some(target_scroll) =
-                    auto_scroll_for_diff_focus(&app, report, &diff_pane_content)
-                {
-                    app = app.with_right_pane_scroll(target_scroll);
+                // ADR 0027 decision 2: auto-scroll to the focused symbol's
+                // section start only when the focus *actually changed* since
+                // the previous key. `should_recompute_diff_pane_content` is
+                // `true` on every key while Diff is showing (it just gates
+                // the cache rebuild, not a selection-change signal), so
+                // firing auto-scroll unconditionally here would overwrite
+                // the reviewer's own `j`/`k`/`Ctrl-d` scrolling immediately
+                // after they pressed it (dogfooding finding: Enter into
+                // Focus::Right + subsequent `j`/`k` had no visible effect
+                // because this override snapped back to the section start
+                // every keystroke). Only when the tree cursor lands on a
+                // different symbol do we retarget the pane.
+                let next_focus = app.selected_diff_focus(report);
+                if next_focus != last_diff_focus {
+                    last_diff_focus = next_focus;
+                    if let Some(target_scroll) =
+                        auto_scroll_for_diff_focus(&app, report, &diff_pane_content)
+                    {
+                        app = app.with_right_pane_scroll(target_scroll);
+                    }
                 }
             }
         }

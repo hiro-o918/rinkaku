@@ -1015,6 +1015,22 @@ impl App {
             // is a real pane switch to Diff and must still fall through to
             // the blanket reset below.
             (Screen::Entry, Focus::Right, RightPane::Diff, InputKey::Open)
+                // ADR 0027 dogfooding finding: Enter from Tree focus onto a
+                // file/symbol row already showing Diff does not visibly
+                // change the pane's content (Diff was already the current
+                // right pane, and the auto-scroll for the row already ran
+                // when the cursor first landed on it) — it just moves
+                // focus. Resetting `right_pane_scroll` to 0 here would
+                // wipe both the auto-scroll offset and any subsequent
+                // manual scrolling the reviewer did before pressing Enter,
+                // dropping them back at the top of the file instead of
+                // the section they were reading. The other `Focus::Tree,
+                // Open` cases — a directory row (expand/collapse only, no
+                // focus change, dispatched via `Action::ToggleExpand`
+                // below) and the Detail/BlastRadius→Diff swap — do change
+                // the pane's content and must still fall through to the
+                // reset.
+                | (Screen::Entry, Focus::Tree, RightPane::Diff, InputKey::Open)
         );
         // Set by the `JumpBack`/`JumpForward` arms below when they actually
         // restore a jumplist entry's own scroll offset — that restored
@@ -2641,6 +2657,35 @@ mod tests {
         let app = app.handle_key(InputKey::ToggleDiff);
 
         assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_preserve_right_pane_scroll_when_open_pressed_from_tree_focus_on_diff_pane() {
+        // ADR 0027 dogfooding finding: pressing Enter from Tree focus onto
+        // a file/symbol row that is already showing on the Diff pane must
+        // not wipe `right_pane_scroll` — the pane's content is not
+        // changing, only the focus is, so the reviewer's reading position
+        // (whether set by the previous auto-scroll to the section start,
+        // or by any manual `j`/`k` they did after that) must survive the
+        // focus swap. Without this, `run_app`'s "only auto-scroll on focus
+        // change" rule leaves nothing to re-derive the scroll from and the
+        // pane snaps back to line 0.
+        let report = report_with_one_symbol();
+        // Start on Diff pane (the default per ADR 0020), cursor on the
+        // symbol row, focus Right. Manually seed a nonzero scroll to
+        // represent an auto-scroll offset or a manual `j` press.
+        let app = App::new(&report)
+            .handle_key(InputKey::Down) // cursor -> the symbol row
+            .with_right_pane_scroll(4);
+        assert_eq!(Focus::Tree, app.focus());
+        assert_eq!(RightPane::Diff, app.right_pane());
+        assert_eq!(4, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Open);
+
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(RightPane::Diff, app.right_pane());
+        assert_eq!(4, app.right_pane_scroll());
     }
 
     #[test]
