@@ -18,11 +18,22 @@ path = "src/lib.rs"
 
 [dependencies]
 rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
-# crossterm itself is not a direct dependency: every use goes through
-# ratatui's own `ratatui::crossterm` re-export, which pins the matching
-# version internally (see ratatui-crossterm) — declaring it here too would
-# just be a second, redundant version to keep in sync.
 ratatui = { workspace = true }
+# Declared directly (unlike most crossterm usage, which goes through
+# ratatui's own `ratatui::crossterm` re-export — see that re-export's use
+# sites in this crate) solely to turn on the `use-dev-tty` feature. Cargo's
+# feature unification then activates it on the single shared crossterm
+# instance ratatui also depends on, since a workspace only ever builds one
+# copy of a given dependency version. Without it, crossterm's default
+# (`mio`-based) Unix event source fails outright with "Failed to initialize
+# input reader" whenever stdin is not a TTY — e.g. `gh pr diff 123 |
+# rinkaku`, the README's own primary usage example — because it tries to
+# poll stdin itself rather than falling back to `/dev/tty` for keyboard
+# input the way `use-dev-tty`'s reader does. Unix-only feature (reads
+# `/dev/tty`); CI only runs ubuntu/macos (see workflow files), so this does
+# not need a Windows fallback today. See docs/adr/0016 for the TUI stack
+# this extends.
+crossterm = { version = "0.29", default-features = false, features = ["use-dev-tty"] }
 unicode-width = { workspace = true }
 # Diff-pane syntax highlighting (ADR 0018): a TUI-only presentation
 # concern, so the grammar crates are duplicated here rather than adding a

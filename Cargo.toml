@@ -27,9 +27,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 self_update = { version = "0.42", default-features = false, features = ["archive-tar", "compression-flate2", "rustls"] }
 # Only rinkaku-tui depends on this (ADR 0016 decision 2): rinkaku-core's
-# dependency set stays untouched. crossterm is not declared separately —
-# rinkaku-tui uses ratatui's own `ratatui::crossterm` re-export instead of
-# depending on crossterm directly (see rinkaku-tui/Cargo.toml).
+# dependency set stays untouched. Most crossterm usage goes through
+# ratatui's own `ratatui::crossterm` re-export rather than a direct
+# dependency; rinkaku-tui/Cargo.toml also declares crossterm directly, but
+# only to opt into its `use-dev-tty` feature (ADR 0016's addendum on piped
+# stdin) — see that file's own comment for why.
 ratatui = "0.30"
 # Already pulled in transitively by ratatui (its own line-wrapping widget
 # uses it), but declared directly here too: rinkaku-tui's own `wrap_lines`

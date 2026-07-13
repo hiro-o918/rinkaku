@@ -137,3 +137,39 @@ free):**
   repository default-input-mode change, are left open and settled (the
   latter via its own ADR) at implementation time rather than blocking
   this decision.
+
+## Addendum: `crossterm`'s `use-dev-tty` feature (2026-07-13)
+
+Bare `rinkaku` (stdin attached to a terminal) worked from the start, but
+`gh pr diff 123 | rinkaku` — the README's own primary usage example, and
+ADR 0017's stdin input mode — could not open the TUI at all: it consumes
+stdin to read the diff, and `crossterm`'s default event source (the `mio`
+backend) tries to poll stdin itself for keyboard input rather than
+falling back to the controlling terminal, so as soon as stdin is a pipe
+rather than a TTY it fails outright with "Failed to initialize input
+reader" (verified with a minimal `crossterm::event::read()` reproduction,
+independent of any `rinkaku-tui` code). `--tui` explicitly requested
+alongside a piped diff hit the same failure.
+
+Fix: `rinkaku-tui/Cargo.toml` now depends on `crossterm` directly (in
+addition to the `ratatui::crossterm` re-export used everywhere else in
+the crate) solely to enable its `use-dev-tty` feature. Cargo's feature
+unification applies that feature to the single shared `crossterm`
+instance ratatui also depends on — there is no second copy of the crate.
+With `use-dev-tty`, `crossterm`'s Unix event source opens `/dev/tty`
+directly for keyboard input whenever stdin is not a TTY, independent of
+what stdin is being used for, which is exactly the piped-diff case.
+Verified interactively (`tmux`): a piped diff plus a raw `crossterm`
+probe blocks correctly on `/dev/tty` and reports real key presses once
+this feature is enabled, versus erroring immediately without it.
+
+`use-dev-tty` is Unix-only (it is not defined for the Windows backend);
+accepted because CI (`.github/workflows/*.yaml`) only runs `ubuntu-latest`
+and `macos-latest` today, so there is no Windows target to regress. It
+pulls in `filedescriptor` and `rustix/process` as additional transitive
+dependencies — both small, no further action needed.
+
+Alternative considered: closing and reopening stdin from `/dev/tty` by
+hand in `rinkaku-tui::run` before starting the event loop. Rejected as
+strictly more code for the same outcome `use-dev-tty` already implements
+and tests upstream in `crossterm` itself.
