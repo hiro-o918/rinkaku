@@ -19,12 +19,12 @@ use serde::Serialize;
 /// Line-count threshold above which a file is reported as
 /// [`FileSizeSeverity::Warn`] (ADR 0028). The check is strictly greater:
 /// a file at exactly [`WARN_LINE_THRESHOLD`] lines is not warned about.
-pub const WARN_LINE_THRESHOLD: usize = 1500;
+pub const WARN_LINE_THRESHOLD: usize = 1000;
 
 /// Line-count threshold above which a file is reported as
 /// [`FileSizeSeverity::Split`] (ADR 0028). Strictly greater, same as
 /// [`WARN_LINE_THRESHOLD`].
-pub const SPLIT_LINE_THRESHOLD: usize = 2000;
+pub const SPLIT_LINE_THRESHOLD: usize = 1500;
 
 /// Severity of a [`FileSizeWarning`] (ADR 0028): `Warn` = the file has
 /// crossed the "start planning the split" watch threshold, `Split` = the

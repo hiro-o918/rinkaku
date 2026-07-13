@@ -369,8 +369,8 @@ fn should_render_file_size_warnings_section_when_warnings_are_present() {
 
 ## File size warnings
 
-- 🚨 `b.rs` (2500 lines) — over the 2000-line split threshold
-- ⚠ `a.rs` (1600 lines) — over the 1500-line watch threshold; consider splitting
+- 🚨 `b.rs` (2500 lines) — over the 1500-line split threshold
+- ⚠ `a.rs` (1600 lines) — over the 1000-line watch threshold; consider splitting
 
 ## Definitions
 
@@ -507,7 +507,7 @@ fn should_place_file_size_warnings_between_high_fan_in_symbols_and_definitions()
 
 ## File size warnings
 
-- 🚨 `store/items.go` (2500 lines) — over the 2000-line split threshold
+- 🚨 `store/items.go` (2500 lines) — over the 1500-line split threshold
 
 ## Definitions
 
