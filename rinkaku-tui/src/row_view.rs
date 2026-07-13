@@ -18,6 +18,7 @@ use crate::tree::{Badges, NodeKind, SymbolRef};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rinkaku_core::extract::{Classification, SymbolKind};
+use rinkaku_core::file_size::FileSizeSeverity;
 use std::collections::HashMap;
 
 /// Indent width per tree depth level, in columns.
@@ -57,7 +58,7 @@ pub fn entry_row_line(
                 Style::default().add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw(" "));
-            spans.push(badges_span(&row.node.badges));
+            push_badge_spans(&mut spans, &row.node.badges, BadgeContext::Dir);
             if in_cycle {
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(
@@ -72,7 +73,7 @@ pub fn entry_row_line(
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
             spans.push(Span::raw(" "));
-            spans.push(badges_span(&row.node.badges));
+            push_badge_spans(&mut spans, &row.node.badges, BadgeContext::File);
             // `skip_reason` is mutually exclusive with `test_symbol_count`
             // (`crate::tree::TreeNode::skip_reason`'s own doc comment: a
             // skipped file has no `FileReport`/`TestFileSummary` entry of
@@ -186,24 +187,106 @@ pub fn relative_labels(rows: &[Row<'_>]) -> Vec<String> {
         .collect()
 }
 
-/// The compact badge summary shared by `Dir`/`File` rows: changed-symbol
-/// count, contract-change count, and fan-in, each only shown when nonzero
-/// (an all-zero badge set renders as an empty span, keeping quiet rows
-/// quiet) — ASCII-only glyphs (`~`/`!`/`^`) chosen over Unicode/emoji for
-/// terminal-compatibility (this implementation's own decision, see the
-/// README's Interactive TUI section for the legend).
-fn badges_span(badges: &Badges) -> Span<'static> {
-    let mut parts = Vec::new();
+/// Which side of the tree a badge row is on — `Dir` rows render the
+/// aggregated file-size warning counts (`warn:N split:N`), `File` rows
+/// render this file's own `lines:N` instead. `NodeKind::Symbol` never
+/// reaches badge rendering (symbol rows have their own layout, no badge
+/// summary), so this only needs the two cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BadgeContext {
+    Dir,
+    File,
+}
+
+/// Appends the compact badge summary for a `Dir`/`File` row to `spans`:
+/// changed-symbol count, contract-change count, fan-in, and (per
+/// `context`) either the file-size-warning aggregate (`warn:N split:N`
+/// on a directory) or this file's own line count (`lines:N` on a file
+/// row). Each badge is only emitted when its underlying counter is
+/// nonzero (an all-zero badge set adds nothing, keeping quiet rows
+/// quiet).
+///
+/// Badge encoding rationale:
+/// - The count/fan-in badges use ASCII-only glyphs (`~`/`!`/`^`), chosen
+///   over Unicode/emoji for terminal-compatibility (see the README's
+///   Interactive TUI section for the legend), and are all cyan.
+/// - The file-size warnings (ADR 0028) deliberately use **text labels
+///   plus color** rather than an emoji glyph (`⚠` / `🚨`): terminal
+///   emoji rendering width is inconsistent enough to distort the tree
+///   column layout, and the color already encodes severity. Only the
+///   numeric N portion is colored (yellow for Warn, red for Split); the
+///   `lines:` / `warn:` / `split:` label stays default so the eye lands
+///   on the number.
+fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: BadgeContext) {
+    let mut ascii_parts = Vec::new();
     if badges.changed_symbols > 0 {
-        parts.push(format!("~{}", badges.changed_symbols));
+        ascii_parts.push(format!("~{}", badges.changed_symbols));
     }
     if badges.contract_changes > 0 {
-        parts.push(format!("!{}", badges.contract_changes));
+        ascii_parts.push(format!("!{}", badges.contract_changes));
     }
     if badges.fan_in > 0 {
-        parts.push(format!("^{}", badges.fan_in));
+        ascii_parts.push(format!("^{}", badges.fan_in));
     }
-    Span::styled(parts.join(" "), Style::default().fg(Color::Cyan))
+    spans.push(Span::styled(
+        ascii_parts.join(" "),
+        Style::default().fg(Color::Cyan),
+    ));
+
+    // File-size warning badges (ADR 0028) — text label + color, no
+    // emoji. Rendered as separate spans so only the numeric N picks up
+    // the severity color.
+    match context {
+        BadgeContext::File => {
+            if let (Some(severity), Some(line_count)) =
+                (badges.own_file_size_severity, badges.own_file_line_count)
+            {
+                // Leading space only when the cyan span above wrote
+                // something — otherwise the row would gain a stray gap.
+                spans.push(Span::raw(if ascii_parts.is_empty() { "" } else { " " }));
+                spans.push(Span::raw("lines:"));
+                spans.push(Span::styled(
+                    line_count.to_string(),
+                    Style::default().fg(severity_color(severity)),
+                ));
+            }
+        }
+        BadgeContext::Dir => {
+            let has_warn = badges.file_size_warn_count > 0;
+            let has_split = badges.file_size_split_count > 0;
+            if has_warn || has_split {
+                spans.push(Span::raw(if ascii_parts.is_empty() { "" } else { " " }));
+            }
+            if has_warn {
+                spans.push(Span::raw("warn:"));
+                spans.push(Span::styled(
+                    badges.file_size_warn_count.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            if has_warn && has_split {
+                spans.push(Span::raw(" "));
+            }
+            if has_split {
+                spans.push(Span::raw("split:"));
+                spans.push(Span::styled(
+                    badges.file_size_split_count.to_string(),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+        }
+    }
+}
+
+/// Maps a [`FileSizeSeverity`] to its display color — yellow for `Warn`,
+/// red for `Split`. Shared by the file-row `lines:N` badge and the
+/// directory-row `warn:N` / `split:N` aggregates so both surfaces agree
+/// on the color legend.
+fn severity_color(severity: FileSizeSeverity) -> Color {
+    match severity {
+        FileSizeSeverity::Warn => Color::Yellow,
+        FileSizeSeverity::Split => Color::Red,
+    }
 }
 
 /// A `File` row's label style: dimmed for a skipped file (nothing was
@@ -398,6 +481,7 @@ mod tests {
                 changed_symbols: 2,
                 contract_changes: 1,
                 fan_in: 3,
+                ..Badges::default()
             },
             vec![file_node("src/a.rs", Badges::default())],
         );
@@ -783,5 +867,157 @@ mod tests {
             ],
             labels
         );
+    }
+
+    // File-size warning badges (ADR 0028): a file row carrying a warning
+    // renders `lines:{N}` with the numeric N colored by severity (yellow
+    // for Warn, red for Split), and a directory row aggregates the
+    // per-severity counts as `warn:N split:N` with the numbers colored
+    // the same way. No emoji glyphs — the color already conveys severity
+    // and emoji rendering width is inconsistent across terminals.
+
+    /// Locates the styled span whose visible text is `content` in `line`,
+    /// returning its foreground color (or `None` when the span exists but
+    /// has no explicit fg, matching ratatui's default). Panics when no
+    /// such span exists — a matching-span assertion is what the test
+    /// wanted, so a missing span is a test failure, not a `None`.
+    fn fg_of_span_with_content(line: &Line<'_>, content: &str) -> Option<Color> {
+        line.spans
+            .iter()
+            .find(|span| span.content.as_ref() == content)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no span with content {content:?} found in line: {:?}",
+                    line_text(line)
+                )
+            })
+            .style
+            .fg
+    }
+
+    #[test]
+    fn should_render_lines_count_in_yellow_when_file_has_warn_severity() {
+        let node = TreeNode {
+            kind: NodeKind::File,
+            path: "src/big.rs".to_string(),
+            badges: Badges {
+                own_file_size_severity: Some(FileSizeSeverity::Warn),
+                own_file_line_count: Some(1734),
+                ..Badges::default()
+            },
+            children: vec![],
+            skip_reason: None,
+            test_symbol_count: None,
+        };
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "big.rs", &HashMap::new(), false);
+
+        assert_eq!("  big.rs lines:1734", line_text(&line));
+        // The numeric 1734 span carries the severity color; the leading
+        // "lines:" label stays uncolored so the eye lands on the number.
+        assert_eq!(Some(Color::Yellow), fg_of_span_with_content(&line, "1734"));
+        assert_eq!(None, fg_of_span_with_content(&line, "lines:"));
+    }
+
+    #[test]
+    fn should_render_lines_count_in_red_when_file_has_split_severity() {
+        let node = TreeNode {
+            kind: NodeKind::File,
+            path: "src/huge.rs".to_string(),
+            badges: Badges {
+                own_file_size_severity: Some(FileSizeSeverity::Split),
+                own_file_line_count: Some(4837),
+                ..Badges::default()
+            },
+            children: vec![],
+            skip_reason: None,
+            test_symbol_count: None,
+        };
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "huge.rs", &HashMap::new(), false);
+
+        assert_eq!("  huge.rs lines:4837", line_text(&line));
+        assert_eq!(Some(Color::Red), fg_of_span_with_content(&line, "4837"));
+    }
+
+    #[test]
+    fn should_render_warn_and_split_labels_side_by_side_on_dir_row() {
+        let node = dir_node(
+            "src",
+            Badges {
+                file_size_warn_count: 2,
+                file_size_split_count: 1,
+                ..Badges::default()
+            },
+            vec![file_node("src/a.rs", Badges::default())],
+        );
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: true,
+        };
+
+        let line = entry_row_line(&row, "src", &HashMap::new(), false);
+
+        assert_eq!("v src warn:2 split:1", line_text(&line));
+        // The numeric part of each half picks up its own severity color;
+        // the "warn:" / "split:" labels themselves stay uncolored so the
+        // eye lands on the counts.
+        assert_eq!(Some(Color::Yellow), fg_of_span_with_content(&line, "2"));
+        assert_eq!(Some(Color::Red), fg_of_span_with_content(&line, "1"));
+        assert_eq!(None, fg_of_span_with_content(&line, "warn:"));
+        assert_eq!(None, fg_of_span_with_content(&line, "split:"));
+    }
+
+    #[test]
+    fn should_not_render_file_size_badge_when_file_node_has_no_warning() {
+        let node = file_node("lib.rs", Badges::default());
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: false,
+        };
+
+        let line = entry_row_line(&row, "lib.rs", &HashMap::new(), false);
+
+        let text = line_text(&line);
+        assert!(!text.contains("lines:"));
+        assert!(!text.contains("warn:"));
+        assert!(!text.contains("split:"));
+    }
+
+    #[test]
+    fn should_render_only_warn_label_on_dir_row_when_no_split_files() {
+        // When only one severity is present under a directory, only that
+        // half of the badge shows — the other half is omitted rather
+        // than rendered as "warn:0" or "split:0".
+        let node = dir_node(
+            "src",
+            Badges {
+                file_size_warn_count: 3,
+                file_size_split_count: 0,
+                ..Badges::default()
+            },
+            vec![file_node("src/a.rs", Badges::default())],
+        );
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: true,
+        };
+
+        let line = entry_row_line(&row, "src", &HashMap::new(), false);
+
+        assert_eq!("v src warn:3", line_text(&line));
     }
 }

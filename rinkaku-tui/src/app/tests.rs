@@ -242,6 +242,7 @@ fn should_return_dir_detail_when_cursor_is_on_a_directory_row() {
             changed_symbols: 1,
             contract_changes: 0,
             fan_in: 0,
+            ..crate::tree::Badges::default()
         },
         top_fan_in: vec![],
         cycle_partners: vec![],

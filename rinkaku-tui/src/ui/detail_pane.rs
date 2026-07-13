@@ -220,18 +220,23 @@ pub(crate) fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
 }
 
 /// Formats one file-size warning (ADR 0028) as the single line the Detail
-/// pane shows above the "Symbols" listing. The glyph tracks severity
-/// (`⚠` for `Warn`, `🚨` for `Split`) and the trailing hint names the
-/// threshold that was crossed, mirroring the Markdown surface's wording.
+/// pane shows above the "Symbols" listing. Uses a text label
+/// (`Warn:` / `Split:`) instead of an emoji glyph — terminal emoji
+/// rendering width is inconsistent enough to distort the pane's
+/// column layout, and severity is already legible from the whole-line
+/// color (yellow for Warn, red for Split; applied at the call site so
+/// this pure formatter stays a plain `String`). The trailing hint
+/// names the threshold that was crossed, mirroring the Markdown
+/// surface's wording without the glyph.
 fn file_size_warning_line(warning: &rinkaku_core::file_size::FileSizeWarning) -> String {
     use rinkaku_core::file_size::{FileSizeSeverity, SPLIT_LINE_THRESHOLD, WARN_LINE_THRESHOLD};
     match warning.severity {
         FileSizeSeverity::Warn => format!(
-            "\u{26a0} {} lines \u{2014} consider splitting (>{WARN_LINE_THRESHOLD} watch)",
+            "Warn: {} lines \u{2014} consider splitting (>{WARN_LINE_THRESHOLD} watch)",
             warning.line_count,
         ),
         FileSizeSeverity::Split => format!(
-            "\u{1f6a8} {} lines \u{2014} over the {SPLIT_LINE_THRESHOLD}-line split threshold",
+            "Split: {} lines \u{2014} over the {SPLIT_LINE_THRESHOLD}-line split threshold",
             warning.line_count,
         ),
     }
@@ -1078,11 +1083,12 @@ mod tests {
     }
 
     // ADR 0028: a `FileDetail` carrying a `size_warning` renders one
-    // extra line above the "Symbols" listing, with a severity-matched
-    // glyph and the crossed threshold named in the trailing hint. The
-    // `⚠` and `>1500 watch` wording pinned here is the same shape the
-    // Markdown surface uses, so a reviewer skimming either output reads
-    // the same signal.
+    // extra line above the "Symbols" listing, with the severity named as
+    // a text label (`Warn:` / `Split:`) rather than an emoji glyph —
+    // terminal emoji width is inconsistent enough to distort the pane
+    // layout — plus the crossed threshold named in the trailing hint.
+    // Severity color (yellow / red) is applied at the caller as a
+    // whole-line style, not baked into this string.
     #[test]
     fn should_render_size_warning_line_when_file_detail_has_size_warning() {
         let detail = FileDetail {
@@ -1116,15 +1122,16 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line == "\u{26a0} 1734 lines \u{2014} consider splitting (>1500 watch)"),
+                .any(|line| line == "Warn: 1734 lines \u{2014} consider splitting (>1500 watch)"),
             "expected watch-severity warning line among: {rendered:?}",
         );
     }
 
     // Companion to the Warn test above: the `Split` variant swaps the
-    // glyph to `🚨` and names the split threshold in the trailing hint.
+    // label to `Split:` and names the split threshold in the trailing
+    // hint. Color (red vs yellow) is applied at the caller.
     #[test]
-    fn should_render_split_severity_glyph_when_file_detail_size_warning_is_split() {
+    fn should_render_split_severity_label_when_file_detail_size_warning_is_split() {
         let detail = FileDetail {
             path: "src/huge.rs".to_string(),
             symbols: vec![],
@@ -1151,8 +1158,7 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line
-                    == "\u{1f6a8} 4837 lines \u{2014} over the 2000-line split threshold"),
+                .any(|line| line == "Split: 4837 lines \u{2014} over the 2000-line split threshold"),
             "expected split-severity warning line among: {rendered:?}",
         );
     }

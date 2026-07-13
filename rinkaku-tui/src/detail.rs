@@ -962,6 +962,7 @@ mod tests {
                 changed_symbols: 1,
                 contract_changes: 1,
                 fan_in: 0,
+                ..crate::tree::Badges::default()
             },
             top_fan_in: vec![],
             cycle_partners: vec![],

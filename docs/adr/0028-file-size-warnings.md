@@ -108,18 +108,45 @@ mirroring how `hotspots` is always present. `FileSizeSeverity`
 serializes as `"warn"` / `"split"` (`#[serde(rename_all =
 "snake_case")]`).
 
-**6. TUI surface (two touch points, no new pane).**
+**6. TUI surface (three touch points, no new pane).**
+
+The TUI deliberately conveys severity through **text labels + color**
+(no emoji glyphs) everywhere it surfaces file-size warnings. Terminal
+emoji rendering width is inconsistent enough to distort the Tree pane's
+column layout — and once the Tree pane had to drop the glyph, the
+Status line and Detail pane were switched over too so the reviewer
+never has to reconcile two different legends for the same signal. The
+Markdown/JSON output keeps its `⚠` / `🚨` glyphs (rendered outside a
+terminal, no width problem).
 
 - **Status line** (`ui/status.rs`): when
-  `report.file_size_warnings` is non-empty, append `"⚠ N file-size
-  warnings"` to the status line so the reviewer sees the total at a
-  glance from any pane.
+  `report.file_size_warnings` is non-empty, append
+  `"warn:N split:M file-size"` to the status line so the reviewer sees
+  the per-severity totals at a glance from any pane. Either half is
+  dropped when its count is zero (so an all-Warn report reads
+  `"warn:N file-size"`, mirroring how the Tree badge omits a zero
+  half).
 - **Detail pane on a file row** (`build_file_detail` +
   `ui/detail_pane.rs`): when the cursor lands on a file row whose path
-  matches a warning, show one line "⚠ 1734 lines — consider splitting
-  (>1500 watch)" in the Detail pane, positioned above the file's
-  own symbol listing (same layout position `top_fan_in` uses on
-  `DirDetail`).
+  matches a warning, show one line
+  `"Warn: 1734 lines — consider splitting (>1500 watch)"` (yellow) or
+  `"Split: 4837 lines — over the 2000-line split threshold"` (red) in
+  the Detail pane, positioned above the file's own symbol listing (same
+  layout position `top_fan_in` uses on `DirDetail`). Whole-line severity
+  color (`Color::Yellow` / `Color::Red`) is applied at the caller so the
+  formatter itself stays a pure `String`.
+- **Tree pane badge** (`row_view::push_badge_spans`): file rows
+  carrying a warning render `lines:N` after the row label — the `lines:`
+  prefix stays uncolored, the numeric `N` picks up the severity color
+  (yellow for Warn, red for Split), so the eye lands on the number.
+  Directory rows aggregate their descendants as `warn:N split:N`, each
+  half's numeric portion colored by its own severity; a half whose
+  count is zero is omitted so a small subtree never gains a stray
+  `split:0`. This mirrors the existing `^N` fan-in badge aggregation
+  pattern (`Badges.fan_in`), lets the reviewer see "which files are
+  oversized" directly from the Tree browse without opening the Detail
+  pane, and — because severity is conveyed by color rather than a glyph
+  — reads correctly across every terminal that supports 8+ colors.
 - **No new pane, no new keybinding.** Reviewers already have Enter →
   Detail. Adding a dedicated File-size pane would violate ADR 0020's
   one-pane-per-attention-dimension ratio for a feature that fits
