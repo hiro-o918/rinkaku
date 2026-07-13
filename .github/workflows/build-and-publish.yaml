@@ -177,10 +177,36 @@ jobs:
         run: cargo publish -p rinkaku-core --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
 
       # crates.io needs a short window to index rinkaku-core before
-      # rinkaku's publish can resolve it as a dependency. Only needed
+      # rinkaku-tui's publish can resolve it as a dependency. Only needed
       # right after an actual publish, not when we skipped above.
       - name: Wait for rinkaku-core to be indexed
         if: steps.check-core.outputs.already_published == 'false'
+        run: sleep 30
+
+      # rinkaku-tui must publish before rinkaku for the same reason
+      # rinkaku-core does: rinkaku depends on rinkaku-tui by version, and
+      # crates.io resolves that dependency from the registry, not from
+      # the workspace path. Same check-then-publish-then-wait pattern as
+      # rinkaku-core above.
+      - name: Check whether rinkaku-tui is already published
+        id: check-tui
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "rinkaku-tui") | .version')
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if curl -sf "https://index.crates.io/ri/nk/rinkaku-tui" \
+              | grep -q "\"vers\":\"${version}\""; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish rinkaku-tui
+        if: steps.check-tui.outputs.already_published == 'false'
+        run: cargo publish -p rinkaku-tui --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+
+      - name: Wait for rinkaku-tui to be indexed
+        if: steps.check-tui.outputs.already_published == 'false'
         run: sleep 30
 
       - name: Check whether rinkaku is already published
