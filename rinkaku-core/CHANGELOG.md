@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.6.0](https://github.com/hiro-o918/rinkaku/compare/v0.5.0...v0.6.0) (2026-07-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* the Markdown "## Hotspots" heading is now "## High fan-in symbols"; the JSON "hotspots" field is now "fan_ins"; the Mermaid "hotspot" class is now "fan-in".
+
+### refactor
+
+* rename hotspot vocabulary to fan-in (ADR 0033) ([#101](https://github.com/hiro-o918/rinkaku/issues/101)) ([d8dcc0f](https://github.com/hiro-o918/rinkaku/commit/d8dcc0f29dba399f933c91cfd3693376c61f3b77))
+
+
+### Features
+
+* surface file-size warnings in rinkaku output (ADR 0028) ([#86](https://github.com/hiro-o918/rinkaku/issues/86)) ([00c7c5a](https://github.com/hiro-o918/rinkaku/commit/00c7c5a7aef57f18eaa30acc0c03775af26b54c2))
+* tighten file size thresholds and always show per-file line counts ([#123](https://github.com/hiro-o918/rinkaku/issues/123)) ([e6ff1d0](https://github.com/hiro-o918/rinkaku/commit/e6ff1d0009b5e03102eaf491ba402e1d2dbd5983))
+* **tui:** add a startup splash screen with real progress (ADR 0033) ([#100](https://github.com/hiro-o918/rinkaku/issues/100)) ([38673bc](https://github.com/hiro-o918/rinkaku/commit/38673bcc42450acc2bca132ae770fdbc6ffb310a))
+* **tui:** report per-file progress during diff analysis ([#107](https://github.com/hiro-o918/rinkaku/issues/107)) ([b590601](https://github.com/hiro-o918/rinkaku/commit/b590601a748dfaaf8a69c709d42b236546b71f3c))
+
+
+### Bug Fixes
+
+* **core:** add id tie-break to compute_hotspots for full determinism ([#96](https://github.com/hiro-o918/rinkaku/issues/96)) ([89d4b56](https://github.com/hiro-o918/rinkaku/commit/89d4b5630696eb1e12c6d00fc5c60fd596dcfbc7))
+* unify release-please into a single-PR release cycle ([#73](https://github.com/hiro-o918/rinkaku/issues/73)) ([796d249](https://github.com/hiro-o918/rinkaku/commit/796d249ee7067ede9207dcd54a643e028f0e123a))
+
+
+### Documentation
+
+* renumber duplicate ADR 0029 to 0031 ([#90](https://github.com/hiro-o918/rinkaku/issues/90)) ([79cafbe](https://github.com/hiro-o918/rinkaku/commit/79cafbe49a66227f26ddcd53430dbee6f090229d))
+* renumber duplicate ADR 0033 (fan-in rename) to 0034 ([#105](https://github.com/hiro-o918/rinkaku/issues/105)) ([e4d6f70](https://github.com/hiro-o918/rinkaku/commit/e4d6f703f06a6bc8fdd99ac6ddadabd7bd97e114))
+
+
+### Miscellaneous
+
+* release main ([#50](https://github.com/hiro-o918/rinkaku/issues/50)) ([8791d00](https://github.com/hiro-o918/rinkaku/commit/8791d00edeba0f84d7b028ce46a05e7f4ec0c178))
+* release main ([#74](https://github.com/hiro-o918/rinkaku/issues/74)) ([5e0986f](https://github.com/hiro-o918/rinkaku/commit/5e0986f3048457ccee5283a3e7770fc149c7e4c7))
+* release main ([#76](https://github.com/hiro-o918/rinkaku/issues/76)) ([e1b7943](https://github.com/hiro-o918/rinkaku/commit/e1b7943d2df1a12320f1d1fe4c29814a1b635c1f))
+* release main ([#77](https://github.com/hiro-o918/rinkaku/issues/77)) ([b8d0393](https://github.com/hiro-o918/rinkaku/commit/b8d039320ef8e3f0455a4fc2bdadf5ba8e2440e6))
+
 ## [0.5.0](https://github.com/hiro-o918/rinkaku/compare/v0.4.0...v0.5.0) (2026-07-13)
 
 

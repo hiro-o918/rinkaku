@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.1](https://github.com/hiro-o918/rinkaku/compare/v0.6.0...v0.6.1) (2026-07-13)
+
+
+### Features
+
+* tighten file size thresholds and always show per-file line counts ([#123](https://github.com/hiro-o918/rinkaku/issues/123)) ([e6ff1d0](https://github.com/hiro-o918/rinkaku/commit/e6ff1d0009b5e03102eaf491ba402e1d2dbd5983))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.5.0 to 0.6.0
+    * rinkaku-tui bumped from 0.5.0 to 0.6.0
+
 ## [0.6.0](https://github.com/hiro-o918/rinkaku/compare/v0.5.3...v0.6.0) (2026-07-13)
 
 
