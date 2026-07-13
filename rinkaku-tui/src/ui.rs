@@ -47,6 +47,18 @@ use unicode_width::UnicodeWidthChar;
 /// comment), so the underlying frame is built exactly the same way whether
 /// the overlay is open or not, and the overlay is simply composited over
 /// it as a final step.
+///
+/// Returns the right-hand pane's scroll offset as actually clamped and
+/// rendered this frame (`None` on [`Screen::Source`], which scrolls via its
+/// own auto-centering window rather than `App::right_pane_scroll`, or when
+/// the active right pane rendered a placeholder with nothing to scroll —
+/// `draw_entry_screen`'s own doc comment). `crate::run_app` feeds this back
+/// into `App` (`App::with_right_pane_scroll`) after every draw so an
+/// overshot scroll request (dogfooding finding: repeated `j` past the
+/// content's end used to keep incrementing `App`'s unclamped "requested"
+/// scroll with no visible effect, so winding back down again took as many
+/// `k` presses as it took to overshoot) never survives past the frame that
+/// visibly clamped it.
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -55,12 +67,12 @@ pub fn draw(
     diff_highlights: &[HighlightedFile],
     blast_radius_selection: &BlastRadiusSelection,
     repo_root: &std::path::Path,
-) {
+) -> Option<usize> {
     let area = frame.area();
     let [body, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
-    match app.screen() {
+    let clamped_scroll = match app.screen() {
         Screen::Entry => draw_entry_screen(
             frame,
             app,
@@ -71,9 +83,10 @@ pub fn draw(
             body,
         ),
         Screen::Source { symbol_id } => {
-            draw_source_screen(frame, report, symbol_id, repo_root, body)
+            draw_source_screen(frame, report, symbol_id, repo_root, body);
+            None
         }
-    }
+    };
 
     draw_status_line(frame, app, status_area);
 
@@ -83,6 +96,8 @@ pub fn draw(
     if let Some(popup) = app.jump_popup() {
         draw_jump_popup(frame, popup, area);
     }
+
+    clamped_scroll
 }
 
 /// Draws the `?` help overlay (ADR 0020) centered over `full_area`: a
@@ -224,6 +239,11 @@ fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, full_area: 
 /// than the right pane has fields, so it gets the larger share. The right
 /// pane itself shows either the detail view or the diff view depending on
 /// `app.right_pane()` (`d`/`D` toggles between them, TUI iteration 2).
+///
+/// Returns the clamped right-pane scroll offset actually applied — whichever
+/// of `draw_detail_pane`/`draw_diff_pane`/`draw_blast_radius_pane` ran for
+/// `app.right_pane()` (`render_scrollable_pane`'s doc comment on why
+/// `crate::run_app` needs this).
 fn draw_entry_screen(
     frame: &mut Frame,
     app: &App,
@@ -232,7 +252,7 @@ fn draw_entry_screen(
     diff_highlights: &[HighlightedFile],
     blast_radius_selection: &BlastRadiusSelection,
     area: Rect,
-) {
+) -> Option<usize> {
     let [tree_area, right_area] =
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
 
@@ -315,14 +335,18 @@ fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
+/// Returns the clamped scroll offset actually applied (`render_scrollable_pane`'s
+/// own doc comment on why the caller — ultimately `crate::run_app` — needs
+/// this), or `None` when the placeholder path was taken (nothing scrollable
+/// was rendered at all).
+fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) -> Option<usize> {
     let Some(detail) = app.selected_detail(report) else {
         let block = Block::bordered().title(" Detail ");
         let paragraph = Paragraph::new("(select a row to see its detail)")
             .block(block)
             .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(paragraph, area);
-        return;
+        return None;
     };
 
     let lines = match &detail {
@@ -330,7 +354,13 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
         SelectedDetail::Dir(detail) => dir_detail_lines(detail, report.origin),
         SelectedDetail::File(detail) => file_detail_lines(detail),
     };
-    render_scrollable_pane(frame, " Detail ", &lines, app.right_pane_scroll(), area);
+    Some(render_scrollable_pane(
+        frame,
+        " Detail ",
+        &lines,
+        app.right_pane_scroll(),
+        area,
+    ))
 }
 
 /// Draws the diff pane (TUI iteration 2, [`RightPane::Diff`]; ADR 0020
@@ -351,6 +381,10 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
 /// by `source_index` rather than pointer identity now that hunks are cloned
 /// into shaped sections (`crate::diff_shape::AttributedHunk`'s own doc
 /// comment).
+///
+/// Returns the clamped scroll offset actually applied, or `None` when the
+/// placeholder path was taken — mirrors `draw_detail_pane`'s own return
+/// value for the identical reason (`render_scrollable_pane`'s doc comment).
 fn draw_diff_pane(
     frame: &mut Frame,
     app: &App,
@@ -358,7 +392,7 @@ fn draw_diff_pane(
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     area: Rect,
-) {
+) -> Option<usize> {
     use crate::diff_shape::DiffPaneContent;
 
     let target = app.selected_diff_target(report);
@@ -378,7 +412,7 @@ fn draw_diff_pane(
                 .block(block)
                 .wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(paragraph, area);
-            return;
+            return None;
         }
         DiffPaneContent::Symbol(section) => vec![section],
         DiffPaneContent::File(sections) => sections.iter().collect(),
@@ -387,7 +421,13 @@ fn draw_diff_pane(
     let highlighted_file = highlight::highlighted_file(diff_highlights, path);
     let is_file_selection = matches!(diff_content, DiffPaneContent::File(_));
     let lines = diff_pane_lines(&sections, is_file_selection, highlighted_file);
-    render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
+    Some(render_scrollable_pane(
+        frame,
+        " Diff ",
+        &lines,
+        app.right_pane_scroll(),
+        area,
+    ))
 }
 
 /// Draws the blast-radius pane (ADR 0019 for the re-rooting algorithm, ADR
@@ -411,12 +451,16 @@ fn draw_diff_pane(
 /// `<path>`") rather than the re-rooting mechanism, per ADR 0023's own
 /// rationale for the rename — a reviewer opening the pane for the first
 /// time should not need `?`'s glossary to understand what it shows.
+///
+/// Returns the clamped scroll offset actually applied, or `None` when a
+/// placeholder path was taken — mirrors `draw_detail_pane`'s own return
+/// value for the identical reason (`render_scrollable_pane`'s doc comment).
 fn draw_blast_radius_pane(
     frame: &mut Frame,
     app: &App,
     selection: &BlastRadiusSelection,
     area: Rect,
-) {
+) -> Option<usize> {
     match selection {
         BlastRadiusSelection::NotApplicable => {
             let block = Block::bordered().title(" Blast radius ");
@@ -425,6 +469,7 @@ fn draw_blast_radius_pane(
                     .block(block)
                     .wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(paragraph, area);
+            None
         }
         BlastRadiusSelection::Empty { path } => {
             let block = Block::bordered().title(format!(" Blast radius of {path} "));
@@ -432,11 +477,18 @@ fn draw_blast_radius_pane(
                 .block(block)
                 .wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(paragraph, area);
+            None
         }
         BlastRadiusSelection::View(view) => {
             let lines = blast_radius_pane_lines(view);
             let title = format!(" Blast radius of {} ", view.path);
-            render_scrollable_pane(frame, &title, &lines, app.right_pane_scroll(), area);
+            Some(render_scrollable_pane(
+                frame,
+                &title,
+                &lines,
+                app.right_pane_scroll(),
+                area,
+            ))
         }
     }
 }
@@ -497,13 +549,24 @@ fn blast_radius_pane_lines(view: &crate::blast_radius::BlastRadiusView) -> Vec<L
 /// everything is visible. Wrapping first makes every one of
 /// `clamp_scroll`/`scroll_indicator`/`Paragraph::scroll` operate on the same
 /// "one rendered terminal row" unit.
+///
+/// Returns the actually-applied (clamped) scroll offset — dogfooding
+/// finding: `App::right_pane_scroll` is deliberately an *unclamped*
+/// "requested" value (its own doc comment), so repeated `j` past the
+/// content's end kept incrementing that request with no visible effect,
+/// and winding it back down again took as many `k` presses as it took to
+/// overshoot — the scrollbar-less pane gave no feedback that this had
+/// happened. `crate::run_app` feeds this return value back into `App` via
+/// `App::with_right_pane_scroll` after every draw, so the *next* `k` moves
+/// the visible content immediately instead of first re-tracing the
+/// overshoot.
 fn render_scrollable_pane(
     frame: &mut Frame,
     title: &str,
     lines: &[Line<'static>],
     requested_scroll: usize,
     area: Rect,
-) {
+) -> usize {
     // 2 columns/rows for the left/right and top/bottom border, matching
     // `draw_source_screen`'s own `saturating_sub(2)` convention for a
     // bordered pane's inner height.
@@ -526,6 +589,7 @@ fn render_scrollable_pane(
         .block(block)
         .scroll((scroll as u16, 0));
     frame.render_widget(paragraph, area);
+    scroll
 }
 
 /// Wraps each of `lines` to `width` display columns, splitting a logical
@@ -1481,7 +1545,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1523,7 +1587,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1573,7 +1637,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1606,7 +1670,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1635,7 +1699,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1670,7 +1734,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1712,7 +1776,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1742,7 +1806,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1781,7 +1845,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1825,7 +1889,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1874,7 +1938,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1929,7 +1993,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -1981,7 +2045,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2038,7 +2102,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2079,7 +2143,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2140,7 +2204,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2207,7 +2271,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2272,7 +2336,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2332,7 +2396,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2383,7 +2447,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &blast_radius_selection,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2411,7 +2475,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &blast_radius_selection,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2454,7 +2518,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &blast_radius_selection,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2551,7 +2615,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2597,7 +2661,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2636,7 +2700,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2682,7 +2746,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2741,7 +2805,7 @@ index e69de29..4b825dc 100644
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2778,7 +2842,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2808,7 +2872,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2835,7 +2899,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -2875,7 +2939,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -3195,10 +3259,13 @@ index e69de29..4b825dc 100644
 
     #[test]
     fn should_show_back_hint_only_on_source_screen_regardless_of_focus() {
+        // The source screen is reached only via the dedicated `s` key
+        // (`InputKey::Source`) now, not `Enter` — a dogfooding fix to
+        // `InputKey::Open`'s own arm (see its doc comment in `crate::app`).
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::Open); // opens Screen::Source
+            .handle_key(crate::app::InputKey::Source); // opens Screen::Source
 
         let actual = status_line_text(&app);
 
@@ -3284,7 +3351,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -3315,7 +3382,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -3348,7 +3415,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -3387,13 +3454,85 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
         let text = buffer_text(&terminal);
         // The last symbol must be visible once clamped to the final page.
         assert!(text.contains("sym39"));
+    }
+
+    #[test]
+    fn should_return_the_clamped_scroll_from_draw_when_requested_scroll_overshoots() {
+        // Dogfooding fix: `draw` must hand back the *clamped* offset it
+        // actually rendered (not the caller's unclamped `right_pane_scroll`
+        // request), since `crate::run_app` folds this return value back into
+        // `App` so an overshot scroll request cannot silently outlive the
+        // frame that visibly clamped it.
+        let report = report_with_many_symbols(40);
+        let mut app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        for _ in 0..1000 {
+            app = app.handle_key(crate::app::InputKey::Down);
+        }
+        assert!(
+            app.right_pane_scroll() > 100,
+            "the unclamped request must actually have overshot for this test to be meaningful"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        let mut actual = None;
+        terminal
+            .draw(|frame| {
+                actual = draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    &test_repo_root(),
+                );
+            })
+            .expect("draw");
+
+        assert!(actual.is_some());
+        assert!(
+            actual.unwrap() < app.right_pane_scroll(),
+            "clamped scroll must be strictly less than the overshot request"
+        );
+    }
+
+    #[test]
+    fn should_return_none_from_draw_when_the_source_screen_is_open() {
+        // The source screen scrolls via its own auto-centering window, not
+        // `App::right_pane_scroll` (`ui::draw`'s own doc comment) — `draw`
+        // must not report a clamped offset for `crate::run_app` to fold
+        // back in that case.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Source);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        let mut actual = Some(999); // sentinel: must be overwritten to None
+        terminal
+            .draw(|frame| {
+                actual = draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    &test_repo_root(),
+                );
+            })
+            .expect("draw");
+
+        assert_eq!(None, actual);
     }
 
     #[test]
@@ -3424,7 +3563,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -3590,7 +3729,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 
@@ -3640,7 +3779,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
-                )
+                );
             })
             .expect("draw");
 

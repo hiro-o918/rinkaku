@@ -167,8 +167,15 @@ fn run_app(
     };
 
     loop {
+        // `ui::draw`'s return value (the right-hand pane's scroll offset as
+        // actually clamped and rendered this frame, `ui::draw`'s own doc
+        // comment) cannot flow out of the closure itself — `Terminal::draw`
+        // requires an `FnOnce(&mut Frame)` returning `()` — so it is
+        // captured into this outer binding instead and folded back into
+        // `app` right after, via `clamp_right_pane_scroll_after_draw`.
+        let mut clamped_scroll = None;
         terminal.draw(|frame| {
-            ui::draw(
+            clamped_scroll = ui::draw(
                 frame,
                 &app,
                 report,
@@ -176,8 +183,9 @@ fn run_app(
                 &diff_highlights,
                 &blast_radius_selection,
                 repo_root,
-            )
+            );
         })?;
+        app = clamp_right_pane_scroll_after_draw(app, clamped_scroll);
 
         if app.should_quit() {
             return Ok(());
@@ -230,6 +238,37 @@ fn run_app(
                 );
             }
         }
+    }
+}
+
+/// Folds `ui::draw`'s clamped scroll offset (`ui::draw`'s own doc comment)
+/// back into `app`, given `clamped` — `Some(scroll)` when the active right
+/// pane rendered scrollable content this frame, `None` on the source screen
+/// or a placeholder pane.
+///
+/// Dogfooding finding: `App::right_pane_scroll` is deliberately an
+/// *unclamped* "requested" offset (that field's own doc comment) — `App`
+/// has no notion of the pane's rendered height, so clamping was left to
+/// `crate::ui` at draw time (`ui::clamp_scroll`). That is still correct as
+/// far as *what gets drawn*, but left `App`'s own notion of "how far down
+/// the user asked to scroll" free to run past the content's actual end:
+/// holding `j` past the bottom kept incrementing the request with no
+/// visible change once the pane was already showing its last screenful, so
+/// the very next `k` had to first unwind that whole invisible overshoot
+/// before the pane visibly moved at all — indistinguishable, from the
+/// keyboard, from the key simply not responding. Writing the clamped value
+/// straight back after every draw keeps `App`'s own state in sync with what
+/// is actually on screen, so the next `j`/`k` always has an immediate,
+/// visible effect.
+///
+/// Applied unconditionally (not gated on `clamped != app.right_pane_scroll()`)
+/// since `App::with_right_pane_scroll` is a plain field write — the branch
+/// would only save a redundant assignment, not a meaningfully different
+/// state, so it is not worth the extra branch.
+fn clamp_right_pane_scroll_after_draw(app: App, clamped: Option<usize>) -> App {
+    match clamped {
+        Some(scroll) => app.with_right_pane_scroll(scroll),
+        None => app,
     }
 }
 
@@ -1024,6 +1063,41 @@ mod tests {
         let actual = jump_scroll_target(&hunk_starts, 3, InputKey::NextHunk);
 
         assert_eq!(Some(10), actual);
+    }
+
+    // --- clamp_right_pane_scroll_after_draw ---
+    //
+    // Dogfooding fix: `render_scrollable_pane`'s clamp only ever affected
+    // what was drawn, never `App`'s own `right_pane_scroll` — so an
+    // overshot scroll request stayed recorded in `App` even once the pane
+    // visibly stopped moving, and winding it back down took as many `k`
+    // presses as it took to overshoot in the first place. These tests pin
+    // the fold-back that keeps `App`'s state in sync with the frame that
+    // was actually drawn.
+
+    #[test]
+    fn should_overwrite_right_pane_scroll_with_the_clamped_value_when_some() {
+        let report = empty_report();
+        let app = App::new(&report).with_right_pane_scroll(999);
+
+        let app = clamp_right_pane_scroll_after_draw(app, Some(7));
+
+        assert_eq!(7, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_leave_right_pane_scroll_untouched_when_none() {
+        // `None` means the drawn pane had nothing scrollable this frame
+        // (`ui::draw`'s own doc comment: the source screen, or a
+        // placeholder) — `App`'s own requested scroll must survive
+        // unchanged rather than being zeroed or otherwise disturbed by a
+        // frame that never consulted it.
+        let report = empty_report();
+        let app = App::new(&report).with_right_pane_scroll(3);
+
+        let app = clamp_right_pane_scroll_after_draw(app, None);
+
+        assert_eq!(3, app.right_pane_scroll());
     }
 
     // g-prefix and jump-popup translate_key tests (ADR 0022).
