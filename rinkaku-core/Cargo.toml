@@ -28,6 +28,7 @@ tree-sitter-go = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 aho-corasick = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
