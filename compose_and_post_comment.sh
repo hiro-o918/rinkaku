@@ -105,7 +105,12 @@ truncate_utf8_safe() {
 # markdown-only fallback path (action.yaml's bootstrap-safety check) —
 # `${VAR:-}` reads as empty either way, so both "input never set" and
 # "set to empty by the caller" collapse to the same "omit this section"
-# branch below.
+# branch below. The `-f` check additionally guards a path that is *set*
+# but does not exist — this script is documented as runnable standalone
+# for dynamic verification (see the top-of-file comment), so a caller
+# passing a typo'd or since-deleted path should degrade to "section
+# omitted" rather than have `cat` fail under `set -e` and kill the whole
+# run.
 #
 # `mermaid_oversized` is tracked separately from "no mermaid content at
 # all" so the oversized case renders its explanatory note as plain text
@@ -115,7 +120,7 @@ truncate_utf8_safe() {
 # just fail to parse the note as a diagram anyway.
 mermaid_content=""
 mermaid_oversized=0
-if [ -n "${MERMAID_PATH:-}" ]; then
+if [ -n "${MERMAID_PATH:-}" ] && [ -f "${MERMAID_PATH}" ]; then
   mermaid_content=$(cat "${MERMAID_PATH}")
   if [ "${#mermaid_content}" -gt "${MAX_MERMAID_LENGTH}" ]; then
     mermaid_content="*(mermaid graph omitted: it would exceed ${MAX_MERMAID_LENGTH} bytes, past the point a diagram this size renders usefully on GitHub anyway)*"
@@ -143,16 +148,27 @@ fi
 # `render_digest` (ADR 0036) already returns an empty string when there is
 # no contract change to report — that's a legitimate "nothing to see
 # here" for a PR with no added/changed/removed symbols, distinct from
-# "no digest file at all" (the markdown-only bootstrap fallback), which
-# gets its own explanatory note instead of a silently empty `<details>`.
+# "no digest file at all" (the markdown-only bootstrap fallback, or a
+# path that was set but doesn't exist — same `-f` guard reasoning as
+# MERMAID_PATH above), which gets its own explanatory note instead of a
+# silently empty `<details>`.
+digest_path_readable=0
+if [ -n "${DIGEST_PATH:-}" ] && [ -f "${DIGEST_PATH}" ]; then
+  digest_path_readable=1
+fi
+
 digest_content=""
-if [ -n "${DIGEST_PATH:-}" ]; then
+if [ "${digest_path_readable}" -eq 1 ]; then
   digest_content=$(cat "${DIGEST_PATH}")
 fi
-if [ -z "${digest_content}" ] && [ -n "${DIGEST_PATH:-}" ]; then
+if [ -z "${digest_content}" ] && [ "${digest_path_readable}" -eq 1 ]; then
   digest_content="_(no API-surface changes detected in this diff)_"
 elif [ -z "${digest_content}" ]; then
-  digest_content="_(API-changes digest unavailable: resolved rinkaku binary predates \`--format digest\`)_"
+  # Deliberately non-committal about *why* the digest is missing — this
+  # branch also fires when action.yaml's --format digest probe passed but
+  # the actual invocation failed (not just "binary predates the flag"),
+  # so naming one specific cause here would be misleading for the other.
+  digest_content="_(API-changes digest unavailable: older rinkaku binary or generation failed)_"
 fi
 
 body_prefix="${MARKER}
