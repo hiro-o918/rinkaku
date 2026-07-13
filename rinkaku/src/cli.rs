@@ -41,8 +41,9 @@ pub(crate) struct Cli {
     pub(crate) pr: Option<String>,
 
     /// Output format. Defaults to Markdown, or the interactive TUI when
-    /// stdout is a terminal and neither `--format` nor `--tui` was given
-    /// (ADR 0017) — see `resolve_display_mode`.
+    /// stdout is a terminal and neither `--format` nor `--tui` was given.
+    //
+    // See `resolve_display_mode` (ADR 0017) for how the default is picked.
     //
     // `Option` rather than a `default_value_t` is what makes "the user
     // didn't pass --format" observable at all; a defaulted `Format` field
@@ -51,50 +52,55 @@ pub(crate) struct Cli {
     #[arg(long, value_enum, conflicts_with = "tui")]
     pub(crate) format: Option<Format>,
 
-    /// Open the interactive terminal UI (ADR 0015/0016) instead of
-    /// printing Markdown/JSON. The input flow (stdin / `--base` / `--pr`)
-    /// is unchanged — `--tui` only changes the output stage, once a
-    /// `Report` is built. Conflicts with `--format`, since the two are
-    /// mutually exclusive output stages rather than combinable options.
+    /// Open the interactive terminal UI instead of printing Markdown/JSON.
+    /// The input flow (stdin / `--base` / `--pr`) is unchanged — `--tui`
+    /// only changes the output stage, once a `Report` is built. Conflicts
+    /// with `--format`, since the two are mutually exclusive output stages
+    /// rather than combinable options.
+    // See ADR 0015/0016 for the design behind the TUI itself.
     #[arg(long, default_value_t = false)]
     pub(crate) tui: bool,
 
-    /// Whether to resolve each changed symbol's 1-hop dependencies
-    /// (ADR 0003). `1` (default) runs the tags-based `Resolver` over
-    /// every file tracked by `git ls-files`; `0` skips resolution
-    /// entirely (no `Resolver::resolve` calls), which is faster and
-    /// avoids the repo-wide indexing pass.
+    /// Whether to resolve each changed symbol's 1-hop dependencies. `1`
+    /// (default) runs the tags-based `Resolver` over every file tracked by
+    /// `git ls-files`; `0` skips resolution entirely (no
+    /// `Resolver::resolve` calls), which is faster and avoids the
+    /// repo-wide indexing pass.
+    // See ADR 0003 for the 1-hop dependency resolution design.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=1))]
     pub(crate) deps: u8,
 
     /// Exclude test symbols from the "Change graph"/"Definitions" output
     /// and summarize their per-file counts under a "Tests" section
-    /// instead (ADR 0025, superseding the ADR 0009 default). Without
-    /// this flag, test symbols appear in the graph and definitions like
-    /// any other symbol — the default the Markdown/JSON output is
-    /// designed around now that its primary audience is LLM reviewers
-    /// (humans read the TUI, which badges test files rather than
+    /// instead. Without this flag, test symbols appear in the graph and
+    /// definitions like any other symbol — the default the Markdown/JSON
+    /// output is designed around now that its primary audience is LLM
+    /// reviewers (humans read the TUI, which badges test files rather than
     /// omitting them).
+    // See ADR 0025 (superseding the ADR 0009 default) for the rationale
+    // behind this default.
     #[arg(long, default_value_t = false)]
     pub(crate) exclude_tests: bool,
 
     /// Include files `.gitattributes` marks `-diff` or `linguist-generated`
-    /// instead of skipping them by default (ADR 0010).
+    /// instead of skipping them by default.
+    // See ADR 0010 for why generated files are skipped by default.
     #[arg(long, default_value_t = false)]
     pub(crate) include_generated: bool,
 
-    /// Re-root the change graph at this path before rendering (ADR 0019):
-    /// entry points become the symbols under `path` that nothing else
-    /// under that same path depends on, and dependency trees still expand
-    /// outward through the full graph as usual. This is a viewpoint change,
-    /// not a filter — symbols outside `path` are neither hidden nor
-    /// excluded from analysis, only no longer eligible to be roots
+    /// Re-root the change graph at this path before rendering: entry
+    /// points become the symbols under `path` that nothing else under
+    /// that same path depends on, and dependency trees still expand
+    /// outward through the full graph as usual. This is a viewpoint
+    /// change, not a filter — symbols outside `path` are neither hidden
+    /// nor excluded from analysis, only no longer eligible to be roots
     /// themselves. Compatible with every input mode (stdin/`--base`/`--pr`/
     /// whole-repo) and with `--tui`: combined, the TUI opens with the
     /// cursor already on the tree row matching `path` and the right pane
-    /// already showing its Blast radius (`rinkaku_tui::run`'s `entry_path`
-    /// parameter; ADR 0023), rather than requiring the reviewer to find the
-    /// row and press `R` themselves.
+    /// already showing its Blast radius, rather than requiring the
+    /// reviewer to find the row and press `R` themselves.
+    // See ADR 0019 for the re-rooting design and ADR 0023 for the
+    // `rinkaku_tui::run` `entry_path` parameter this drives.
     #[arg(long)]
     pub(crate) entry: Option<String>,
 }
@@ -121,9 +127,9 @@ pub(crate) enum Format {
     Md,
     Json,
     /// A human-oriented call/dependency graph as a mermaid `flowchart`
-    /// document (ADR 0021) — opt-in, aimed at GitHub's native mermaid
-    /// rendering in PR comments/descriptions, not the default Markdown
-    /// output.
+    /// document — opt-in, aimed at GitHub's native mermaid rendering in PR
+    /// comments/descriptions, not the default Markdown output.
+    // See ADR 0021 for the design behind this output format.
     Mermaid,
 }
 impl From<Format> for OutputFormat {
