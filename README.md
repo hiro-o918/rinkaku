@@ -23,6 +23,17 @@ Both share one engine: tree-sitter extraction of changed symbols, 1-hop
 dependency expansion, fan-in / contract-change / entry-point
 summarizers. Rust, Go, Python, and TypeScript out of the box.
 
+The TUI greets you with this on startup, while it scans the diff:
+
+```
+      _       _              _
+     (_)     | |            | |
+ _ __ _ _ __ | | ____ _ _ __| |___   _
+| '__| | '_ \| |/ / _` | '__| / / | | |
+| |  | | | | |   < (_| | |  | . \ |_| |
+|_|  |_|_| |_|_|\_\__,_|_|  |_|\_\__,_|
+```
+
 ## Try it in 30 seconds
 
 ```sh
@@ -30,6 +41,8 @@ summarizers. Rust, Go, Python, and TypeScript out of the box.
 brew install hiro-o918/tap/rinkaku
 # or:
 curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh | bash
+# or install into your home directory (no sudo):
+INSTALL_DIR="$HOME/.local/bin" bash -c "$(curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh)"
 
 # 2. Point it at any GitHub PR — a local clone is optional
 rinkaku --pr https://github.com/owner/repo/pull/123
