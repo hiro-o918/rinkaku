@@ -31,6 +31,13 @@ impl Spinner {
     pub fn start(message: &str) -> Self {
         let bar = ProgressBar::new_spinner();
         bar.set_style(
+            // `with_template` only fails on a malformed template string
+            // (unknown placeholder, unbalanced braces); the template here
+            // is a fixed literal using two placeholders documented in
+            // `indicatif::ProgressStyle`'s own reference, so this can never
+            // fail at runtime — the `expect` exists to satisfy the
+            // `Result`-returning signature, not to guard a real failure
+            // mode.
             ProgressStyle::with_template("{spinner:.cyan} {msg}")
                 .expect("static spinner template is valid"),
         );
@@ -55,6 +62,14 @@ impl Spinner {
     }
 }
 
+// Note: an early `?`-propagated error in `main` (e.g. a failing `git`/`gh`
+// call inside `run_base_pipeline`/`build_resolver`) drops the `Spinner`
+// without ever reaching a `finish_and_clear()` call. This is still safe:
+// `indicatif`'s underlying `BarState` clears the line on `Drop` unless the
+// bar was already finished, using `ProgressFinish::AndClear` — the crate's
+// documented default — so the spinner never survives past the process
+// printing its error to stderr, with or without an explicit clear call.
+
 /// Which analysis phase is currently running, decided from the same
 /// input-mode branching `main` already does (`--pr` / `--base` / stdin /
 /// whole-repo). Kept as its own enum — rather than passing message strings
@@ -63,6 +78,12 @@ impl Spinner {
 /// without touching `indicatif`/stderr at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisPhase {
+    /// The spinner's initial state, shown for the brief window between
+    /// `Spinner::start` and `main` determining which input mode (`--pr` /
+    /// `--base` / stdin / whole-repo) actually applies — none of the other
+    /// variants is correct yet at that point, so this exists to avoid
+    /// mislabeling that window as e.g. "Analyzing diff...".
+    Starting,
     /// Resolving a `--pr` argument via `gh` (fetching PR metadata, base/head
     /// commits) before any diffing starts.
     ResolvingPr,
@@ -83,6 +104,7 @@ pub enum AnalysisPhase {
 /// real terminal.
 pub fn phase_message(phase: AnalysisPhase) -> &'static str {
     match phase {
+        AnalysisPhase::Starting => "Starting...",
         AnalysisPhase::ResolvingPr => "Resolving PR...",
         AnalysisPhase::Diffing => "Diffing...",
         AnalysisPhase::BuildingDependencyIndex => "Building dependency index...",
@@ -98,6 +120,10 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
+    #[case::should_return_starting_message_when_phase_is_starting(
+        AnalysisPhase::Starting,
+        "Starting..."
+    )]
     #[case::should_return_resolving_pr_message_when_phase_is_resolving_pr(
         AnalysisPhase::ResolvingPr,
         "Resolving PR..."

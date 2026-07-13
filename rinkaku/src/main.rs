@@ -228,7 +228,7 @@ fn main() -> anyhow::Result<()> {
     // stderr draw target already suppresses drawing when stderr isn't a
     // terminal (see `spinner.rs`'s own doc comment), so this is safe to run
     // unconditionally in every input mode, including piped stderr.
-    let spinner = Spinner::start(phase_message(AnalysisPhase::AnalyzingDiff));
+    let spinner = Spinner::start(phase_message(AnalysisPhase::Starting));
     let (report, diff_text) = if let Some(pr_arg) = &cli.pr {
         // Validate the arg and derive the fetch refspec's PR number, but
         // pass the original (trimmed) value — not the parsed number — to
