@@ -118,8 +118,8 @@ pub struct TreeNode {
     /// see `SkipReason`), `None` for every other node including an
     /// ordinary analyzed `File`. Kept as a field on `TreeNode` rather than a
     /// new `NodeKind` variant so `crate::app`/`crate::order`'s existing
-    /// exhaustive `match`es over `NodeKind` (dispatching detail/diff/pivot
-    /// panes and sibling ordering) keep treating a skipped file exactly
+    /// exhaustive `match`es over `NodeKind` (dispatching detail/diff/blast-
+    /// radius panes and sibling ordering) keep treating a skipped file exactly
     /// like any other file row — it already has the right shape (a
     /// childless file with a path), it just additionally carries *why*
     /// rinkaku skipped it, for `row_view`/the detail pane to surface.

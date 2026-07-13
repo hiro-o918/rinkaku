@@ -1,6 +1,6 @@
-//! The `?` help overlay's content (ADR 0020): a static keymap plus a short
-//! glossary, assembled as plain data so `crate::ui` only has to lay it out,
-//! not decide what belongs in it.
+//! The `?` help overlay's content (ADR 0020, glossary wording per ADR
+//! 0022): a static keymap plus a short glossary, assembled as plain data so
+//! `crate::ui` only has to lay it out, not decide what belongs in it.
 //!
 //! The keymap itself is fixed (not derived from `crate::app::InputKey` or
 //! `crate::lib::translate_key` — both already carry their own doc comments
@@ -18,7 +18,7 @@ pub struct KeyBinding {
 }
 
 /// One glossary entry: a term used elsewhere in the UI (an order mode name,
-/// "pivot", "cycle") paired with a short explanation — the answer to
+/// "blast radius", "cycle") paired with a short explanation — the answer to
 /// "what does that word on the status line/tree actually mean".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlossaryEntry {
@@ -90,8 +90,8 @@ const GLOBAL_BINDINGS: &[KeyBinding] = &[
         description: "Toggle the right pane between Detail and Diff",
     },
     KeyBinding {
-        keys: "p / P",
-        description: "Toggle the right pane to the pivot tree rooted at the selected row",
+        keys: "r / R",
+        description: "Toggle the right pane to the blast radius of the selected row",
     },
     KeyBinding {
         keys: "o / O",
@@ -152,12 +152,12 @@ const GLOSSARY: &[GlossaryEntry] = &[
         explanation: "Directories ordered A-Z, ignoring dependency direction",
     },
     GlossaryEntry {
-        term: "pivot",
-        explanation: "Re-roots the dependency tree at the selected directory/file's path",
+        term: "blast radius",
+        explanation: "The dependency tree rooted at a selected directory or file, showing what would be affected if it changed",
     },
     GlossaryEntry {
         term: "cycle",
-        explanation: "A closing back-edge in the dependency graph — two or more directories depend on each other",
+        explanation: "A dependency loop: two or more symbols depend on each other, so the tree stops and points back to where it first appeared",
     },
     GlossaryEntry {
         term: "jumplist",
@@ -199,14 +199,14 @@ mod tests {
     }
 
     #[test]
-    fn should_include_a_glossary_entry_for_pivot_and_cycle() {
+    fn should_include_a_glossary_entry_for_blast_radius_and_cycle() {
         let terms: Vec<&str> = HELP_CONTENT
             .glossary
             .iter()
             .map(|entry| entry.term)
             .collect();
 
-        assert!(terms.contains(&"pivot"));
+        assert!(terms.contains(&"blast radius"));
         assert!(terms.contains(&"cycle"));
     }
 

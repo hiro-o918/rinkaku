@@ -8,14 +8,14 @@
 //! header up front when the symbol's contract changed.
 //!
 //! Pure and free of `ratatui` types, mirroring every other view-model in
-//! this crate (`crate::tree`/`crate::nav`/`crate::detail`/`crate::pivot`):
+//! this crate (`crate::tree`/`crate::nav`/`crate::detail`/`crate::blast_radius`):
 //! `Report` + `&[FileHunks]` + a selection in, plain [`DiffPaneContent`]
 //! data out. `crate::run_app` computes this once per handled key (the same
-//! cache-on-selection-change discipline `crate::app::App::selected_pivot_view`'s
+//! cache-on-selection-change discipline `crate::app::App::selected_blast_radius_view`'s
 //! own doc comment already establishes, after that pane's own past
 //! per-frame recompute bug — see this crate's `lib.rs` regression test);
 //! `crate::ui::draw` must not call it, for the identical reason
-//! `ui::draw` must not call `App::selected_pivot_view` either.
+//! `ui::draw` must not call `App::selected_blast_radius_view` either.
 
 use crate::app::DiffTarget;
 use crate::diff_view::{FileHunks, Hunk, file_hunks};
