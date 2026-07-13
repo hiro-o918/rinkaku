@@ -150,9 +150,7 @@ pub(crate) fn diff_pane_lines(
             }
             lines.push(Line::styled(
                 attributed.hunk.header.clone(),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
+                Style::default().fg(Color::DarkGray),
             ));
 
             let hunk_highlight = highlight::lookup_hunk_highlight_by_index(
@@ -762,7 +760,7 @@ index e69de29..4b825dc 100644
     }
 
     #[test]
-    fn should_keep_hunk_header_dim_when_diff_pane_is_highlighted() {
+    fn should_keep_hunk_header_dark_gray_when_diff_pane_is_highlighted() {
         let report = report_with_one_symbol();
         // ADR 0020 defaults the right pane to Diff already, so no
         // `ToggleDiff` press is needed to reach it here.
@@ -797,7 +795,10 @@ index e69de29..4b825dc 100644
 
         let header_style = find_cell_style(&terminal, "@@ -1,1 +1,2 @@", "@@");
         assert_eq!(Some(Color::DarkGray), header_style.fg);
-        assert!(header_style.add_modifier.contains(Modifier::DIM));
+        // DarkGray alone gives sufficient contrast; stacking `Modifier::DIM`
+        // on top of it double-dims the header to near-invisibility on many
+        // terminal themes (especially light backgrounds).
+        assert!(!header_style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! background tint" composition (ADR 0018).
 
 use crate::highlight::{PALETTE, TokenSpan};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
 /// Splits `content` into styled spans per `spans` (byte-offset [`TokenSpan`]s
@@ -74,9 +74,7 @@ pub(crate) fn palette_style(palette_index: usize) -> Style {
     match PALETTE.get(palette_index).copied() {
         Some("keyword") => Style::default().fg(Color::Magenta),
         Some("string") => Style::default().fg(Color::Yellow),
-        Some("comment") => Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
+        Some("comment") => Style::default().fg(Color::DarkGray),
         Some("function") => Style::default().fg(Color::Blue),
         Some("type") => Style::default().fg(Color::Cyan),
         Some("number") => Style::default().fg(Color::LightRed),
@@ -99,12 +97,7 @@ mod tests {
         let expected = vec![
             ("keyword", Style::default().fg(Color::Magenta)),
             ("string", Style::default().fg(Color::Yellow)),
-            (
-                "comment",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
-            ),
+            ("comment", Style::default().fg(Color::DarkGray)),
             ("function", Style::default().fg(Color::Blue)),
             ("type", Style::default().fg(Color::Cyan)),
             ("number", Style::default().fg(Color::LightRed)),
