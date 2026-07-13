@@ -10,6 +10,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core diff-condensation engine for rinkaku: parses unified diffs and slices out changed symbols with their signatures and dependencies"
+documentation = "https://docs.rs/rinkaku-core"
 readme = "../README.md"
 keywords = ["diff", "tree-sitter", "code-review", "llm"]
 categories = ["development-tools"]

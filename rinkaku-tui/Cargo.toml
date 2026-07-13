@@ -8,6 +8,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Interactive terminal UI view-models for rinkaku (ADR 0015/0016): directory tree, navigation, and detail views over a Report"
+documentation = "https://docs.rs/rinkaku-tui"
 readme = "../README.md"
 keywords = ["diff", "tui", "code-review"]
 categories = ["development-tools"]
