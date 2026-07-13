@@ -228,6 +228,97 @@ fn should_sort_hotspots_by_fan_in_descending_when_multiple_hotspots_exist() {
 }
 
 #[test]
+fn should_break_fan_in_tie_by_id_when_path_and_name_are_also_equal() {
+    // Two distinct symbols share the same (path, name) — e.g. two
+    // overloaded `helper` functions in the same file, disambiguated only
+    // by `@line` in `id` (see `collect_nodes`'s doc comment) — and both
+    // reach fan-in 2. Without an id-based tie-break, `HashMap` iteration
+    // order in `compute_hotspots` decides the order non-deterministically
+    // across runs; the id ("a.rs::helper@1" before "a.rs::helper@9")
+    // must fix it instead.
+    let graph = SymbolGraph {
+        nodes: vec![
+            Node {
+                id: "a.rs::helper@9".to_string(),
+                path: "a.rs".to_string(),
+                name: "helper".to_string(),
+            },
+            Node {
+                id: "a.rs::helper@1".to_string(),
+                path: "a.rs".to_string(),
+                name: "helper".to_string(),
+            },
+            Node {
+                id: "a.rs::x".to_string(),
+                path: "a.rs".to_string(),
+                name: "x".to_string(),
+            },
+            Node {
+                id: "a.rs::y".to_string(),
+                path: "a.rs".to_string(),
+                name: "y".to_string(),
+            },
+            Node {
+                id: "a.rs::m".to_string(),
+                path: "a.rs".to_string(),
+                name: "m".to_string(),
+            },
+            Node {
+                id: "a.rs::n".to_string(),
+                path: "a.rs".to_string(),
+                name: "n".to_string(),
+            },
+        ],
+        edges: vec![
+            Edge {
+                from: "a.rs::x".to_string(),
+                to: "a.rs::helper@9".to_string(),
+                is_cycle: false,
+            },
+            Edge {
+                from: "a.rs::y".to_string(),
+                to: "a.rs::helper@9".to_string(),
+                is_cycle: false,
+            },
+            Edge {
+                from: "a.rs::m".to_string(),
+                to: "a.rs::helper@1".to_string(),
+                is_cycle: false,
+            },
+            Edge {
+                from: "a.rs::n".to_string(),
+                to: "a.rs::helper@1".to_string(),
+                is_cycle: false,
+            },
+        ],
+        roots: vec![
+            "a.rs::x".to_string(),
+            "a.rs::y".to_string(),
+            "a.rs::m".to_string(),
+            "a.rs::n".to_string(),
+        ],
+    };
+
+    let expected = vec![
+        Hotspot {
+            id: "a.rs::helper@1".to_string(),
+            path: "a.rs".to_string(),
+            name: "helper".to_string(),
+            used_by: vec!["m".to_string(), "n".to_string()],
+        },
+        Hotspot {
+            id: "a.rs::helper@9".to_string(),
+            path: "a.rs".to_string(),
+            name: "helper".to_string(),
+            used_by: vec!["x".to_string(), "y".to_string()],
+        },
+    ];
+    let actual = compute_hotspots(&graph);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_break_fan_in_tie_by_path_then_name_when_counts_are_equal() {
     // Both "b_target" (path b.rs) and "a_target" (path a.rs) have
     // fan-in 2 — must sort a.rs before b.rs by path, not by discovery

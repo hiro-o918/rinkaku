@@ -123,3 +123,24 @@ This is a breaking change to the TUI's badge presentation, but has never
 shipped a release (per ADR 0015/0016), so no compatibility path is
 needed. Consumers of `Report` (Markdown / JSON / Mermaid) are
 untouched.
+
+## Amendment (2026-07-13, fix/hotspots-deterministic-tiebreak)
+
+Found while verifying byte-level output determinism during ADR 0031's
+parallel-parse work: `compute_hotspots`'s ordering was not fully
+deterministic even on `main` alone, unrelated to parallelization. The
+existing tie-break (fan-in descending, then `path` then `name` ascending,
+per this ADR's Decision section) leaves ties unresolved when two distinct
+symbols share both `path` and `name` and reach equal fan-in — e.g. two
+overloaded functions named `helper` in the same file, disambiguated only
+by the `@{start_line}` suffix in their `id` (`collect_nodes`'s
+disambiguation scheme). In that case the order between them was decided
+by `referrers_by_target`'s `HashMap` iteration order, which varies
+between runs under Rust's randomized `HashMap` hasher seed.
+
+Change: add `id` as a fourth, final tie-break key
+(`fan-in desc, path asc, name asc, id asc`) in `compute_hotspots`'s
+`sort_by` (`rinkaku-core/src/graph.rs`). `id` is always unique per node
+(`collect_nodes`'s contract), so this fully determines the order in every
+case. Purely an internal ordering fix — `Hotspot`'s fields and the
+Markdown/JSON output shapes are unchanged.
