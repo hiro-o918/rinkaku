@@ -265,3 +265,49 @@ predictable state transitions and `s` is the deliberate "go read the real
 file" action. No other decision in this ADR changes: the diff-shaping
 rules (decision 4), the pane-scoped `]`/`[` hunk jump (decision 1's Right
 focus bullet), and the help overlay are all unaffected.
+
+## Amendment 2 (map-assisted review, post-acceptance)
+
+Two further scroll-semantics refinements, found by a map-assisted review
+round rather than dogfooding, but belonging with the two amendments above
+since both touch `right_pane_scroll`'s reset/clamp rules this ADR and
+Amendment 1 already document:
+
+- **Enter while already reading Diff must be a true no-op.** Amendment 1
+  above unified `Enter` to always mean "switch to `RightPane::Diff` and
+  move focus to `Right`" — but `App::handle_key`'s `(Screen::Entry, _,
+  InputKey::Open)` arm matched regardless of `Focus`, so pressing `Enter`
+  a second time mid-read (already `Focus::Right`, already `RightPane::Diff`)
+  still fell through to the function's blanket "reset scroll to 0 unless
+  `preserve_scroll`" rule and threw away the reviewer's reading position.
+  `Focus::Right` now branches on the *current* `right_pane`: `Diff` already
+  showing is a genuine no-op (scroll preserved, mirroring plain `j`/`k`
+  scrolling's own `preserve_scroll` case), while `Detail`/`BlastRadius`
+  showing is still a real pane switch to `Diff` and keeps the ordinary
+  scroll-reset behavior, since that case *is* a content change.
+- **`gd`/`gr` jumplist entries always recorded scroll 0.** `dispatch_non_source_key`
+  (`crate/lib.rs`) must call `App::handle_key(GotoDefinition | GotoReferences)`
+  before resolving candidates, purely so that call's unconditional
+  `pending_prefix` clear runs (ADR 0022) — but that same call also hit the
+  blanket scroll reset *before* `App::jump_to_symbol` read
+  `right_pane_scroll` to save it into the jumplist entry being jumped
+  *from*, so every entry's saved scroll was always 0 and `Ctrl-o` could
+  never restore a real reading position. `GotoDefinition`/`GotoReferences`
+  are now added to `preserve_scroll`'s exception list; `App::jump_to_symbol`
+  (and `PopupConfirm`, which also calls it) still does its own explicit
+  `right_pane_scroll = 0` reset for the *new* target once a jump actually
+  happens, so this only protects the *old* position's snapshot, not the
+  reset a real jump still performs.
+
+A third, smaller point from the same review round was confirmed as an
+already-intentional trade-off rather than a bug: `crate::run_app` folds
+`ui::draw`'s clamped scroll back into `App` on *every* draw (Amendment to
+`clamp_right_pane_scroll_after_draw`'s own doc comment, `lib.rs`), including
+idle poll ticks, not only key presses — so shrinking the terminal
+mid-read permanently clamps `App`'s own scroll offset down, and growing
+the terminal back afterward does not restore the pre-shrink position.
+Accepted as-is: `right_pane_scroll` is deliberately single-valued (no
+separate "requested vs. actually-applied" pair to fall back to), and a
+reviewer resizing mid-read and losing a few lines of scroll position is a
+far rarer, lower-cost edge case than the overshoot-unwind bug this
+fold-back exists to fix.

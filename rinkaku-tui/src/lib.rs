@@ -265,6 +265,18 @@ fn run_app(
 /// since `App::with_right_pane_scroll` is a plain field write — the branch
 /// would only save a redundant assignment, not a meaningfully different
 /// state, so it is not worth the extra branch.
+///
+/// Deliberate trade-off (recorded in ADR 0020's Amendment too): this runs on
+/// *every* draw, including the idle ~100ms poll ticks `crate::run_app`'s doc
+/// comment already notes, not only after a key press — so shrinking the
+/// terminal (fewer visible rows, a smaller `max_scroll`) permanently clamps
+/// `App`'s own scroll offset down, and growing the terminal back afterward
+/// does not restore the pre-shrink position; there is no separate "requested
+/// vs. actually-applied" pair of fields to fall back to; `right_pane_scroll`
+/// is single-valued by design (that field's own doc comment). A reviewer who
+/// shrinks their terminal mid-read and then grows it back finds the pane
+/// scrolled less far than before the resize — judged an acceptable, rare
+/// edge case relative to the far more common overshoot this fold-back fixes.
 fn clamp_right_pane_scroll_after_draw(app: App, clamped: Option<usize>) -> App {
     match clamped {
         Some(scroll) => app.with_right_pane_scroll(scroll),
@@ -1496,6 +1508,71 @@ mod tests {
             right_pane_before,
             app.right_pane(),
             "d after a cancelled gr popup must toggle the right pane like an ordinary ToggleDiff press"
+        );
+    }
+
+    #[test]
+    fn should_restore_the_scroll_offset_the_reviewer_was_at_when_jumping_back_after_gd() {
+        // Independent-review finding: `dispatch_non_source_key` always calls
+        // `app.handle_key(GotoDefinition)` first (for the `pending_prefix`
+        // clear — see the test group above), and before this fix that call
+        // hit `App::handle_key`'s own blanket scroll reset before
+        // `App::jump_to_symbol` ever read `right_pane_scroll` to save it into
+        // the jumplist entry — so every jumplist entry's saved scroll was
+        // always 0 and `Ctrl-o` could never restore a real reading position.
+        //
+        // This test drives the *real* two-key `g` then `d` sequence
+        // (`InputKey::PendingGoto` then `InputKey::GotoDefinition`), each
+        // through `dispatch_non_source_key` — not `App::handle_key` directly,
+        // and not `GotoDefinition` alone. An earlier version of this test did
+        // call `GotoDefinition` alone and passed while the underlying bug was
+        // still only half-fixed: `PendingGoto` (the leading `g`) is also
+        // dispatched through `handle_key` on its own, one keypress *before*
+        // `GotoDefinition`, and its own blanket scroll reset zeroed
+        // `right_pane_scroll` before `d` was even pressed — a gap only a
+        // real terminal run surfaced (see `InputKey::PendingGoto`'s own doc
+        // comment). Scrolls to a nonzero offset, jumps via the real `gd` key
+        // sequence, then jumps back via `Ctrl-o` (`InputKey::JumpBack`) and
+        // asserts the original scroll offset is restored rather than 0.
+        let report = report_with_symbols_and_edges(
+            vec![("lib.rs", vec!["foo", "bar"])],
+            vec![("lib.rs::foo", "lib.rs::bar")],
+        );
+        let diff_content = diff_shape::DiffPaneContent::Empty;
+
+        // Cursor on "foo" (row 1), scrolled 5 lines into its Diff pane.
+        let mut app = App::new(&report).handle_key(InputKey::Down);
+        app = dispatch_non_source_key(app, &report, &diff_content, InputKey::Open); // focus -> Right, RightPane::Diff
+        for _ in 0..5 {
+            app = dispatch_non_source_key(app, &report, &diff_content, InputKey::Down);
+        }
+        assert_eq!(5, app.right_pane_scroll());
+
+        // The real `gd` key sequence: `g` (PendingGoto) then `d`
+        // (GotoDefinition) — "bar" is "foo"'s one callee, so this jumps
+        // immediately (`GotoOutcome::One`) rather than opening the popup.
+        app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PendingGoto);
+        assert_eq!(
+            5,
+            app.right_pane_scroll(),
+            "the leading g of gd must not disturb scroll either"
+        );
+        app = dispatch_non_source_key(app, &report, &diff_content, InputKey::GotoDefinition);
+        assert_eq!(Some("lib.rs::bar"), app.selected_symbol_id());
+        assert_eq!(
+            0,
+            app.right_pane_scroll(),
+            "the new target's own scroll must start at 0 (App::jump_to_symbol's own reset)"
+        );
+
+        // Ctrl-o: jump back to "foo" — the regression this test guards.
+        app = dispatch_non_source_key(app, &report, &diff_content, InputKey::JumpBack);
+
+        assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
+        assert_eq!(
+            5,
+            app.right_pane_scroll(),
+            "jumping back must restore the scroll offset recorded when gd was pressed, not 0"
         );
     }
 }
