@@ -1,4 +1,5 @@
-//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037, ADR 0039).
+//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037, ADR 0039,
+//! ADR 0040).
 //!
 //! The `--format mermaid` output path: a human-oriented call/dependency
 //! graph aimed at GitHub's native mermaid rendering in PR comments/
@@ -7,10 +8,11 @@
 //! would exceed `MERMAID_NODE_BUDGET`, so the output stays legible instead
 //! of degrading into a hairball. `report.removed` (ADR 0014) renders as
 //! `removed`-classed nodes in the same graph — see ADR 0037 for why a
-//! merged graph rather than a separate before/after diagram. A trailing
-//! `Legend` subgraph (ADR 0039) renders one real, styled node per class so
-//! the diagram explains its own color/style vocabulary without a separate
-//! prose legend.
+//! merged graph rather than a separate before/after diagram. The trailing
+//! `classDef` lines (below) are the only legend-related output this module
+//! produces (ADR 0040 superseded ADR 0039's in-diagram `Legend` subgraph);
+//! `compose_and_post_comment.sh` parses them to build the human-readable
+//! legend outside the diagram.
 
 use crate::extract::Classification;
 use crate::graph::Node;
@@ -53,7 +55,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
 
     if report.graph.nodes.is_empty() && report.removed.is_empty() {
         out.push_str("%% no symbols\n");
-        write_legend_and_class_defs(&mut out);
+        write_class_defs(&mut out);
         return out;
     }
 
@@ -182,7 +184,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
         writeln!(out, "  class {safe_id} removed").expect("writing to a String cannot fail");
     }
 
-    write_legend_and_class_defs(&mut out);
+    write_class_defs(&mut out);
     out
 }
 
@@ -301,7 +303,7 @@ fn render_mermaid_file_level(report: &Report) -> String {
         }
     }
 
-    write_legend_and_class_defs(&mut out);
+    write_class_defs(&mut out);
     out
 }
 
@@ -317,7 +319,9 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// that is both `changed`/`added` and high-fan-in still gets `fan-in`
 /// styling (see `render_mermaid`'s class-assignment comment for the
 /// precedence rule), and its label additionally carries a `(in:N)` suffix
-/// so the signal survives even without color (ADR 0039).
+/// so the signal survives even without color (ADR 0039). Also the source
+/// of truth `compose_and_post_comment.sh` parses for the Markdown legend
+/// (ADR 0040) — a hex value changed here needs no separate update there.
 const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
     "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
@@ -325,35 +329,12 @@ const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef removed fill:#fed7d7,stroke:#9b2c2c,color:#1a202c,stroke-dasharray: 5 5;\n",
 );
 
-/// Fixed-id, real-node `subgraph Legend` block appended by
-/// [`write_legend_and_class_defs`] (ADR 0039): one node per class, styled
-/// with the same `classDef` a real graph node of that class would use.
-/// Always emitted — including the empty-graph and file-level-fallback
-/// paths — so a reader never sees the diagram without its own key, and a
-/// future `classDef` change re-styles the legend automatically instead of
-/// risking drift against a hand-written prose description (the problem ADR
-/// 0039 replaces). Node ids are fixed rather than drawn from the `n{i}`
-/// sequence since the legend has no corresponding `report.graph.nodes`
-/// entry to derive one from.
-const MERMAID_LEGEND: &str = concat!(
-    "  subgraph Legend\n",
-    "    legend_added[\"added\"]\n",
-    "    legend_changed[\"API changed\"]\n",
-    "    legend_removed[\"removed\"]\n",
-    "    legend_fan_in[\"fan-in (in:N)\"]\n",
-    "  end\n",
-    "  class legend_added added\n",
-    "  class legend_changed changed\n",
-    "  class legend_removed removed\n",
-    "  class legend_fan_in fan-in\n",
-);
-
-/// Appends [`MERMAID_LEGEND`] followed by [`MERMAID_CLASS_DEFS`] — every
-/// [`render_mermaid`]/[`render_mermaid_file_level`] return path ends with
-/// this same pair, in this order, so the legend's `class` assignments
-/// above always have a matching `classDef` below them.
-fn write_legend_and_class_defs(out: &mut String) {
-    out.push_str(MERMAID_LEGEND);
+/// Appends [`MERMAID_CLASS_DEFS`] — every [`render_mermaid`]/
+/// [`render_mermaid_file_level`] return path ends with this. No `Legend`
+/// subgraph here (ADR 0040 superseded ADR 0039): that block made the
+/// diagram too large for a PR comment, so the legend moved to
+/// `compose_and_post_comment.sh`.
+fn write_class_defs(out: &mut String) {
     out.push_str(MERMAID_CLASS_DEFS);
 }
 

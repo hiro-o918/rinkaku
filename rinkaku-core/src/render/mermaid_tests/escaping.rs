@@ -20,7 +20,7 @@ fn should_escape_label_when_name_contains_quote_and_bracket() {
 
     let expected = format!(
         "flowchart LR\n  subgraph sub0[\"src/lib.rs\"]\n    n0[\"weird&quot;name&#91;with&#93;brackets\"]\n  end\n{}",
-        LEGEND_AND_CLASS_DEFS
+        CLASS_DEFS
     );
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
@@ -45,7 +45,7 @@ fn should_replace_embedded_newline_with_space_when_path_contains_one() {
 
     let expected = format!(
         "flowchart LR\n  subgraph sub0[\"src/li b.rs\"]\n    n0[\"weird\"]\n  end\n{}",
-        LEGEND_AND_CLASS_DEFS
+        CLASS_DEFS
     );
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 

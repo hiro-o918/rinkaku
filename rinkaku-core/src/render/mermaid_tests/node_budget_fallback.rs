@@ -37,7 +37,7 @@ fn should_stay_symbol_level_when_node_count_equals_budget_exactly() {
         expected.push_str(&format!("    n{i}[\"s{i}\"]\n"));
     }
     expected.push_str("  end\n");
-    expected.push_str(LEGEND_AND_CLASS_DEFS);
+    expected.push_str(CLASS_DEFS);
 
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
@@ -122,7 +122,7 @@ fn should_fall_back_to_file_level_graph_when_node_count_exceeds_budget() {
         "  class n0 changed\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);

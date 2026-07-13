@@ -1,11 +1,14 @@
-//! The empty-graph short-circuit and the ADR 0039 `Legend` subgraph every
-//! render path shares.
+//! The empty-graph short-circuit and the `classDef` trailer every render
+//! path shares (ADR 0040: the in-diagram `Legend` subgraph ADR 0039 added
+//! is gone — the Markdown legend now lives in
+//! `compose_and_post_comment.sh`, generated from these same `classDef`
+//! lines).
 
 use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn should_render_minimal_valid_document_with_legend_when_graph_is_empty() {
+fn should_render_minimal_valid_document_with_class_defs_when_graph_is_empty() {
     let report = empty_report(
         SymbolGraph {
             nodes: vec![],
@@ -15,20 +18,14 @@ fn should_render_minimal_valid_document_with_legend_when_graph_is_empty() {
         vec![],
     );
 
-    let expected = format!("flowchart LR\n%% no symbols\n{}", LEGEND_AND_CLASS_DEFS);
+    let expected = format!("flowchart LR\n%% no symbols\n{}", CLASS_DEFS);
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
 }
 
-// NOTE: partial (`contains`) assertions here, not a full-string compare —
-// every other test in this module already pins the exact full document
-// (including this same trailer via `LEGEND_AND_CLASS_DEFS`); this test's
-// purpose is narrower, to have one failure point squarely at the legend
-// block itself if its content changes, independent of whichever
-// class-assignment test happens to also cover it.
 #[test]
-fn should_render_legend_subgraph_with_one_styled_node_per_class_when_graph_has_symbols() {
+fn should_render_class_defs_with_no_legend_subgraph_when_graph_has_symbols() {
     let report = empty_report(
         SymbolGraph {
             nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
@@ -44,22 +41,15 @@ fn should_render_legend_subgraph_with_one_styled_node_per_class_when_graph_has_s
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert!(
-        actual.contains(
-            "  subgraph Legend\n\
-             \x20   legend_added[\"added\"]\n\
-             \x20   legend_changed[\"API changed\"]\n\
-             \x20   legend_removed[\"removed\"]\n\
-             \x20   legend_fan_in[\"fan-in (in:N)\"]\n\
-             \x20 end\n"
-        ),
-        "expected Legend subgraph block in output, got:\n{actual}"
+        actual.ends_with(CLASS_DEFS),
+        "expected output to end with the classDef trailer, got:\n{actual}"
     );
     assert!(
-        actual.contains("  class legend_added added\n"),
-        "expected legend_added class assignment, got:\n{actual}"
+        !actual.contains("subgraph Legend"),
+        "expected no in-diagram Legend subgraph (ADR 0040), got:\n{actual}"
     );
     assert!(
-        actual.contains("  class legend_fan_in fan-in\n"),
-        "expected legend_fan_in class assignment, got:\n{actual}"
+        !actual.contains("legend_"),
+        "expected no legend_* node ids (ADR 0040), got:\n{actual}"
     );
 }

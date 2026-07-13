@@ -36,7 +36,7 @@ fn should_render_removed_node_in_its_file_subgraph_when_report_has_removed_symbo
         "  class n1 removed\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
@@ -62,7 +62,7 @@ fn should_render_removed_only_file_subgraph_when_file_has_no_surviving_symbols()
         "  class n0 removed\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
@@ -165,7 +165,7 @@ fn should_render_removed_only_file_as_removed_node_when_fallback_fires() {
         "  class n2 removed\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
