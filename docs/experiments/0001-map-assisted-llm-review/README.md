@@ -1,7 +1,8 @@
 # Experiment 0001: rinkaku change maps as an entry point for LLM code review
 
-- Status: 10 rounds complete
-- Date: 2026-07-12
+- Status: 17 rounds complete (index/conclusions cover rounds 1-10 and
+  17; rounds 11-16 are recorded under `rounds/` but not yet folded in)
+- Date: 2026-07-13
 
 ## Hypothesis
 
@@ -66,6 +67,10 @@ that file so future rounds are conflict-free:
 | [008](rounds/008.md) | TUI source view path resolution fix | Both arms converged on the same blocker (workdir propagation); only dynamic verification caught a narrow-pane wrapping bug |
 | [009](rounds/009.md) | TUI entry tree: skipped/test-only files | Zero overlap, zero shared theme — the cleanest complementary-findings round yet |
 | [010](rounds/010.md) | This PR's own diff: `--format mermaid` + GitHub Action | Mostly non-Rust surface; map's best signal was naming its own blind spot; neither arm caught a first-PR bootstrap bug the orchestrator found post-merge |
+| [017](rounds/017.md) | Minimal `env_logger` config change in `fn main` (PR #79) | Map was correctly silent on a body-only diff whose entire risk lives in rendered log text, not any signature; reviewer fell back to manual consumer tracing, dynamic verification carried the confirmation |
+
+Rounds 11-16 are recorded under `rounds/` but not yet folded into this
+index; that backlog is tracked separately from this round's follow-up.
 
 ## Threats to validity
 
@@ -80,8 +85,12 @@ that file so future rounds are conflict-free:
   orchestrator seeding a specific suspicion into both review prompts —
   not independent evidence that round. Round 10's dynamic-verification
   assignment (arm B only) is a similar, recorded asymmetry.
+- Round 17 was not run as a harness-timed A/B pair at all (no token/
+  tool-call/wall-clock metrics collected); it records the review this
+  PR actually received before merge, in the per-round format used for
+  continuity, not as comparable experimental data.
 
-## Conclusions (after 10 rounds)
+## Conclusions (after rounds 1-10 and 17)
 
 - The map is a **complement, not a substitute**. Across ten rounds,
   neither arm has ever produced a superset of the other's findings;
@@ -108,8 +117,15 @@ that file so future rounds are conflict-free:
   code or a dependency's own semantics (round 5); (2) whether a
   data-flow wire that exists actually carries the *correct* value,
   as opposed to *a* value (rounds 7, 8, 9); (3) anything outside its
-  language coverage at all — round 10's YAML/shell surface rendered
-  as "skipped," not analyzed.
+  representational model at all — round 10's YAML/shell surface
+  rendered as "skipped," not analyzed, and round 17's opposite-
+  direction case, a Rust diff fully inside the map's *language*
+  coverage but whose entire risk (rendered log text) sits outside its
+  *signature* coverage, which the map correctly rendered as silence
+  rather than a fabricated marker. Either shape — skipped-as-language
+  or silent-as-signature — must trigger the same reviewer response:
+  fall back to manual tracing and dynamic verification, not read
+  absence of markers as absence of risk.
 - **Doc-versus-implementation drift is a defect shape adversarial
   reading plus execution is specifically good at** (dominant in round
   4's dead-guard comment and round 7's four separate instances) —
