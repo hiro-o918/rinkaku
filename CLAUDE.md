@@ -92,6 +92,20 @@ The map allocates attention; it is not a verifier. Behavioral bugs do
 not show up on the signature surface, so neither pass may skip reading
 the code it flags — and none of the three angles may be skipped.
 
+## Process weight
+
+Match the process to the risk of the change; not every PR needs the
+full pipeline above.
+
+- **Mechanical changes** — renames, label/string substitutions,
+  promoting a literal to a named const, doc wording — may be done
+  directly: edit, `make test`, `make lint`, PR. The three-angle
+  review is not required. An ADR (or amendment) is still required
+  when the change breaks an output format, but keep it short.
+- **Logic, behavior, or design changes** get the full treatment:
+  TDD, an ADR where the conventions below require one, and the
+  three-angle dogfooding review.
+
 ## Toolchain
 
 ```sh
