@@ -245,6 +245,46 @@ fn should_mark_removed_symbol_with_x() {
     assert_eq!("  x fn gone_fn", line_text(&line));
 }
 
+// ADR 0035: a test symbol left in the production tree (only possible
+// for a *mixed* file — a whole-test-file's symbols never reach the
+// production tree at all, see `SymbolRef::is_test`'s doc comment)
+// renders a trailing `test` badge, magenta like the existing whole-file
+// `[test] (N symbols)` badge (`test_badge_span`) so the same color means
+// the same thing everywhere in the tree.
+
+#[test]
+fn should_append_test_badge_for_a_test_symbol_in_a_mixed_file() {
+    let symbol_ref = SymbolRef {
+        is_test: true,
+        ..plain_symbol("test_it")
+    };
+    let node = symbol_node("lib.rs", symbol_ref, Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(&row, "", &HashMap::new(), false);
+
+    assert_eq!("    fn test_it test", line_text(&line));
+    assert_eq!(Some(Color::Magenta), fg_of_span_with_content(&line, "test"));
+}
+
+#[test]
+fn should_not_append_test_badge_for_an_ordinary_non_test_symbol() {
+    let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(&row, "", &HashMap::new(), false);
+
+    assert_eq!("    fn foo", line_text(&line));
+}
+
 #[test]
 fn should_apply_reversed_modifier_when_row_is_selected() {
     let node = file_node("lib.rs", Badges::default());

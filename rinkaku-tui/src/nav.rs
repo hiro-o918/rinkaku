@@ -389,6 +389,7 @@ mod tests {
                 kind: rinkaku_core::extract::SymbolKind::Function,
                 classification: None,
                 removed: false,
+                is_test: false,
             }),
             path: path.to_string(),
             badges: Badges::default(),

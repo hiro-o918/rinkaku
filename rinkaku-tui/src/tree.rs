@@ -33,6 +33,16 @@ pub struct SymbolRef {
     /// match went missing entirely.
     pub classification: Option<Classification>,
     pub removed: bool,
+    /// Mirrors [`rinkaku_core::extract::ExtractedSymbol::is_test`] (ADR
+    /// 0035): `true` for a test symbol that survives into the production
+    /// tree because it lives in a *mixed* file alongside non-test symbols
+    /// (a whole-test-file's symbols never reach the production tree at
+    /// all — see `TreeNode::test_symbol_count`'s doc comment — so this
+    /// field only ever matters for the mixed case). `false` for a
+    /// [`RemovedSymbol`], which carries no `is_test` flag of its own —
+    /// there is no head-side AST context left to classify a removed
+    /// symbol's test-ness by.
+    pub is_test: bool,
 }
 
 /// What kind of thing a [`TreeNode`] represents.
@@ -353,6 +363,7 @@ impl<'a> TreeBuilder<'a> {
                 kind: symbol.kind,
                 classification: symbol.classification,
                 removed: false,
+                is_test: symbol.is_test,
             });
         }
     }
@@ -366,6 +377,9 @@ impl<'a> TreeBuilder<'a> {
             kind: removed.kind,
             classification: None,
             removed: true,
+            // `RemovedSymbol` carries no `is_test` flag of its own — see
+            // `SymbolRef::is_test`'s doc comment.
+            is_test: false,
         });
     }
 

@@ -39,6 +39,7 @@ fn should_build_flat_file_node_when_path_has_no_directory() {
                     kind: SymbolKind::Function,
                     classification: None,
                     removed: false,
+                    is_test: false,
                 }),
                 path: "lib.rs".to_string(),
                 badges: Badges {

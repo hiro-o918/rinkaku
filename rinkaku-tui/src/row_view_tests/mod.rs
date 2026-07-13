@@ -2,8 +2,8 @@
 //! grouped by which pub function / row-render concern each block pins:
 //!
 //! - `entry_row_line` — general `entry_row_line` behavior: indent,
-//!   badges, skip-reason, test-file badge, cycle marker, classification
-//!   markers, selection modifier
+//!   badges, skip-reason, test-file badge, per-symbol `test` badge (ADR
+//!   0035), cycle marker, classification markers, selection modifier
 //! - `relative_labels` — `relative_labels`' ancestor-prefix stripping
 //! - `file_size_badges` — ADR 0028 file-size warning badges on file and
 //!   dir rows (`lines:N`, `warn:N split:N`)
@@ -81,6 +81,7 @@ pub(super) fn plain_symbol(name: &str) -> SymbolRef {
         kind: SymbolKind::Function,
         classification: None,
         removed: false,
+        is_test: false,
     }
 }
 

@@ -104,6 +104,16 @@ pub fn entry_row_line(
                 symbol_ref.name.clone(),
                 symbol_name_style(symbol_ref),
             ));
+            // ADR 0035: only reachable for a test symbol left in the
+            // production tree — i.e. one living in a *mixed* file
+            // alongside non-test symbols, since a whole-test-file's
+            // symbols never reach the production tree at all (they are
+            // summarized by the file-level `[test] (N symbols)` badge
+            // above instead, see `TreeNode::test_symbol_count`).
+            if symbol_ref.is_test {
+                spans.push(Span::raw(" "));
+                spans.push(symbol_test_badge_span());
+            }
         }
     }
 
@@ -366,6 +376,16 @@ fn test_badge_span(symbol_count: usize) -> Span<'static> {
         format!("[test] ({symbol_count} {noun})"),
         Style::default().fg(Color::Magenta),
     )
+}
+
+/// The `test` badge for a single test-symbol row (ADR 0035) — same
+/// magenta as [`test_badge_span`]'s whole-file `[test] (N symbols)`
+/// badge, so one color consistently means "this is test code" whether
+/// it labels a whole file or one symbol inside a mixed file. Unlike the
+/// file-level badge, there is no count to show here: a `Symbol` row is
+/// already one symbol, so the badge is just the bare word.
+fn symbol_test_badge_span() -> Span<'static> {
+    Span::styled("test", Style::default().fg(Color::Magenta))
 }
 
 /// A symbol row's leading classification marker: `+` added, `~`

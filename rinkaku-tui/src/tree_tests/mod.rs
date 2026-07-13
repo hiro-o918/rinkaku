@@ -5,8 +5,9 @@
 //!   collapse, non-collapse, own-file-plus-subdir, bottom-up badge
 //!   aggregation, empty-file leaves, source-order preservation
 //! - `symbol_badges` — per-symbol badge derivation: contract-change
-//!   counting, removed-symbol marking, and fan-in propagation from
-//!   `report.fan_ins`
+//!   counting, removed-symbol marking, fan-in propagation from
+//!   `report.fan_ins`, and (ADR 0035) `SymbolRef::is_test` propagation
+//!   from `ExtractedSymbol::is_test`
 //! - `file_size_warnings` — ADR 0028 file-size badge propagation:
 //!   own line count, per-severity aggregation, and dir-node severity
 //!   invariant

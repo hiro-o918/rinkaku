@@ -86,6 +86,7 @@ fn should_add_removed_symbol_as_marked_leaf_under_its_file_without_counting_as_c
                     kind: SymbolKind::Function,
                     classification: None,
                     removed: true,
+                    is_test: false,
                 }),
                 path: "lib.rs".to_string(),
                 badges: Badges {
@@ -145,6 +146,7 @@ fn should_merge_removed_symbol_into_existing_file_with_present_symbols() {
                         kind: SymbolKind::Function,
                         classification: None,
                         removed: false,
+                        is_test: false,
                     }),
                     path: "lib.rs".to_string(),
                     badges: Badges {
@@ -164,6 +166,7 @@ fn should_merge_removed_symbol_into_existing_file_with_present_symbols() {
                         kind: SymbolKind::Function,
                         classification: None,
                         removed: true,
+                        is_test: false,
                     }),
                     path: "lib.rs".to_string(),
                     badges: Badges {
@@ -231,4 +234,78 @@ fn should_leave_fan_in_at_zero_when_symbol_has_no_matching_fan_in_entry() {
     let tree = build_tree(&report);
 
     assert_eq!(0, tree.roots[0].badges.fan_in);
+}
+
+// The following tests pin ADR 0035's `SymbolRef::is_test` propagation: a
+// mixed file (real + test symbols in `report.files`, ADR 0025's default)
+// keeps its test symbols as ordinary `Symbol` children, but each one now
+// carries `is_test` through from `ExtractedSymbol::is_test` so
+// `row_view` can render a `test` badge on it without a second lookup
+// back into the `Report`.
+
+#[test]
+fn should_carry_is_test_true_onto_symbol_ref_for_a_test_symbol() {
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![ExtractedSymbol {
+                is_test: true,
+                ..symbol("lib.rs::test_it", "test_it", SymbolKind::Function)
+            }],
+        }],
+        ..empty_report()
+    };
+
+    let tree = build_tree(&report);
+
+    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[0].kind else {
+        panic!("expected a Symbol child");
+    };
+    assert!(symbol_ref.is_test);
+}
+
+#[test]
+fn should_carry_is_test_false_onto_symbol_ref_for_an_ordinary_symbol() {
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![symbol("lib.rs::foo", "foo", SymbolKind::Function)],
+        }],
+        ..empty_report()
+    };
+
+    let tree = build_tree(&report);
+
+    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[0].kind else {
+        panic!("expected a Symbol child");
+    };
+    assert!(!symbol_ref.is_test);
+}
+
+#[test]
+fn should_set_is_test_false_for_a_removed_symbol() {
+    // A removed symbol has no `ExtractedSymbol::is_test` of its own (see
+    // `RemovedSymbol`'s shape) — it never carries the test badge,
+    // regardless of whether the symbol it once was was test code, since
+    // there is no head-side AST context left to check.
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![],
+        removed: vec![RemovedSymbol {
+            name: "gone".to_string(),
+            kind: SymbolKind::Function,
+            path: "lib.rs".to_string(),
+            signature: "fn gone()".to_string(),
+        }],
+        ..empty_report()
+    };
+
+    let tree = build_tree(&report);
+
+    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[0].kind else {
+        panic!("expected a Symbol child");
+    };
+    assert!(!symbol_ref.is_test);
 }
