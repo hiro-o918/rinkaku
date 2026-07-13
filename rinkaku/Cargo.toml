@@ -27,6 +27,7 @@ env_logger = { workspace = true }
 self_update = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+indicatif = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
