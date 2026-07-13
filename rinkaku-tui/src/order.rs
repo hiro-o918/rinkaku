@@ -1070,6 +1070,8 @@ mod tests {
             path: path.to_string(),
             badges: crate::tree::Badges::default(),
             children,
+            skip_reason: None,
+            test_symbol_count: None,
         }
     }
 
@@ -1079,6 +1081,8 @@ mod tests {
             path: path.to_string(),
             badges: crate::tree::Badges::default(),
             children: vec![],
+            skip_reason: None,
+            test_symbol_count: None,
         }
     }
 
@@ -1332,6 +1336,8 @@ mod tests {
             path: path.to_string(),
             badges: crate::tree::Badges::default(),
             children,
+            skip_reason: None,
+            test_symbol_count: None,
         }
     }
 

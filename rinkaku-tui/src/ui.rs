@@ -19,7 +19,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 use rinkaku_core::extract::Classification;
 use rinkaku_core::render::{Report, ReportOrigin};
 use unicode_width::UnicodeWidthChar;
@@ -35,7 +35,11 @@ use unicode_width::UnicodeWidthChar;
 /// mode. `pivot_selection` is likewise computed once per handled key by
 /// `crate::run_app` (not here) whenever the right pane is in
 /// [`RightPane::Pivot`] mode — see `App::selected_pivot_view`'s own doc
-/// comment on why this function must not call it itself.
+/// comment on why this function must not call it itself. `repo_root` is
+/// only consulted on [`Screen::Source`] (forwarded to
+/// [`load_symbol_source`], see that function's doc comment for why
+/// `Report` paths need it) — it is threaded through here rather than
+/// resolved lazily so this stays the single frame-drawing entry point.
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -43,6 +47,7 @@ pub fn draw(
     diff_files: &[FileHunks],
     diff_highlights: &[HighlightedFile],
     pivot_selection: &PivotSelection,
+    repo_root: &std::path::Path,
 ) {
     let area = frame.area();
     let [body, status_area] =
@@ -58,7 +63,9 @@ pub fn draw(
             pivot_selection,
             body,
         ),
-        Screen::Source { symbol_id } => draw_source_screen(frame, report, symbol_id, body),
+        Screen::Source { symbol_id } => {
+            draw_source_screen(frame, report, symbol_id, repo_root, body)
+        }
     }
 
     draw_status_line(frame, app, status_area);
@@ -702,13 +709,17 @@ fn dir_detail_lines(detail: &DirDetail, origin: ReportOrigin) -> Vec<Line<'stati
     lines
 }
 
-/// Formats a [`FileDetail`] into displayable lines: every symbol in this
-/// file (changed symbols for a diff, every symbol for a whole-repo
-/// outline — ADR 0017), with the same classification marker convention
-/// `crate::row_view::entry_row_line` uses on symbol rows, plus fan-in. The
-/// "Symbols (N)" label itself is already origin-neutral, unlike
-/// `dir_detail_lines`'s first badge line, so no `origin` parameter is
-/// needed here.
+/// Formats a [`FileDetail`] into displayable lines: a `File <path>` header,
+/// then either a skipped-file explanation, a whole-test-file explanation, or
+/// the ordinary "Symbols (N)" listing — the three are mutually exclusive by
+/// construction (`crate::tree::TreeNode`'s own doc comment on
+/// `skip_reason`/`test_symbol_count`: an ordinary analyzed file has neither
+/// set, a skipped file has no symbols to list, and a whole-test file has no
+/// per-symbol data at all, only the count `pipeline::partition_test_symbols`
+/// kept). Without this, a skipped or whole-test file's detail pane would
+/// show a bare "Symbols (0)" — indistinguishable from a file that genuinely
+/// changed nothing, which is exactly the gap this feature closes for the
+/// entry-tree row too (see `row_view::entry_row_line`).
 fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -717,6 +728,35 @@ fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
         Style::default().add_modifier(Modifier::BOLD),
     ));
     lines.push(Line::raw(""));
+
+    if let Some(reason) = detail.skip_reason {
+        lines.push(Line::styled(
+            format!(
+                "Skipped: {}",
+                rinkaku_core::render::skip_reason_label(reason)
+            ),
+            Style::default().fg(Color::DarkGray),
+        ));
+        lines.push(Line::raw("rinkaku did not extract symbols from this file."));
+        return lines;
+    }
+
+    if let Some(symbol_count) = detail.test_symbol_count {
+        let noun = if symbol_count == 1 {
+            "symbol"
+        } else {
+            "symbols"
+        };
+        lines.push(Line::styled(
+            format!("Test file: {symbol_count} changed test {noun}"),
+            Style::default().fg(Color::Magenta),
+        ));
+        lines.push(Line::raw(
+            "Every changed symbol in this file is test code, excluded from the default view (see --include-tests).",
+        ));
+        return lines;
+    }
+
     lines.push(Line::styled(
         format!("Symbols ({})", detail.symbols.len()),
         Style::default().add_modifier(Modifier::BOLD),
@@ -834,14 +874,31 @@ fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
 /// status line (`App::set_status`) via that same code path, so a failure
 /// mid-session (e.g. the file was deleted after opening the view) is
 /// shown in the pane itself too, not just silently on the status line.
-fn draw_source_screen(frame: &mut Frame, report: &Report, symbol_id: &str, area: Rect) {
+fn draw_source_screen(
+    frame: &mut Frame,
+    report: &Report,
+    symbol_id: &str,
+    repo_root: &std::path::Path,
+    area: Rect,
+) {
     let title = format!(" Source: {symbol_id} ");
     let block = Block::bordered().title(title);
 
-    let source = match load_symbol_source(report, symbol_id) {
+    let source = match load_symbol_source(report, symbol_id, repo_root) {
         Ok(source) => source,
         Err(message) => {
-            let paragraph = Paragraph::new(message).block(block);
+            // `.wrap(Wrap { trim: false })`: the error message (full path +
+            // io error + the "not present in the working tree" hint added
+            // alongside repo-root resolution) routinely exceeds one line at
+            // ordinary pane widths. Without wrapping, `Paragraph` silently
+            // truncates instead of overflowing, cutting the hint off
+            // exactly where it explains the failure. `trim: false` keeps
+            // the message's own leading whitespace (there isn't any here,
+            // but matches this pane's other `Paragraph` usages that don't
+            // opt into trimming either).
+            let paragraph = Paragraph::new(message)
+                .block(block)
+                .wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
             return;
         }
@@ -947,6 +1004,14 @@ mod tests {
         }
     }
 
+    /// A placeholder repo root for tests that don't exercise the source
+    /// drill-down's actual file read (every `draw` test except the two
+    /// `draw_source_screen` ones below) — `draw` still requires the
+    /// parameter, but nothing under this path is ever read.
+    fn test_repo_root() -> std::path::PathBuf {
+        std::path::PathBuf::from("/repo")
+    }
+
     /// Flattens a `TestBackend`'s buffer into one string (rows joined by
     /// `\n`), so a snapshot assertion can check for expected substrings
     /// (pane titles, row content) without pinning every cell — the coarse
@@ -979,6 +1044,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1022,6 +1088,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1060,6 +1127,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1106,6 +1174,7 @@ mod tests {
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1114,6 +1183,108 @@ mod tests {
         assert!(text.contains("Dir src"));
         assert!(text.contains("symbols:"));
         assert!(!text.contains("changed symbols:"));
+    }
+
+    /// A [`Report`] whose only entry is a skipped file (no `files`, no
+    /// `tests`) — pairs with `report_with_one_symbol` for the detail-pane
+    /// tests below.
+    fn report_with_one_skipped_file() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![],
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        }
+    }
+
+    #[test]
+    fn should_draw_skip_reason_in_detail_pane_when_cursor_is_on_a_skipped_file_row() {
+        let report = report_with_one_skipped_file();
+        // Row 0 is the collapsing "assets" dir (single child, see
+        // `crate::tree::build_tree`'s collapsing rule); row 1 is the
+        // skipped "logo.png" file itself.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("File assets/logo.png"));
+        assert!(text.contains("Skipped: binary"));
+        assert!(!text.contains("Symbols ("));
+    }
+
+    /// A [`Report`] whose only entry is a whole-test-file summary (no
+    /// `files`, no `skipped`).
+    fn report_with_one_test_file() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![rinkaku_core::render::TestFileSummary {
+                path: "src/lib_test.go".to_string(),
+                symbol_count: 3,
+            }],
+            hotspots: vec![],
+            removed: vec![],
+        }
+    }
+
+    #[test]
+    fn should_draw_test_symbol_count_in_detail_pane_when_cursor_is_on_a_whole_test_file_row() {
+        let report = report_with_one_test_file();
+        // Row 0 is the collapsing "src" dir; row 1 is the whole test file.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("File src/lib_test.go"));
+        // "Test file: 3 changed test symbols" wraps across two rendered
+        // lines at this terminal's pane width, so assert on a substring
+        // that survives the wrap rather than the whole phrase.
+        assert!(text.contains("Test file: 3 changed test"));
+        assert!(!text.contains("Symbols ("));
     }
 
     #[test]
@@ -1144,6 +1315,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1151,6 +1323,132 @@ index e69de29..4b825dc 100644
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"));
         assert!(text.contains("+fn foo() {}"));
+    }
+
+    // Dynamic-verification note (see CLAUDE.md's reviewing-changes
+    // section): this pins that a skipped file's diff pane still resolves
+    // real hunks from the raw diff text — `App::selected_diff_target`
+    // scopes a `NodeKind::File` row to `DiffTarget::File { path }`
+    // regardless of `skip_reason` (see the `app.rs` unit test
+    // `should_return_file_diff_target_when_cursor_is_on_a_skipped_file_row`),
+    // and `draw_diff_pane` looks hunks up by that path alone — so a
+    // skipped file (which has no `FileReport`/symbols to key off of) must
+    // not silently fall back to the "no diff hunks found" placeholder just
+    // because rinkaku didn't extract symbols from it.
+    #[test]
+    fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_skipped_file_row() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "assets/logo.png".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+            files: vec![],
+        };
+        // Row 0 is the collapsing "assets" dir; row 1 is the skipped file.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/assets/logo.png b/assets/logo.png
+index e69de29..4b825dc 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // A binary file has no hunks at all in the diff text itself (git
+        // reports "Binary files ... differ" instead of `@@` hunks), so the
+        // correct, honest behavior is the pane's own "no diff hunks found"
+        // placeholder — this test's real assertion is that it names the
+        // right path, not a stale/mismatched one, confirming the lookup
+        // reached this row's `path` at all. Checked as two substrings
+        // rather than the whole phrase since it wraps across rendered
+        // lines at this terminal's pane width.
+        assert!(text.contains("no diff hunks found for"));
+        assert!(text.contains("assets/logo.png"));
+    }
+
+    /// Sibling of the binary-skip test above, using an unsupported-language
+    /// skip (a real text file with real hunks in the raw diff) to confirm
+    /// the diff pane actually renders content — not just the placeholder —
+    /// for a skipped-but-textual file.
+    #[test]
+    fn should_draw_diff_pane_with_hunk_lines_for_an_unsupported_language_skipped_file() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            skipped: vec![rinkaku_core::render::SkippedFile {
+                path: "vendor/lib.zig".to_string(),
+                reason: rinkaku_core::render::SkipReason::UnsupportedLanguage,
+            }],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+            files: vec![],
+        };
+        // Row 0 is the collapsing "vendor" dir; row 1 is the skipped file.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        let diff_text = "\
+diff --git a/vendor/lib.zig b/vendor/lib.zig
+index e69de29..4b825dc 100644
+--- a/vendor/lib.zig
++++ b/vendor/lib.zig
+@@ -1,1 +1,2 @@
+ const a = 1;
++const b = 2;
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_files,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Diff"));
+        assert!(text.contains("+const b = 2;"));
     }
 
     #[test]
@@ -1181,7 +1479,17 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[], &pivot_selection))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &pivot_selection,
+                    &test_repo_root(),
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1199,7 +1507,17 @@ index e69de29..4b825dc 100644
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
-            .draw(|frame| draw(frame, &app, &report, &[], &[], &pivot_selection))
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &pivot_selection,
+                    &test_repo_root(),
+                )
+            })
             .expect("draw");
 
         let text = buffer_text(&terminal);
@@ -1290,6 +1608,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1334,6 +1653,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1371,6 +1691,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1415,6 +1736,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1472,6 +1794,7 @@ index e69de29..4b825dc 100644
                     &diff_files,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1504,6 +1827,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1533,6 +1857,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1558,17 +1883,65 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
 
-        // "lib.rs" does not exist relative to the test process's cwd, so
-        // this exercises `draw_source_screen`'s error-message fallback
-        // path rather than needing a real file on disk.
+        // "lib.rs" does not exist under `test_repo_root()`'s placeholder
+        // path, so this exercises `draw_source_screen`'s error-message
+        // fallback path rather than needing a real file on disk.
         let text = buffer_text(&terminal);
         assert!(text.contains("Source: lib.rs::foo"));
         assert!(text.contains("failed to read"));
         assert!(text.contains("back"));
+    }
+
+    #[test]
+    fn should_wrap_source_error_message_instead_of_truncating_it_in_a_narrow_pane() {
+        // Regression test: `source::load_symbol_source`'s error message
+        // (full path + io error + the "not present in the working tree"
+        // hint) routinely exceeds one line, and `Paragraph` without
+        // `.wrap(...)` silently truncates rather than overflowing — cutting
+        // the hint off exactly where it explains the failure. A narrow
+        // (40-column) pane makes the message wrap across multiple rows
+        // whether or not `.wrap(...)` is set, but only *with* it does the
+        // hint's text actually appear anywhere in the buffer; without it,
+        // the trailing text is simply dropped.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Source);
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &[],
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        // `buffer_text` joins rows with `\n`, so a phrase that happens to
+        // wrap exactly at a row boundary (as "in the" / "present" do at
+        // this width) would not appear as one contiguous substring even
+        // though every word is visible — asserting on words rather than a
+        // multi-word phrase keeps this test robust to exactly where the
+        // wrap point falls, while still failing if `.wrap(...)` were
+        // removed (the words after "working tree" would be dropped
+        // entirely, not just split across rows).
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Source: lib.rs::foo"));
+        assert!(text.contains("present"));
+        assert!(text.contains("working tree"));
+        assert!(text.contains("historical commit not checked out"));
+        assert!(text.contains("locally)"));
     }
 
     // --- clamp_scroll / scroll_indicator (pure helpers) ---
@@ -1687,6 +2060,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1715,6 +2089,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1739,6 +2114,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1773,6 +2149,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1804,6 +2181,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -1962,6 +2340,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");
@@ -2009,6 +2388,7 @@ index e69de29..4b825dc 100644
                     &[],
                     &[],
                     &PivotSelection::NotApplicable,
+                    &test_repo_root(),
                 )
             })
             .expect("draw");

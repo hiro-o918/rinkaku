@@ -496,15 +496,24 @@ placeholder.
   uses in Markdown, condensed to the directory level; `o` toggles to plain
   alphabetical order. Symbol rows show a kind abbreviation (`fn`, `struct`,
   ...) and a classification marker: `+` added, `~` signature-changed, `x`
-  removed (dimmed and crossed out).
+  removed (dimmed and crossed out). A file rinkaku could not extract
+  symbols from (unsupported language, binary, deleted) still shows up as a
+  dimmed row marked `(skipped: <reason>)`, same reasons as `--format
+  json`'s `skipped[].reason` — the same as Markdown's own "Skipped files"
+  list, `SkipReason::Generated` entries are omitted by default (ADR
+  0010/0011). A file whose changed symbols were *all* test code (ADR 0009)
+  shows up too, marked `[test] (N symbols)`, instead of the pre-existing
+  gap where such a file had no row at all and was only summarized in
+  Markdown's "Tests" section.
 - **Detail pane (right):** what the cursor is on. A symbol row shows its
   classification, signature (an old/new diff when the contract changed),
   who depends on it ("used by"), and its callees. A file row shows every
-  symbol changed in that file with its classification marker and fan-in. A
-  directory row shows its badge breakdown and top fan-in symbols, plus —
-  when it participates in a dependency cycle — exactly which other
-  directories it cycles with and the concrete symbol-to-symbol edges
-  forming that cycle.
+  symbol changed in that file with its classification marker and fan-in —
+  or, for a skipped file, why rinkaku didn't analyze it; or, for a
+  whole-test file, the changed test-symbol count. A directory row shows
+  its badge breakdown and top fan-in symbols, plus — when it participates
+  in a dependency cycle — exactly which other directories it cycles with
+  and the concrete symbol-to-symbol edges forming that cycle.
 - **Diff pane (right):** `d`/`D` toggles the right-hand pane to the raw
   unified-diff hunks instead of the detail view — every hunk of the file
   for a file row, or just the hunks intersecting a symbol's own line range
