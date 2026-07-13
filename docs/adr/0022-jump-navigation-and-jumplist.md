@@ -153,6 +153,24 @@ tick, following ADR 0020 decision 5's caching discipline (`crate::run_app`
 computes it once per handled key, hands it to `ui::draw`, which never
 calls the computation itself).
 
+Both the popup and the tree pane (`crate::ui::draw_jump_popup`/
+`draw_tree_pane`) window their content around the current cursor —
+`crate::ui::windowed_rows_with_indicators`, mirroring `crate::source::
+visible_window`'s centering approach for the source drill-down — so the
+highlighted candidate/row is always inside the visible viewport, with dim
+"… N more above/below" lines when the window does not reach an edge of the
+list. An earlier draft of this feature instead let excess content
+"wrap/scroll off" via `ratatui::widgets::Wrap` alone with no scroll offset
+at all (the same tradeoff `draw_help_overlay`'s fixed-size keymap box
+accepts, reasonable there since the keymap is fixed and short); caught in
+review, that meant a popup or tree taller than its box could highlight or
+land on a row with zero visual feedback — a jump feature whose own target
+is invisible defeats its purpose. The tree pane's own unscrolled-`Paragraph`
+gap predates this ADR (it already existed on `main`) but is fixed here too,
+since an invisible jump landing spot makes the tree pane's half of the same
+underlying bug block this feature just as completely as the popup's half
+would.
+
 ## Alternatives
 
 - **A general prefix-tree/chord parser in `translate_key` for arbitrary
