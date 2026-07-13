@@ -369,4 +369,3 @@ fn should_not_bounce_scroll_back_on_the_next_key_after_a_sync() {
     assert_eq!(6, second.app.right_pane_scroll());
     assert_eq!(Some("lib.rs::bar"), second.app.selected_symbol_id());
 }
-
