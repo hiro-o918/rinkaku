@@ -80,6 +80,9 @@ pub fn draw(
     if app.help_open() {
         draw_help_overlay(frame, area);
     }
+    if let Some(popup) = app.jump_popup() {
+        draw_jump_popup(frame, popup, area);
+    }
 }
 
 /// Draws the `?` help overlay (ADR 0020) centered over `full_area`: a
@@ -150,6 +153,45 @@ fn centered_rect(area: Rect, percent_width: u16, percent_height: u16) -> Rect {
     .areas(middle);
 
     center
+}
+
+/// Draws the jump-target popup (ADR 0022) centered over `full_area`,
+/// listing every candidate as `name (path)` with the currently highlighted
+/// one shown reversed — the same `Clear`-first, centered-bordered-box
+/// compositing `draw_help_overlay` already uses, just a narrower and
+/// shorter box (60% x 40%, vs. the help overlay's 80% x 90%) since a
+/// candidate list is typically much shorter than the whole keymap; content
+/// taller than the box simply wraps/scrolls off, the same tradeoff
+/// `draw_help_overlay` already accepts for a very long keymap on a small
+/// terminal rather than dynamically sizing the box to content.
+fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, full_area: Rect) {
+    let overlay_area = centered_rect(full_area, 60, 40);
+    frame.render_widget(Clear, overlay_area);
+
+    let lines: Vec<Line<'static>> = popup
+        .candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let text = format!("{} ({})", candidate.name, candidate.path);
+            if index == popup.cursor {
+                Line::styled(
+                    text,
+                    Style::default()
+                        .add_modifier(Modifier::REVERSED)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Line::raw(text)
+            }
+        })
+        .collect();
+
+    let block = Block::bordered().title(" Jump to (enter: go, esc: cancel) ");
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(paragraph, overlay_area);
 }
 
 /// Left entry pane (directory tree) + right pane, split 60/40 — this
@@ -1092,13 +1134,13 @@ fn status_line_text(app: &App) -> String {
             };
             let keys = match app.focus() {
                 crate::app::Focus::Tree => {
-                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
-                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right => {
-                    "j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
+                    "j/k: scroll  h/esc: back  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 }
             };
             format!("order: {order}  |  {keys}")
@@ -1288,6 +1330,67 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(!text.contains("Glossary"));
+    }
+
+    #[test]
+    fn should_draw_jump_popup_with_every_candidate_when_jump_popup_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).open_jump_popup(vec![
+            crate::app::JumpCandidate {
+                id: "lib.rs::alpha".to_string(),
+                name: "alpha".to_string(),
+                path: "lib.rs".to_string(),
+            },
+            crate::app::JumpCandidate {
+                id: "lib.rs::beta".to_string(),
+                name: "beta".to_string(),
+                path: "lib.rs".to_string(),
+            },
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Jump to"));
+        assert!(text.contains("alpha"));
+        assert!(text.contains("beta"));
+    }
+
+    #[test]
+    fn should_not_draw_jump_popup_when_no_jump_is_pending() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("Jump to"));
     }
 
     #[test]
@@ -2286,10 +2389,10 @@ index e69de29..4b825dc 100644
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
         // module: the full help text (order mode + Tree-focus key hints,
-        // ADR 0020) is ~140 columns and would otherwise be truncated (the
-        // status line intentionally does not wrap), hiding the "quit"
+        // ADR 0020/0022) is ~155 columns and would otherwise be truncated
+        // (the status line intentionally does not wrap), hiding the "quit"
         // fragment this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(150, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(170, 20)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -2465,7 +2568,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -2493,7 +2596,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -2514,7 +2617,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  h/esc: back  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
