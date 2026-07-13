@@ -63,14 +63,14 @@ aid, not a verifier, and we have the experiment rounds to prove it.
 The tree pane orders sibling directories topologically over the change
 graph, not alphabetically: entry-point directories (nothing else
 depends on them) sort first, heavily-depended-upon foundations sort
-last (ADR 0016). Tests are excluded from that ranking entirely and
-pinned into a trailing `Tests` section instead (ADR 0035). Files within
-a directory are alphabetical; symbols keep source order. When a diff
-has no cross-directory references, ranking has nothing to work with and
-the order silently falls back to alphabetical — don't over-read
-ordering in that case, and remember the underlying dependency edges
-come from syntactic tree-sitter resolution, not a type checker, so a
-reference can occasionally be missed (ADR 0003).
+last. Tests are excluded from that ranking entirely and pinned into a
+trailing `Tests` section instead. Files within a directory are
+alphabetical; symbols keep source order. When a diff has no
+cross-directory references, ranking has nothing to work with and the
+order silently falls back to alphabetical — don't over-read ordering
+in that case, and remember the underlying dependency edges come from
+syntactic tree-sitter resolution, not a type checker, so a reference
+can occasionally be missed.
 
 Badges on a row: `chg:N` changed symbols, `api:N` (yellow) contract/
 signature changes, `fan-in:N` symbols that reference this one — i.e.
