@@ -94,8 +94,15 @@ pub struct Hotspot {
 /// symbols), so `used_by` can contain the same name twice in that case
 /// rather than silently under-counting fan-in.
 ///
-/// Results are sorted by fan-in descending, ties broken by `(path, name)`
-/// ascending for determinism independent of edge/node iteration order.
+/// Results are sorted by fan-in descending, ties broken by `(path, name,
+/// id)` ascending for determinism independent of edge/node iteration
+/// order. `id` is the final tie-break rather than `path`/`name` alone
+/// because two distinct symbols can share both — e.g. two overloaded
+/// functions named `helper` in the same file, disambiguated only by the
+/// `@{start_line}` suffix `collect_nodes` gives their `id` — and without
+/// it, `referrers_by_target`'s `HashMap` iteration order (which varies
+/// run to run under Rust's randomized `HashMap` seed) decided the order
+/// between them (see ADR 0013's amendment).
 pub fn compute_hotspots(graph: &SymbolGraph) -> Vec<Hotspot> {
     let node_by_id: HashMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
@@ -135,6 +142,7 @@ pub fn compute_hotspots(graph: &SymbolGraph) -> Vec<Hotspot> {
             .cmp(&a.used_by.len())
             .then_with(|| a.path.cmp(&b.path))
             .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.id.cmp(&b.id))
     });
 
     hotspots
