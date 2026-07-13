@@ -1,11 +1,16 @@
-//! Diff-pane content shaping (ADR 0020): given the row currently selected
-//! in the entry view (a symbol or a file) plus the already-parsed diff
-//! hunks (`crate::diff_view`), decides how the diff pane groups and
-//! annotates that content — a symbol selection clips to its own hunks
-//! (unchanged from before this ADR), while a file selection now groups
-//! hunks under per-symbol section headers instead of listing them
-//! undifferentiated, and either selection gets a 2-line old/new signature
-//! header up front when the symbol's contract changed.
+//! Diff-pane content shaping (ADR 0020, ADR 0027): given the row currently
+//! selected in the entry view (a symbol or a file) plus the already-parsed
+//! diff hunks (`crate::diff_view`), decides how the diff pane groups and
+//! annotates that content. Per ADR 0027, both symbol-row and file-row
+//! selections now produce the same file-scoped shape: hunks grouped under
+//! per-symbol section headers (unchanged from ADR 0020's file-selection
+//! semantics), with each section carrying an optional `symbol_id` so
+//! `crate::run_app` can look up the selected symbol's section start and
+//! auto-scroll to it. The old `DiffPaneContent::Symbol` clip variant is gone
+//! (ADR 0027 decision 1).
+//!
+//! Each section whose symbol's contract changed gets a 2-line old/new
+//! signature header up front.
 //!
 //! Pure and free of `ratatui` types, mirroring every other view-model in
 //! this crate (`crate::tree`/`crate::nav`/`crate::detail`/`crate::blast_radius`):
@@ -57,6 +62,16 @@ pub struct DiffSection {
     /// fixed `"(module level)"` label for hunks intersecting no symbol at
     /// all (import-only changes, module-level `use` statements).
     pub title: String,
+    /// The extracted symbol's id (matches
+    /// [`rinkaku_core::extract::ExtractedSymbol::id`] for symbol sections,
+    /// `None` for the module-level bucket) — used by `crate::run_app` to
+    /// find "which section is the selected symbol's" and auto-scroll the
+    /// diff pane's `right_pane_scroll` to that section's start (ADR 0027
+    /// decision 2). Kept as an `Option` rather than a separate lookup on
+    /// `Report` so the lookup stays a plain `iter().find()` over already-
+    /// shaped sections, and so the module-level bucket cannot accidentally
+    /// match any real symbol id.
+    pub symbol_id: Option<String>,
     pub contract_header: Option<ContractHeader>,
     pub hunks: Vec<AttributedHunk>,
 }
@@ -64,16 +79,17 @@ pub struct DiffSection {
 /// The diff pane's fully shaped content for the current selection —
 /// what `crate::ui::draw_diff_pane` renders, computed once by
 /// `crate::run_app` and handed in rather than recomputed per draw.
+///
+/// Per ADR 0027 decision 1 the old `Symbol(DiffSection)` clip variant was
+/// removed: both symbol-row and file-row selections now produce `File(..)`,
+/// and a symbol selection is expressed as an auto-scroll target (see
+/// [`section_start_line_for_symbol`]) rather than a distinct pane shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffPaneContent {
     /// Nothing to show: no row selected, a directory row (no diff-specific
     /// content of its own — `App::selected_diff_target`'s own doc comment),
     /// or (defensively) a mismatch between `report` and the diff text.
     Empty,
-    /// A single symbol's hunks, clipped to its own line range — unchanged
-    /// scoping from before this ADR, just wrapped in the same
-    /// `DiffPaneContent` shape a file selection now also produces.
-    Symbol(DiffSection),
     /// A file's hunks, grouped into one [`DiffSection`] per symbol in
     /// `report.files[..].symbols` order, plus a trailing `"(module level)"`
     /// section for hunks intersecting no symbol at all — omitted (not an
@@ -102,35 +118,80 @@ pub const MODULE_LEVEL_TITLE: &str = "(module level)";
 /// same trade `crate::order`'s own doc comment already accepts for its
 /// deliberately duplicated Tarjan SCC implementation.
 pub fn hunk_start_lines(content: &DiffPaneContent) -> Vec<usize> {
-    let (sections, show_section_headers): (Vec<&DiffSection>, bool) = match content {
-        DiffPaneContent::Empty => return Vec::new(),
-        DiffPaneContent::Symbol(section) => (vec![section], false),
-        DiffPaneContent::File(sections) => (sections.iter().collect(), true),
+    let mut starts = Vec::new();
+    for (_, _, _, hunk_starts) in walk_sections(content) {
+        starts.extend(hunk_starts);
+    }
+    starts
+}
+
+/// The logical-line offset (same "requested-scroll unit"
+/// [`hunk_start_lines`] uses) where the section whose `symbol_id` matches
+/// `symbol_id` starts, in the exact order [`crate::ui::draw_diff_pane`]
+/// renders sections. Returns `None` when `content` is
+/// [`DiffPaneContent::Empty`] or no section matches (the selected symbol
+/// contributed no hunks of its own, e.g. a `BodyOnly` classification whose
+/// diff lines all fell inside another symbol's range — same rule as
+/// [`build_diff_pane_content`]'s "drop empty sections" step).
+///
+/// Points at the *start of the section*, including its title line — not at
+/// the first hunk's `@@` header (ADR 0027 decision 3): a reviewer moving
+/// between symbols wants to see the section title (and its contract header,
+/// when present) first, before the hunks that follow.
+///
+/// Used by `crate::run_app` to write the auto-scroll target into
+/// `App::right_pane_scroll` right after `build_diff_pane_content` rebuilds
+/// the shaped content for a new selection.
+pub fn section_start_line_for_symbol(content: &DiffPaneContent, symbol_id: &str) -> Option<usize> {
+    walk_sections(content)
+        .find(|(_, section, _, _)| section.symbol_id.as_deref() == Some(symbol_id))
+        .map(|(_, _, section_start, _)| section_start)
+}
+
+/// One entry per section for line-counting consumers ([`hunk_start_lines`]
+/// and [`section_start_line_for_symbol`] both need the exact same layout
+/// walk, kept in one place so a change to
+/// [`crate::ui::diff_pane_lines`]'s rendered layout only has to be mirrored
+/// once here — the same trade [`hunk_start_lines`]'s own doc comment already
+/// accepts for the mirroring itself). Yields `(section_index, &section,
+/// section_start_line, hunk_start_lines)` — `section_start_line` is where
+/// the section's title (or its very first line, when nothing precedes it)
+/// begins.
+fn walk_sections(
+    content: &DiffPaneContent,
+) -> impl Iterator<Item = (usize, &DiffSection, usize, Vec<usize>)> {
+    let sections: &[DiffSection] = match content {
+        DiffPaneContent::Empty => &[],
+        DiffPaneContent::File(sections) => sections,
     };
 
-    let mut starts = Vec::new();
     let mut line = 0usize;
+    let mut out = Vec::with_capacity(sections.len());
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
             line += 1; // blank line between sections
         }
-        if show_section_headers {
-            line += 1; // section title line
-        }
+        let section_start = line;
+        line += 1; // section title line (always shown now — ADR 0027)
         if section.contract_header.is_some() {
             line += 2; // "- previous" / "+ current" lines
         }
 
-        for (hunk_index, attributed) in section.hunks.iter().enumerate() {
-            if hunk_index > 0 || show_section_headers || section.contract_header.is_some() {
-                line += 1; // blank line before this hunk's own header
-            }
-            starts.push(line);
+        let mut hunk_starts = Vec::with_capacity(section.hunks.len());
+        for attributed in &section.hunks {
+            // Blank line before every hunk header: the section title is
+            // always shown (ADR 0027 collapsed the two former
+            // `show_section_headers` cases into one), so every hunk —
+            // including a section's first — has *something* on the line
+            // above it and needs the visual separator.
+            line += 1;
+            hunk_starts.push(line);
             line += 1; // the hunk header line itself
             line += attributed.hunk.lines.len();
         }
+        out.push((section_index, section, section_start, hunk_starts));
     }
-    starts
+    out.into_iter()
 }
 
 /// Builds the diff pane's shaped content for `target` (`None` mirrors
@@ -138,6 +199,12 @@ pub fn hunk_start_lines(content: &DiffPaneContent) -> Vec<usize> {
 /// directory row). `diff_files` is the whole diff already parsed once by
 /// `crate::run_app` (`crate::diff_view::parse_diff_hunks`), not re-parsed
 /// here.
+///
+/// Per ADR 0027 both symbol-row and file-row selections produce the same
+/// file-scoped shape; a symbol selection is expressed by
+/// `App::selected_diff_focus` (a separate accessor) and applied by
+/// `crate::run_app` as an auto-scroll target, not by returning a different
+/// `DiffPaneContent` variant here.
 pub fn build_diff_pane_content(
     report: &Report,
     diff_files: &[FileHunks],
@@ -145,56 +212,8 @@ pub fn build_diff_pane_content(
 ) -> DiffPaneContent {
     match target {
         None => DiffPaneContent::Empty,
-        Some(DiffTarget::Symbol {
-            path,
-            range_start,
-            range_end,
-        }) => build_symbol_content(report, diff_files, path, *range_start, *range_end),
         Some(DiffTarget::File { path }) => build_file_content(report, diff_files, path),
     }
-}
-
-fn build_symbol_content(
-    report: &Report,
-    diff_files: &[FileHunks],
-    path: &str,
-    range_start: usize,
-    range_end: usize,
-) -> DiffPaneContent {
-    let Some(file_hunks) = file_hunks(diff_files, path) else {
-        return DiffPaneContent::Empty;
-    };
-    let hunks: Vec<AttributedHunk> = file_hunks
-        .hunks
-        .iter()
-        .enumerate()
-        .filter(|(_, hunk)| crate::diff_view::hunk_intersects(hunk, range_start, range_end))
-        .map(|(source_index, hunk)| AttributedHunk {
-            source_index,
-            hunk: hunk.clone(),
-        })
-        .collect();
-    if hunks.is_empty() {
-        return DiffPaneContent::Empty;
-    }
-
-    let symbol = report
-        .files
-        .iter()
-        .find(|file| file.path == path)
-        .and_then(|file| {
-            file.symbols
-                .iter()
-                .find(|s| s.range.start == range_start && s.range.end == range_end)
-        });
-    let title = symbol.map(|s| s.signature.clone()).unwrap_or_default();
-    let contract_header = symbol.and_then(contract_header_for_symbol);
-
-    DiffPaneContent::Symbol(DiffSection {
-        title,
-        contract_header,
-        hunks,
-    })
 }
 
 fn build_file_content(report: &Report, diff_files: &[FileHunks], path: &str) -> DiffPaneContent {
@@ -216,6 +235,7 @@ fn build_file_content(report: &Report, diff_files: &[FileHunks], path: &str) -> 
         .iter()
         .map(|symbol| DiffSection {
             title: symbol.signature.clone(),
+            symbol_id: Some(symbol.id.clone()),
             contract_header: contract_header_for_symbol(symbol),
             hunks: Vec::new(),
         })
@@ -252,6 +272,7 @@ fn build_file_content(report: &Report, diff_files: &[FileHunks], path: &str) -> 
     if !module_level_hunks.is_empty() {
         sections.push(DiffSection {
             title: MODULE_LEVEL_TITLE.to_string(),
+            symbol_id: None,
             contract_header: None,
             hunks: module_level_hunks,
         });
@@ -355,154 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn should_return_empty_when_symbol_file_has_no_matching_diff_hunks() {
-        let report = Report {
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 1 })],
-            }],
-            ..empty_report()
-        };
-        let target = DiffTarget::Symbol {
-            path: "lib.rs".to_string(),
-            range_start: 1,
-            range_end: 1,
-        };
-
-        let actual = build_diff_pane_content(&report, &[], Some(&target));
-
-        assert_eq!(DiffPaneContent::Empty, actual);
-    }
-
-    #[test]
-    fn should_clip_symbol_selection_to_its_own_hunks() {
-        let report = Report {
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![
-                    symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 2 }),
-                    symbol("lib.rs::bar", "bar", LineRange { start: 10, end: 11 }),
-                ],
-            }],
-            ..empty_report()
-        };
-        let diff_files = vec![FileHunks {
-            path: "lib.rs".to_string(),
-            hunks: vec![
-                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
-                hunk("@@ -10,1 +10,2 @@", Some((10, 11)), vec!["fn bar() {}"]),
-            ],
-        }];
-        let target = DiffTarget::Symbol {
-            path: "lib.rs".to_string(),
-            range_start: 1,
-            range_end: 2,
-        };
-
-        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
-
-        let expected = DiffPaneContent::Symbol(DiffSection {
-            title: "fn foo()".to_string(),
-            contract_header: None,
-            hunks: vec![attributed(
-                0,
-                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
-            )],
-        });
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_include_pure_deletion_hunk_in_symbol_selection_when_it_intersects_the_symbol() {
-        // Finding-2 regression: a pure-deletion hunk (`new_range` a
-        // zero-width position, `crate::diff_view::Hunk`'s own doc comment)
-        // used to always report `hunk_intersects == false`, so it silently
-        // vanished from a symbol-scoped diff view entirely instead of
-        // showing the deleted lines under the symbol they were removed
-        // from.
-        let report = Report {
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 4 })],
-            }],
-            ..empty_report()
-        };
-        let diff_files = vec![FileHunks {
-            path: "lib.rs".to_string(),
-            hunks: vec![hunk(
-                "@@ -4 +3,0 @@",
-                Some((3, 2)),
-                vec!["println!(\"removed\");"],
-            )],
-        }];
-        let target = DiffTarget::Symbol {
-            path: "lib.rs".to_string(),
-            range_start: 1,
-            range_end: 4,
-        };
-
-        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
-
-        let expected = DiffPaneContent::Symbol(DiffSection {
-            title: "fn foo()".to_string(),
-            contract_header: None,
-            hunks: vec![attributed(
-                0,
-                hunk(
-                    "@@ -4 +3,0 @@",
-                    Some((3, 2)),
-                    vec!["println!(\"removed\");"],
-                ),
-            )],
-        });
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_include_contract_header_when_symbol_selection_signature_changed() {
-        let report = Report {
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![ExtractedSymbol {
-                    classification: Some(Classification::SignatureChanged),
-                    previous_signature: Some("fn foo(a: i32)".to_string()),
-                    signature: "fn foo(a: i32, b: i32)".to_string(),
-                    ..symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 2 })
-                }],
-            }],
-            ..empty_report()
-        };
-        let diff_files = vec![FileHunks {
-            path: "lib.rs".to_string(),
-            hunks: vec![hunk(
-                "@@ -1,1 +1,2 @@",
-                Some((1, 2)),
-                vec!["fn foo(a, b) {}"],
-            )],
-        }];
-        let target = DiffTarget::Symbol {
-            path: "lib.rs".to_string(),
-            range_start: 1,
-            range_end: 2,
-        };
-
-        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
-
-        let expected = DiffPaneContent::Symbol(DiffSection {
-            title: "fn foo(a: i32, b: i32)".to_string(),
-            contract_header: Some(ContractHeader {
-                previous_signature: "fn foo(a: i32)".to_string(),
-                signature: "fn foo(a: i32, b: i32)".to_string(),
-            }),
-            hunks: vec![attributed(
-                0,
-                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo(a, b) {}"]),
-            )],
-        });
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
     fn should_group_file_selection_hunks_under_per_symbol_sections() {
         let report = Report {
             files: vec![FileReport {
@@ -530,6 +403,7 @@ mod tests {
         let expected = DiffPaneContent::File(vec![
             DiffSection {
                 title: "fn foo()".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
                 contract_header: None,
                 hunks: vec![attributed(
                     0,
@@ -538,6 +412,7 @@ mod tests {
             },
             DiffSection {
                 title: "fn bar()".to_string(),
+                symbol_id: Some("lib.rs::bar".to_string()),
                 contract_header: None,
                 hunks: vec![attributed(
                     1,
@@ -578,6 +453,7 @@ mod tests {
 
         let expected = DiffPaneContent::File(vec![DiffSection {
             title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: None,
             hunks: vec![attributed(
                 0,
@@ -620,6 +496,7 @@ mod tests {
         let expected = DiffPaneContent::File(vec![
             DiffSection {
                 title: "fn foo()".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
                 contract_header: None,
                 hunks: vec![attributed(
                     1,
@@ -628,6 +505,7 @@ mod tests {
             },
             DiffSection {
                 title: MODULE_LEVEL_TITLE.to_string(),
+                symbol_id: None,
                 contract_header: None,
                 hunks: vec![attributed(
                     0,
@@ -659,6 +537,7 @@ mod tests {
 
         let expected = DiffPaneContent::File(vec![DiffSection {
             title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: None,
             hunks: vec![attributed(
                 0,
@@ -698,6 +577,7 @@ mod tests {
 
         let expected = DiffPaneContent::File(vec![DiffSection {
             title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: None,
             hunks: vec![attributed(
                 0,
@@ -737,6 +617,7 @@ mod tests {
 
         let expected = DiffPaneContent::File(vec![DiffSection {
             title: "fn foo(a: i32, b: i32)".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: Some(ContractHeader {
                 previous_signature: "fn foo(a: i32)".to_string(),
                 signature: "fn foo(a: i32, b: i32)".to_string(),
@@ -777,6 +658,7 @@ mod tests {
 
         let expected = DiffPaneContent::File(vec![DiffSection {
             title: MODULE_LEVEL_TITLE.to_string(),
+            symbol_id: None,
             contract_header: None,
             hunks: vec![attributed(
                 0,
@@ -860,13 +742,15 @@ mod tests {
     }
 
     #[test]
-    fn should_start_first_hunk_at_line_zero_for_a_single_section_symbol_selection_with_no_contract_header()
+    fn should_offset_first_hunk_start_by_title_and_blank_when_file_has_a_single_section_without_contract_header()
      {
-        // No section header shown for a symbol selection (`diff_pane_lines`'s
-        // own `show_section_headers` rule) and no contract header here, so
-        // the hunk's own header line is the very first line.
-        let content = DiffPaneContent::Symbol(DiffSection {
+        // ADR 0027 unified layout: the section title is always shown, and
+        // every hunk (including the section's first) gets a blank line
+        // before its header. So: title(0), blank(1), header(2) — the hunk
+        // starts at line 2.
+        let content = DiffPaneContent::File(vec![DiffSection {
             title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: None,
             hunks: vec![attributed(
                 0,
@@ -876,18 +760,20 @@ mod tests {
                     vec!["fn a() {}", "fn foo() {}"],
                 ),
             )],
-        });
+        }]);
 
         let actual = hunk_start_lines(&content);
 
-        assert_eq!(vec![0], actual);
+        assert_eq!(vec![2], actual);
     }
 
     #[test]
-    fn should_offset_hunk_start_by_contract_header_lines_when_symbol_selection_has_one() {
-        // 2 contract-header lines precede the hunk's own header line.
-        let content = DiffPaneContent::Symbol(DiffSection {
+    fn should_offset_hunk_start_by_contract_header_lines_when_section_has_one() {
+        // Title(0), 2 contract-header lines (1, 2), blank before the hunk (3),
+        // hunk header (4) — hunk starts at line 4.
+        let content = DiffPaneContent::File(vec![DiffSection {
             title: "fn foo(a, b)".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: Some(ContractHeader {
                 previous_signature: "fn foo(a)".to_string(),
                 signature: "fn foo(a, b)".to_string(),
@@ -896,19 +782,20 @@ mod tests {
                 0,
                 hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo(a, b) {}"]),
             )],
-        });
+        }]);
 
         let actual = hunk_start_lines(&content);
 
-        assert_eq!(vec![3], actual);
+        assert_eq!(vec![4], actual);
     }
 
     #[test]
     fn should_offset_second_hunk_start_by_first_hunk_header_and_body_length() {
-        // First hunk: header (1 line) + 2 body lines = 3 lines, then 1 blank
-        // separator line before the second hunk's own header.
-        let content = DiffPaneContent::Symbol(DiffSection {
+        // Section title(0), blank(1), first hunk header(2), 2 body lines(3,4),
+        // blank before second hunk(5), second hunk header(6) — starts at 2, 6.
+        let content = DiffPaneContent::File(vec![DiffSection {
             title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: None,
             hunks: vec![
                 attributed(
@@ -924,23 +811,22 @@ mod tests {
                     hunk("@@ -10,1 +11,1 @@", Some((11, 11)), vec!["fn c() {}"]),
                 ),
             ],
-        });
+        }]);
 
         let actual = hunk_start_lines(&content);
 
-        assert_eq!(vec![0, 4], actual);
+        assert_eq!(vec![2, 6], actual);
     }
 
     #[test]
     fn should_offset_hunk_start_by_section_header_and_separator_lines_for_a_file_selection() {
-        // Section 0 (file selection: `show_section_headers` is always true,
-        // so the blank-before-hunk rule fires even for the section's first
-        // hunk): title(0), blank(1), header(2), 1 body line(3) — hunk starts
-        // at line 2. Section 1: blank separator between sections(4),
+        // Section 0: title(0), blank(1), header(2), 1 body line(3) — hunk
+        // starts at line 2. Section 1: blank separator between sections(4),
         // title(5), blank before its hunk(6), header(7) — hunk starts at 7.
         let content = DiffPaneContent::File(vec![
             DiffSection {
                 title: "fn foo()".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
                 contract_header: None,
                 hunks: vec![attributed(
                     0,
@@ -949,6 +835,7 @@ mod tests {
             },
             DiffSection {
                 title: "fn bar()".to_string(),
+                symbol_id: Some("lib.rs::bar".to_string()),
                 contract_header: None,
                 hunks: vec![attributed(
                     1,
@@ -960,5 +847,138 @@ mod tests {
         let actual = hunk_start_lines(&content);
 
         assert_eq!(vec![2, 7], actual);
+    }
+
+    // --- section_start_line_for_symbol ---
+
+    #[test]
+    fn should_return_none_for_symbol_start_when_content_is_empty() {
+        let actual = section_start_line_for_symbol(&DiffPaneContent::Empty, "lib.rs::foo");
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_zero_for_symbol_start_when_content_has_a_single_matching_section() {
+        // Only section: its title is at line 0, so the section starts at 0.
+        let content = DiffPaneContent::File(vec![DiffSection {
+            title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+            )],
+        }]);
+
+        let actual = section_start_line_for_symbol(&content, "lib.rs::foo");
+
+        assert_eq!(Some(0), actual);
+    }
+
+    #[test]
+    fn should_return_second_section_start_when_symbol_id_matches_the_second_section() {
+        // Section 0 layout: title(0), blank(1), header(2), body(3) — 4 lines.
+        // Blank separator between sections at line 4, so section 1 starts at 5.
+        let content = DiffPaneContent::File(vec![
+            DiffSection {
+                title: "fn foo()".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    0,
+                    hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+                )],
+            },
+            DiffSection {
+                title: "fn bar()".to_string(),
+                symbol_id: Some("lib.rs::bar".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    1,
+                    hunk("@@ -10,1 +10,2 @@", Some((10, 11)), vec!["fn bar() {}"]),
+                )],
+            },
+        ]);
+
+        let actual = section_start_line_for_symbol(&content, "lib.rs::bar");
+
+        assert_eq!(Some(5), actual);
+    }
+
+    #[test]
+    fn should_point_at_section_title_line_when_section_has_a_contract_header() {
+        // The section start is the title line, *before* the contract header —
+        // ADR 0027 decision 3: the reviewer wants the section title and its
+        // contract change first, not the hunks below them.
+        // Section 0: title(0), body(1), 2 contract-header lines(2,3), blank
+        // before hunk(4), hunk header(5) — 6 lines. Blank between sections at
+        // line 6, section 1 title at line 7.
+        let content = DiffPaneContent::File(vec![
+            DiffSection {
+                title: "fn foo(a, b)".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
+                contract_header: Some(ContractHeader {
+                    previous_signature: "fn foo(a)".to_string(),
+                    signature: "fn foo(a, b)".to_string(),
+                }),
+                hunks: vec![attributed(
+                    0,
+                    hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo(a, b) {}"]),
+                )],
+            },
+            DiffSection {
+                title: "fn bar()".to_string(),
+                symbol_id: Some("lib.rs::bar".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    1,
+                    hunk("@@ -10,1 +10,2 @@", Some((10, 11)), vec!["fn bar() {}"]),
+                )],
+            },
+        ]);
+
+        let actual = section_start_line_for_symbol(&content, "lib.rs::bar");
+
+        assert_eq!(Some(7), actual);
+    }
+
+    #[test]
+    fn should_return_none_for_module_level_bucket_when_asked_by_any_symbol_id() {
+        // The module-level bucket has `symbol_id: None`, so no real symbol id
+        // lookup can accidentally match it. Even passing the literal
+        // `MODULE_LEVEL_TITLE` as a symbol id (which is not a valid symbol id
+        // shape but is the closest a caller could get to "aim at the bucket")
+        // must not match.
+        let content = DiffPaneContent::File(vec![DiffSection {
+            title: MODULE_LEVEL_TITLE.to_string(),
+            symbol_id: None,
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["use foo::bar;"]),
+            )],
+        }]);
+
+        let actual = section_start_line_for_symbol(&content, MODULE_LEVEL_TITLE);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_none_when_symbol_id_matches_no_section() {
+        let content = DiffPaneContent::File(vec![DiffSection {
+            title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+            )],
+        }]);
+
+        let actual = section_start_line_for_symbol(&content, "lib.rs::nonexistent");
+
+        assert_eq!(None, actual);
     }
 }

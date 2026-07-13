@@ -314,19 +314,37 @@ pub enum SelectedDetail {
 }
 
 /// What [`App::selected_diff_target`] resolved the cursor's row to — plain
-/// data describing which file (and, for a symbol, which 1-based inclusive
-/// line range) the diff pane should slice hunks from; `crate::ui` combines
-/// this with the raw diff text (via `crate::diff_view`) at draw time.
+/// data describing which file the diff pane should slice hunks from;
+/// `crate::ui` combines this with the raw diff text (via
+/// `crate::diff_view`) at draw time.
+///
+/// Per ADR 0027 this always resolves to a file-scoped target, even for
+/// symbol rows — the "which symbol is focused" information is carried by
+/// [`App::selected_diff_focus`] on a separate accessor and applied by
+/// `crate::run_app` as an auto-scroll offset, not by branching the diff
+/// pane's shape here. The old `DiffTarget::Symbol` variant is gone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffTarget {
-    Symbol {
-        path: String,
-        range_start: usize,
-        range_end: usize,
-    },
-    File {
-        path: String,
-    },
+    File { path: String },
+}
+
+/// Which symbol (if any) the tree cursor is currently on for the diff
+/// pane's benefit (ADR 0027 decision 2 + Consequences): `crate::run_app`
+/// looks up this symbol's shaped section
+/// (`crate::diff_shape::section_start_line_for_symbol`) and auto-scrolls
+/// [`App::right_pane_scroll`] to that section's start whenever a new
+/// selection triggers a diff-pane recompute. `None` on file/directory
+/// rows and on removed symbol rows — those either have no symbol to
+/// focus, or no line-range/graph identity to derive a section from.
+///
+/// `path` is redundant with [`DiffTarget::File`]'s own `path` (both come
+/// from the same tree row), but is kept here so a caller with only a
+/// `DiffFocus` in hand does not need to also thread a `DiffTarget`
+/// through to know which file the focus belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffFocus {
+    pub path: String,
+    pub symbol_id: String,
 }
 
 /// What [`App::selected_blast_radius_view`] resolved the cursor's row to
@@ -651,40 +669,71 @@ impl App {
 
     /// What the diff pane (TUI iteration 2, [`RightPane::Diff`]) should
     /// slice out of the raw diff text for the row currently under the
-    /// cursor: a symbol row scopes to just its own line range (looked up
-    /// from `report`, since `crate::tree::SymbolRef` itself carries no line
-    /// range — only `id`/`name`/`kind`/`classification`/`removed`), a file
-    /// row to the whole file, and a directory row has nothing diff-specific
-    /// to show (a directory spans multiple files with no single line range
-    /// to highlight — showing "every hunk under this directory" was
-    /// considered and deferred, since it would just be the concatenation
-    /// of every file's own diff, better browsed file by file). `None` when
-    /// there are no rows at all, the cursor sits on a removed symbol (no
-    /// line range to scope to, same as `selected_detail`'s handling), or
-    /// (defensively) `report` no longer contains the selected symbol.
-    pub fn selected_diff_target(&self, report: &Report) -> Option<DiffTarget> {
+    /// cursor: a file-scoped [`DiffTarget::File`] on both file rows and
+    /// symbol rows (ADR 0027 decision 1 — the diff pane always renders the
+    /// whole file, and "which symbol is focused" is carried on
+    /// [`Self::selected_diff_focus`] alongside), or `None` on a directory
+    /// row (a directory spans multiple files with no single diff to show —
+    /// showing "every hunk under this directory" was considered and
+    /// deferred, since it would just be the concatenation of every file's
+    /// own diff, better browsed file by file). `None` also when there are
+    /// no rows at all.
+    ///
+    /// `_report` is unused now that resolution needs only the tree row's
+    /// own path (previously the symbol variant needed the line range from
+    /// `report.files[..].symbols` — ADR 0027 folded that lookup into
+    /// `crate::diff_shape` instead). Kept in the signature so the
+    /// symmetry with [`Self::selected_detail`]/[`Self::selected_diff_focus`]
+    /// stays intact for call sites that already thread `report` through.
+    pub fn selected_diff_target(&self, _report: &Report) -> Option<DiffTarget> {
         let rows = self.nav.rows(&self.tree);
         let row = rows.get(self.nav.cursor())?;
         match &row.node.kind {
-            NodeKind::Symbol(symbol_ref) if !symbol_ref.removed => {
-                let range = report
-                    .files
-                    .iter()
-                    .find(|file| file.path == row.node.path)
-                    .and_then(|file| file.symbols.iter().find(|s| s.id == symbol_ref.id))
-                    .map(|s| s.range)?;
-                Some(DiffTarget::Symbol {
-                    path: row.node.path.clone(),
-                    range_start: range.start,
-                    range_end: range.end,
-                })
-            }
+            NodeKind::Symbol(symbol_ref) if !symbol_ref.removed => Some(DiffTarget::File {
+                path: row.node.path.clone(),
+            }),
             NodeKind::Symbol(_) => None,
             NodeKind::File => Some(DiffTarget::File {
                 path: row.node.path.clone(),
             }),
             NodeKind::Dir => None,
         }
+    }
+
+    /// Which symbol the tree cursor currently focuses for the diff pane's
+    /// auto-scroll (ADR 0027 decision 2 + Consequences): [`DiffFocus`] on a
+    /// present symbol row, `None` on file/directory rows, on removed symbol
+    /// rows (no graph identity to look up), or when there are no rows at
+    /// all. `report` is threaded through only defensively — the focus id
+    /// itself lives on the tree row already, but a caller wiring the focus
+    /// into the shaped diff content must still know whether the id exists
+    /// in `report.files[..].symbols`; when it does not (a mismatch between
+    /// tree and report, "should not happen" but not enforceable at compile
+    /// time), returning `None` here matches
+    /// [`crate::diff_shape::section_start_line_for_symbol`]'s own "no
+    /// section found" behavior so the diff pane simply does not auto-scroll
+    /// rather than jumping to a stale offset.
+    pub fn selected_diff_focus(&self, report: &Report) -> Option<DiffFocus> {
+        let rows = self.nav.rows(&self.tree);
+        let row = rows.get(self.nav.cursor())?;
+        let NodeKind::Symbol(symbol_ref) = &row.node.kind else {
+            return None;
+        };
+        if symbol_ref.removed {
+            return None;
+        }
+        let known = report
+            .files
+            .iter()
+            .find(|file| file.path == row.node.path)
+            .is_some_and(|file| file.symbols.iter().any(|s| s.id == symbol_ref.id));
+        if !known {
+            return None;
+        }
+        Some(DiffFocus {
+            path: row.node.path.clone(),
+            symbol_id: symbol_ref.id.clone(),
+        })
     }
 
     /// What the blast-radius pane ([`RightPane::BlastRadius`], ADR 0019/0023)
@@ -2141,7 +2190,10 @@ mod tests {
     }
 
     #[test]
-    fn should_return_symbol_diff_target_with_line_range_when_cursor_is_on_a_symbol_row() {
+    fn should_return_file_diff_target_when_cursor_is_on_a_symbol_row() {
+        // ADR 0027 decision 1: even on a symbol row the diff pane resolves
+        // to a file-scoped target — "which symbol is focused" is carried by
+        // `selected_diff_focus` on a separate accessor instead.
         let report = Report {
             origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
@@ -2158,13 +2210,56 @@ mod tests {
         let actual = app.selected_diff_target(&report);
 
         assert_eq!(
-            Some(DiffTarget::Symbol {
+            Some(DiffTarget::File {
                 path: "lib.rs".to_string(),
-                range_start: 3,
-                range_end: 7,
             }),
             actual
         );
+    }
+
+    #[test]
+    fn should_return_diff_focus_when_cursor_is_on_a_present_symbol_row() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    range: LineRange { start: 3, end: 7 },
+                    ..symbol("lib.rs::foo", "foo")
+                }],
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        let actual = app.selected_diff_focus(&report);
+
+        assert_eq!(
+            Some(DiffFocus {
+                path: "lib.rs".to_string(),
+                symbol_id: "lib.rs::foo".to_string(),
+            }),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_no_diff_focus_when_cursor_is_on_a_file_row() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::foo", "foo")],
+            }],
+            ..empty_report()
+        };
+        // App::new lands the cursor on the first row, which is the file row
+        // (the tree only has one path so no directory row collapses in).
+        let app = App::new(&report);
+
+        let actual = app.selected_diff_focus(&report);
+
+        assert_eq!(None, actual);
     }
 
     #[test]

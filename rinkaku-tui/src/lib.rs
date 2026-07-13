@@ -165,6 +165,14 @@ fn run_app(
     } else {
         diff_shape::DiffPaneContent::Empty
     };
+    // ADR 0027 decision 2: apply the same "auto-scroll to the focused
+    // symbol's section" rule the loop below runs after every diff-content
+    // recompute, so `--tui` startup on a symbol row (e.g. `App::new`'s
+    // default cursor when the first row happens to be a symbol) already
+    // opens with the correct scroll offset rather than an unrelated 0.
+    if let Some(target_scroll) = auto_scroll_for_diff_focus(&app, report, &diff_pane_content) {
+        app = app.with_right_pane_scroll(target_scroll);
+    }
     // The source screen's (`s` key) file read + syntax highlight, computed
     // once when `Screen::Source` is entered (the `InputKey::Source` arm
     // below) and cached here across every subsequent draw — including the
@@ -311,6 +319,20 @@ fn run_app(
                     &diff_hunks,
                     app.selected_diff_target(report).as_ref(),
                 );
+                // ADR 0027 decision 2: after the shaped content is rebuilt
+                // for the new selection, auto-scroll the diff pane to the
+                // focused symbol's section start (if any). `App::handle_key`
+                // has already reset `right_pane_scroll` to 0 as part of its
+                // blanket rule (see that method's `preserve_scroll`
+                // exception list) — this override runs after that, so the
+                // reset-then-retarget order matches every other
+                // selection-derived recompute in this loop (blast radius,
+                // diff content).
+                if let Some(target_scroll) =
+                    auto_scroll_for_diff_focus(&app, report, &diff_pane_content)
+                {
+                    app = app.with_right_pane_scroll(target_scroll);
+                }
             }
         }
     }
@@ -479,6 +501,28 @@ fn dispatch_non_source_key(
 /// reasoning, just for [`RightPane::Diff`] instead of `RightPane::BlastRadius`.
 fn should_recompute_diff_pane_content(app: &App) -> bool {
     matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Diff
+}
+
+/// The auto-scroll target for the diff pane (ADR 0027 decision 2 + 4):
+/// [`crate::diff_shape::section_start_line_for_symbol`] on the currently
+/// focused symbol's section, or `None` when there is nothing to auto-scroll
+/// to — a file/directory row has no `DiffFocus`, and a symbol whose id
+/// contributed no section (e.g. its hunks were absorbed into an adjacent
+/// symbol's section via first-match attribution, or the file has no diff
+/// hunks at all) has no section start to jump to.
+///
+/// Extracted as its own pure function (mirroring
+/// [`jump_scroll_target`]/[`should_apply_hunk_jump`]'s own precedent) so this
+/// rule stays unit-testable without a live `ratatui::DefaultTerminal`, and
+/// so the "when do we auto-scroll?" gate is in one obvious place rather than
+/// scattered through `run_app`'s loop body.
+fn auto_scroll_for_diff_focus(
+    app: &App,
+    report: &Report,
+    diff_pane_content: &diff_shape::DiffPaneContent,
+) -> Option<usize> {
+    let focus = app.selected_diff_focus(report)?;
+    diff_shape::section_start_line_for_symbol(diff_pane_content, &focus.symbol_id)
 }
 
 /// Whether `crate::run_app`'s [`InputKey::Source`] arm should re-run

@@ -480,7 +480,7 @@ fn draw_diff_pane(
 
     let target = app.selected_diff_target(report);
     let path: &str = match &target {
-        Some(DiffTarget::Symbol { path, .. }) | Some(DiffTarget::File { path }) => path.as_str(),
+        Some(DiffTarget::File { path }) => path.as_str(),
         None => "",
     };
 
@@ -497,13 +497,16 @@ fn draw_diff_pane(
             frame.render_widget(paragraph, area);
             return None;
         }
-        DiffPaneContent::Symbol(section) => vec![section],
         DiffPaneContent::File(sections) => sections.iter().collect(),
     };
 
     let highlighted_file = highlight::highlighted_file(diff_highlights, path);
-    let is_file_selection = matches!(diff_content, DiffPaneContent::File(_));
-    let lines = diff_pane_lines(&sections, is_file_selection, highlighted_file);
+    // ADR 0027: `DiffPaneContent` no longer has a symbol-clip variant, so
+    // the diff pane always renders with section headers on. `diff_pane_lines`'s
+    // `show_section_headers` parameter is now always `true` at this call
+    // site, kept as a parameter to leave that layout knob visible in one
+    // place rather than hard-coding it inside `diff_pane_lines`.
+    let lines = diff_pane_lines(&sections, true, highlighted_file);
     Some(render_scrollable_pane(
         frame,
         " Diff ",
