@@ -2,18 +2,24 @@
 //! `pipeline::run_base_pipeline`/`build_resolver` (ADR 0033), replacing the
 //! bare `&Spinner` parameter those functions used to take.
 //!
-//! Two phase-reporting concerns used to be conflated in `&Spinner`: "which
-//! phase is running" (every display mode wants this) and "how far along a
-//! file-scanning phase is" (only `--tui` mode's splash screen can show a
-//! real bar for — ADR 0032's stderr spinner is deliberately indeterminate).
-//! [`AnalysisProgress`] separates them into two methods so a caller that has
-//! no file-count signal (the stderr [`crate::spinner::Spinner`]) can just
-//! no-op the second one, rather than every display mode having to fake a
-//! `(done, total)` pair it doesn't have.
+//! Three concerns used to be conflated in `&Spinner`/bare `eprintln!` calls
+//! scattered across `main.rs`/`pipeline.rs`: "which phase is running"
+//! (every display mode wants this), "how far along a file-scanning phase
+//! is" (only `--tui` mode's splash screen can show a real bar for — ADR
+//! 0032's stderr spinner is deliberately indeterminate), and "a one-shot
+//! advisory note unrelated to phase/progress" (empty diff, garbage input,
+//! an `--entry` path matching nothing, a PR base-commit fallback —
+//! previously raw `eprintln!`/`log::warn!` calls at each site).
+//! [`AnalysisProgress`] separates all three into their own methods so each
+//! caller only overrides what it actually needs to handle differently: the
+//! stderr [`crate::spinner::Spinner`] no-ops `report_file_progress` and
+//! prints `note` immediately (unchanged from before this port existed),
+//! while `--tui` mode's `crate::splash_progress::SplashProgress` renders a
+//! real bar for the former and *buffers* the latter (see `note`'s own doc
+//! comment for why).
 //!
-//! Kept small (two methods) and defined here, on the consumer side
-//! (`pipeline.rs` is what actually calls through this port) per CLAUDE.md's
-//! port convention.
+//! Kept small and defined here, on the consumer side (`pipeline.rs` is
+//! what actually calls through this port) per CLAUDE.md's port convention.
 
 use crate::spinner::AnalysisPhase;
 
@@ -42,6 +48,26 @@ pub(crate) trait AnalysisProgress: Sync {
     /// needs to override this — the stderr spinner stays indeterminate
     /// (ADR 0032), so its impl leaves this at the default no-op.
     fn report_file_progress(&self, _done: usize, _total: usize) {}
+
+    /// A one-shot advisory note unrelated to phase/progress (empty diff,
+    /// garbage input, an `--entry` path matching nothing, a PR base-commit
+    /// fallback) — what every call site in `main.rs`/`pipeline.rs` used to
+    /// hand straight to a bare `eprintln!` before this method existed.
+    ///
+    /// Defaults to printing immediately (`eprintln!`), matching that
+    /// pre-existing behavior exactly — every non-TUI caller (the stderr
+    /// [`crate::spinner::Spinner`]) leaves this at the default, since
+    /// stderr is not being drawn over by anything in that mode. `--tui`
+    /// mode's `crate::splash_progress::SplashProgress` is the one override:
+    /// printing immediately there would interleave raw bytes into the
+    /// terminal's alternate-screen frame stream mid-redraw (this method's
+    /// whole reason for existing — a bug found by dynamic verification,
+    /// `--tui --base <ref> --entry <path-matching-nothing>`), so it buffers
+    /// the message instead and `main.rs` flushes the buffer to stderr only
+    /// after `TuiSession` has torn down the alternate screen.
+    fn note(&self, message: String) {
+        eprintln!("{message}");
+    }
 }
 
 #[cfg(test)]
@@ -85,6 +111,50 @@ mod tests {
         let expected = vec![AnalysisPhase::Diffing];
         let actual = progress
             .phases
+            .into_inner()
+            .expect("lock must not be poisoned");
+        assert_eq!(expected, actual);
+    }
+
+    // A second fake, this one overriding `note` — proves an implementer can
+    // replace the default's immediate `eprintln!` with buffering (the exact
+    // shape `crate::splash_progress::SplashProgress` needs) without
+    // touching `set_phase`/`report_file_progress`. The default `note`
+    // body's own `eprintln!` is deliberately left untested here: it is a
+    // one-line, branchless IO call with nothing to assert against besides
+    // "did it write to stderr", which this project's "no mocking of
+    // external processes" convention does not ask for (mirrors ADR 0032's
+    // own stance on not unit-testing `Spinner`'s IO).
+    struct BufferingProgress {
+        notes: Mutex<Vec<String>>,
+    }
+
+    impl AnalysisProgress for BufferingProgress {
+        fn set_phase(&self, _phase: AnalysisPhase) {}
+
+        fn note(&self, message: String) {
+            self.notes
+                .lock()
+                .expect("lock must not be poisoned")
+                .push(message);
+        }
+    }
+
+    #[test]
+    fn should_buffer_note_instead_of_printing_when_note_is_overridden() {
+        let progress = BufferingProgress {
+            notes: Mutex::new(Vec::new()),
+        };
+
+        progress.note("note: diff is empty, nothing to analyze".to_string());
+        progress.note("note: no symbols under nonexistent/path.rs".to_string());
+
+        let expected = vec![
+            "note: diff is empty, nothing to analyze".to_string(),
+            "note: no symbols under nonexistent/path.rs".to_string(),
+        ];
+        let actual = progress
+            .notes
             .into_inner()
             .expect("lock must not be poisoned");
         assert_eq!(expected, actual);

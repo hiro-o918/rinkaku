@@ -29,7 +29,11 @@ pub(crate) fn run_base_pipeline(
     progress.set_phase(AnalysisPhase::Diffing);
     let diff_text = run_git_diff(base, head, cwd)?;
     if diff_text.trim().is_empty() {
-        eprintln!("note: diff is empty, nothing to analyze");
+        // ADR 0033: routed through `progress.note` rather than a bare
+        // `eprintln!` — see `AnalysisProgress::note`'s own doc comment for
+        // why (a raw stderr write here would interleave into the TUI's
+        // alternate-screen frame stream mid-redraw during `--tui` mode).
+        progress.note("note: diff is empty, nothing to analyze".to_string());
         return Ok((
             rinkaku_core::render::Report {
                 origin: rinkaku_core::render::ReportOrigin::Diff,
@@ -84,7 +88,7 @@ pub(crate) fn run_base_pipeline(
         cli.include_generated,
     )?;
     if let Some(note) = garbage_input_note(&diff_text, &report) {
-        eprintln!("{note}");
+        progress.note(note.to_string());
     }
     Ok((report, diff_text))
 }
