@@ -68,10 +68,9 @@ pub enum OutputFormat {
     /// mermaid rendering (PR comments/descriptions), not the default
     /// Markdown output ADR 0013/0015 keep machine-facing.
     Mermaid,
-    /// A slim "API changes" list — one line per `Added`/`SignatureChanged`
-    /// symbol plus every removed symbol, nothing else (ADR 0036). Built for
-    /// the PR comment's `<details>` section, cheap for an LLM review pass
-    /// to read alongside the mermaid graph, unlike the full Markdown report.
+    /// A slim "API changes" list — one line per `Added`/`SignatureChanged`/
+    /// removed symbol, nothing else (ADR 0036). Built for the PR comment's
+    /// `<details>` section in place of the full Markdown report.
     Digest,
 }
 

@@ -12,31 +12,26 @@ use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol};
 use crate::render::report::Report;
 use std::fmt::Write as _;
 
-/// `name (path)` — the same disambiguation `render_markdown`'s
-/// `removed_symbol_label`/`tree_label` already append, needed here for the
-/// identical reason: two distinct files can each define a symbol sharing a
-/// name (`new`, `run`, ...), and a bare name alone cannot tell a reader
-/// which file's `new` changed.
+/// `name (path)` — matches `render_markdown`'s `tree_label`/
+/// `removed_symbol_label` disambiguation: a bare name can't tell two
+/// same-named symbols in different files apart.
 fn located_name(name: &str, path: &str) -> String {
     format!("{name} ({path})")
 }
 
 /// Renders a [`Report`]'s contract-affecting symbols (ADR 0014's
 /// classifications) as a flat Markdown list under an `### API changes`
-/// heading. Walks `report.files` in source order (not the DFS order
-/// `render_markdown`'s "Change graph" uses — a flat digest has no
-/// tree/call-order structure for that distinction to convey), then
-/// appends `report.removed` after every file's contract changes.
+/// heading. Ordering is per-file source order, not `render_markdown`'s
+/// DFS — a flat list has no tree structure for that distinction to
+/// convey.
 ///
-/// Returns an empty string when there is nothing to report (no
-/// `Added`/`SignatureChanged` symbol and no removed symbol) — the caller
-/// decides whether an empty digest still gets a heading/`<details>`
-/// wrapper, the same convention `render_markdown` uses for its own
-/// all-empty case.
+/// Returns an empty string when there's nothing to report, same
+/// empty-means-omit convention `render_markdown` uses — the caller
+/// decides whether an empty digest still gets a `<details>` wrapper.
 ///
 /// Infallible for the same reason `render_mermaid` is: an owned `String`
-/// buffer built via `push_str`/`write!` and only ever handed back to the
-/// caller cannot fail the way an `io::Write` sink could.
+/// buffer handed back to the caller cannot fail the way an `io::Write`
+/// sink could.
 pub(super) fn render_digest(report: &Report) -> String {
     let mut lines: Vec<String> = Vec::new();
 
@@ -63,11 +58,9 @@ pub(super) fn render_digest(report: &Report) -> String {
     out
 }
 
-/// Builds one digest entry for `symbol`, or `None` when its
-/// classification isn't a contract change (`BodyOnly`, or classification
-/// not attempted at all — always the case for a whole-repo outline, which
-/// has no base side to classify against). `path` disambiguates two
-/// same-named symbols defined in different files (see [`located_name`]).
+/// `None` for anything that isn't a contract change (`BodyOnly`, or no
+/// classification at all — always true for a whole-repo outline, which has
+/// no base side to classify against).
 fn digest_line(path: &str, symbol: &ExtractedSymbol) -> Option<String> {
     match symbol.classification {
         Some(Classification::Added) => Some(added_line(path, symbol)),
@@ -76,9 +69,8 @@ fn digest_line(path: &str, symbol: &ExtractedSymbol) -> Option<String> {
     }
 }
 
-/// `+ name (path)` header followed by the signature in a fenced code span
-/// — the `+` mirrors the diff convention `signature_changed_line` uses
-/// below, read as "added" without a "previous" side to diff against.
+/// `+` mirrors `signature_changed_line`'s diff convention for an addition
+/// with no "previous" side to diff against.
 fn added_line(path: &str, symbol: &ExtractedSymbol) -> String {
     let fence = fence_for(&symbol.signature);
     let mut out = String::new();
@@ -88,11 +80,8 @@ fn added_line(path: &str, symbol: &ExtractedSymbol) -> String {
     out
 }
 
-/// `name (path)` header followed by a ` ```diff ` block (`-` previous
-/// signature, `+` current signature) — the exact convention
-/// `render_markdown`'s "Definitions" section already uses for
-/// `SignatureChanged`, reused here so a reader who has seen either output
-/// recognizes it immediately.
+/// Same ` ```diff ` convention `render_markdown`'s "Definitions" section
+/// uses for `SignatureChanged`.
 ///
 /// `previous_signature` is expected to be `Some` whenever `classification`
 /// is `SignatureChanged` (`extract::classify_symbols`' invariant); falls
@@ -119,12 +108,8 @@ fn signature_changed_line(path: &str, symbol: &ExtractedSymbol) -> String {
     out
 }
 
-/// `~~name (path)~~ — removed` — GitHub-native Markdown strikethrough,
-/// since a removed symbol has no signature left to show at all (same data
-/// gap ADR 0035 hit for the mermaid case). `removed.path` plays the same
-/// disambiguating role as every other line's `path` parameter, sourced
-/// directly from `RemovedSymbol` instead of a `FileReport` since removed
-/// symbols aren't grouped by file the way `report.files` is.
+/// Strikethrough, not a signature block: a removed symbol has no
+/// head-side signature left to show (see ADR 0035).
 fn removed_line(removed: &RemovedSymbol) -> String {
     format!(
         "- ~~{}~~ — removed\n",
@@ -132,13 +117,9 @@ fn removed_line(removed: &RemovedSymbol) -> String {
     )
 }
 
-/// Backtick fence wide enough to safely wrap `signature` inline (an inline
-/// code span, not a fenced block — the digest keeps each entry to one or
-/// two lines) — widens past the longest run of consecutive backticks
-/// already in the text, the same defensive sizing `render_markdown`'s
-/// `fence_for` uses, so a signature that happens to contain backticks
-/// (unusual, but not impossible depending on the source language) can't
-/// prematurely close the span.
+/// Inline-code-span fence wide enough that an embedded backtick run in
+/// `text` can't prematurely close it (mirrors `render_markdown`'s
+/// `fence_for`).
 fn fence_for(text: &str) -> String {
     "`".repeat((longest_backtick_run(text).unwrap_or(0) + 1).max(1))
 }
@@ -318,10 +299,7 @@ mod tests {
 
     #[test]
     fn should_render_added_changed_and_removed_together_in_file_then_removed_order() {
-        // Two files (a.rs: Added, b.rs: SignatureChanged), then one
-        // removed symbol from a.rs — pins that ordering is per-file
-        // source order for graph-backed symbols, with every removed
-        // symbol appended after, regardless of which file it belonged to.
+        // The removed symbol belongs to a.rs but must still land last.
         let report = empty_report(
             vec![
                 FileReport {
@@ -371,9 +349,6 @@ mod tests {
 
     #[test]
     fn should_disambiguate_same_named_symbols_defined_in_different_files() {
-        // Both files define a symbol named "new" (a plausible, generic
-        // helper name) — without the "(path)" suffix these two entries
-        // would render as identical, indistinguishable lines.
         let report = empty_report(
             vec![
                 FileReport {
@@ -414,8 +389,6 @@ mod tests {
 
     #[test]
     fn should_widen_diff_fence_when_signature_contains_a_backtick_run() {
-        // A signature containing a triple-backtick run would prematurely
-        // close a plain ```diff fence; fence_for_diff must widen past it.
         let report = empty_report(
             vec![FileReport {
                 path: "src/lib.rs".to_string(),
