@@ -93,11 +93,13 @@ struct Point {
                     id: "src/lib.rs::helper".to_string(),
                     path: "src/lib.rs".to_string(),
                     name: "helper".to_string(),
+                    is_test: false,
                 },
                 crate::graph::Node {
                     id: "src/lib.rs::Point".to_string(),
                     path: "src/lib.rs".to_string(),
                     name: "Point".to_string(),
+                    is_test: false,
                 },
             ],
             edges: vec![],

@@ -30,11 +30,13 @@ fn report_with_caller_and_callee() -> Report {
                 id: "a/one.rs::foo".to_string(),
                 path: "a/one.rs".to_string(),
                 name: "foo".to_string(),
+                is_test: false,
             },
             rinkaku_core::graph::Node {
                 id: "b/two.rs::bar".to_string(),
                 path: "b/two.rs".to_string(),
                 name: "bar".to_string(),
+                is_test: false,
             },
         ],
         edges: vec![rinkaku_core::graph::Edge {

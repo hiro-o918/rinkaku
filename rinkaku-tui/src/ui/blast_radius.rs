@@ -188,6 +188,7 @@ mod tests {
                     id: "lib.rs::foo".to_string(),
                     path: "lib.rs".to_string(),
                     name: "foo".to_string(),
+                    is_test: false,
                 }],
                 edges: vec![],
                 roots: vec!["lib.rs::foo".to_string()],
