@@ -1,4 +1,4 @@
-# 0034. Keep tests out of production directory ranking and out of the main tree
+# 0035. Keep tests out of production directory ranking and out of the main tree
 
 - Status: proposed
 - Date: 2026-07-13
