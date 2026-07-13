@@ -50,6 +50,7 @@
 
 use crate::extract::extract_all_symbols;
 use crate::language::LanguageSupport;
+use crate::progress::{OnProgress, should_report_progress};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -146,6 +147,18 @@ impl TagsResolver {
     /// Files with no registered [`LanguageSupport`] for their extension
     /// are silently skipped, matching the pipeline's handling of
     /// unsupported files elsewhere (`pipeline::analyze_diff`).
+    ///
+    /// `on_progress` (ADR 0033), when `Some`, is called with `(files_done,
+    /// total)` as this loop works through `files` — `files` is materialized
+    /// into a `Vec` first (rather than iterated lazily) specifically so
+    /// `total` is known up front the same way `pipeline::analyze_repo`'s
+    /// `paths.len()` already is; every real call site already passes a
+    /// `Vec<(String, String)>` (`main.rs`'s `build_resolver`), so this adds
+    /// no new allocation. Reported approximately every
+    /// [`crate::progress::PROGRESS_REPORT_STRIDE`] files
+    /// (`crate::progress::should_report_progress`), always including a
+    /// final `(total, total)` call. `None` (every non-`--tui` caller, every
+    /// existing test) skips the counter entirely.
     pub fn new(
         files: impl IntoIterator<Item = (String, String)>,
         language_for_path: impl Fn(&str) -> Option<&'static dyn LanguageSupport>,
@@ -153,6 +166,7 @@ impl TagsResolver {
         include_tests: bool,
         generated_paths: &HashSet<String>,
         include_generated: bool,
+        on_progress: Option<OnProgress>,
     ) -> Self {
         let mut index: HashMap<String, Vec<ResolvedSymbol>> = HashMap::new();
         // `AhoCorasick::new` only errors on pathological inputs this call
@@ -168,30 +182,43 @@ impl TagsResolver {
         let matcher = aho_corasick::AhoCorasick::new(reference_names)
             .expect("reference_names must build a valid AhoCorasick matcher");
 
-        for (path, content) in files {
-            let Some(lang) = language_for_path(&path) else {
-                continue;
-            };
-            if !include_tests && lang.is_test_path(&path) {
-                continue;
-            }
-            if !include_generated && generated_paths.contains(&path) {
-                continue;
-            }
-            if !include_generated && is_generated_content(&content) {
-                continue;
-            }
-            if !should_parse_file(&matcher, &content) {
-                continue;
-            }
-            for symbol in extract_all_symbols(&content, lang) {
-                if !include_tests && symbol.is_test {
-                    continue;
+        let files: Vec<(String, String)> = files.into_iter().collect();
+        let total = files.len();
+        for (done, (path, content)) in files.into_iter().enumerate() {
+            let outcome = (|| {
+                let lang = language_for_path(&path)?;
+                if !include_tests && lang.is_test_path(&path) {
+                    return None;
                 }
-                index.entry(symbol.name).or_default().push(ResolvedSymbol {
-                    signature: symbol.signature,
-                    path: path.clone(),
-                });
+                if !include_generated && generated_paths.contains(&path) {
+                    return None;
+                }
+                if !include_generated && is_generated_content(&content) {
+                    return None;
+                }
+                if !should_parse_file(&matcher, &content) {
+                    return None;
+                }
+                Some((lang, content))
+            })();
+
+            if let Some((lang, content)) = outcome {
+                for symbol in extract_all_symbols(&content, lang) {
+                    if !include_tests && symbol.is_test {
+                        continue;
+                    }
+                    index.entry(symbol.name).or_default().push(ResolvedSymbol {
+                        signature: symbol.signature,
+                        path: path.clone(),
+                    });
+                }
+            }
+
+            if let Some(on_progress) = on_progress {
+                let done = done + 1;
+                if should_report_progress(done, total) {
+                    on_progress(done, total);
+                }
             }
         }
 

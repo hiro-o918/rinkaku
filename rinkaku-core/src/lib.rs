@@ -13,4 +13,5 @@ pub mod file_size;
 pub mod graph;
 pub mod language;
 pub mod pipeline;
+pub mod progress;
 pub mod render;

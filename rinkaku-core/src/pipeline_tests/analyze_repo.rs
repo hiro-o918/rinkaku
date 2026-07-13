@@ -26,7 +26,7 @@ fn should_return_empty_report_when_paths_is_empty() {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_repo(&[], read_file, true, &HashSet::new(), true);
+    let actual = analyze_repo(&[], read_file, true, &HashSet::new(), true, None);
 
     assert_eq!(expected, actual);
 }
@@ -109,7 +109,7 @@ struct Point {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     assert_eq!(expected, actual);
 }
@@ -123,7 +123,7 @@ fn should_leave_classification_none_for_every_symbol() {
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
     let paths = vec!["src/lib.rs".to_string()];
 
-    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     let expected: Option<crate::extract::Classification> = None;
     let actual = report.files[0].symbols[0].classification;
@@ -150,7 +150,7 @@ fn should_skip_path_without_registered_language_support() {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     assert_eq!(expected, actual);
 }
@@ -173,7 +173,7 @@ fn should_skip_path_when_read_file_fails() {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     assert_eq!(expected, actual);
 }
@@ -200,7 +200,7 @@ fn should_skip_path_in_generated_paths_set_without_reading_it() {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_repo(&paths, read_file, true, &generated_paths, true);
+    let actual = analyze_repo(&paths, read_file, true, &generated_paths, true, None);
 
     assert_eq!(expected, actual);
 }
@@ -221,7 +221,7 @@ fn should_skip_file_with_generated_content_marker_when_include_generated_is_fals
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), false);
+    let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), false, None);
 
     assert_eq!(expected, actual);
 }
@@ -232,7 +232,7 @@ fn should_not_skip_file_with_generated_content_marker_when_include_generated_is_
     let read_file = fake_reader(HashMap::from([("models/user.rs", source)]));
     let paths = vec!["models/user.rs".to_string()];
 
-    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     assert_eq!(1, report.files.len());
 }
@@ -259,7 +259,7 @@ func TestFoo(t *testing.T) {
         file_size_warnings: vec![],
         removed: vec![],
     };
-    let actual = analyze_repo(&paths, read_file, false, &HashSet::new(), true);
+    let actual = analyze_repo(&paths, read_file, false, &HashSet::new(), true, None);
 
     assert_eq!(expected, actual);
 }
@@ -276,7 +276,7 @@ func TestFoo(t *testing.T) {
     let read_file = fake_reader(HashMap::from([("repo_test.go", source)]));
     let paths = vec!["repo_test.go".to_string()];
 
-    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     assert_eq!(1, report.files.len());
 }
@@ -304,7 +304,7 @@ mod tests {
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
     let paths = vec!["src/lib.rs".to_string()];
 
-    let report = analyze_repo(&paths, read_file, false, &HashSet::new(), true);
+    let report = analyze_repo(&paths, read_file, false, &HashSet::new(), true, None);
 
     let expected_names = vec!["add".to_string()];
     let actual_names: Vec<String> = report.files[0]
@@ -335,7 +335,7 @@ fn caller_two() -> i32 {
     let read_file = fake_reader(HashMap::from([("src/lib.rs", source)]));
     let paths = vec!["src/lib.rs".to_string()];
 
-    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     let expected = vec![crate::graph::Hotspot {
         id: "src/lib.rs::shared_helper".to_string(),
