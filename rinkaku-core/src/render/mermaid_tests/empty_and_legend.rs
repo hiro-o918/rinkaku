@@ -1,4 +1,4 @@
-//! The empty-graph short-circuit and the ADR 0038 `Legend` subgraph every
+//! The empty-graph short-circuit and the ADR 0039 `Legend` subgraph every
 //! render path shares.
 
 use super::*;

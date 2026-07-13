@@ -1,7 +1,7 @@
 //! Tests for [`super::render_mermaid`]/[`super::render_mermaid_file_level`],
 //! split by which behavior each file pins:
 //!
-//! - [`empty_and_legend`] — the empty-graph short-circuit and the ADR 0038
+//! - [`empty_and_legend`] — the empty-graph short-circuit and the ADR 0039
 //!   `Legend` subgraph/`classDef` trailer every render path shares.
 //! - [`class_styling`] — `added`/`changed`/`fan-in` class assignment,
 //!   fan-in's `(in:N)` label suffix, and the fan-in-vs-changed/added
@@ -83,7 +83,7 @@ fn removed_symbol(name: &str, path: &str) -> RemovedSymbol {
 }
 
 /// The exact `Legend` subgraph + `classDef` trailer every render path
-/// appends (ADR 0038) — every test's `expected` string ends with this,
+/// appends (ADR 0039) — every test's `expected` string ends with this,
 /// shared here so a future style change is a one-line update instead of a
 /// find/replace across every test file. `concat!`, not a `"\`-continued
 /// literal: the latter strips leading whitespace from the continued line,

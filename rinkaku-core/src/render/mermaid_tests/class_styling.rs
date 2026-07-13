@@ -1,5 +1,5 @@
 //! `added`/`changed`/`fan-in` class assignment, fan-in's `(in:N)` label
-//! suffix (ADR 0038), and the fan-in-vs-changed/added precedence rule.
+//! suffix (ADR 0039), and the fan-in-vs-changed/added precedence rule.
 
 use super::*;
 use pretty_assertions::assert_eq;
@@ -267,7 +267,7 @@ fn should_prefer_fan_in_class_over_added_class_when_a_new_symbol_has_high_fan_in
 
 #[test]
 fn should_render_removed_and_fan_in_nodes_distinctly_when_both_present_in_one_report() {
-    // Regression pin for the ADR 0038 collision this ADR fixes: before
+    // Regression pin for the ADR 0039 collision this ADR fixes: before
     // this change, `removed` and `fan-in` shared the same red fill, so a
     // report containing both classes rendered two visually-identical node
     // styles. `hot` (SignatureChanged, fan-in 2) must get the `fan-in`

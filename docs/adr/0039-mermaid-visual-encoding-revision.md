@@ -1,4 +1,4 @@
-# 0038. Revise `--format mermaid`'s visual encoding and legend
+# 0039. Revise `--format mermaid`'s visual encoding and legend
 
 - Status: accepted
 - Date: 2026-07-14

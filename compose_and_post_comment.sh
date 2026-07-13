@@ -118,11 +118,11 @@ if [ -n "${MERMAID_PATH:-}" ] && [ -f "${MERMAID_PATH}" ]; then
   fi
 fi
 
-# No legend appended here (ADR 0038): the diagram itself now carries a
+# No legend appended here (ADR 0039): the diagram itself now carries a
 # self-describing `Legend` subgraph, styled with its own real `classDef`s,
 # so this script has nothing to compose alongside it — a hand-written
 # prose legend risked drifting out of sync with the actual node styles
-# (the exact problem ADR 0038 fixes), which a legend built from those same
+# (the exact problem ADR 0039 fixes), which a legend built from those same
 # `classDef`s cannot do. The oversized-mermaid fallback below has no
 # legend either, since there is no diagram at all in that case.
 mermaid_section=""

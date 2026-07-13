@@ -1,4 +1,4 @@
-//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037, ADR 0038).
+//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037, ADR 0039).
 //!
 //! The `--format mermaid` output path: a human-oriented call/dependency
 //! graph aimed at GitHub's native mermaid rendering in PR comments/
@@ -8,7 +8,7 @@
 //! of degrading into a hairball. `report.removed` (ADR 0014) renders as
 //! `removed`-classed nodes in the same graph — see ADR 0037 for why a
 //! merged graph rather than a separate before/after diagram. A trailing
-//! `Legend` subgraph (ADR 0038) renders one real, styled node per class so
+//! `Legend` subgraph (ADR 0039) renders one real, styled node per class so
 //! the diagram explains its own color/style vocabulary without a separate
 //! prose legend.
 
@@ -59,7 +59,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
 
     let lookup = SymbolLookup::build(&report.files);
     // Fan-in count (`used_by.len()`) per node id, used both for class
-    // selection and the `(in:N)` label suffix (ADR 0038) — a node present
+    // selection and the `(in:N)` label suffix (ADR 0039) — a node present
     // here is by definition a high-fan-in symbol (`compute_fan_ins` only
     // includes nodes with fan-in >= 2, per ADR 0013).
     let fan_in_counts: HashMap<&str, usize> = report
@@ -309,15 +309,15 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// [`render_mermaid_file_level`]. Colors are chosen with explicit
 /// dark-on-light text (rather than relying on mermaid's theme defaults) so
 /// they stay legible under both GitHub's light and dark PR-comment themes
-/// (ADR 0021). `removed` (ADR 0037, recolored red by ADR 0038) is dashed
+/// (ADR 0021). `removed` (ADR 0037, recolored red by ADR 0039) is dashed
 /// rather than solid-bordered, echoing the cycle-edge convention (`-.->`)
-/// for "no longer normal." `fan-in` (ADR 0038) uses a violet/blue stroke
+/// for "no longer normal." `fan-in` (ADR 0039) uses a violet/blue stroke
 /// distinct from `removed`'s red, plus its own heavier `stroke-width`, so
 /// the two classes cannot be confused for each other at a glance — a node
 /// that is both `changed`/`added` and high-fan-in still gets `fan-in`
 /// styling (see `render_mermaid`'s class-assignment comment for the
 /// precedence rule), and its label additionally carries a `(in:N)` suffix
-/// so the signal survives even without color (ADR 0038).
+/// so the signal survives even without color (ADR 0039).
 const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
     "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
@@ -326,13 +326,13 @@ const MERMAID_CLASS_DEFS: &str = concat!(
 );
 
 /// Fixed-id, real-node `subgraph Legend` block appended by
-/// [`write_legend_and_class_defs`] (ADR 0038): one node per class, styled
+/// [`write_legend_and_class_defs`] (ADR 0039): one node per class, styled
 /// with the same `classDef` a real graph node of that class would use.
 /// Always emitted — including the empty-graph and file-level-fallback
 /// paths — so a reader never sees the diagram without its own key, and a
 /// future `classDef` change re-styles the legend automatically instead of
 /// risking drift against a hand-written prose description (the problem ADR
-/// 0038 replaces). Node ids are fixed rather than drawn from the `n{i}`
+/// 0039 replaces). Node ids are fixed rather than drawn from the `n{i}`
 /// sequence since the legend has no corresponding `report.graph.nodes`
 /// entry to derive one from.
 const MERMAID_LEGEND: &str = concat!(
