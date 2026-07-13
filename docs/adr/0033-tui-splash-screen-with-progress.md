@@ -158,10 +158,70 @@ a real (not simulated) fraction-complete count.
    downgraded to `log::debug!`** (e.g. `"analyzing diff"`,
    `"resolving PR #{number} via gh"`) inside the TUI branch's own call
    path, mirroring the same reasoning ADR 0032 already applied when the
-   spinner made those lines redundant for non-TUI output; `eprintln!`
-   notices (empty diff, garbage input, `used_fallback` warning) are
-   unaffected — the splash never displays those messages, so they must
-   still reach stderr to be seen at all.
+   spinner made those lines redundant for non-TUI output.
+
+8. **Advisory notes are buffered during `--tui` mode and flushed only
+   after the terminal leaves the alternate screen (amendment, added
+   during review).** The original version of this decision left every
+   `eprintln!`/`log::warn!` notice (empty diff, garbage input, an
+   `--entry` path matching nothing, the PR base-commit fallback) firing
+   immediately, on the assumption that "the splash never displays those
+   messages, so they must still reach stderr to be seen at all" was
+   enough justification to leave them untouched. Dynamic verification
+   during review disproved that: `--tui --base <ref> --entry
+   <path-matching-nothing>` writes the raw, unstyled note bytes straight
+   into the terminal's alternate-screen frame stream — mid-redraw,
+   between the splash's "Analyzing diff..." frame and the entry screen's
+   first frame — because stderr and the alternate screen are the same
+   physical terminal, and nothing about entering the alternate screen
+   redirects or suppresses a plain `eprintln!` the way it would for, say,
+   `indicatif`'s TTY-aware draw target (ADR 0032's own note on why the
+   *spinner* needs no such handling: `indicatif` already detects and
+   defers to a non-interactive stream, but a bare `eprintln!` has no such
+   awareness at all).
+
+   `AnalysisProgress` (the port `run_base_pipeline`/`build_resolver`/
+   `main.rs` already thread through for phase/progress reporting, per
+   decision 2 above) gains a third method, `note(&self, message:
+   String)`, defaulting to today's immediate `eprintln!` — every non-TUI
+   caller (the stderr `Spinner`) leaves it at that default, since stderr
+   is not being drawn over by anything outside `--tui` mode.
+   `--tui` mode's `SplashProgress` is the one override: it pushes
+   `message` onto a `Vec<String>` guarded by the same `Mutex` that
+   already serializes its terminal access, instead of printing.
+   `main.rs` extracts that buffer via
+   `SplashProgress::into_session_and_notes` (renamed from the original
+   `into_session`) alongside the plain `TuiSession`, and flushes it with
+   a small `flush_notes` helper at exactly two points — after
+   `TuiSession::run` returns (both `Ok` and `Err`, since `run`'s own
+   postamble unconditionally restores the terminal first) and after an
+   early-return analysis error drops the `TuiSession` (whose `Drop`
+   safety net, decision 5 above, restores the terminal before the flush
+   runs). Every call site that used to call `eprintln!`/`log::warn!`
+   directly — `run_base_pipeline`'s two (empty diff, garbage input),
+   `main.rs`'s `run_analysis` two (repo-outline-empty, stdin empty-diff),
+   `main.rs`'s `finish_report` one (`--entry` empty), and the PR
+   base-commit fallback (`log::warn!` → `progress.note`, reclassified as
+   a plain note rather than a log line so it is buffered the same way) —
+   now goes through `progress.note(...)` instead.
+
+   `finish_report` itself moves *inside* the `--tui` branch's still-live
+   `SplashProgress` scope (called with `&progress` before
+   `into_session_and_notes` consumes it), rather than after, specifically
+   so its own `--entry`-empty note is captured by the same buffer — the
+   bug report's exact reproduction used `--entry` for this reason.
+
+## Amendment (review round 1)
+
+Decision 8 above **is** the amendment: it replaces the original
+Consequences bullet claiming "`eprintln!` notices ... are unaffected —
+the splash never displays those messages, so they must still reach
+stderr to be seen at all" with the buffer-then-flush design, after
+dynamic verification showed that claim was false — a note written to
+stderr during `--tui` mode is not simply "not displayed by the splash",
+it is interleaved into the same terminal the splash/entry screen are
+actively redrawing, corrupting whichever frame happens to be mid-write
+when the note lands.
 
 ## Alternatives
 
@@ -234,13 +294,36 @@ a real (not simulated) fraction-complete count.
   the two file-scanning phases and a plain phase label otherwise. Every
   non-TUI display mode is byte-for-byte unaffected: `on_progress: None`
   everywhere in that path, and ADR 0032's stderr spinner keeps running
-  exactly as before.
+  exactly as before — including its notes, which (decision 8's amendment)
+  still print immediately via `AnalysisProgress::note`'s default. `--tui`
+  mode's own notes now surface *after* the session ends instead of not at
+  all mid-session, which is a UX change from ADR 0032's baseline (a
+  reviewer previously saw these notes interleaved with `log::info!` output
+  before the TUI even started; now they appear on a clean stderr right
+  after quitting/erroring out of the TUI) but strictly better than the
+  data-corrupting alternative decision 8 replaces.
+- **`rinkaku` bin API** (all `pub(crate)`, no external surface):
+  `AnalysisProgress` gains a third method, `note(&self, message: String)`,
+  defaulting to `eprintln!`. `SplashProgress::into_session` is renamed to
+  `SplashProgress::into_session_and_notes`, returning `(TuiSession,
+  Vec<String>)` instead of just `TuiSession`. `finish_report` gains a
+  `progress: &dyn AnalysisProgress` parameter (previously just `cli` and
+  `report`). A new `flush_notes(Vec<String>)` helper in `main.rs` prints a
+  buffer's contents in order.
+- **`rinkaku-tui` API**: adds `pub mod splash` (`SplashState`,
+  `LOGO_LINES`, `draw_splash`) and `pub struct TuiSession` with
+  `init`/`draw_splash`/`run`. `pub fn run(...)`'s signature is unchanged;
+  its body now delegates to `TuiSession`.
 - **Testing**: `SplashState`/the phase→label mapping/the stride decision
   (`should_report_progress_this_index`, or similarly named) are unit
   tested as pure functions (`rstest` + `pretty_assertions`). `draw_splash`
   itself gets the same coarse `TestBackend` treatment `ui::draw`'s
   submodules already use — a snapshot-style assertion that the logo and
-  label/bar appear, not a pixel-exact pin. `TuiSession::init`/`run`'s
+  label/bar appear, not a pixel-exact pin. `AnalysisProgress::note`'s
+  contract (an implementer can override it to buffer instead of printing,
+  and buffering preserves call order) is unit tested against a
+  hand-rolled fake in `progress.rs`, mirroring `SplashProgress`'s actual
+  override without needing a real terminal. `TuiSession::init`/`run`'s
   actual terminal lifecycle is not unit-tested, matching ADR 0032's own
   precedent for `Spinner` (no mocking of a real terminal) — covered
   instead by this PR's dynamic verification (pty-driven manual runs).
