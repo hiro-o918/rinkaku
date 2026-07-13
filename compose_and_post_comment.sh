@@ -159,7 +159,7 @@ body_prefix="${MARKER}
 ## rinkaku PR report
 ${mermaid_section}
 <details>
-<summary>API changes</summary>
+<summary>Details</summary>
 
 "
 

@@ -236,7 +236,6 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         MERMAID_PATH: ${{ steps.run-rinkaku.outputs.mermaid-path }}
         DIGEST_PATH: ${{ steps.run-rinkaku.outputs.digest-path }}
-        MARKDOWN_PATH: ${{ steps.run-rinkaku.outputs.markdown-path }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         IS_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
