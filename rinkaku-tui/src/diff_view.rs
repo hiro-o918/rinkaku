@@ -39,10 +39,31 @@ pub struct DiffLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hunk {
     pub header: String,
-    /// 1-based inclusive new-side line range this hunk's `+`/context lines
-    /// span. `None` when the hunk adds/removes zero new-side lines (a
-    /// hunk that is pure deletion) — there is then no new-side range to
-    /// intersect a symbol's line range against at all.
+    /// The new-side extent this hunk's `+`/context lines span, expressed as
+    /// a 1-based inclusive `(start, end)` pair.
+    ///
+    /// A hunk that adds/keeps at least one new-side line gets an ordinary
+    /// `start <= end` range. A **pure-deletion** hunk (declared new-side
+    /// count is 0, e.g. `@@ -10,3 +10,0 @@`) still carries a real position:
+    /// the header's new-side start is where the deleted content used to sit
+    /// in the new file — line `start` is still `start`, it is just now
+    /// zero-width, so this stores it as `(start, start - 1)` (`start > end`,
+    /// a deliberately empty range at that position) rather than discarding
+    /// it. This lets [`hunk_intersects`] test a deletion's *position*
+    /// against a symbol's range using the exact same `start <= end`
+    /// comparison it already uses for ordinary hunks — mirroring
+    /// `rinkaku_core::diff::parse_hunk`'s own zero-width `LineRange { start,
+    /// end: start - 1 }` convention for a closed-out deletion run, rather
+    /// than inventing a second rule for the same shape of problem.
+    ///
+    /// `None` only when the header itself couldn't be read at all
+    /// (malformed input, module doc comment) or its declared new-side start
+    /// is `0` (git's own "before the first line of the file" marker for a
+    /// deletion at the very top) — `0` has no `start - 1` to subtract
+    /// without underflow, and no symbol's 1-based range can start before
+    /// line 1 anyway, so a deletion reported there can never belong to any
+    /// symbol; it always falls through to the file view's module-level
+    /// bucket, same as a genuinely unreadable header.
     pub new_range: Option<(usize, usize)>,
     pub lines: Vec<DiffLine>,
 }
@@ -176,7 +197,16 @@ fn parse_one_hunk(lines: &[&str], start: usize) -> (Hunk, usize) {
     let new_range = new_start_count.and_then(|(start, declared_count)| {
         let count = declared_count.min(actual_new_line_count);
         if count == 0 {
-            None
+            // Pure deletion (`Hunk::new_range`'s own doc comment on why
+            // `start` is still worth keeping): `start == 0` has no valid
+            // position to encode (git's "before line 1" marker, and no
+            // symbol range can start before line 1 anyway), everything else
+            // becomes the zero-width `(start, start - 1)` position.
+            if start == 0 {
+                None
+            } else {
+                Some((start, start - 1))
+            }
         } else {
             Some((start, start + count - 1))
         }
@@ -212,9 +242,36 @@ fn parse_new_side_header(header: &str) -> Option<(usize, usize)> {
 /// Whether `hunk` intersects the 1-based inclusive new-side range
 /// `[range_start, range_end]` — used to filter a file's hunks down to just
 /// the ones touching a selected symbol's line range.
+///
+/// A pure-deletion hunk's `new_range` is a zero-width `(position, position -
+/// 1)` pair (`Hunk::new_range`'s doc comment) rather than an ordinary
+/// `start <= end` span, and it needs its own boundary rule, not the general
+/// `hunk_start <= range_end && range_start <= hunk_end` overlap test below —
+/// that test treats both ends of an inclusive range as "belongs", but a
+/// deletion *position* is where content used to sit, i.e. strictly *before*
+/// new-file line `position`. Concretely (verified against `git diff -U0`
+/// output, not just algebra): deleting a function's first body statement
+/// reports `position == range_start`, and should belong to that function
+/// (`range_start <= position`); deleting the blank separator line right
+/// after a function's closing brace reports `position == range_end`, and
+/// should *not* belong to that function (`position < range_end`, not
+/// `position <= range_end` — the deletion sits in the gap between this
+/// symbol and the next one, not inside this symbol's own body). So the rule
+/// for a zero-width position is `range_start <= position < range_end`, the
+/// half-open interpretation of "before this new-file line" — deliberately
+/// asymmetric versus the closed-interval test used for ordinary hunks.
 pub fn hunk_intersects(hunk: &Hunk, range_start: usize, range_end: usize) -> bool {
     match hunk.new_range {
+        Some((hunk_start, hunk_end)) if hunk_start > hunk_end => {
+            // Zero-width deletion position (`hunk_start`, since `hunk_end ==
+            // hunk_start - 1` by construction) — half-open test, see this
+            // function's own doc comment for why.
+            range_start <= hunk_start && hunk_start < range_end
+        }
         Some((hunk_start, hunk_end)) => hunk_start <= range_end && range_start <= hunk_end,
+        // Only reached for a header this parser couldn't read at all, or
+        // one whose new-side start is line 0 (`Hunk::new_range`'s doc
+        // comment) — both cases have no position to test at all.
         None => false,
     }
 }
@@ -390,7 +447,10 @@ index e69de29..4b825dc 100644
     }
 
     #[test]
-    fn should_return_none_new_range_when_hunk_is_pure_deletion() {
+    fn should_return_none_new_range_when_pure_deletion_starts_at_new_side_line_zero() {
+        // Whole-file deletion: git reports `+0,0` (no position at all, since
+        // the new file doesn't exist) — the one pure-deletion shape with no
+        // valid `start - 1` to encode (`Hunk::new_range`'s own doc comment).
         let diff = "\
 diff --git a/src/old.rs b/src/old.rs
 deleted file mode 100644
@@ -405,6 +465,30 @@ index 4b825dc..0000000
 
         assert_eq!(1, actual.len());
         assert_eq!(None, actual[0].hunks[0].new_range);
+    }
+
+    #[test]
+    fn should_return_zero_width_new_range_at_declared_start_when_pure_deletion_is_mid_file() {
+        // `@@ -10,3 +10,0 @@`-shaped: content was deleted from inside a
+        // still-existing file, so the header's new-side start (10) is a real
+        // position in the new file, just a zero-width one — this is the
+        // finding-2 regression: this used to collapse to `None`, which made
+        // `hunk_intersects` always report `false` and silently dropped the
+        // hunk from symbol attribution entirely.
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index e69de29..4b825dc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,3 +10,0 @@ fn a() {
+-    println!(\"x\");
+-    println!(\"y\");
+-    println!(\"z\");
+";
+        let actual = parse_diff_hunks(diff);
+
+        assert_eq!(1, actual.len());
+        assert_eq!(Some((10, 9)), actual[0].hunks[0].new_range);
     }
 
     #[test]
@@ -472,6 +556,73 @@ index e69de29..4b825dc 100644
         };
 
         assert_eq!(false, hunk_intersects(&hunk, 1, 100));
+    }
+
+    // A pure-deletion hunk's `new_range` is a zero-width `(position, position
+    // - 1)` value (`Hunk::new_range`'s doc comment) tested with the
+    // deliberately asymmetric half-open rule `hunk_intersects` documents
+    // (`range_start <= position < range_end`). These four cases are grounded
+    // in real `git diff -U0` output (this function's own doc comment), not
+    // just algebra:
+    //
+    // - deleting a function's *first* body statement reports `position ==
+    //   range_start` and belongs to that function;
+    // - deleting its *last* body statement reports a position strictly
+    //   between `range_start` and `range_end` and belongs to it too;
+    // - deleting the blank line right after a function's closing brace
+    //   reports `position == range_end` and does *not* belong to that
+    //   function — it's in the gap before the next symbol.
+
+    #[test]
+    fn should_report_intersection_when_deletion_position_equals_symbol_range_start() {
+        // e.g. `fn a() { <deleted first line> ... }` spanning new lines
+        // [1,4]: deleting the first body statement reports position 1.
+        let hunk = Hunk {
+            header: "@@ -2 +1,0 @@".to_string(),
+            new_range: Some((1, 0)),
+            lines: vec![],
+        };
+
+        assert_eq!(true, hunk_intersects(&hunk, 1, 4));
+    }
+
+    #[test]
+    fn should_report_intersection_when_deletion_position_is_strictly_inside_symbol_range() {
+        // Same [1,4] function: deleting its last body statement (just before
+        // the closing brace) reports position 3.
+        let hunk = Hunk {
+            header: "@@ -4 +3,0 @@".to_string(),
+            new_range: Some((3, 2)),
+            lines: vec![],
+        };
+
+        assert_eq!(true, hunk_intersects(&hunk, 1, 4));
+    }
+
+    #[test]
+    fn should_report_no_intersection_when_deletion_position_equals_symbol_range_end() {
+        // Same [1,4] function ([1,5] before this deletion): deleting the
+        // blank separator line right after its closing brace reports
+        // position 5 — the gap before the next symbol, not this one's body.
+        let hunk = Hunk {
+            header: "@@ -6 +5,0 @@".to_string(),
+            new_range: Some((5, 4)),
+            lines: vec![],
+        };
+
+        assert_eq!(false, hunk_intersects(&hunk, 1, 5));
+    }
+
+    #[test]
+    fn should_report_no_intersection_when_deletion_position_is_strictly_after_symbol_range() {
+        // Position 11 is well past the symbol's end (4) — outside it.
+        let hunk = Hunk {
+            header: "@@ -15,1 +11,0 @@".to_string(),
+            new_range: Some((11, 10)),
+            lines: vec![],
+        };
+
+        assert_eq!(false, hunk_intersects(&hunk, 1, 4));
     }
 
     #[test]

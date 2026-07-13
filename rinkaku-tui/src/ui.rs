@@ -11,7 +11,8 @@
 
 use crate::app::{App, DiffTarget, PivotSelection, RightPane, Screen, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
-use crate::diff_view::{DiffLine, DiffLineKind, FileHunks, Hunk, file_hunks, hunks_for_range};
+use crate::diff_shape::DiffSection;
+use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, PALETTE, TokenSpan};
 use crate::row_view::{entry_row_line, relative_labels};
 use crate::source::{SourceView, load_symbol_source, visible_window};
@@ -19,32 +20,38 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use rinkaku_core::extract::Classification;
 use rinkaku_core::render::{Report, ReportOrigin};
 use unicode_width::UnicodeWidthChar;
 
 /// Draws one full frame: the entry view (tree + right pane split) or the
 /// source drill-down, depending on `app.screen()`, with a status/help line
-/// pinned to the bottom either way. `diff_files` is the whole diff already
-/// parsed into per-file hunks once by `crate::run_app` (not re-parsed here
-/// on every frame — see that function's doc comment on why parsing lives
-/// outside the draw loop), and `diff_highlights` is that same diff's
-/// per-line syntax highlighting, computed once alongside it (ADR 0018) —
-/// both are only consulted when the right pane is in [`RightPane::Diff`]
-/// mode. `pivot_selection` is likewise computed once per handled key by
-/// `crate::run_app` (not here) whenever the right pane is in
-/// [`RightPane::Pivot`] mode — see `App::selected_pivot_view`'s own doc
-/// comment on why this function must not call it itself. `repo_root` is
+/// pinned to the bottom either way. `diff_highlights` is the whole diff's
+/// per-line syntax highlighting, computed once by `crate::run_app` (not
+/// re-parsed/re-highlighted here on every frame — see that function's doc
+/// comment on why that work lives outside the draw loop), consulted only
+/// when the right pane is in [`RightPane::Diff`] mode. `diff_content` and
+/// `pivot_selection` are likewise computed once per handled key by
+/// `crate::run_app` (not here), for [`RightPane::Diff`]/[`RightPane::Pivot`]
+/// respectively — see `App::selected_pivot_view`'s own doc comment on why
+/// this function must not call either computation itself. `repo_root` is
 /// only consulted on [`Screen::Source`] (forwarded to
 /// [`load_symbol_source`], see that function's doc comment for why
 /// `Report` paths need it) — it is threaded through here rather than
 /// resolved lazily so this stays the single frame-drawing entry point.
+///
+/// The `?` help overlay (ADR 0020) draws last, on top of whatever screen
+/// was already rendered underneath — `app.help_open()` never changes what
+/// `Screen`/`RightPane` themselves draw (`App::help_open`'s own doc
+/// comment), so the underlying frame is built exactly the same way whether
+/// the overlay is open or not, and the overlay is simply composited over
+/// it as a final step.
 pub fn draw(
     frame: &mut Frame,
     app: &App,
     report: &Report,
-    diff_files: &[FileHunks],
+    diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     pivot_selection: &PivotSelection,
     repo_root: &std::path::Path,
@@ -58,7 +65,7 @@ pub fn draw(
             frame,
             app,
             report,
-            diff_files,
+            diff_content,
             diff_highlights,
             pivot_selection,
             body,
@@ -69,6 +76,80 @@ pub fn draw(
     }
 
     draw_status_line(frame, app, status_area);
+
+    if app.help_open() {
+        draw_help_overlay(frame, area);
+    }
+}
+
+/// Draws the `?` help overlay (ADR 0020) centered over `full_area`: a
+/// bordered box roughly 70% of the frame's width/height (capped so it
+/// never claims more than the frame itself on a small terminal), listing
+/// every [`crate::help::HELP_CONTENT`] keymap group followed by the
+/// glossary. [`Clear`] is rendered first so the overlay's background is
+/// opaque rather than letting the underlying frame's glyphs show through
+/// gaps in the overlay's own text.
+fn draw_help_overlay(frame: &mut Frame, full_area: Rect) {
+    let overlay_area = centered_rect(full_area, 80, 90);
+    frame.render_widget(Clear, overlay_area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for group in crate::help::HELP_CONTENT.keymap_groups {
+        lines.push(Line::styled(
+            group.title,
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        for binding in group.bindings {
+            lines.push(Line::raw(format!(
+                "  {:<16} {}",
+                binding.keys, binding.description
+            )));
+        }
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::styled(
+        "Glossary",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    for entry in crate::help::HELP_CONTENT.glossary {
+        lines.push(Line::raw(format!(
+            "  {:<16} {}",
+            entry.term, entry.explanation
+        )));
+    }
+
+    let block = Block::bordered().title(" Help (? to close) ");
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(paragraph, overlay_area);
+}
+
+/// A `Rect` centered within `area`, `percent_width`/`percent_height` of
+/// `area`'s own dimensions — the standard `ratatui` centered-popup layout
+/// recipe (two nested `Layout::vertical`/`horizontal` splits with a
+/// `Percentage` constraint sandwiched between two equal `Percentage`
+/// margins), extracted as its own pure function so the overlay's sizing
+/// rule is nameable and independent of `draw_help_overlay`'s own
+/// `Clear`/`Paragraph` concerns.
+fn centered_rect(area: Rect, percent_width: u16, percent_height: u16) -> Rect {
+    let vertical_margin = (100 - percent_height) / 2;
+    let [_, middle, _] = Layout::vertical([
+        Constraint::Percentage(vertical_margin),
+        Constraint::Percentage(percent_height),
+        Constraint::Percentage(vertical_margin),
+    ])
+    .areas(area);
+
+    let horizontal_margin = (100 - percent_width) / 2;
+    let [_, center, _] = Layout::horizontal([
+        Constraint::Percentage(horizontal_margin),
+        Constraint::Percentage(percent_width),
+        Constraint::Percentage(horizontal_margin),
+    ])
+    .areas(middle);
+
+    center
 }
 
 /// Left entry pane (directory tree) + right pane, split 60/40 — this
@@ -81,7 +162,7 @@ fn draw_entry_screen(
     frame: &mut Frame,
     app: &App,
     report: &Report,
-    diff_files: &[FileHunks],
+    diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     pivot_selection: &PivotSelection,
     area: Rect,
@@ -92,9 +173,14 @@ fn draw_entry_screen(
     draw_tree_pane(frame, app, tree_area);
     match app.right_pane() {
         RightPane::Detail => draw_detail_pane(frame, app, report, right_area),
-        RightPane::Diff => {
-            draw_diff_pane(frame, app, report, diff_files, diff_highlights, right_area)
-        }
+        RightPane::Diff => draw_diff_pane(
+            frame,
+            app,
+            report,
+            diff_content,
+            diff_highlights,
+            right_area,
+        ),
         RightPane::Pivot => draw_pivot_pane(frame, app, pivot_selection, right_area),
     }
 }
@@ -135,70 +221,60 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
     render_scrollable_pane(frame, " Detail ", &lines, app.right_pane_scroll(), area);
 }
 
-/// Draws the diff pane (TUI iteration 2, [`RightPane::Diff`]): the raw
-/// unified-diff hunks touching the row under the cursor — every hunk of the
-/// file for a file row, or just the hunks intersecting a symbol's own line
-/// range for a symbol row (`App::selected_diff_target`'s own doc comment).
+/// Draws the diff pane (TUI iteration 2, [`RightPane::Diff`]; ADR 0020
+/// reshapes its content): the raw unified-diff hunks touching the row under
+/// the cursor, clipped to a symbol's own line range for a symbol row, or
+/// grouped into per-symbol sections (plus a trailing "(module level)"
+/// section) for a file row — `diff_content` is already shaped by
+/// `crate::diff_shape::build_diff_pane_content`, computed once per handled
+/// key by `crate::run_app` (this function must not call it itself, mirroring
+/// `App::selected_pivot_view`'s own "must not call from `ui::draw`"
+/// constraint and the reason it exists — see that method's doc comment).
 /// A directory row, or a row with nothing to show (no hunks found, e.g. a
 /// mismatch between `report` and the diff), falls back to a placeholder
-/// message rather than an empty pane. `diff_files` is already parsed and
-/// `diff_highlights` already highlighted (`crate::run_app` does both once,
-/// up front, not on every call to this function — ADR 0018).
+/// message rather than an empty pane; `App::selected_diff_target` is called
+/// here (not cached) purely to pick which of the two placeholder messages
+/// applies — it is an O(rows) lookup, not the O(diff size) hunk-walk
+/// `diff_content` itself avoids recomputing. `diff_highlights` is looked up
+/// by `source_index` rather than pointer identity now that hunks are cloned
+/// into shaped sections (`crate::diff_shape::AttributedHunk`'s own doc
+/// comment).
 fn draw_diff_pane(
     frame: &mut Frame,
     app: &App,
     report: &Report,
-    diff_files: &[FileHunks],
+    diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     area: Rect,
 ) {
-    let Some(target) = app.selected_diff_target(report) else {
-        let block = Block::bordered().title(" Diff ");
-        let paragraph = Paragraph::new("(select a symbol or file row to see its diff)")
-            .block(block)
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(paragraph, area);
-        return;
+    use crate::diff_shape::DiffPaneContent;
+
+    let target = app.selected_diff_target(report);
+    let path: &str = match &target {
+        Some(DiffTarget::Symbol { path, .. }) | Some(DiffTarget::File { path }) => path.as_str(),
+        None => "",
     };
 
-    let (path, hunks): (&str, Vec<&Hunk>) = match &target {
-        DiffTarget::Symbol {
-            path,
-            range_start,
-            range_end,
-        } => {
-            let hunks = file_hunks(diff_files, path)
-                .map(|fh| hunks_for_range(fh, *range_start, *range_end))
-                .unwrap_or_default();
-            (path.as_str(), hunks)
+    let sections: Vec<&crate::diff_shape::DiffSection> = match diff_content {
+        DiffPaneContent::Empty => {
+            let message = match &target {
+                None => "(select a symbol or file row to see its diff)".to_string(),
+                Some(_) => format!("(no diff hunks found for {path})"),
+            };
+            let block = Block::bordered().title(" Diff ");
+            let paragraph = Paragraph::new(message)
+                .block(block)
+                .wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+            return;
         }
-        DiffTarget::File { path } => {
-            let hunks = file_hunks(diff_files, path)
-                .map(|fh: &FileHunks| fh.hunks.iter().collect())
-                .unwrap_or_default();
-            (path.as_str(), hunks)
-        }
+        DiffPaneContent::Symbol(section) => vec![section],
+        DiffPaneContent::File(sections) => sections.iter().collect(),
     };
 
-    if hunks.is_empty() {
-        let block = Block::bordered().title(" Diff ");
-        let paragraph = Paragraph::new(format!("(no diff hunks found for {path})"))
-            .block(block)
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(paragraph, area);
-        return;
-    }
-
-    // `file_hunks` was already resolved above via `DiffTarget`'s match arm,
-    // but `hunks_for_range`/the file-row arm both return `&Hunk`s borrowed
-    // from it — re-resolving it here (rather than threading it out of the
-    // match above) keeps `highlight::lookup_hunk_highlight`'s pointer-
-    // identity lookup working against the exact same `FileHunks` the
-    // `&Hunk`s in `hunks` were borrowed from.
-    let source_file_hunks = file_hunks(diff_files, path);
     let highlighted_file = highlight::highlighted_file(diff_highlights, path);
-
-    let lines = diff_pane_lines(&hunks, source_file_hunks, highlighted_file);
+    let is_file_selection = matches!(diff_content, DiffPaneContent::File(_));
+    let lines = diff_pane_lines(&sections, is_file_selection, highlighted_file);
     render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
 }
 
@@ -439,53 +515,82 @@ fn scroll_indicator(content_len: usize, viewport_height: usize, scroll: usize) -
     Some(format!(" ({first_visible}-{last_visible}/{content_len})"))
 }
 
-/// Formats a list of [`Hunk`]s into styled lines: hunk headers dim, `+`/`-`
-/// marker glyphs keep their existing bold green/red foreground, and each
-/// line's own code tokens are colored by [`highlight::lookup_hunk_highlight`]
-/// when available (ADR 0018) — falling back to the plain green/red/unstyled
-/// line style this pane always had when a hunk has no highlight (unknown
-/// extension, parse/query failure) so highlighting can never make a diff
-/// harder to read than before.
+/// Formats every [`DiffSection`] in `sections` into styled lines (ADR
+/// 0020): a section header (a symbol's own signature, styled bold, or the
+/// fixed "(module level)" label) only when `show_section_headers` is set —
+/// a single-section symbol selection has nothing to disambiguate a header
+/// would add value to, so it is omitted there and the pane opens straight
+/// on the (optional) contract header/hunks, matching this pane's pre-ADR-
+/// 0020 layout for a symbol row. A file selection (multiple sections, or
+/// one section that still benefits from being named) always shows headers.
+/// Each section's own `contract_header` (when present) renders as a 2-line
+/// red/green old/new pair before that section's hunks — the outline-before-
+/// implementation disclosure order ADR 0020 asks for.
 ///
-/// `source_file_hunks`/`highlighted_file` are `None` exactly when `hunks`
-/// itself would already be empty (`draw_diff_pane` returns before calling
-/// this function in that case), so in practice they are always `Some` here
-/// — kept as `Option`s anyway (rather than unwrapped) since `file_hunks`
-/// returning `None` is a defensive, not-supposed-to-happen case elsewhere
-/// in this module too, and threading the same shape through keeps this
-/// function's fallback path uniform with `highlight::lookup_hunk_highlight`'s
-/// own `None` handling.
+/// Within each section, hunk headers stay dim, `+`/`-` marker glyphs keep
+/// their existing bold green/red foreground, and each line's own code
+/// tokens are colored by [`highlight::lookup_hunk_highlight_by_index`] when
+/// available (ADR 0018/0020) — falling back to the plain green/red/
+/// unstyled line style this pane always had when a hunk has no highlight
+/// (unknown extension, parse/query failure, or `highlighted_file` itself
+/// being `None`) so highlighting can never make a diff harder to read than
+/// before.
 fn diff_pane_lines(
-    hunks: &[&Hunk],
-    source_file_hunks: Option<&FileHunks>,
+    sections: &[&DiffSection],
+    show_section_headers: bool,
     highlighted_file: Option<&HighlightedFile>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for (index, hunk) in hunks.iter().enumerate() {
-        if index > 0 {
+    for (section_index, section) in sections.iter().enumerate() {
+        if section_index > 0 {
             lines.push(Line::raw(""));
         }
-        lines.push(Line::styled(
-            hunk.header.clone(),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        ));
+        if show_section_headers {
+            lines.push(Line::styled(
+                section.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(contract) = &section.contract_header {
+            lines.push(Line::styled(
+                format!("- {}", contract.previous_signature),
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::styled(
+                format!("+ {}", contract.signature),
+                Style::default().fg(Color::Green),
+            ));
+        }
 
-        let hunk_highlight = source_file_hunks
-            .and_then(|fh| highlight::lookup_hunk_highlight(highlighted_file, fh, hunk));
+        for (hunk_index, attributed) in section.hunks.iter().enumerate() {
+            if hunk_index > 0 || show_section_headers || section.contract_header.is_some() {
+                lines.push(Line::raw(""));
+            }
+            lines.push(Line::styled(
+                attributed.hunk.header.clone(),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ));
 
-        for (line_index, line) in hunk.lines.iter().enumerate() {
-            // `hunk_highlight` is `Option<&[LineHighlight]>`, and
-            // `LineHighlight` is itself `Option<Vec<TokenSpan>>` (per-line
-            // fallback within an otherwise-highlighted hunk) — `flatten`
-            // collapses "no highlight data at all for this hunk" and
-            // "this specific line had no highlight" into the same `None`
-            // `diff_line` already treats as its fallback signal.
-            let token_spans = hunk_highlight
-                .and_then(|lines| lines.get(line_index).cloned())
-                .flatten();
-            lines.push(diff_line(line, token_spans));
+            let hunk_highlight = highlight::lookup_hunk_highlight_by_index(
+                highlighted_file,
+                attributed.source_index,
+            );
+
+            for (line_index, line) in attributed.hunk.lines.iter().enumerate() {
+                // `hunk_highlight` is `Option<&[LineHighlight]>`, and
+                // `LineHighlight` is itself `Option<Vec<TokenSpan>>`
+                // (per-line fallback within an otherwise-highlighted hunk)
+                // — `flatten` collapses "no highlight data at all for this
+                // hunk" and "this specific line had no highlight" into the
+                // same `None` `diff_line` already treats as its fallback
+                // signal.
+                let token_spans = hunk_highlight
+                    .and_then(|lines| lines.get(line_index).cloned())
+                    .flatten();
+                lines.push(diff_line(line, token_spans));
+            }
         }
     }
     lines
@@ -710,16 +815,21 @@ fn dir_detail_lines(detail: &DirDetail, origin: ReportOrigin) -> Vec<Line<'stati
 }
 
 /// Formats a [`FileDetail`] into displayable lines: a `File <path>` header,
-/// then either a skipped-file explanation, a whole-test-file explanation, or
-/// the ordinary "Symbols (N)" listing — the three are mutually exclusive by
-/// construction (`crate::tree::TreeNode`'s own doc comment on
-/// `skip_reason`/`test_symbol_count`: an ordinary analyzed file has neither
-/// set, a skipped file has no symbols to list, and a whole-test file has no
-/// per-symbol data at all, only the count `pipeline::partition_test_symbols`
-/// kept). Without this, a skipped or whole-test file's detail pane would
-/// show a bare "Symbols (0)" — indistinguishable from a file that genuinely
-/// changed nothing, which is exactly the gap this feature closes for the
-/// entry-tree row too (see `row_view::entry_row_line`).
+/// then a skipped-file explanation (returning early — a skipped file has no
+/// `symbols`/`test_symbol_count` of its own to show alongside it,
+/// `crate::tree::TreeNode::skip_reason`'s own doc comment on why that half
+/// of the split is a true either/or), followed by a whole/mixed-test-file
+/// note when `test_symbol_count` is set, followed by the ordinary "Symbols
+/// (N)" listing when `symbols` is non-empty. The last two are **not**
+/// mutually exclusive — `pipeline::partition_test_symbols` can populate both
+/// a `FileReport` (real, non-test symbols) and a `TestFileSummary` (a test
+/// count) for the same mixed-test-code path (`TreeNode::test_symbol_count`'s
+/// own doc comment), so a mixed file shows both the test note and its real
+/// symbols rather than one silently hiding the other. Without the
+/// skip/test-note lines at all, a skipped or whole-test file's detail pane
+/// would show a bare "Symbols (0)" — indistinguishable from a file that
+/// genuinely changed nothing, which is exactly the gap this feature closes
+/// for the entry-tree row too (see `row_view::entry_row_line`).
 fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -752,35 +862,39 @@ fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
             Style::default().fg(Color::Magenta),
         ));
         lines.push(Line::raw(
-            "Every changed symbol in this file is test code, excluded from the default view (see --include-tests).",
+            "Changed test-code symbols in this file are excluded from the default view (see --include-tests).",
         ));
-        return lines;
+        if !detail.symbols.is_empty() {
+            lines.push(Line::raw(""));
+        }
     }
 
-    lines.push(Line::styled(
-        format!("Symbols ({})", detail.symbols.len()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    for symbol in &detail.symbols {
-        let marker = if symbol.removed {
-            "x"
-        } else {
-            match symbol.classification {
-                Some(Classification::Added) => "+",
-                Some(Classification::SignatureChanged) => "~",
-                Some(Classification::BodyOnly) | None => " ",
-            }
-        };
-        let fan_in = if symbol.fan_in > 0 {
-            format!(" ^{}", symbol.fan_in)
-        } else {
-            String::new()
-        };
-        lines.push(Line::raw(format!(
-            "  {marker} {} {}{fan_in}",
-            kind_abbrev(symbol.kind),
-            symbol.name,
-        )));
+    if !detail.symbols.is_empty() || detail.test_symbol_count.is_none() {
+        lines.push(Line::styled(
+            format!("Symbols ({})", detail.symbols.len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        for symbol in &detail.symbols {
+            let marker = if symbol.removed {
+                "x"
+            } else {
+                match symbol.classification {
+                    Some(Classification::Added) => "+",
+                    Some(Classification::SignatureChanged) => "~",
+                    Some(Classification::BodyOnly) | None => " ",
+                }
+            };
+            let fan_in = if symbol.fan_in > 0 {
+                format!(" ^{}", symbol.fan_in)
+            } else {
+                String::new()
+            };
+            lines.push(Line::raw(format!(
+                "  {marker} {} {}{fan_in}",
+                kind_abbrev(symbol.kind),
+                symbol.name,
+            )));
+        }
     }
 
     lines
@@ -936,17 +1050,7 @@ fn source_lines(source: &SourceView, start: usize, end: usize) -> Vec<Line<'stat
 }
 
 fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
-    let help = match app.screen() {
-        Screen::Entry => {
-            "j/k: move  enter/space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  J/K: scroll  s: source  q: quit"
-        }
-        Screen::Source { .. } => "esc/q: back",
-    };
-
-    let text = match app.status() {
-        Some(status) => format!("{status}  |  {help}"),
-        None => help.to_string(),
-    };
+    let text = status_line_text(app);
 
     let style = if app.status().is_some() {
         Style::default().fg(Color::Yellow)
@@ -955,6 +1059,57 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     frame.render_widget(Paragraph::new(text).style(style), area);
+}
+
+/// The status line's full text (ADR 0020): the current order mode is
+/// always shown (the real `crate::order::OrderMode` term, not a
+/// paraphrase, so it matches what `o` actually toggles between), and the
+/// key-hint segment switches on `app.focus()` while [`Screen::Entry`] —
+/// Tree-focused hints are navigation-oriented, Right-focused hints are
+/// scroll/hunk-jump-oriented, and both end with a `?` mention so the fuller
+/// keymap/glossary overlay is always one keypress away. [`Screen::Source`]
+/// keeps its own short "esc/q: back" hint, unaffected by focus (drilling
+/// into source is reached only via [`Focus::Right`] already, so a focus
+/// distinction there would be redundant).
+///
+/// The `]/[: next/prev hunk` hint only appears while Right-focused *and*
+/// [`RightPane::Diff`] is showing — `crate::run_app` only wires up the
+/// `]`/`[` jump for that pane/focus combination (it needs the Diff pane's
+/// shaped hunk-offset table, which Detail/Pivot have no equivalent of), so
+/// advertising the key while Detail/Pivot is showing would describe a
+/// binding that does nothing there.
+///
+/// Extracted as its own pure function (no `ratatui` types) so the text
+/// itself — not just that *something* renders — is unit-testable, mirroring
+/// [`clamp_scroll`]/[`scroll_indicator`]'s own precedent in this module for
+/// layout-adjacent pure logic.
+fn status_line_text(app: &App) -> String {
+    let help = match app.screen() {
+        Screen::Entry => {
+            let order = match app.order_mode() {
+                crate::order::OrderMode::Topological => "topological",
+                crate::order::OrderMode::AlphaNumeric => "alphabetical",
+            };
+            let keys = match app.focus() {
+                crate::app::Focus::Tree => {
+                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+                }
+                crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
+                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                }
+                crate::app::Focus::Right => {
+                    "j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
+                }
+            };
+            format!("order: {order}  |  {keys}")
+        }
+        Screen::Source { .. } => "esc/q: back".to_string(),
+    };
+
+    match app.status() {
+        Some(status) => format!("{status}  |  {help}"),
+        None => help,
+    }
 }
 
 #[cfg(test)]
@@ -1012,6 +1167,25 @@ mod tests {
         std::path::PathBuf::from("/repo")
     }
 
+    /// Builds the [`crate::diff_shape::DiffPaneContent`] `crate::run_app`
+    /// would have cached for `app`'s current selection against `report`/
+    /// `diff_files` — this module's tests recreate that one-shot
+    /// computation by hand (mirroring how `should_draw_pivot_pane_...`
+    /// already recreates `App::selected_pivot_view`'s own one-shot
+    /// computation for `pivot_selection`), since `draw` itself must not
+    /// compute it (`draw_diff_pane`'s own doc comment).
+    fn diff_content_for(
+        report: &Report,
+        diff_files: &[crate::diff_view::FileHunks],
+        app: &App,
+    ) -> crate::diff_shape::DiffPaneContent {
+        crate::diff_shape::build_diff_pane_content(
+            report,
+            diff_files,
+            app.selected_diff_target(report).as_ref(),
+        )
+    }
+
     /// Flattens a `TestBackend`'s buffer into one string (rows joined by
     /// `\n`), so a snapshot assertion can check for expected substrings
     /// (pane titles, row content) without pinning every cell — the coarse
@@ -1032,7 +1206,9 @@ mod tests {
     #[test]
     fn should_draw_entry_and_detail_panes_with_titles_on_entry_screen() {
         let report = report_with_one_symbol();
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1041,7 +1217,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1062,6 +1238,59 @@ mod tests {
     }
 
     #[test]
+    fn should_draw_help_overlay_with_keymap_and_glossary_when_help_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Help"));
+        assert!(text.contains("Tree focus"));
+        assert!(text.contains("Right focus"));
+        assert!(text.contains("Global"));
+        assert!(text.contains("Glossary"));
+        assert!(text.contains("pivot"));
+    }
+
+    #[test]
+    fn should_not_draw_help_overlay_when_help_is_closed() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("Glossary"));
+    }
+
+    #[test]
     fn should_draw_placeholder_message_when_there_are_no_rows_at_all() {
         let report = Report {
             origin: rinkaku_core::render::ReportOrigin::Diff,
@@ -1076,7 +1305,10 @@ mod tests {
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff, whose own placeholder
+        // text differs ("select a symbol or file row..."); `ToggleDiff`
+        // switches to Detail, whose placeholder is what this test checks.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1085,7 +1317,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1115,7 +1347,12 @@ mod tests {
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises. (A directory
+        // row has no diff-specific content of its own, so leaving it on the
+        // default Diff pane would just show that pane's placeholder rather
+        // than the dir-detail content this test checks for.)
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1124,7 +1361,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1162,7 +1399,9 @@ mod tests {
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // See the sibling test above for why `ToggleDiff` is needed to
+        // reach the Detail pane this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1171,7 +1410,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1212,8 +1451,12 @@ mod tests {
         let report = report_with_one_skipped_file();
         // Row 0 is the collapsing "assets" dir (single child, see
         // `crate::tree::build_tree`'s collapsing rule); row 1 is the
-        // skipped "logo.png" file itself.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        // skipped "logo.png" file itself. ADR 0020 defaults the right pane
+        // to Diff, so `ToggleDiff` is needed here to reach Detail (unlike
+        // the pre-v2 default this test originally relied on).
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1222,7 +1465,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1261,7 +1504,11 @@ mod tests {
     fn should_draw_test_symbol_count_in_detail_pane_when_cursor_is_on_a_whole_test_file_row() {
         let report = report_with_one_test_file();
         // Row 0 is the collapsing "src" dir; row 1 is the whole test file.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        // ADR 0020 defaults the right pane to Diff, so `ToggleDiff` is
+        // needed here to reach Detail.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1270,7 +1517,7 @@ mod tests {
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1287,12 +1534,67 @@ mod tests {
         assert!(!text.contains("Symbols ("));
     }
 
+    // Regression test (post-rebase integration check): a mixed file — real
+    // symbols in `report.files` *and* a test-symbol count in `report.tests`
+    // for the same path (`pipeline::partition_test_symbols`'s legitimate
+    // output for a file with both production and test code changed) — must
+    // show both the test-file note and the real "Symbols (N)" listing in
+    // the detail pane, not just one. This is the exact shape that caused a
+    // live panic (`rinkaku-tui/src/app.rs` in this repo's own diff) before
+    // `TreeBuilder::insert_test_file` stopped rejecting a file that already
+    // carries real symbols.
+    #[test]
+    fn should_draw_both_test_note_and_real_symbols_in_detail_pane_when_file_is_mixed() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "app.rs".to_string(),
+                symbols: vec![symbol("app.rs::handle_key", "handle_key")],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![rinkaku_core::render::TestFileSummary {
+                path: "app.rs".to_string(),
+                symbol_count: 5,
+            }],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        // Row 0 is the "app.rs" file row itself.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("File app.rs"));
+        assert!(text.contains("Test file: 5 changed test"));
+        assert!(text.contains("Symbols (1)"));
+        assert!(text.contains("handle_key"));
+    }
+
     #[test]
     fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_symbol_row() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1304,6 +1606,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1312,7 +1615,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1354,9 +1657,9 @@ index e69de29..4b825dc 100644
             files: vec![],
         };
         // Row 0 is the collapsing "assets" dir; row 1 is the skipped file.
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/assets/logo.png b/assets/logo.png
 index e69de29..4b825dc 100644
@@ -1364,6 +1667,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1372,7 +1676,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1416,9 +1720,9 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             files: vec![],
         };
         // Row 0 is the collapsing "vendor" dir; row 1 is the skipped file.
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/vendor/lib.zig b/vendor/lib.zig
 index e69de29..4b825dc 100644
@@ -1430,6 +1734,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1438,7 +1743,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1449,6 +1754,135 @@ index e69de29..4b825dc 100644
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"));
         assert!(text.contains("+const b = 2;"));
+    }
+
+    #[test]
+    fn should_draw_per_symbol_section_headers_when_diff_pane_shows_a_file_selection() {
+        // Cursor stays on row 0, the "lib.rs" file row itself — a file
+        // selection (ADR 0020) groups hunks under each symbol's own
+        // signature as a section header, unlike a symbol selection (the
+        // sibling test above), which shows no header at all.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![
+                    symbol("lib.rs::foo", "foo"),
+                    ExtractedSymbol {
+                        range: LineRange { start: 10, end: 10 },
+                        ..symbol("lib.rs::bar", "bar")
+                    },
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let app = App::new(&report);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,1 @@
+-fn a() {}
++fn foo() {}
+@@ -9,1 +10,1 @@
+-fn old_bar() {}
++fn bar() {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_content,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("fn foo()"));
+        assert!(text.contains("fn bar()"));
+        assert!(text.contains("+fn foo() {}"));
+        assert!(text.contains("+fn bar() {}"));
+    }
+
+    #[test]
+    fn should_draw_contract_header_before_hunks_when_symbol_signature_changed() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    classification: Some(Classification::SignatureChanged),
+                    previous_signature: Some("fn foo(a: i32)".to_string()),
+                    signature: "fn foo(a: i32, b: i32)".to_string(),
+                    ..symbol("lib.rs::foo", "foo")
+                }],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,1 @@
+-fn foo(a: i32) {}
++fn foo(a: i32, b: i32) {}
+";
+        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &diff_content,
+                    &diff_highlights,
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // The 2-line old/new contract header precedes the hunk body itself
+        // (ADR 0020's outline-before-implementation disclosure order).
+        assert!(text.contains("- fn foo(a: i32)"));
+        assert!(text.contains("+ fn foo(a: i32, b: i32)"));
+        assert!(text.contains("-fn foo(a: i32) {}"));
+        assert!(text.contains("+fn foo(a: i32, b: i32) {}"));
     }
 
     #[test]
@@ -1484,7 +1918,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &pivot_selection,
                     &test_repo_root(),
@@ -1512,7 +1946,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &pivot_selection,
                     &test_repo_root(),
@@ -1583,9 +2017,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_apply_added_background_tint_and_keyword_foreground_in_diff_pane() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1597,6 +2031,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1605,7 +2040,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1628,9 +2063,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_apply_removed_background_tint_in_diff_pane() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1642,6 +2077,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1650,7 +2086,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1666,9 +2102,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_keep_context_line_unstyled_background_in_diff_pane() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1680,6 +2116,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1688,7 +2125,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1711,9 +2148,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_keep_hunk_header_dim_when_diff_pane_is_highlighted() {
         let report = report_with_one_symbol();
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -1725,6 +2162,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1733,7 +2171,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1769,9 +2207,9 @@ index e69de29..4b825dc 100644
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/config.yaml b/config.yaml
 index e69de29..4b825dc 100644
@@ -1783,6 +2221,7 @@ index e69de29..4b825dc 100644
 ";
         let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
         let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+        let diff_content = diff_content_for(&report, &diff_files, &app);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1791,7 +2230,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &diff_files,
+                    &diff_content,
                     &diff_highlights,
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1815,7 +2254,11 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_draw_detail_pane_content_when_cursor_is_on_a_symbol_row() {
         let report = report_with_one_symbol();
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1824,7 +2267,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1842,11 +2285,11 @@ index e69de29..4b825dc 100644
         let report = report_with_one_symbol();
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
-        // module: the full help text (now including the J/K scroll hint and
-        // the `p: pivot` hint, ADR 0019) is ~114 columns and would
-        // otherwise be truncated (the status line intentionally does not
-        // wrap), hiding the "quit" fragment this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(120, 20)).expect("terminal");
+        // module: the full help text (order mode + Tree-focus key hints,
+        // ADR 0020) is ~140 columns and would otherwise be truncated (the
+        // status line intentionally does not wrap), hiding the "quit"
+        // fragment this test checks for.
+        let mut terminal = Terminal::new(TestBackend::new(150, 20)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -1854,7 +2297,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1864,6 +2307,7 @@ index e69de29..4b825dc 100644
 
         let text = buffer_text(&terminal);
         assert!(text.contains("quit"));
+        assert!(text.contains("order: topological"));
     }
 
     #[test]
@@ -1880,7 +2324,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -1920,7 +2364,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2011,6 +2455,110 @@ index e69de29..4b825dc 100644
         assert_eq!(Some(" (11-20/20)".to_string()), actual);
     }
 
+    // --- status_line_text (pure helper) ---
+
+    #[test]
+    fn should_show_topological_order_and_tree_focus_hints_by_default() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report);
+
+        let actual = status_line_text(&app);
+
+        assert_eq!(
+            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+                .to_string(),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_show_alphabetical_order_after_toggle_order_is_pressed() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleOrder);
+
+        let actual = status_line_text(&app);
+
+        assert!(actual.starts_with("order: alphabetical  |  "));
+    }
+
+    #[test]
+    fn should_show_right_focus_hints_with_hunk_jump_when_diff_pane_is_showing() {
+        let report = report_with_one_symbol();
+        // `Open` on the file row (cursor starts there) reaches Focus::Right
+        // (ADR 0020) without leaving Screen::Entry, and lands on
+        // `RightPane::Diff` (its default, `f3c4b98`) — the pane the
+        // `]/[: next/prev hunk` hint actually applies to.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Open);
+
+        let actual = status_line_text(&app);
+
+        assert_eq!(
+            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                .to_string(),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_show_right_focus_hints_without_hunk_jump_when_detail_pane_is_showing() {
+        let report = report_with_one_symbol();
+        // `Open` reaches Focus::Right on RightPane::Diff (its default), then
+        // `ToggleDiff` (`d`) switches to RightPane::Detail — the hunk-jump
+        // hint must disappear here since `crate::run_app` never wires `]`/`[`
+        // up for Detail (finding: `]`/`[` used to fire regardless of pane).
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        assert_eq!(crate::app::RightPane::Detail, app.right_pane());
+
+        let actual = status_line_text(&app);
+
+        assert_eq!(
+            "order: topological  |  j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
+                .to_string(),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_show_back_hint_only_on_source_screen_regardless_of_focus() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Open); // opens Screen::Source
+
+        let actual = status_line_text(&app);
+
+        assert_eq!("esc/q: back".to_string(), actual);
+    }
+
+    #[test]
+    fn should_prefix_status_message_before_the_help_text_when_set() {
+        let report = empty_report_for_status_line();
+        let mut app = App::new(&report);
+        app.set_status("a source read failed");
+
+        let actual = status_line_text(&app);
+
+        assert!(actual.starts_with("a source read failed  |  order: topological  |  "));
+    }
+
+    fn empty_report_for_status_line() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        }
+    }
+
     // --- rendered scroll behavior (TestBackend) ---
 
     /// A report whose single file has `count` symbols, each referencing
@@ -2048,7 +2596,9 @@ index e69de29..4b825dc 100644
         // then all 40 symbols (43 lines total) — comfortably more than a
         // 20-row terminal's inner pane height can show at once.
         let report = report_with_many_symbols(40);
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2057,7 +2607,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2077,7 +2627,9 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_not_show_overflow_indicator_when_content_fits_the_viewport() {
         let report = report_with_one_symbol();
-        let app = App::new(&report);
+        // See the test above for why `ToggleDiff` is needed to reach the
+        // Detail pane this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2086,7 +2638,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2102,7 +2654,15 @@ index e69de29..4b825dc 100644
     #[test]
     fn should_scroll_detail_pane_content_down_when_scroll_down_is_pressed() {
         let report = report_with_many_symbols(40);
-        let app = App::new(&report).handle_key(crate::app::InputKey::ScrollDown);
+        // `Open` on the file row (cursor starts there) reaches Focus::Right
+        // (ADR 0020) without changing the selected row itself, so `Down`
+        // afterward scrolls instead of moving the cursor. `ToggleDiff`
+        // switches from the default Diff pane to Detail, which is what this
+        // test actually exercises.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff)
+            .handle_key(crate::app::InputKey::Down);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2111,7 +2671,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2134,9 +2694,13 @@ index e69de29..4b825dc 100644
         // report; the pane must clamp to its last full page rather than
         // showing a mostly-blank pane past the end of the content.
         let report = report_with_many_symbols(40);
-        let mut app = App::new(&report);
+        // `ToggleDiff` switches from the default Diff pane to Detail, which
+        // is what this test actually exercises.
+        let mut app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         for _ in 0..1000 {
-            app = app.handle_key(crate::app::InputKey::ScrollDown);
+            app = app.handle_key(crate::app::InputKey::Down);
         }
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
@@ -2146,7 +2710,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2166,9 +2730,14 @@ index e69de29..4b825dc 100644
         // the newly selected row's own (short) detail must render from the
         // top, not carry over the file row's scroll offset.
         let report = report_with_many_symbols(40);
+        // `ToggleDiff` switches from the default Diff pane to Detail, which
+        // is what this test actually exercises.
         let app = App::new(&report)
-            .handle_key(crate::app::InputKey::ScrollDown)
-            .handle_key(crate::app::InputKey::ScrollDown)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::FocusLeft)
             .handle_key(crate::app::InputKey::Down);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
@@ -2178,7 +2747,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2323,11 +2892,18 @@ index e69de29..4b825dc 100644
             hotspots: vec![],
             removed: vec![],
         };
-        let mut app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff, whose own placeholder
+        // text also happens to embed the file path (`"(no diff hunks found
+        // for <path>)"`) — but not through this test's actual target,
+        // `render_scrollable_pane`'s wrap-before-scroll behavior, so
+        // `ToggleDiff` switches to Detail to keep exercising that.
+        let mut app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         // Scroll far enough down to reach the wrapped tail of the long path
         // line, however many wrapped rows that turns out to be.
         for _ in 0..200 {
-            app = app.handle_key(crate::app::InputKey::ScrollDown);
+            app = app.handle_key(crate::app::InputKey::Down);
         }
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 
@@ -2337,7 +2913,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),
@@ -2376,7 +2952,9 @@ index e69de29..4b825dc 100644
             hotspots: vec![],
             removed: vec![],
         };
-        let app = App::new(&report);
+        // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
+        // Detail, which is what this test actually exercises.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(34, 12)).expect("terminal");
 
         terminal
@@ -2385,7 +2963,7 @@ index e69de29..4b825dc 100644
                     frame,
                     &app,
                     &report,
-                    &[],
+                    &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &PivotSelection::NotApplicable,
                     &test_repo_root(),

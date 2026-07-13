@@ -480,8 +480,19 @@ rinkaku --base main --tui
 rather than combining with it. Bare `rinkaku`, run on an interactive
 terminal with no `--base`/`--pr`, opens the TUI automatically on a
 whole-repo outline instead of a diff ([ADR 0017](docs/adr/0017-whole-repo-outline-as-default-input-mode.md));
-its diff pane (`d`) has nothing to show in that case and renders a
-placeholder.
+the diff pane (the default right-hand pane, [ADR 0020](docs/adr/0020-tui-interaction-model-v2.md))
+has nothing to show in that case and renders a placeholder — press `d` to
+switch to the detail pane instead.
+
+### Interaction model
+
+The interface follows a **focus** model ([ADR 0020](docs/adr/0020-tui-interaction-model-v2.md)),
+similar to neovim's window/pane idioms: at any moment, either the tree
+(left pane) or the right-hand pane has focus, and `j`/`k` act on whichever
+one does. `enter` on a file/symbol row moves focus to the right pane;
+`h`/`esc` moves it back to the tree. Press `?` any time for an in-app
+overlay listing every key and a short glossary (order modes, pivot,
+cycle).
 
 ### What it shows
 
@@ -505,6 +516,20 @@ placeholder.
   shows up too, marked `[test] (N symbols)`, instead of the pre-existing
   gap where such a file had no row at all and was only summarized in
   Markdown's "Tests" section.
+- **Diff pane (right, the default):** the raw unified-diff hunks touching
+  the selected row — "what changed" is what a reviewer wants to see first.
+  A symbol row clips to just its own line range; a file row groups hunks
+  under per-symbol section headers (each symbol's own signature line),
+  with hunks matching no symbol (e.g. import-only changes) collected under
+  a trailing `(module level)` section. When a symbol's signature itself
+  changed, a 2-line old/new header (`- <old>` / `+ <new>`) precedes its
+  hunks. A directory row has no single diff to show, since it spans
+  multiple files. Hunks in the four built-in languages are
+  syntax-highlighted (keywords, strings, types, ...); added/removed lines
+  keep their green/red diff signal as a background tint so it doesn't
+  compete with token colors, and any other file falls back to plain
+  green/red text. `d`/`D` toggles the right-hand pane to the detail view
+  instead.
 - **Detail pane (right):** what the cursor is on. A symbol row shows its
   classification, signature (an old/new diff when the contract changed),
   who depends on it ("used by"), and its callees. A file row shows every
@@ -514,15 +539,6 @@ placeholder.
   its badge breakdown and top fan-in symbols, plus — when it participates
   in a dependency cycle — exactly which other directories it cycles with
   and the concrete symbol-to-symbol edges forming that cycle.
-- **Diff pane (right):** `d`/`D` toggles the right-hand pane to the raw
-  unified-diff hunks instead of the detail view — every hunk of the file
-  for a file row, or just the hunks intersecting a symbol's own line range
-  for a symbol row (a directory row has no single diff to show, since it
-  spans multiple files). Hunks in the four built-in languages are
-  syntax-highlighted (keywords, strings, types, ...); added/removed lines
-  keep their green/red diff signal as a background tint so it doesn't
-  compete with token colors, and any other file falls back to plain
-  green/red text.
 - **Pivot pane (right):** `p`/`P` toggles the right-hand pane to an
   entry-tree view rooted at the directory or file row under the cursor
   ([ADR 0019](docs/adr/0019-entry-path-pivot-view.md)) — the interactive
@@ -533,14 +549,16 @@ placeholder.
   by expanding a dependency edge outward past the pivoted path are dimmed
   so you can tell "the layer I pivoted on" from "what it reaches into".
   Press `p` again, or `d`, to leave pivot mode.
-- **Scrolling the right-hand pane:** `J`/`K` scroll the Detail/Diff/Pivot
-  pane down/up by one line when its content is too long to fit — the
-  pane's title grows a `(first-last/total)` suffix (e.g. `Detail
-  (1-17/43)`) whenever there's more to see, so a long cycle-edge list or a
-  large file's diff doesn't quietly get cut off. The scroll position
-  resets to the top whenever the underlying content could have changed:
-  moving the cursor, toggling between the detail/diff/pivot views, or
-  returning from the source view.
+- **Scrolling the right-hand pane:** move focus to the right pane
+  (`enter` on a file/symbol row) and use `j`/`k` to scroll the
+  Detail/Diff/Pivot pane down/up by one line when its content is too long
+  to fit — the pane's title grows a `(first-last/total)` suffix (e.g.
+  `Detail (1-17/43)`) whenever there's more to see, so a long cycle-edge
+  list or a large file's diff doesn't quietly get cut off. While viewing
+  the Diff pane specifically, `]`/`[` jump straight to the next/previous
+  hunk. The scroll position resets to the top whenever the underlying
+  content could have changed: moving the cursor, toggling between the
+  detail/diff/pivot views, or returning from the source view.
 - **Source view:** `s` on a symbol row opens that file, scrolled to and
   highlighting the symbol's line range; `esc`/`q` returns to the entry
   view. Reads the working tree directly (not the historical commit a
@@ -552,17 +570,37 @@ placeholder.
 
 ### Key bindings
 
+Press `?` in the TUI for the always-up-to-date version of this table,
+grouped by focus.
+
+**Tree focus (default):**
+
 | Key(s) | Action |
 | --- | --- |
 | `j` / `k` / `↓` / `↑` | Move the cursor |
-| `enter` / `space` | Expand or collapse a directory/file row |
+| `enter` | Expand/collapse a directory row, or open a file/symbol row (moves focus right) |
+| `space` | Expand or collapse a directory/file row (never moves focus) |
 | `e` / `E` | Expand every row |
 | `c` / `C` | Collapse every row |
+
+**Right focus (Detail/Diff/Pivot pane):**
+
+| Key(s) | Action |
+| --- | --- |
+| `j` / `k` / `↓` / `↑` | Scroll the pane by one line |
+| `h` / `esc` | Return focus to the tree |
+| `]` | Jump to the next hunk (Diff pane only) |
+| `[` | Jump to the previous hunk (Diff pane only) |
+
+**Global (any focus):**
+
+| Key(s) | Action |
+| --- | --- |
 | `o` / `O` | Toggle topological / alphabetical ordering |
-| `d` / `D` | Toggle the right-hand pane between detail and diff |
+| `d` / `D` | Toggle the right-hand pane between diff and detail |
 | `p` / `P` | Toggle the right-hand pane to the pivot tree rooted at the selected directory/file |
-| `J` / `K` | Scroll the right-hand pane (Detail/Diff/Pivot) down/up |
 | `s` / `S` | Open the source view for the symbol under the cursor |
+| `?` | Toggle the help overlay (keymap + glossary) |
 | `esc` / `q` | Return to the entry view (from the source view) |
 | `q` / `ctrl-c` | Quit (from the entry view) |
 

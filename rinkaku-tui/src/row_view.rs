@@ -73,15 +73,19 @@ pub fn entry_row_line(
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
             spans.push(Span::raw(" "));
             spans.push(badges_span(&row.node.badges));
-            // `skip_reason`/`test_symbol_count` are mutually exclusive by
-            // construction (`crate::tree::TreeNode`'s own doc comment, and
-            // `TreeBuilder::insert_file`'s `debug_assert` in `tree.rs`), so
-            // this `if`/`else if` never actually has to choose between the
-            // two badges — but the priority (skip reason first) is kept
-            // explicit and matches `crate::ui::file_detail_lines`'s own
-            // skip-reason-first early return, so the two panes never
-            // disagree about which explanation wins if that invariant were
-            // ever violated upstream.
+            // `skip_reason` is mutually exclusive with `test_symbol_count`
+            // (`crate::tree::TreeNode::skip_reason`'s own doc comment: a
+            // skipped file has no `FileReport`/`TestFileSummary` entry of
+            // its own), so this `if`/`else if` only ever needs to choose
+            // between "skipped" and "has a test count" — but `test_symbol_count`
+            // is *not* exclusive with real `symbols`/badges shown above (a
+            // mixed file legitimately has both, `TreeNode::test_symbol_count`'s
+            // own doc comment), so the test badge still renders alongside the
+            // ordinary changed-symbol badges for such a row rather than being
+            // hidden by them. The priority (skip reason first, when present)
+            // matches `crate::ui::file_detail_lines`'s own skip-reason-first
+            // early return, so the two panes never disagree about which
+            // explanation wins.
             if let Some(reason) = row.node.skip_reason {
                 spans.push(Span::raw(" "));
                 spans.push(skip_reason_span(reason));

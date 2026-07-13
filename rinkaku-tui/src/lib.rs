@@ -30,7 +30,9 @@
 
 pub mod app;
 pub mod detail;
+pub mod diff_shape;
 pub mod diff_view;
+pub mod help;
 pub mod highlight;
 pub mod nav;
 pub mod order;
@@ -144,6 +146,24 @@ fn run_app(
     } else {
         PivotSelection::NotApplicable
     };
+    // Computed once up front then on demand below, once per handled key —
+    // same reasoning and cache-on-selection-change discipline as
+    // `pivot_selection` above (ADR 0020: `crate::diff_shape`'s own doc
+    // comment on why this must not be recomputed inside `ui::draw`, after
+    // the pivot pane's own past per-frame recompute bug). The up-front
+    // computation matters for the ordinary (non-`--entry`) startup path
+    // too now, since ADR 0020 also made Diff the default right pane: the
+    // very first frame must already show shaped diff content, not an
+    // empty placeholder until the first key press recomputes it.
+    let mut diff_pane_content = if should_recompute_diff_pane_content(&app) {
+        diff_shape::build_diff_pane_content(
+            report,
+            &diff_hunks,
+            app.selected_diff_target(report).as_ref(),
+        )
+    } else {
+        diff_shape::DiffPaneContent::Empty
+    };
 
     loop {
         terminal.draw(|frame| {
@@ -151,7 +171,7 @@ fn run_app(
                 frame,
                 &app,
                 report,
-                &diff_hunks,
+                &diff_pane_content,
                 &diff_highlights,
                 &pivot_selection,
                 repo_root,
@@ -190,6 +210,21 @@ fn run_app(
                         Err(message) => app.set_status(message),
                     }
                 }
+            } else if let InputKey::NextHunk | InputKey::PrevHunk = input_key
+                && should_apply_hunk_jump(&app)
+            {
+                // Hunk jumping needs the shaped diff content already
+                // cached above (`diff_pane_content`) to know where each
+                // hunk starts — `App::handle_key` itself has no notion of
+                // that content, so the jump target is computed here, at
+                // the one place both `app` and `diff_pane_content` are in
+                // scope, rather than threading the whole shaped content
+                // into `App` just for this.
+                let scroll = diff_shape::hunk_start_lines(&diff_pane_content);
+                let next = jump_scroll_target(&scroll, app.right_pane_scroll(), input_key);
+                if let Some(target) = next {
+                    app = app.handle_key(input_key).with_right_pane_scroll(target);
+                }
             } else {
                 app = app.handle_key(input_key);
             }
@@ -197,7 +232,71 @@ fn run_app(
             if should_recompute_pivot_selection(&app) {
                 pivot_selection = app.selected_pivot_view(report);
             }
+            if should_recompute_diff_pane_content(&app) {
+                diff_pane_content = diff_shape::build_diff_pane_content(
+                    report,
+                    &diff_hunks,
+                    app.selected_diff_target(report).as_ref(),
+                );
+            }
         }
+    }
+}
+
+/// Whether `crate::run_app`'s event loop should recompute the diff pane's
+/// shaped content this key, rather than keep showing the previously cached
+/// one — mirrors `should_recompute_pivot_selection`'s own contract and
+/// reasoning, just for [`RightPane::Diff`] instead of `RightPane::Pivot`.
+fn should_recompute_diff_pane_content(app: &App) -> bool {
+    matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Diff
+}
+
+/// Whether `crate::run_app`'s event loop should act on an
+/// [`InputKey::NextHunk`]/[`InputKey::PrevHunk`] press by jumping
+/// `diff_pane_content`'s scroll offset, rather than treating the key as a
+/// no-op. `true` only while [`app::Focus::Right`] *and* [`app::RightPane::Diff`]
+/// is showing — gating on focus alone let `]`/`[` scroll the Detail/Pivot
+/// pane using `diff_pane_content`'s hunk-start table, which is only ever
+/// recomputed for the Diff pane (`should_recompute_diff_pane_content` above),
+/// so it goes stale (pinned to whichever file/symbol was selected the last
+/// time Diff was shown) the moment the user switches away from Diff. That
+/// produced a jump with no relation to what is actually on screen.
+///
+/// Extracted as its own pure function, mirroring `should_recompute_pivot_selection`'s
+/// own reasoning, so this exact gate is unit-testable without a live
+/// `ratatui::DefaultTerminal`.
+fn should_apply_hunk_jump(app: &App) -> bool {
+    app.focus() == app::Focus::Right && app.right_pane() == app::RightPane::Diff
+}
+
+/// The scroll offset [`InputKey::NextHunk`]/[`InputKey::PrevHunk`] should
+/// jump to, given `hunk_starts` (each hunk's starting logical-line offset
+/// within the diff pane's shaped content, `crate::diff_shape::hunk_start_lines`'s
+/// own doc comment) and the pane's `current_scroll`. `None` when there is
+/// nowhere to jump (`hunk_starts` is empty, or already at the first/last
+/// hunk in the requested direction) — a no-op, not a clamp to the nearest
+/// edge, since silently landing back on the same hunk would look like the
+/// keypress did nothing anyway.
+///
+/// Extracted as its own pure function (rather than inlined in `run_app`,
+/// which takes a live `ratatui::DefaultTerminal` and so cannot be driven
+/// directly in a test) so the jump direction/boundary logic is
+/// unit-testable without a terminal.
+fn jump_scroll_target(
+    hunk_starts: &[usize],
+    current_scroll: usize,
+    direction: InputKey,
+) -> Option<usize> {
+    match direction {
+        InputKey::NextHunk => hunk_starts
+            .iter()
+            .copied()
+            .find(|&start| start > current_scroll),
+        InputKey::PrevHunk => hunk_starts
+            .iter()
+            .copied()
+            .rfind(|&start| start < current_scroll),
+        _ => None,
     }
 }
 
@@ -217,30 +316,69 @@ fn should_recompute_pivot_selection(app: &App) -> bool {
 
 /// Translates a raw `crossterm` key press into this crate's
 /// terminal-agnostic [`InputKey`], or `None` for a key the app does not
-/// react to. Depends on `app.screen()` only to disambiguate `q`/Esc
-/// (`Quit` on the entry view, `Back` on the source view) — every other
-/// mapping is context-free.
+/// react to. Depends on `app.screen()` to disambiguate `q`/Esc (`Quit`/
+/// `FocusLeft` on the entry view depending on focus, `Back` on the source
+/// view) and on `app.focus()` (ADR 0020) to route Esc between `FocusLeft`
+/// and its other meanings — every other mapping is context-free.
+///
+/// `app.help_open()` (ADR 0020) short-circuits every other rule: while the
+/// help overlay is open, `?`/Esc/`q` all translate to `ToggleHelp` (closing
+/// it) regardless of what they would otherwise mean, and this check runs
+/// before every other arm so none of them — especially `q`, which would
+/// otherwise mean `Quit` — can reach past the overlay. `App::handle_key`'s
+/// own `help_open` guard is a second, independent layer of the same rule
+/// (swallowing every non-`ToggleHelp` key while open) — belt and braces,
+/// since "the overlay is a safe action that can never accidentally quit
+/// the app" is exactly the property ADR 0020 asks this feature to hold.
 fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
+    if app.help_open() {
+        return match code {
+            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::ToggleHelp),
+            _ => None,
+        };
+    }
+
     let on_source_screen = matches!(app.screen(), Screen::Source { .. });
+    let right_focused = app.focus() == app::Focus::Right;
 
     match code {
         KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
         KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
-        KeyCode::Enter | KeyCode::Char(' ') => Some(InputKey::Select),
+        // Space always means "expand/collapse", never "drill in" — kept
+        // distinct from Enter's own `InputKey::Open` (ADR 0020) so Space on
+        // a file/symbol row never moves focus. Translated unconditionally
+        // here regardless of `app.focus()`, same as every other key this
+        // function maps context-free — `App::handle_key`'s own
+        // `Focus::Tree`-only arm for `Select` is where the actual
+        // Tree-focus requirement lives (mirroring how `NextHunk`/`PrevHunk`
+        // are also translated unconditionally but only acted on under
+        // certain conditions elsewhere).
+        KeyCode::Char(' ') => Some(InputKey::Select),
+        KeyCode::Enter => Some(InputKey::Open),
         KeyCode::Char('e') | KeyCode::Char('E') => Some(InputKey::ExpandAll),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::Quit),
         KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
         KeyCode::Char('p') | KeyCode::Char('P') => Some(InputKey::TogglePivot),
-        // Uppercase specifically: `j`/`k` already move the tree cursor, so
-        // the right-pane scroll needs a key that doesn't collide with
-        // them. Shift+j/k arrives here as the distinct `Char('J')`/`Char('K')`
-        // values (crossterm folds Shift into the char itself for plain
-        // letter keys), so this needs no separate modifier check.
-        KeyCode::Char('J') => Some(InputKey::ScrollDown),
-        KeyCode::Char('K') => Some(InputKey::ScrollUp),
+        // `h`, or Esc while the right pane has focus: return focus to the
+        // tree (ADR 0020's neovim-style "move left/back"). Checked before
+        // the source-screen Esc arm below so `h`/Esc while Right-focused
+        // never reaches the source screen (impossible in practice today,
+        // since opening the source screen already moves focus to `Right`,
+        // but ordered defensively rather than relying on that invariant).
+        KeyCode::Char('h') if right_focused => Some(InputKey::FocusLeft),
+        KeyCode::Esc if right_focused && !on_source_screen => Some(InputKey::FocusLeft),
+        // `]c`/`[c` (vim's hunk-jump idiom) are read here as a single
+        // bracket keystroke rather than a buffered two-key chord — this
+        // crate's event loop (`run_app`) has no notion of a pending-chord
+        // state machine today, and introducing one for exactly one binding
+        // would be disproportionate; `]`/`[` alone are otherwise unbound,
+        // so no existing gesture is lost by this simplification.
+        KeyCode::Char(']') => Some(InputKey::NextHunk),
+        KeyCode::Char('[') => Some(InputKey::PrevHunk),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
+        KeyCode::Char('?') => Some(InputKey::ToggleHelp),
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') => Some(InputKey::Quit),
@@ -303,30 +441,132 @@ mod tests {
     }
 
     #[test]
-    fn should_translate_uppercase_j_to_scroll_down() {
+    fn should_translate_enter_to_open() {
+        // ADR 0020: Enter is `Open` (may move focus), distinct from Space's
+        // `Select` (never moves focus) — see the two tests right after this
+        // one.
         let report = empty_report();
         let app = App::new(&report);
 
-        let actual = translate_key(KeyCode::Char('J'), KeyModifiers::NONE, &app);
+        let actual = translate_key(KeyCode::Enter, KeyModifiers::NONE, &app);
 
-        assert_eq!(Some(InputKey::ScrollDown), actual);
+        assert_eq!(Some(InputKey::Open), actual);
     }
 
     #[test]
-    fn should_translate_uppercase_k_to_scroll_up() {
+    fn should_translate_space_to_select() {
         let report = empty_report();
         let app = App::new(&report);
 
-        let actual = translate_key(KeyCode::Char('K'), KeyModifiers::NONE, &app);
+        let actual = translate_key(KeyCode::Char(' '), KeyModifiers::NONE, &app);
 
-        assert_eq!(Some(InputKey::ScrollUp), actual);
+        assert_eq!(Some(InputKey::Select), actual);
     }
 
     #[test]
-    fn should_translate_lowercase_j_to_down_not_scroll() {
-        // Regression guard: lowercase j/k must keep moving the tree cursor
-        // (InputKey::Down/Up) rather than being swallowed by the new
-        // uppercase-only scroll bindings.
+    fn should_translate_h_to_focus_left_when_right_focused() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(app::Focus::Right, app.focus());
+
+        let actual = translate_key(KeyCode::Char('h'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::FocusLeft), actual);
+    }
+
+    #[test]
+    fn should_not_translate_h_at_all_when_tree_focused() {
+        // `h` has no meaning while Focus::Tree (ADR 0020 only assigns it a
+        // "move left/back" meaning while Focus::Right) — must fall through
+        // to `None`, not be swallowed by some other arm.
+        let report = empty_report();
+        let app = App::new(&report);
+        assert_eq!(app::Focus::Tree, app.focus());
+
+        let actual = translate_key(KeyCode::Char('h'), KeyModifiers::NONE, &app);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_esc_to_focus_left_when_right_focused_on_entry_screen() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(app::Focus::Right, app.focus());
+
+        let actual = translate_key(KeyCode::Esc, KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::FocusLeft), actual);
+    }
+
+    #[test]
+    fn should_translate_right_bracket_to_next_hunk() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char(']'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::NextHunk), actual);
+    }
+
+    #[test]
+    fn should_translate_left_bracket_to_prev_hunk() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('['), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::PrevHunk), actual);
+    }
+
+    #[test]
+    fn should_translate_question_mark_to_toggle_help() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('?'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleHelp), actual);
+    }
+
+    #[test]
+    fn should_translate_esc_to_toggle_help_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Esc, KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleHelp), actual);
+    }
+
+    #[test]
+    fn should_translate_q_to_toggle_help_instead_of_quit_when_overlay_is_open() {
+        // ADR 0020: `q` must close the overlay, not fall through to its
+        // normal `Quit` meaning, while it is open.
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('q'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleHelp), actual);
+    }
+
+    #[test]
+    fn should_translate_arbitrary_key_to_none_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('j'), KeyModifiers::NONE, &app);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_lowercase_j_to_down_regardless_of_focus() {
+        // Regression guard: lowercase j/k are always translated to the same
+        // `InputKey::Down`/`Up` regardless of focus — `App::handle_key`, not
+        // `translate_key`, is what decides whether that means "move cursor"
+        // or "scroll" (ADR 0020).
         let report = empty_report();
         let app = App::new(&report);
 
@@ -411,5 +651,173 @@ mod tests {
             }],
             ..empty_report()
         }
+    }
+
+    #[test]
+    fn should_recompute_diff_pane_content_when_diff_pane_is_active_on_entry_screen() {
+        let report = empty_report();
+        let app = App::new(&report);
+        assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_not_recompute_diff_pane_content_when_right_pane_is_detail() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleDiff);
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_recompute_diff_pane_content_when_right_pane_is_pivot() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_recompute_diff_pane_content_while_source_screen_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+
+        let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(!actual);
+    }
+
+    // --- should_apply_hunk_jump ---
+    //
+    // Regression coverage for the cross-pane key-leak this gate was added
+    // to fix: `]`/`[` used to fire (scrolling `diff_pane_content`'s cached
+    // hunk-offset table) whenever `Focus::Right` held, regardless of which
+    // right pane was actually showing — so opening a file (Focus::Right,
+    // RightPane::Diff by default), pressing `d` to switch to Detail, then
+    // pressing `]`, silently jumped the Detail pane's scroll to a Diff-pane
+    // offset that has no meaning there. `should_recompute_pivot_selection`'s
+    // own existing tests only pin cache-staleness for the pivot pane's
+    // *recompute* trigger; none of them cover this key's *application* gate,
+    // which is a separate condition (`run_app` applies the jump only when
+    // this returns true, independent of whether anything gets recomputed).
+    #[test]
+    fn should_apply_hunk_jump_when_right_focused_on_diff_pane() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(app::Focus::Right, app.focus());
+        assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+        let actual = should_apply_hunk_jump(&app);
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_not_apply_hunk_jump_when_right_focused_on_detail_pane() {
+        let report = report_with_one_symbol();
+        // Open reaches Focus::Right on RightPane::Diff (its default), then
+        // ToggleDiff ('d') switches to RightPane::Detail without touching
+        // focus — exactly the sequence (Enter -> d -> ]) the bug report
+        // describes.
+        let app = App::new(&report)
+            .handle_key(InputKey::Open)
+            .handle_key(InputKey::ToggleDiff);
+        assert_eq!(app::Focus::Right, app.focus());
+        assert_eq!(app::RightPane::Detail, app.right_pane());
+
+        let actual = should_apply_hunk_jump(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_apply_hunk_jump_when_right_focused_on_pivot_pane() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Open)
+            .handle_key(InputKey::TogglePivot);
+        assert_eq!(app::Focus::Right, app.focus());
+        assert_eq!(app::RightPane::Pivot, app.right_pane());
+
+        let actual = should_apply_hunk_jump(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_apply_hunk_jump_when_tree_focused_even_if_right_pane_is_diff() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        assert_eq!(app::Focus::Tree, app.focus());
+        assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+        let actual = should_apply_hunk_jump(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_jump_to_the_next_hunk_start_strictly_after_current_scroll() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 5, InputKey::NextHunk);
+
+        assert_eq!(Some(12), actual);
+    }
+
+    #[test]
+    fn should_return_none_when_next_hunk_is_pressed_at_the_last_hunk() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 12, InputKey::NextHunk);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_jump_to_the_previous_hunk_start_strictly_before_current_scroll() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 12, InputKey::PrevHunk);
+
+        assert_eq!(Some(5), actual);
+    }
+
+    #[test]
+    fn should_return_none_when_prev_hunk_is_pressed_at_the_first_hunk() {
+        let hunk_starts = vec![0, 5, 12];
+
+        let actual = jump_scroll_target(&hunk_starts, 0, InputKey::PrevHunk);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_none_when_hunk_starts_is_empty() {
+        let hunk_starts: Vec<usize> = vec![];
+
+        let actual = jump_scroll_target(&hunk_starts, 0, InputKey::NextHunk);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_jump_to_the_first_hunk_after_scroll_lands_between_two_hunks() {
+        // Scroll sitting mid-hunk (not exactly on a hunk boundary) still
+        // finds the next hunk strictly after it, not the one it's inside.
+        let hunk_starts = vec![0, 10];
+
+        let actual = jump_scroll_target(&hunk_starts, 3, InputKey::NextHunk);
+
+        assert_eq!(Some(10), actual);
     }
 }
