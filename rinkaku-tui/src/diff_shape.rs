@@ -1,13 +1,16 @@
-//! Diff-pane content shaping (ADR 0020, ADR 0027): given the row currently
-//! selected in the entry view (a symbol or a file) plus the already-parsed
-//! diff hunks (`crate::diff_view`), decides how the diff pane groups and
-//! annotates that content. Per ADR 0027, both symbol-row and file-row
-//! selections now produce the same file-scoped shape: hunks grouped under
-//! per-symbol section headers (unchanged from ADR 0020's file-selection
-//! semantics), with each section carrying an optional `symbol_id` so
-//! `crate::run_app` can look up the selected symbol's section start and
-//! auto-scroll to it. The old `DiffPaneContent::Symbol` clip variant is gone
-//! (ADR 0027 decision 1).
+//! Diff-pane content shaping (ADR 0020, ADR 0027, ADR 0030): given the row
+//! currently selected in the entry view (a symbol or a file) plus the
+//! already-parsed diff hunks (`crate::diff_view`), decides how the diff
+//! pane groups and annotates that content. Per ADR 0027, both symbol-row
+//! and file-row selections now produce the same file-scoped shape: hunks
+//! grouped under per-symbol section headers (unchanged from ADR 0020's
+//! file-selection semantics), with each section carrying an optional
+//! `symbol_id` so `crate::run_app` can look up the selected symbol's
+//! section start and auto-scroll to it. The old `DiffPaneContent::Symbol`
+//! clip variant is gone (ADR 0027 decision 1). ADR 0030 adds the mirror
+//! image — [`symbol_id_for_scroll_line`] resolves a scroll offset back to
+//! the symbol whose section it falls inside, so `crate::run_app` can sync
+//! the tree cursor when the reviewer scrolls the pane manually.
 //!
 //! Each section whose symbol's contract changed gets a 2-line old/new
 //! signature header up front.

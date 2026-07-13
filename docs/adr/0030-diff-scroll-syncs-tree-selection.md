@@ -232,11 +232,29 @@ ADR needs to touch.
   already established as this crate's canonical example — `lib.rs` had
   already crossed the 1500-line warn threshold (ADR 0028) primarily on
   test-code weight, and this ADR's own new tests would have pushed it
-  further. Production code in `lib.rs` now sits at roughly 1100 lines
-  (the 1000-1500 "watch" band, no action required); `tests.rs` itself
-  is under the 2000-line split threshold. This is bookkeeping the ADR
-  performs as part of implementing decision 6's new function, not a
-  separate structural decision of its own.
+  further. Production code in `lib.rs` now sits at roughly 1130 lines
+  (the 1000-1500 "watch" band, no action required) after the split.
+  This is bookkeeping the ADR performs as part of implementing
+  decision 6's new function, not a separate structural decision of
+  its own.
+- **Two files still cross the 1500-line warn threshold after this
+  PR**, per rinkaku's own dogfooded `## File size warnings` output
+  (CLAUDE.md's "rinkaku's own warning is authoritative" rule, so this
+  is recorded rather than silently merged past): the new
+  `rinkaku-tui/src/tests.rs` itself, at 1619 lines (moved wholesale out
+  of `lib.rs`, still under the 2000-line split threshold, and this
+  ADR's own new tests are a small fraction of it), and
+  `rinkaku-tui/src/app/mod.rs`, which this ADR's `+24`-line
+  `sync_tree_cursor_to_symbol` addition pushed from 1480 to 1504 —
+  just over the line. Neither is split in this PR: `tests.rs` has no
+  natural sub-responsibility to carve out (it is one flat suite for
+  `App`'s key-translation/dispatch surface, not several independent
+  concerns per CLAUDE.md's "split along responsibility, not line
+  count" rule), and `app/mod.rs` crossing by 4 lines from one small,
+  cohesive method addition is not itself a signal that a split is due
+  now — both are left as a known, acknowledged watch item for a future
+  PR that touches either file for its own reason, rather than forcing
+  an unrelated split into this one.
 - No backward-compatibility concern: the TUI has never shipped a
   release (ADR 0015/0016, restated by every TUI-scoped ADR since),
   so this amendment applies in place.
