@@ -44,6 +44,7 @@ mod display;
 mod generated_paths;
 mod git;
 mod github;
+mod log_writer;
 mod notes;
 mod pipeline;
 mod progress;
@@ -66,6 +67,7 @@ use github::base_sha::{
 use github::pr_arg::parse_pr_arg;
 use github::pr_info::fetch_pr_info;
 use github::workdir::resolve_pr_workdir;
+use log_writer::DeferredLogSink;
 use notes::{
     apply_entry_pivot, entry_pivot_empty_note, garbage_input_note, repo_outline_empty_note,
 };
@@ -80,24 +82,28 @@ use splash_progress::SplashProgress;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+/// Shared `env_logger` setup for every display mode: `info`-level default
+/// (env_logger's own default is error-only, which meant `--pr`/`--base`
+/// runs — the ones slow enough to want a heartbeat, see the
+/// dependency-index build below — gave no feedback at all while running;
+/// `RUST_LOG` still overrides this). Timestamp and module path are
+/// dropped: this is a short-lived one-shot CLI, so there is nothing to
+/// correlate a timestamp against, and the binary is a single crate, making
+/// the module path redundant.
+fn logger_builder() -> env_logger::Builder {
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    builder.format_timestamp(None).format_target(false);
+    builder
+}
+
 fn main() -> anyhow::Result<()> {
-    // Default to `info`-level progress output on stderr (env_logger's own
-    // default is error-only, which meant `--pr`/`--base` runs — the ones
-    // slow enough to want a heartbeat, see the dependency-index build
-    // below — gave no feedback at all while running). `RUST_LOG` still
-    // overrides this, same as any other `env_logger::Builder::from_env`
-    // setup.
-    //
-    // Timestamp and module path are dropped: this is a short-lived
-    // one-shot CLI, so there is nothing to correlate a timestamp against,
-    // and the binary is a single crate, making the module path redundant.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp(None)
-        .format_target(false)
-        .init();
     let cli = Cli::parse();
 
     if let Some(Command::SelfUpdate { yes }) = cli.command {
+        // Non-TUI: logs straight to stderr like every other subcommand did
+        // before display-mode resolution was moved ahead of logger init.
+        logger_builder().init();
         return self_update::run_self_update(yes);
     }
 
@@ -108,12 +114,27 @@ fn main() -> anyhow::Result<()> {
     // and is what lets the `DisplayMode::Tui` branch below enter the
     // alternate screen and start drawing a splash screen before the
     // pipeline's first byte of work runs, instead of only after it
-    // finishes.
+    // finishes. Determining `display_mode` before `logger_builder().init()`
+    // (ADR 0033 amendment) is what lets the `Tui` branch route the logger
+    // through a deferring sink from the very first log call, instead of
+    // racing the alternate-screen switch against whichever log record
+    // fires first.
     let stdout_is_tty = std::io::stdout().is_terminal();
     let display_mode = resolve_display_mode(cli.tui, cli.format, stdout_is_tty);
 
     match display_mode {
         DisplayMode::Tui => {
+            // ADR 0033 amendment: `log::` records bypass `AnalysisProgress`
+            // entirely, so they need their own deferral mechanism — a
+            // `DeferredLogSink` buffers every record until `release` is
+            // called below, once the alternate screen has actually torn
+            // down, mirroring `SplashProgress`'s buffered-notes handling
+            // for the same underlying bug (raw bytes landing mid-redraw).
+            let log_sink = DeferredLogSink::new();
+            logger_builder()
+                .target(env_logger::Target::Pipe(Box::new(log_sink.clone())))
+                .init();
+
             // No stderr spinner in this branch (ADR 0033 decision 1): the
             // splash screen drawn on the alternate screen is this run's
             // only progress feedback, replacing it rather than layering on
@@ -155,6 +176,7 @@ fn main() -> anyhow::Result<()> {
                     // warning, ADR 0033) is not silently lost on an
                     // early-return failure.
                     drop(session);
+                    release_log_sink(&log_sink);
                     flush_notes(buffered_notes);
                     return Err(err);
                 }
@@ -172,10 +194,15 @@ fn main() -> anyhow::Result<()> {
             // fallback) now reaches stderr as clean, ordinary text once
             // the alternate screen is gone, instead of corrupting a splash
             // or entry-screen frame mid-redraw.
+            release_log_sink(&log_sink);
             flush_notes(buffered_notes);
             result
         }
         DisplayMode::Output(format) => {
+            // Non-TUI: no alternate screen ever opens, so `log::` output
+            // goes straight to stderr, same as it always has.
+            logger_builder().init();
+
             // Started before any branch below runs and cleared right after
             // the pipeline finishes (`spinner.finish_and_clear()`), so the
             // whole synchronous analysis phase — the only part of a run
@@ -216,6 +243,19 @@ fn flush_notes(notes: Vec<String>) {
     for note in notes {
         eprintln!("{note}");
     }
+}
+
+/// Releases a `--tui`-mode [`DeferredLogSink`] to stderr — the `log::`
+/// counterpart of [`flush_notes`], called at the same two points (both of
+/// this function's call sites in `main` are positioned identically; see
+/// each one's own comment) so buffered log records drain in order once the
+/// terminal has actually left the alternate screen.
+fn release_log_sink(sink: &DeferredLogSink<std::io::Stderr>) {
+    // A failed `write_all`/`flush` to stderr here has nowhere left to be
+    // reported (the process is already on its way out in every call site),
+    // so it is dropped rather than propagated — same judgment call
+    // `flush_notes`'s own `eprintln!` already makes implicitly.
+    let _ = sink.release(std::io::stderr());
 }
 
 /// The result of [`run_analysis`]: a built [`Report`], the raw diff text
