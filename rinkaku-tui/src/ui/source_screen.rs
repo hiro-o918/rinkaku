@@ -483,6 +483,8 @@ mod tests {
         let mut actual = DrawOutcome {
             clamped_right_pane_scroll: Some(999),
             scroll_viewport_height: None,
+            clamped_help_scroll: None,
+            help_scroll_viewport_height: None,
         };
         terminal
             .draw(|frame| {

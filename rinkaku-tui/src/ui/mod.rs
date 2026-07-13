@@ -35,13 +35,16 @@ use status::draw_status_line;
 /// request never survives past the visible clamp) and the inner height of
 /// the currently-scrolling pane (so the next `Ctrl-d`/`Ctrl-u` half-page
 /// step, ADR 0026, can be sized against the real viewport rather than a
-/// magic constant).
+/// magic constant) — plus the same pair again for the `?` help overlay,
+/// which can be open and scrolling independently of whichever screen is
+/// showing underneath it.
 ///
-/// Both fields are `Option<usize>` because a given frame may not have
+/// Every field is `Option<usize>` because a given frame may not have
 /// anything to fold back at all — no right pane on [`Screen::Source`],
-/// no scrolling pane at all when the tree has focus, etc. `crate::run_app`
-/// treats each `None` as "nothing to update on that seam this frame",
-/// mirroring the pre-existing single-`Option<usize>` return this replaces.
+/// no scrolling pane at all when the tree has focus, the overlay closed,
+/// etc. `crate::run_app` treats each `None` as "nothing to update on that
+/// seam this frame", mirroring the pre-existing single-`Option<usize>`
+/// return this replaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DrawOutcome {
     /// The right-hand pane's scroll offset as actually clamped and
@@ -66,6 +69,23 @@ pub struct DrawOutcome {
     /// half-page (ADR 0026) key arrives, so the step size scales with
     /// the actual pane rather than a magic constant.
     pub scroll_viewport_height: Option<usize>,
+    /// The `?` help overlay's own scroll offset as actually clamped and
+    /// rendered this frame (`None` while the overlay is closed) — kept
+    /// separate from [`Self::clamped_right_pane_scroll`] rather than reusing
+    /// it, since the overlay composites *on top of* whichever screen was
+    /// already showing (`crate::app::App::help_open`'s own doc comment) and
+    /// can be open while that underlying screen still has its own scroll
+    /// state to fold back independently; collapsing the two into one field
+    /// would make one clobber the other the moment both are scrollable in
+    /// the same frame. `crate::run_app` feeds this back via
+    /// `App::with_help_scroll`, mirroring the right-pane fold-back.
+    pub clamped_help_scroll: Option<usize>,
+    /// The help overlay's own inner height (borders excluded) this frame,
+    /// `None` while closed — `crate::run_app` remembers this the same way
+    /// it does [`Self::scroll_viewport_height`], so a `Ctrl-d`/`Ctrl-u`
+    /// half-page press while the overlay is open sizes its step against the
+    /// overlay's own box, not whatever pane happens to be underneath it.
+    pub help_scroll_viewport_height: Option<usize>,
 }
 
 /// Draws one full frame: the entry view (tree + right pane split) or the
@@ -93,7 +113,13 @@ pub struct DrawOutcome {
 /// `Screen`/`crate::app::RightPane` themselves draw (`App::help_open`'s own doc
 /// comment), so the underlying frame is built exactly the same way whether
 /// the overlay is open or not, and the overlay is simply composited over
-/// it as a final step.
+/// it as a final step. Its own clamped scroll offset and inner height
+/// (scrolling, added after the overlay's content outgrew a single fixed
+/// box) are folded into `outcome` after the base match above, rather than
+/// as another arm of it, since the overlay is orthogonal to which `Screen`
+/// is underneath — `outcome`'s `clamped_right_pane_scroll`/
+/// `scroll_viewport_height` pair (whichever screen set it) is left
+/// untouched by this step.
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -107,7 +133,7 @@ pub fn draw(
     let [body, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
-    let outcome = match app.screen() {
+    let mut outcome = match app.screen() {
         Screen::Entry => {
             let clamped = draw_entry_screen(
                 frame,
@@ -133,6 +159,8 @@ pub fn draw(
             DrawOutcome {
                 clamped_right_pane_scroll: clamped,
                 scroll_viewport_height,
+                clamped_help_scroll: None,
+                help_scroll_viewport_height: None,
             }
         }
         Screen::Source {
@@ -144,6 +172,8 @@ pub fn draw(
             DrawOutcome {
                 clamped_right_pane_scroll: None,
                 scroll_viewport_height: Some(inner_height),
+                clamped_help_scroll: None,
+                help_scroll_viewport_height: None,
             }
         }
     };
@@ -151,7 +181,10 @@ pub fn draw(
     draw_status_line(frame, app, status_area);
 
     if app.help_open() {
-        draw_help_overlay(frame, area);
+        let (clamped_help_scroll, help_scroll_viewport_height) =
+            draw_help_overlay(frame, area, app.help_scroll());
+        outcome.clamped_help_scroll = Some(clamped_help_scroll);
+        outcome.help_scroll_viewport_height = Some(help_scroll_viewport_height);
     }
     if let Some(popup) = app.jump_popup() {
         draw_jump_popup(frame, popup, area);

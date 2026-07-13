@@ -284,6 +284,16 @@ pub struct App {
     /// free by construction: nothing else about `App`'s state changes while
     /// the overlay is open.
     help_open: bool,
+    /// The `?` help overlay's own scroll offset (lines), unclamped in the
+    /// same "requested, not authoritative" sense as [`Self::right_pane_scroll`]
+    /// — `App` has no notion of the overlay's rendered height, so clamping
+    /// is `crate::ui`'s job at draw time (`crate::ui::overlay::draw_help_overlay`,
+    /// reusing [`crate::ui::scroll::render_scrollable_pane`]'s clamp).
+    /// Reset to 0 whenever the overlay opens or closes ([`Self::handle_key`]'s
+    /// `ToggleHelp` arms), so re-opening the overlay after scrolling always
+    /// starts from the top rather than resuming a stale offset the reviewer
+    /// has no way to see coming back.
+    help_scroll: usize,
     /// A `g`-prefixed sequence's first key, awaiting its second (ADR 0022) —
     /// `None` outside that one-key window. Set by `g` and cleared by
     /// *every* subsequent key regardless of what it is (`crate::lib::
@@ -335,6 +345,7 @@ impl App {
             right_pane_scroll: 0,
             focus: Focus::default(),
             help_open: false,
+            help_scroll: 0,
             pending_prefix: None,
             jump_popup: None,
             jump_back: Vec::new(),
@@ -413,6 +424,12 @@ impl App {
     /// own doc comment.
     pub fn focus(&self) -> Focus {
         self.focus
+    }
+
+    /// The `?` help overlay's requested scroll offset (lines) — see
+    /// [`Self::help_scroll`]'s own doc comment on why this is unclamped.
+    pub fn help_scroll(&self) -> usize {
+        self.help_scroll
     }
 
     /// Whether the `?` help overlay (ADR 0020) is currently open.
@@ -692,14 +709,21 @@ impl App {
     /// active) and is otherwise unused.
     ///
     /// The `?` help overlay (ADR 0020) is handled first and takes over the
-    /// whole key space while open: `ToggleHelp` closes it and every other
-    /// key is swallowed as a no-op (deliberately, including `Quit` — the
-    /// overlay's whole point is a safe, low-stakes "let me check the keys"
-    /// action that cannot be short-circuited by an accidental app exit; see
-    /// `Self::help_open`'s own doc comment). This must run before the
-    /// screen/focus dispatch below, not as another arm inside it, so no
-    /// future `InputKey` variant can accidentally bypass the overlay by
-    /// being handled in a screen-specific branch first.
+    /// whole key space while open: `ToggleHelp` closes it, `Up`/`Down` move
+    /// [`Self::help_scroll`] by one line (the content can run longer than
+    /// the overlay's own box — ADR 0026's follow-up, this struct's own
+    /// `help_scroll` doc comment), `ScrollHalfPageDown`/`ScrollHalfPageUp`/
+    /// `ScrollToTop`/`ScrollToBottom` are let through unmodified for
+    /// [`Self::handle_scroll_key`] to apply (mirroring ADR 0026's existing
+    /// two-step dispatch for the source screen/right pane — see that
+    /// method's own doc comment), and every other key is swallowed as a
+    /// no-op (deliberately, including `Quit` — the overlay's whole point is
+    /// a safe, low-stakes "let me check the keys" action that cannot be
+    /// short-circuited by an accidental app exit; see `Self::help_open`'s
+    /// own doc comment). This must run before the screen/focus dispatch
+    /// below, not as another arm inside it, so no future `InputKey` variant
+    /// can accidentally bypass the overlay by being handled in a
+    /// screen-specific branch first.
     ///
     /// `right_pane_scroll` is reset to 0 by every key *except* `Up`/`Down`
     /// while [`Focus::Right`] on [`Screen::Entry`] (ADR 0020: scrolling
@@ -750,13 +774,35 @@ impl App {
         };
 
         if self.help_open {
-            if key == InputKey::ToggleHelp {
-                self.help_open = false;
+            match key {
+                InputKey::ToggleHelp => {
+                    self.help_open = false;
+                    self.help_scroll = 0;
+                }
+                InputKey::Down => {
+                    self.help_scroll = self.help_scroll.saturating_add(1);
+                }
+                InputKey::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
+                }
+                // The four ADR 0026 scroll variants are deliberately not
+                // handled here: their step size depends on the overlay's
+                // rendered height, which only `Self::handle_scroll_key`
+                // receives (`crate::run_app`'s two-step dispatch) — passed
+                // through as a no-op here so that call still runs (matching
+                // every other scroll key's own `handle_key` arm, ADR 0026's
+                // `is_scroll_input_key` doc comment).
+                InputKey::ScrollHalfPageDown
+                | InputKey::ScrollHalfPageUp
+                | InputKey::ScrollToTop
+                | InputKey::ScrollToBottom => {}
+                _ => {}
             }
             return self;
         }
         if key == InputKey::ToggleHelp {
             self.help_open = true;
+            self.help_scroll = 0;
             return self;
         }
 
@@ -1277,6 +1323,19 @@ impl App {
         self
     }
 
+    /// Overwrites the `?` help overlay's scroll offset directly to `scroll`
+    /// — used by `crate::run_app` to fold the actually-clamped, actually-
+    /// rendered offset back into `App` after every draw
+    /// (`crate::ui::DrawOutcome`'s own doc comment on why this fold-back
+    /// exists: without it, repeated scrolling past the overlay's own end
+    /// would keep incrementing this unclamped request with no visible
+    /// effect, the same overshoot [`Self::with_right_pane_scroll`] already
+    /// guards against for the right pane).
+    pub fn with_help_scroll(mut self, scroll: usize) -> Self {
+        self.help_scroll = scroll;
+        self
+    }
+
     /// Overwrites [`Screen::Source`]'s `scroll_top` to `scroll_top` —
     /// used by `crate::run_app` right after the `s` key transitions to
     /// [`Screen::Source`], to back-fill the centered starting position
@@ -1327,8 +1386,36 @@ impl App {
     /// ([`InputKey::ScrollToBottom`]'s doc comment): the clamp-at-draw
     /// step folds it down to `total_lines - viewport_height` cleanly,
     /// so no per-pane bottom sentinel is needed here.
+    /// While the `?` help overlay is open, these four variants act on
+    /// [`Self::help_scroll`] instead of whatever `self.screen`/`self.focus`
+    /// would otherwise imply, checked before the screen/focus match below —
+    /// same priority [`Self::handle_key`] already gives the overlay, and
+    /// for the same reason: without this, `crate::run_app`'s unconditional
+    /// second-step call to this method (ADR 0026's two-step dispatch;
+    /// `Self::handle_key`'s own arms for these variants are deliberate
+    /// no-ops) would fall through to the ordinary `Screen::Entry` +
+    /// `Focus::Right` branch and silently scroll the right pane *behind*
+    /// the overlay while it looked closed to the reviewer.
     pub fn handle_scroll_key(mut self, key: InputKey, viewport_height: usize) -> Self {
         let step = viewport_height / 2;
+        if self.help_open {
+            match key {
+                InputKey::ScrollHalfPageDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(step);
+                }
+                InputKey::ScrollHalfPageUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(step);
+                }
+                InputKey::ScrollToTop => {
+                    self.help_scroll = 0;
+                }
+                InputKey::ScrollToBottom => {
+                    self.help_scroll = usize::MAX;
+                }
+                _ => {}
+            }
+            return self;
+        }
         match (&self.screen, self.focus, key) {
             (
                 Screen::Source {
