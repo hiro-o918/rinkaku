@@ -815,16 +815,21 @@ fn dir_detail_lines(detail: &DirDetail, origin: ReportOrigin) -> Vec<Line<'stati
 }
 
 /// Formats a [`FileDetail`] into displayable lines: a `File <path>` header,
-/// then either a skipped-file explanation, a whole-test-file explanation, or
-/// the ordinary "Symbols (N)" listing — the three are mutually exclusive by
-/// construction (`crate::tree::TreeNode`'s own doc comment on
-/// `skip_reason`/`test_symbol_count`: an ordinary analyzed file has neither
-/// set, a skipped file has no symbols to list, and a whole-test file has no
-/// per-symbol data at all, only the count `pipeline::partition_test_symbols`
-/// kept). Without this, a skipped or whole-test file's detail pane would
-/// show a bare "Symbols (0)" — indistinguishable from a file that genuinely
-/// changed nothing, which is exactly the gap this feature closes for the
-/// entry-tree row too (see `row_view::entry_row_line`).
+/// then a skipped-file explanation (returning early — a skipped file has no
+/// `symbols`/`test_symbol_count` of its own to show alongside it,
+/// `crate::tree::TreeNode::skip_reason`'s own doc comment on why that half
+/// of the split is a true either/or), followed by a whole/mixed-test-file
+/// note when `test_symbol_count` is set, followed by the ordinary "Symbols
+/// (N)" listing when `symbols` is non-empty. The last two are **not**
+/// mutually exclusive — `pipeline::partition_test_symbols` can populate both
+/// a `FileReport` (real, non-test symbols) and a `TestFileSummary` (a test
+/// count) for the same mixed-test-code path (`TreeNode::test_symbol_count`'s
+/// own doc comment), so a mixed file shows both the test note and its real
+/// symbols rather than one silently hiding the other. Without the
+/// skip/test-note lines at all, a skipped or whole-test file's detail pane
+/// would show a bare "Symbols (0)" — indistinguishable from a file that
+/// genuinely changed nothing, which is exactly the gap this feature closes
+/// for the entry-tree row too (see `row_view::entry_row_line`).
 fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -857,35 +862,39 @@ fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
             Style::default().fg(Color::Magenta),
         ));
         lines.push(Line::raw(
-            "Every changed symbol in this file is test code, excluded from the default view (see --include-tests).",
+            "Changed test-code symbols in this file are excluded from the default view (see --include-tests).",
         ));
-        return lines;
+        if !detail.symbols.is_empty() {
+            lines.push(Line::raw(""));
+        }
     }
 
-    lines.push(Line::styled(
-        format!("Symbols ({})", detail.symbols.len()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    for symbol in &detail.symbols {
-        let marker = if symbol.removed {
-            "x"
-        } else {
-            match symbol.classification {
-                Some(Classification::Added) => "+",
-                Some(Classification::SignatureChanged) => "~",
-                Some(Classification::BodyOnly) | None => " ",
-            }
-        };
-        let fan_in = if symbol.fan_in > 0 {
-            format!(" ^{}", symbol.fan_in)
-        } else {
-            String::new()
-        };
-        lines.push(Line::raw(format!(
-            "  {marker} {} {}{fan_in}",
-            kind_abbrev(symbol.kind),
-            symbol.name,
-        )));
+    if !detail.symbols.is_empty() || detail.test_symbol_count.is_none() {
+        lines.push(Line::styled(
+            format!("Symbols ({})", detail.symbols.len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        for symbol in &detail.symbols {
+            let marker = if symbol.removed {
+                "x"
+            } else {
+                match symbol.classification {
+                    Some(Classification::Added) => "+",
+                    Some(Classification::SignatureChanged) => "~",
+                    Some(Classification::BodyOnly) | None => " ",
+                }
+            };
+            let fan_in = if symbol.fan_in > 0 {
+                format!(" ^{}", symbol.fan_in)
+            } else {
+                String::new()
+            };
+            lines.push(Line::raw(format!(
+                "  {marker} {} {}{fan_in}",
+                kind_abbrev(symbol.kind),
+                symbol.name,
+            )));
+        }
     }
 
     lines
@@ -1432,8 +1441,12 @@ mod tests {
         let report = report_with_one_skipped_file();
         // Row 0 is the collapsing "assets" dir (single child, see
         // `crate::tree::build_tree`'s collapsing rule); row 1 is the
-        // skipped "logo.png" file itself.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        // skipped "logo.png" file itself. ADR 0020 defaults the right pane
+        // to Diff, so `ToggleDiff` is needed here to reach Detail (unlike
+        // the pre-v2 default this test originally relied on).
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1481,7 +1494,11 @@ mod tests {
     fn should_draw_test_symbol_count_in_detail_pane_when_cursor_is_on_a_whole_test_file_row() {
         let report = report_with_one_test_file();
         // Row 0 is the collapsing "src" dir; row 1 is the whole test file.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        // ADR 0020 defaults the right pane to Diff, so `ToggleDiff` is
+        // needed here to reach Detail.
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::ToggleDiff);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -1505,6 +1522,61 @@ mod tests {
         // that survives the wrap rather than the whole phrase.
         assert!(text.contains("Test file: 3 changed test"));
         assert!(!text.contains("Symbols ("));
+    }
+
+    // Regression test (post-rebase integration check): a mixed file — real
+    // symbols in `report.files` *and* a test-symbol count in `report.tests`
+    // for the same path (`pipeline::partition_test_symbols`'s legitimate
+    // output for a file with both production and test code changed) — must
+    // show both the test-file note and the real "Symbols (N)" listing in
+    // the detail pane, not just one. This is the exact shape that caused a
+    // live panic (`rinkaku-tui/src/app.rs` in this repo's own diff) before
+    // `TreeBuilder::insert_test_file` stopped rejecting a file that already
+    // carries real symbols.
+    #[test]
+    fn should_draw_both_test_note_and_real_symbols_in_detail_pane_when_file_is_mixed() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "app.rs".to_string(),
+                symbols: vec![symbol("app.rs::handle_key", "handle_key")],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![rinkaku_core::render::TestFileSummary {
+                path: "app.rs".to_string(),
+                symbol_count: 5,
+            }],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        // Row 0 is the "app.rs" file row itself.
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("File app.rs"));
+        assert!(text.contains("Test file: 5 changed test"));
+        assert!(text.contains("Symbols (1)"));
+        assert!(text.contains("handle_key"));
     }
 
     #[test]

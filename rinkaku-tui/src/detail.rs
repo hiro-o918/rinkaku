@@ -250,9 +250,14 @@ pub struct FileSymbolSummary {
 /// `skip_reason`/`test_symbol_count` mirror `crate::tree::TreeNode`'s own
 /// fields of the same name (copied straight from the tree node this detail
 /// was built from — see `build_file_detail`) so the detail pane can explain
-/// *why* a skipped or whole-test file has no `symbols` entries instead of
-/// silently showing an empty list, which used to read as "this file changed
-/// nothing" rather than "rinkaku did not analyze this file's symbols".
+/// *why* a skipped file has no `symbols` entries instead of silently
+/// showing an empty list, which used to read as "this file changed nothing"
+/// rather than "rinkaku did not analyze this file's symbols" — and, for a
+/// whole/mixed-test file, can additionally note the excluded test-symbol
+/// count alongside whatever real `symbols` the file does have (`skip_reason`
+/// and `test_symbol_count` are mutually exclusive, but `test_symbol_count`
+/// and `symbols` are not — `crate::tree::TreeNode::test_symbol_count`'s own
+/// doc comment).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDetail {
     pub path: String,
@@ -1124,6 +1129,49 @@ mod tests {
             symbols: vec![],
             skip_reason: None,
             test_symbol_count: Some(4),
+        };
+        assert_eq!(expected, actual);
+    }
+
+    // Regression test (post-rebase integration check): a mixed file — real
+    // (non-test) symbols in `report.files` *and* a test-symbol count in
+    // `report.tests` for the same path, which `pipeline::partition_test_symbols`
+    // legitimately produces for a file with both production and
+    // `#[cfg(test)]`-style code changed in one diff — must keep both halves
+    // on the built `FileDetail` rather than one silently dropping the other.
+    // This is exactly the shape that caused a live panic when running the
+    // TUI against this repo's own diff (`rinkaku-tui/src/app.rs` has both
+    // real and test symbols changed), before `TreeBuilder::insert_test_file`
+    // stopped asserting the file's `symbols` were empty.
+    #[test]
+    fn should_keep_real_symbols_alongside_test_symbol_count_when_file_is_mixed() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "app.rs".to_string(),
+                symbols: vec![symbol("app.rs::handle_key", "handle_key")],
+            }],
+            tests: vec![rinkaku_core::render::TestFileSummary {
+                path: "app.rs".to_string(),
+                symbol_count: 5,
+            }],
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_file_detail(&tree, &report, "app.rs").expect("file found");
+
+        let expected = FileDetail {
+            path: "app.rs".to_string(),
+            symbols: vec![FileSymbolSummary {
+                name: "handle_key".to_string(),
+                kind: SymbolKind::Function,
+                classification: None,
+                removed: false,
+                fan_in: 0,
+            }],
+            skip_reason: None,
+            test_symbol_count: Some(5),
         };
         assert_eq!(expected, actual);
     }

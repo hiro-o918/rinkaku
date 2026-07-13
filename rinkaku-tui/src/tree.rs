@@ -124,16 +124,20 @@ pub struct TreeNode {
     /// childless file with a path), it just additionally carries *why*
     /// rinkaku skipped it, for `row_view`/the detail pane to surface.
     pub skip_reason: Option<SkipReason>,
-    /// `Some(symbol_count)` only for a [`NodeKind::File`] node built from
-    /// `report.tests` (a file whose changed symbols were *all* test code,
-    /// ADR 0009 — such a file has no `FileReport` in `report.files` at all,
-    /// see `pipeline::partition_test_symbols`'s doc comment, so without
-    /// this it would be invisible in the tree the same way a skipped file
-    /// is). `None` for every other node, including an ordinary `File` node
-    /// whose *some* (not all) symbols were tests — those are filtered out
-    /// of `report.files` silently today and stay that way here too; only a
-    /// whole-file test exclusion has no other representation in the tree to
-    /// piggyback on.
+    /// `Some(symbol_count)` for a [`NodeKind::File`] node built from an
+    /// entry in `report.tests` (ADR 0009): either a file whose changed
+    /// symbols were *all* test code (no `FileReport` in `report.files` at
+    /// all for it, see `pipeline::partition_test_symbols`'s doc comment —
+    /// without this it would be invisible in the tree the same way a
+    /// skipped file is), or a *mixed* file that has both real (non-test)
+    /// symbols in `report.files` and a nonzero test-symbol count in
+    /// `report.tests` for the same path — `partition_test_symbols`
+    /// populates both independently, it is not an either/or split, so
+    /// `symbols` and `test_symbol_count` are **not** mutually exclusive
+    /// here (unlike `skip_reason`, which is: a skipped file by construction
+    /// has no `FileReport` entry at all). `None` when the file has no
+    /// `report.tests` entry, i.e. every changed symbol in it (if any) is
+    /// non-test.
     pub test_symbol_count: Option<usize>,
 }
 
@@ -169,12 +173,16 @@ pub struct Tree {
 /// `pipeline::analyze_diff`), then `report.removed`, then `report.tests`,
 /// then `report.skipped`, for any additional files/symbols not already
 /// covered, and directory chains are inserted in that same discovery
-/// order. A path present in more than one of these sources (not expected
-/// from `pipeline::analyze_diff`'s own invariants — a file is either kept
-/// in `files`, summarized in `tests`, or listed in `skipped`, never more
-/// than one) merges into one `TreeNode` the same way `insert_file`/
-/// `insert_removed` already merge on a shared path, rather than producing
-/// a duplicate row.
+/// order. A path present in more than one of these sources merges into one
+/// `TreeNode` the same way `insert_file`/`insert_removed` already merge on a
+/// shared path, rather than producing a duplicate row. `files`/`tests`
+/// overlapping on a path is a real, expected case — `pipeline::partition_test_symbols`
+/// can emit both a `FileReport` and a `TestFileSummary` for one mixed file
+/// (`TreeNode::test_symbol_count`'s own doc comment) — but `skipped`
+/// overlapping either `files` or `tests` on the same path is not expected
+/// from `pipeline::analyze_diff`'s own invariants (a skipped file has no
+/// `FileReport`/`TestFileSummary` of its own), and is only debug-asserted
+/// against, not handled gracefully, by `insert_skipped`/`insert_test_file`.
 ///
 /// **Single-child directory collapsing**: a directory whose only content is
 /// exactly one child directory (and nothing else — no files or symbols of
@@ -261,24 +269,26 @@ impl<'a> TreeBuilder<'a> {
     fn insert_file(&mut self, path: &str, symbols: &[rinkaku_core::extract::ExtractedSymbol]) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
-        // `pipeline::analyze_diff`'s own invariant is that a path is either
-        // kept in `report.files`, summarized in `report.tests`, or listed
-        // in `report.skipped` — never more than one (see `build_tree`'s doc
-        // comment). This is unreachable from that pipeline today, but
-        // `build_tree` is a public, pure function any caller (e.g. a future
-        // non-`analyze_diff` JSON-input path) could feed a `Report` that
-        // violates it — silently the later insert would win, producing a
-        // `File` row that both lists symbols and claims to be
-        // skipped/test-only, a display contradiction (`row_view` would show
-        // a skip/test badge alongside real symbol children; the detail pane
-        // would drop the symbols entirely, see `file_detail_lines`'s
-        // mutually-exclusive branches). Debug-only since this is a caller
-        // contract violation, not a condition `build_tree` itself needs to
-        // handle gracefully in release builds.
+        // `report.files` and `report.skipped` never overlap on a path — a
+        // skipped file by construction has no `FileReport` at all
+        // (`pipeline::analyze_diff`'s invariant). `report.files` and
+        // `report.tests` *can* legitimately overlap, though: a mixed file
+        // (some real symbols, some `#[cfg(test)]`-style test symbols) gets
+        // both a `FileReport` (its non-test symbols) and a `TestFileSummary`
+        // (its test count) for the same path —
+        // `pipeline::partition_test_symbols`'s doc comment. So only the
+        // skip_reason half of the old combined check is a real invariant;
+        // asserting against `test_symbol_count` here would reject a
+        // reachable, correct `Report` (this crate's own dogfood run against
+        // this repo hit exactly that: `rinkaku-tui/src/app.rs` has both real
+        // and test symbols changed in the same diff). Debug-only since this
+        // is still a caller contract violation for the skip_reason case, not
+        // a condition `build_tree` itself needs to handle gracefully in
+        // release builds.
         debug_assert!(
-            file_builder.skip_reason.is_none() && file_builder.test_symbol_count.is_none(),
-            "path {path:?} has real symbols but was already marked skipped/test-only — \
-             report.files/report.tests/report.skipped must not overlap on the same path"
+            file_builder.skip_reason.is_none(),
+            "path {path:?} has real symbols but was already listed in report.skipped — \
+             report.files/report.skipped must not overlap on the same path"
         );
         for symbol in symbols {
             file_builder.symbols.push(SymbolRef {
@@ -303,22 +313,27 @@ impl<'a> TreeBuilder<'a> {
         });
     }
 
-    /// Inserts a whole-test-file summary (`report.tests`, see
-    /// `TreeNode::test_symbol_count`'s doc comment) as a childless `File`
-    /// node — there is no per-symbol data to nest under it, only the count
+    /// Inserts a whole- or mixed-test-file summary (`report.tests`, see
+    /// `TreeNode::test_symbol_count`'s doc comment) into the node for
+    /// `path` — a childless `File` node when the file has no `FileReport`
+    /// at all (all its changed symbols were test code), or an existing node
+    /// already carrying real `symbols` from a prior `insert_file` call when
+    /// the file is mixed. Either way there is no per-symbol data for the
+    /// *test* half to nest under, only the count
     /// `pipeline::partition_test_symbols` kept.
     fn insert_test_file(&mut self, path: &str, symbol_count: usize) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
-        // Same overlap contract as `insert_file`'s debug_assert, mirrored
-        // here: a path already carrying real symbols must not also be
-        // marked test-only, or `file_detail_lines`'s early-return on
-        // `test_symbol_count` would silently drop those symbols from the
-        // detail pane.
+        // Only guard the genuinely-invariant case: `report.skipped` never
+        // overlaps `report.tests` (a skipped file has no symbols of any
+        // kind to partition into test/non-test in the first place). Real
+        // symbols being present here is expected for a mixed file —
+        // `insert_file`'s own doc comment on why that is not a contract
+        // violation.
         debug_assert!(
-            file_builder.symbols.is_empty(),
-            "path {path:?} already has real symbols but was also summarized in report.tests — \
-             report.files/report.tests must not overlap on the same path"
+            file_builder.skip_reason.is_none(),
+            "path {path:?} was already listed in report.skipped but was also summarized in \
+             report.tests — report.skipped/report.tests must not overlap on the same path"
         );
         file_builder.test_symbol_count = Some(symbol_count);
     }
@@ -328,11 +343,14 @@ impl<'a> TreeBuilder<'a> {
     fn insert_skipped(&mut self, path: &str, reason: SkipReason) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
-        // Same overlap contract as `insert_file`'s debug_assert.
+        // Same overlap contract as `insert_file`'s debug_assert: a skipped
+        // file has no `FileReport`/`TestFileSummary` entry of its own, so
+        // neither real symbols nor a test count should already be set here.
         debug_assert!(
-            file_builder.symbols.is_empty(),
-            "path {path:?} already has real symbols but was also listed in report.skipped — \
-             report.files/report.skipped must not overlap on the same path"
+            file_builder.symbols.is_empty() && file_builder.test_symbol_count.is_none(),
+            "path {path:?} was already listed in report.files/report.tests but was also listed \
+             in report.skipped — report.skipped must not overlap report.files/report.tests on \
+             the same path"
         );
         file_builder.skip_reason = Some(reason);
     }
@@ -1288,15 +1306,24 @@ mod tests {
         assert_eq!(None, tree.roots[0].test_symbol_count);
     }
 
-    // `pipeline::analyze_diff` never produces a `Report` where the same
-    // path appears in more than one of `files`/`tests`/`skipped` (see
-    // `build_tree`'s doc comment), so `#[cfg(debug_assertions)]` keeps this
-    // panic-path test out of release builds, matching the `debug_assert!`s
-    // themselves — this only guards a caller contract, not a condition
-    // `build_tree` needs to handle gracefully at runtime.
+    // `pipeline::analyze_diff` never produces a `Report` where the same path
+    // appears in both `files`/`skipped` or both `tests`/`skipped` (see
+    // `TreeBuilder::insert_file`/`insert_test_file`/`insert_skipped`'s own
+    // doc comments), so `#[cfg(debug_assertions)]` keeps these panic-path
+    // tests out of release builds, matching the `debug_assert!`s themselves
+    // — they only guard a caller contract, not a condition `build_tree`
+    // needs to handle gracefully at runtime. `files`/`tests` overlapping on
+    // the same path, in contrast, is a *valid* `analyze_diff` output (a
+    // mixed file) — see `should_keep_real_symbols_when_file_is_also_in_tests`
+    // below, not a panic case.
+    // `build_tree` visits `report.files` before `report.skipped` (its own
+    // doc comment's discovery order), so this hits `insert_skipped`'s own
+    // assert, not `insert_file`'s — `insert_file` only guards against a
+    // path *already* marked skipped when files runs, which is not yet true
+    // here.
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "report.files/report.skipped must not overlap")]
+    #[should_panic(expected = "report.skipped must not overlap report.files/report.tests")]
     fn should_panic_when_the_same_path_appears_in_files_and_skipped() {
         let report = Report {
             origin: rinkaku_core::render::ReportOrigin::Diff,
@@ -1316,8 +1343,35 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "report.files/report.tests must not overlap")]
-    fn should_panic_when_the_same_path_appears_in_files_and_tests() {
+    #[should_panic(expected = "report.skipped must not overlap report.files/report.tests")]
+    fn should_panic_when_the_same_path_appears_in_tests_and_skipped() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            tests: vec![TestFileSummary {
+                path: "lib.rs".to_string(),
+                symbol_count: 1,
+            }],
+            skipped: vec![SkippedFile {
+                path: "lib.rs".to_string(),
+                reason: rinkaku_core::render::SkipReason::Binary,
+            }],
+            ..empty_report()
+        };
+
+        build_tree(&report);
+    }
+
+    // Regression test (post-rebase integration check): `lib.rs` in both
+    // `report.files` (some real symbols) and `report.tests` (a test count
+    // for the rest) is exactly what `pipeline::partition_test_symbols`
+    // produces for a mixed file — e.g. a Rust file with production
+    // functions changed alongside its own `#[cfg(test)] mod tests` in the
+    // same diff (this crate's own `rinkaku-tui/src/app.rs` hit this in a
+    // live dogfood run). `build_tree` must keep both pieces of information
+    // on the one `TreeNode` rather than panicking or silently dropping
+    // either half.
+    #[test]
+    fn should_keep_real_symbols_when_file_is_also_in_tests() {
         let report = Report {
             origin: rinkaku_core::render::ReportOrigin::Diff,
             files: vec![FileReport {
@@ -1326,11 +1380,15 @@ mod tests {
             }],
             tests: vec![TestFileSummary {
                 path: "lib.rs".to_string(),
-                symbol_count: 1,
+                symbol_count: 3,
             }],
             ..empty_report()
         };
 
-        build_tree(&report);
+        let tree = build_tree(&report);
+
+        assert_eq!(1, tree.roots[0].children.len());
+        assert_eq!(Some(3), tree.roots[0].test_symbol_count);
+        assert_eq!(None, tree.roots[0].skip_reason);
     }
 }
