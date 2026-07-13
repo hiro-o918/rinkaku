@@ -169,14 +169,17 @@ fn should_chain_three_directories_in_dependency_order() {
     assert_eq!(2, ranks["store"].rank);
 }
 
-// Uses `symbol` to document that `rank_directories` only reads
-// `report.graph`, not `report.files`, even though a realistic `Report`
-// always carries matching `files` alongside its `graph` — this pins
-// that `rank_directories`' contract is graph-only, matching its own doc
-// comment.
+// Uses `symbol` (non-test) to document that `rank_directories` produces
+// the same ranking whether or not `report.files` carries a matching,
+// non-test entry for a graph node — `files` is only ever consulted to
+// find *test*-flagged symbols to exclude (ADR 0035), never to influence
+// the ranking of an ordinary, non-test node. A `files` entry for a node
+// that is not test code is therefore a no-op input as far as
+// `rank_directories` is concerned, matching its pre-ADR-0035 contract of
+// ranking from `report.graph` alone in that case.
 
 #[test]
-fn should_ignore_files_field_and_rank_from_graph_alone() {
+fn should_rank_the_same_whether_or_not_files_has_a_matching_non_test_entry() {
     let mut report = report_with_graph(vec![node("api/a.rs::a", "api/a.rs", "a")], vec![]);
     report.files = vec![FileReport {
         path: "api/a.rs".to_string(),
@@ -187,4 +190,138 @@ fn should_ignore_files_field_and_rank_from_graph_alone() {
 
     assert_eq!(1, ranks.len());
     assert_eq!(0, ranks["api"].rank);
+}
+
+// The following tests pin ADR 0035's rank-exclusion behavior: a node or
+// edge whose owning symbol is test code (`ExtractedSymbol::is_test`,
+// looked up via `report.files` by matching `graph::Node::id` against
+// `ExtractedSymbol::id` — the two are the same stable id after
+// `graph::stamp_ids` runs, per `graph.rs`'s own doc comment) is dropped
+// from the condensation before Tarjan/Kahn ever see it, so it cannot
+// affect any *production* directory's rank.
+
+#[test]
+fn should_omit_directory_whose_only_graph_presence_is_a_test_symbol() {
+    let report = report_with_graph_and_files(
+        vec![node(
+            "api/handler_test.rs::test_it",
+            "api/handler_test.rs",
+            "test_it",
+        )],
+        vec![],
+        vec![FileReport {
+            path: "api/handler_test.rs".to_string(),
+            symbols: vec![test_symbol("api/handler_test.rs::test_it", "test_it")],
+        }],
+    );
+
+    let ranks = rank_directories(&report);
+
+    assert_eq!(HashMap::new(), ranks);
+}
+
+#[test]
+fn should_not_let_inbound_test_edge_affect_production_directory_rank() {
+    // A test in `api/` references a production symbol in `store/`. Under
+    // the pre-ADR-0035 behavior this edge would give `store` an inbound
+    // reference from `api`, making `api` (in-degree 0) rank before
+    // `store` (in-degree 1) even though no *production* code in `api`
+    // depends on anything — purely a test-authored dependency. After
+    // exclusion, the test node/edge are dropped entirely, `store` has no
+    // remaining inbound edges either, and each directory ranks
+    // independently at rank 0 (no relative order asserted between them,
+    // since with the test edge gone there is nothing left to order them
+    // by).
+    let report = report_with_graph_and_files(
+        vec![
+            node(
+                "api/handler_test.rs::test_it",
+                "api/handler_test.rs",
+                "test_it",
+            ),
+            node("store/db.rs::save", "store/db.rs", "save"),
+        ],
+        vec![Edge {
+            from: "api/handler_test.rs::test_it".to_string(),
+            to: "store/db.rs::save".to_string(),
+            is_cycle: false,
+        }],
+        vec![
+            FileReport {
+                path: "api/handler_test.rs".to_string(),
+                symbols: vec![test_symbol("api/handler_test.rs::test_it", "test_it")],
+            },
+            FileReport {
+                path: "store/db.rs".to_string(),
+                symbols: vec![symbol("store/db.rs::save", "save")],
+            },
+        ],
+    );
+
+    let ranks = rank_directories(&report);
+
+    let expected = {
+        let mut m = HashMap::new();
+        m.insert(
+            "store".to_string(),
+            DirRank {
+                rank: 0,
+                in_cycle: false,
+            },
+        );
+        m
+    };
+    assert_eq!(expected, ranks);
+}
+
+#[test]
+fn should_rank_production_directory_by_production_edges_alone_when_mixed_with_test_edges() {
+    // `service/` has a real production dependency on `store/`, plus a
+    // test-authored edge from `api/`'s test file into `service/`. The
+    // production ranking (`api` semantics aside — `api` here has no
+    // production node at all) must come out identical to the
+    // test-free case: `service` before `store`.
+    let report = report_with_graph_and_files(
+        vec![
+            node(
+                "api/handler_test.rs::test_it",
+                "api/handler_test.rs",
+                "test_it",
+            ),
+            node("service/s.rs::s", "service/s.rs", "s"),
+            node("store/db.rs::save", "store/db.rs", "save"),
+        ],
+        vec![
+            Edge {
+                from: "api/handler_test.rs::test_it".to_string(),
+                to: "service/s.rs::s".to_string(),
+                is_cycle: false,
+            },
+            Edge {
+                from: "service/s.rs::s".to_string(),
+                to: "store/db.rs::save".to_string(),
+                is_cycle: false,
+            },
+        ],
+        vec![
+            FileReport {
+                path: "api/handler_test.rs".to_string(),
+                symbols: vec![test_symbol("api/handler_test.rs::test_it", "test_it")],
+            },
+            FileReport {
+                path: "service/s.rs".to_string(),
+                symbols: vec![symbol("service/s.rs::s", "s")],
+            },
+            FileReport {
+                path: "store/db.rs".to_string(),
+                symbols: vec![symbol("store/db.rs::save", "save")],
+            },
+        ],
+    );
+
+    let ranks = rank_directories(&report);
+
+    assert_eq!(2, ranks.len());
+    assert_eq!(0, ranks["service"].rank);
+    assert_eq!(1, ranks["store"].rank);
 }

@@ -66,6 +66,33 @@ pub(super) fn report_with_graph(nodes: Vec<Node>, edges: Vec<Edge>) -> Report {
     }
 }
 
+/// Same as [`report_with_graph`], plus `files`: needed by tests that pin
+/// [`crate::order::DirCondensation::build`]'s test-node/edge exclusion
+/// (ADR 0035), which reads `report.files[..].symbols[..].is_test` to
+/// decide which `graph.nodes`/`graph.edges` to drop before ranking —
+/// unlike every other `rank_directories`/`cycle_partners`/`cycle_edges`
+/// concern, which is graph-only (see
+/// `rank_directories.rs`'s `should_ignore_files_field_and_rank_from_graph_alone`).
+pub(super) fn report_with_graph_and_files(
+    nodes: Vec<Node>,
+    edges: Vec<Edge>,
+    files: Vec<FileReport>,
+) -> Report {
+    Report {
+        files,
+        ..report_with_graph(nodes, edges)
+    }
+}
+
+/// Same as [`symbol`], but marked as test code (`is_test: true`) — for
+/// pinning ADR 0035's rank-exclusion behavior, which keys off this flag.
+pub(super) fn test_symbol(id: &str, name: &str) -> ExtractedSymbol {
+    ExtractedSymbol {
+        is_test: true,
+        ..symbol(id, name)
+    }
+}
+
 pub(super) fn dir_node(path: &str, children: Vec<crate::tree::TreeNode>) -> crate::tree::TreeNode {
     crate::tree::TreeNode {
         kind: crate::tree::NodeKind::Dir,

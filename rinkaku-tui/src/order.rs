@@ -67,18 +67,30 @@ struct DirCondensation<'a> {
 }
 
 impl<'a> DirCondensation<'a> {
-    /// Builds the condensation from `report.graph`: remaps every
-    /// [`rinkaku_core::graph::Edge`] from its endpoints' node ids to the
-    /// parent directory of each endpoint's file path (the empty string for
-    /// a root-level file, e.g. `"lib.rs"` condenses to `""`), dropping any
-    /// edge whose two endpoints condense to the *same* directory — it says
-    /// nothing about inter-directory dependency, only intra-directory
-    /// structure (a directory doesn't depend on itself).
+    /// Builds the condensation from `report.graph`, first dropping every
+    /// node/edge whose id names a test symbol (ADR 0035): a test-only
+    /// directory (e.g. `tests/`, or a whole test file) then has no
+    /// [`DirRank`] entry at all — same as today's existing "no graph
+    /// presence" case (a directory whose only content is removed
+    /// symbols) — and an edge from/to a test symbol cannot pull a
+    /// *production* directory's rank around merely because a test
+    /// happens to reference it. See [`test_node_ids`] for how test ids
+    /// are found.
+    ///
+    /// Remaining nodes/edges are remapped from their endpoints' node ids
+    /// to the parent directory of each endpoint's file path (the empty
+    /// string for a root-level file, e.g. `"lib.rs"` condenses to `""`),
+    /// dropping any edge whose two endpoints condense to the *same*
+    /// directory — it says nothing about inter-directory dependency, only
+    /// intra-directory structure (a directory doesn't depend on itself).
     fn build(report: &'a Report) -> Self {
+        let test_ids = test_node_ids(report);
+
         let dir_of_node: HashMap<&str, &str> = report
             .graph
             .nodes
             .iter()
+            .filter(|node| !test_ids.contains(node.id.as_str()))
             .map(|node| (node.id.as_str(), parent_dir(&node.path)))
             .collect();
 
@@ -94,6 +106,9 @@ impl<'a> DirCondensation<'a> {
 
         let mut adjacency: Vec<HashSet<usize>> = vec![HashSet::new(); dirs.len()];
         for edge in &report.graph.edges {
+            if test_ids.contains(edge.from.as_str()) || test_ids.contains(edge.to.as_str()) {
+                continue;
+            }
             let (Some(&from_dir), Some(&to_dir)) = (
                 dir_of_node.get(edge.from.as_str()),
                 dir_of_node.get(edge.to.as_str()),
@@ -126,6 +141,32 @@ impl<'a> DirCondensation<'a> {
             scc_of,
         }
     }
+}
+
+/// Every `id` in `report.files`/`report.removed` whose owning symbol is
+/// test code (ADR 0035): `ExtractedSymbol::is_test` for a present symbol
+/// (`report.files`), or every id in `report.removed` — a removed symbol
+/// carries no `is_test` flag of its own (see `RemovedSymbol`'s shape),
+/// but it also never appears in `report.graph.nodes` in the first place
+/// (`tree.rs`'s own doc comment: a removed symbol is never a graph
+/// node), so `report.removed` contributes nothing here in practice
+/// either way — included only so a future change that *did* start giving
+/// removed symbols graph ids would not silently need to revisit this.
+///
+/// Relies on `graph::stamp_ids` having already run before `Report` is
+/// built (`pipeline::analyze_diff`/`analyze_repo`'s own doc comments):
+/// `ExtractedSymbol::id` and `graph::Node::id` are the *same* stable
+/// string by the time a `Report` exists, so matching on `id` here needs
+/// no re-derivation of `graph::collect_nodes`'s own id-uniqueness
+/// algorithm.
+fn test_node_ids(report: &Report) -> HashSet<&str> {
+    report
+        .files
+        .iter()
+        .flat_map(|file| &file.symbols)
+        .filter(|symbol| symbol.is_test)
+        .map(|symbol| symbol.id.as_str())
+        .collect()
 }
 
 /// Computes each directory's [`DirRank`] from `report.graph`'s edges,
