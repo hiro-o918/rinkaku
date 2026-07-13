@@ -181,7 +181,9 @@ fn should_append_a_trailing_tests_section_for_a_whole_test_file_by_all_symbols_b
 #[test]
 fn should_keep_a_mixed_file_in_the_production_tree_and_omit_the_tests_section() {
     // A mixed file (real symbol + test symbol in the same file) is never
-    // moved — see this file's header comment.
+    // moved — see this file's header comment. Its test symbol nests under
+    // a synthetic `TestGroup` child (visual-encoding prototype) rather
+    // than sitting flat alongside `real_fn`.
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
         files: vec![FileReport {
@@ -214,13 +216,20 @@ fn should_keep_a_mixed_file_in_the_production_tree_and_omit_the_tests_section() 
                 children: vec![
                     symbol_leaf("src/mixed.rs", "real_fn"),
                     TreeNode {
-                        kind: NodeKind::Symbol(SymbolRef {
-                            is_test: true,
-                            ..symbol_ref("src/mixed.rs::test_it", "test_it")
-                        }),
-                        path: "src/mixed.rs".to_string(),
+                        kind: NodeKind::TestGroup { count: 1 },
+                        path: "src/mixed.rs::tests".to_string(),
                         badges: one_symbol_badges(),
-                        children: vec![],
+                        children: vec![TreeNode {
+                            kind: NodeKind::Symbol(SymbolRef {
+                                is_test: true,
+                                ..symbol_ref("src/mixed.rs::test_it", "test_it")
+                            }),
+                            path: "src/mixed.rs".to_string(),
+                            badges: one_symbol_badges(),
+                            children: vec![],
+                            skip_reason: None,
+                            test_symbol_count: None,
+                        }],
                         skip_reason: None,
                         test_symbol_count: None,
                     },

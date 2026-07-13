@@ -53,6 +53,7 @@ pub fn entry_row_line(
         NodeKind::Dir => {
             let in_cycle = ranks.get(&row.node.path).is_some_and(|rank| rank.in_cycle);
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
+            push_risk_marker_span(&mut spans, is_high_risk(&row.node.badges));
             spans.push(Span::styled(
                 label.to_string(),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -84,6 +85,13 @@ pub fn entry_row_line(
             spans.push(Span::raw(" "));
             push_badge_spans(&mut spans, &row.node.badges, BadgeContext::Dir);
         }
+        NodeKind::TestGroup { count } => {
+            spans.push(Span::raw(format!("{} ", expand_marker(row))));
+            spans.push(Span::styled(
+                format!("{count} {}", if *count == 1 { "test" } else { "tests" }),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
         NodeKind::File => {
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
             // The `[test] (N symbols)` badge is placed *before* the file
@@ -97,6 +105,7 @@ pub fn entry_row_line(
                 spans.push(test_badge_span(count));
                 spans.push(Span::raw(" "));
             }
+            push_risk_marker_span(&mut spans, is_high_risk(&row.node.badges));
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
             spans.push(Span::raw(" "));
             push_badge_spans(&mut spans, &row.node.badges, BadgeContext::File);
@@ -115,17 +124,14 @@ pub fn entry_row_line(
             spans.push(symbol_marker_span(symbol_ref));
             spans.push(Span::raw(" "));
             spans.push(Span::raw(format!("{} ", kind_abbrev(symbol_ref.kind))));
+            push_risk_marker_span(
+                &mut spans,
+                is_high_risk_symbol(symbol_ref, &row.node.badges),
+            );
             spans.push(Span::styled(
                 symbol_ref.name.clone(),
                 symbol_name_style(symbol_ref),
             ));
-            // Only reachable for a mixed-file test symbol — a
-            // whole-test-file's symbols never reach the production tree
-            // (they get the file-level `[test]` badge above instead).
-            if symbol_ref.is_test {
-                spans.push(Span::raw(" "));
-                spans.push(symbol_test_badge_span());
-            }
         }
     }
 
@@ -385,16 +391,6 @@ fn test_badge_span(symbol_count: usize) -> Span<'static> {
     )
 }
 
-/// The `test` badge for a single test-symbol row (ADR 0035) — same
-/// magenta as [`test_badge_span`]'s whole-file `[test] (N symbols)`
-/// badge, so one color consistently means "this is test code" whether
-/// it labels a whole file or one symbol inside a mixed file. Unlike the
-/// file-level badge, there is no count to show here: a `Symbol` row is
-/// already one symbol, so the badge is just the bare word.
-fn symbol_test_badge_span() -> Span<'static> {
-    Span::styled("test", Style::default().fg(Color::Magenta))
-}
-
 /// A symbol row's leading classification marker: `+` added, `~`
 /// signature-changed, ` ` (blank, one column) body-only or unclassified,
 /// `x` removed. Kept as its own single-character span (rather than folded
@@ -416,14 +412,65 @@ fn symbol_marker_span(symbol_ref: &SymbolRef) -> Span<'static> {
 /// The symbol name's own style: a removed symbol renders dimmed +
 /// crossed-out (`Modifier::CROSSED_OUT`, widely supported by modern
 /// terminals) to read as "gone" at a glance, distinct from the marker span
-/// above which only flags *why*.
+/// above which only flags *why*. A body-only (or unclassified) symbol —
+/// [`symbol_marker_span`]'s blank marker — renders dimmed without the
+/// strikethrough: its signature didn't change, so it carries less review
+/// weight than an added/signature-changed/removed symbol, but it still
+/// exists (unlike a removed one). A test symbol (only reachable inside a
+/// mixed file's `TestGroup`, see `crate::tree::NodeKind::TestGroup`) is
+/// dimmed the same way — group membership already conveys "this is test
+/// code", so the name itself only needs to read as lower review priority,
+/// not carry its own badge anymore.
 fn symbol_name_style(symbol_ref: &SymbolRef) -> Style {
     if symbol_ref.removed {
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::CROSSED_OUT)
+    } else if symbol_ref.is_test
+        || matches!(
+            symbol_ref.classification,
+            Some(Classification::BodyOnly) | None
+        )
+    {
+        Style::default().fg(Color::DarkGray)
     } else {
         Style::default()
+    }
+}
+
+/// Whether a `Dir`/`File` row's aggregated badges warrant the `!` risk
+/// co-occurrence marker (visual-encoding prototype): a contract change
+/// (signature change or removal) sitting on top of at least one high-fan-in
+/// symbol in the same subtree — the combination that makes a change both
+/// hard to miss (contract change) and wide-reaching (fan-in), which neither
+/// count alone conveys.
+fn is_high_risk(badges: &Badges) -> bool {
+    badges.contract_changes > 0 && badges.fan_in >= rinkaku_core::graph::HIGH_FAN_IN_THRESHOLD
+}
+
+/// The symbol-row equivalent of [`is_high_risk`]: a signature-changed
+/// symbol whose own fan-in (already test-referrer-excluded, see
+/// `rinkaku_core::graph::compute_fan_ins`) clears the high-fan-in
+/// threshold. Unlike `Dir`/`File`'s aggregated `Badges::fan_in` (a sum
+/// across every high-fan-in symbol in the subtree), a symbol's own badge
+/// only ever holds *its own* fan-in (`crate::tree::symbol_badges`), so the
+/// same threshold comparison is meaningful without aggregation.
+fn is_high_risk_symbol(symbol_ref: &SymbolRef, badges: &Badges) -> bool {
+    symbol_ref.classification == Some(Classification::SignatureChanged)
+        && badges.fan_in >= rinkaku_core::graph::HIGH_FAN_IN_THRESHOLD
+}
+
+/// Appends the `!` risk marker span (bold red) followed by a space, or
+/// nothing at all when `is_risky` is `false` — callers push this right
+/// after the expand marker and before the label so a non-risky row's
+/// layout is untouched (no reserved gutter column).
+fn push_risk_marker_span(spans: &mut Vec<Span<'static>>, is_risky: bool) {
+    if is_risky {
+        spans.push(Span::styled(
+            "!",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
     }
 }
 

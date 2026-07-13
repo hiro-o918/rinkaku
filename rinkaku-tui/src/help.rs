@@ -196,7 +196,15 @@ const GLOSSARY: &[GlossaryEntry] = &[
     },
     GlossaryEntry {
         term: "chg: / api: / fan-in:",
-        explanation: "Tree row badges: changed symbols, contract changes (signature-changed or deleted, shown in yellow), and fan-in (symbols referenced by 2+ other changed symbols, shown as the fan-in badge's count)",
+        explanation: "Tree row badges: changed symbols, contract changes (signature-changed or deleted, shown in yellow), and fan-in (symbols referenced by 2+ other changed production symbols — tests exercising a symbol don't count toward its fan-in)",
+    },
+    GlossaryEntry {
+        term: "!",
+        explanation: "Risk marker: this row has both a contract change and a high-fan-in symbol in the same subtree — a change that is both hard to miss and wide-reaching",
+    },
+    GlossaryEntry {
+        term: "N tests",
+        explanation: "A collapsed group of a file's test symbols — expand it to see them individually, dimmed to show they carry less review weight than production code",
     },
 ];
 
@@ -293,6 +301,18 @@ mod tests {
             .collect();
 
         assert!(terms.contains(&"chg: / api: / fan-in:"));
+    }
+
+    #[test]
+    fn should_include_a_glossary_entry_for_the_risk_marker_and_test_group() {
+        let terms: Vec<&str> = HELP_CONTENT
+            .glossary
+            .iter()
+            .map(|entry| entry.term)
+            .collect();
+
+        assert!(terms.contains(&"!"));
+        assert!(terms.contains(&"N tests"));
     }
 
     #[test]

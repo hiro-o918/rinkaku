@@ -324,11 +324,11 @@ pub struct App {
 impl App {
     /// Builds the initial application state from `report`: the directory
     /// tree, its topological ranks, and a fresh [`Nav`] with everything
-    /// expanded and the cursor on the first row (`Nav::new`'s own doc
-    /// comment). Starts on [`Screen::Entry`] in [`OrderMode::Topological`]
-    /// (ADR 0016 decision 4's default), ordered immediately so the first
-    /// frame already reflects it rather than showing source order for one
-    /// tick.
+    /// expanded except `TestGroup` rows (`Nav::new_collapsing_test_groups`'s
+    /// own doc comment) and the cursor on the first row. Starts on
+    /// [`Screen::Entry`] in [`OrderMode::Topological`] (ADR 0016 decision
+    /// 4's default), ordered immediately so the first frame already
+    /// reflects it rather than showing source order for one tick.
     pub fn new(report: &Report) -> Self {
         let mut tree = build_tree(report);
         let ranks = rank_directories(report);
@@ -336,8 +336,8 @@ impl App {
         crate::order::order_tree(&mut tree, &ranks, order_mode);
 
         Self {
+            nav: Nav::new_collapsing_test_groups(&tree),
             tree,
-            nav: Nav::new(),
             ranks,
             order_mode,
             screen: Screen::Entry,
@@ -496,8 +496,9 @@ impl App {
             // so `build_dir_detail`'s cycle/fan-in lookups would find
             // nothing — falls back to the generic placeholder, same as a
             // removed symbol. Its children still get full detail once the
-            // cursor moves onto them.
-            NodeKind::Section(_) => None,
+            // cursor moves onto them. A test group's synthetic path is the
+            // same story.
+            NodeKind::Section(_) | NodeKind::TestGroup { .. } => None,
         }
     }
 
@@ -531,8 +532,9 @@ impl App {
                 path: row.node.path.clone(),
             }),
             // A section spans multiple files, same reasoning as `Dir`
-            // above — no single diff to show (ADR 0035 Phase B).
-            NodeKind::Dir | NodeKind::Section(_) => None,
+            // above — no single diff to show (ADR 0035 Phase B). A test
+            // group's synthetic path is likewise not a real file path.
+            NodeKind::Dir | NodeKind::Section(_) | NodeKind::TestGroup { .. } => None,
         }
     }
 
@@ -607,8 +609,11 @@ impl App {
             // A section's synthetic path is not a real file-tree prefix,
             // so `build_blast_radius_view` would find nothing and report
             // `Empty` — misleading for "not applicable to this row kind",
-            // so it's grouped with `Symbol` instead.
-            NodeKind::Symbol(_) | NodeKind::Section(_) => BlastRadiusSelection::NotApplicable,
+            // so it's grouped with `Symbol` instead. A test group's
+            // synthetic path has the same problem.
+            NodeKind::Symbol(_) | NodeKind::Section(_) | NodeKind::TestGroup { .. } => {
+                BlastRadiusSelection::NotApplicable
+            }
             NodeKind::Dir | NodeKind::File => {
                 match crate::blast_radius::build_blast_radius_view(report, &row.node.path) {
                     Some(view) => BlastRadiusSelection::View(view),
