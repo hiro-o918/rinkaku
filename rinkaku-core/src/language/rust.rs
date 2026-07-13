@@ -84,13 +84,16 @@ impl LanguageSupport for RustSupport {
         REFERENCE_QUERY
     }
 
-    /// Rust's `tests/` directory convention: integration test crates
-    /// (`tests/*.rs`, each compiled as its own binary by `cargo test`).
-    /// Unit tests (`#[cfg(test)] mod tests { ... }`) live colocated with
-    /// production code instead, so they are not caught by path alone — see
-    /// `is_test_definition`.
+    /// Covers Rust's `tests/` integration-test convention and ADR 0028
+    /// split test files (`#[cfg(test)] #[path = "foo_tests/mod.rs"] mod
+    /// tests;`): the split file carries no `#[cfg(test)]` wrapper, so its
+    /// path is the only classification signal. Inline `#[cfg(test)] mod
+    /// tests` blocks are handled by `is_test_definition` instead.
     fn is_test_path(&self, path: &str) -> bool {
-        path.split('/').any(|segment| segment == "tests")
+        path.split('/').any(|segment| {
+            let stem = segment.strip_suffix(".rs").unwrap_or(segment);
+            stem == "tests" || stem.ends_with("_tests")
+        })
     }
 
     /// Whether `node` (a captured `@definition` node) is a Rust unit test:
@@ -349,6 +352,24 @@ mod tests {
     #[case::should_return_false_when_path_is_ordinary_module("src/lib.rs", false)]
     #[case::should_return_false_when_filename_merely_contains_test_substring(
         "src/contest.rs",
+        false
+    )]
+    #[case::should_return_true_when_path_has_underscore_tests_directory_segment(
+        "rinkaku-tui/src/nav_tests/mod.rs",
+        true
+    )]
+    #[case::should_return_true_when_underscore_tests_directory_is_deeply_nested(
+        "rinkaku-tui/src/tree/tree_tests/tests_section.rs",
+        true
+    )]
+    #[case::should_return_true_when_underscore_tests_is_the_file_stem("src/foo_tests.rs", true)]
+    #[case::should_return_true_when_tests_is_the_bare_file_stem("src/tests.rs", true)]
+    #[case::should_return_false_when_filename_merely_ends_in_tests_substring(
+        "src/latest_stats.rs",
+        false
+    )]
+    #[case::should_return_false_when_directory_merely_contains_tests_substring(
+        "src/contests/mod.rs",
         false
     )]
     fn is_test_path_cases(#[case] path: &str, #[case] expected: bool) {
