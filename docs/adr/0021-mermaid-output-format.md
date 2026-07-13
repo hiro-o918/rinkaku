@@ -141,6 +141,6 @@ unchanged.
   cannot be pivoted back to symbol level from this format alone; a
   reader who wants that detail follows the Markdown/TUI companion
   output the Action also posts (in a collapsed `<details>` section).
-- ADR 0035 amends this format to also render `report.removed` (base-side
+- ADR 0037 amends this format to also render `report.removed` (base-side
   symbols deleted entirely), which this ADR's initial version did not
   cover at all.

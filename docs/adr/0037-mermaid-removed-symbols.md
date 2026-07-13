@@ -1,4 +1,4 @@
-# 0035. Render removed symbols in `--format mermaid`
+# 0037. Render removed symbols in `--format mermaid`
 
 - Status: accepted
 - Date: 2026-07-13

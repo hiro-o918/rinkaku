@@ -6,7 +6,7 @@
 //! full signatures for unclassified symbols. `render_markdown`'s full
 //! report remains available as a separate action output for callers that
 //! want it; this format exists specifically to be cheap for an LLM review
-//! pass to read alongside the mermaid graph (ADR 0021/0035).
+//! pass to read alongside the mermaid graph (ADR 0021/0037).
 
 use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol};
 use crate::render::report::Report;
@@ -109,7 +109,7 @@ fn signature_changed_line(path: &str, symbol: &ExtractedSymbol) -> String {
 }
 
 /// Strikethrough, not a signature block: a removed symbol has no
-/// head-side signature left to show (see ADR 0035).
+/// head-side signature left to show (see ADR 0037).
 fn removed_line(removed: &RemovedSymbol) -> String {
     format!(
         "- ~~{}~~ — removed\n",

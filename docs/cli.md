@@ -105,7 +105,7 @@ into a GitHub PR comment or description where mermaid renders
 natively. This is the format the [GitHub Action](action.md) uses for
 the top of its sticky comment. Deleted symbols render as isolated,
 dashed `removed` nodes in the same graph
-([ADR 0035](adr/0035-mermaid-removed-symbols.md)).
+([ADR 0037](adr/0037-mermaid-removed-symbols.md)).
 
 ## `--format digest`
 

@@ -1,4 +1,4 @@
-//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0035).
+//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037).
 //!
 //! The `--format mermaid` output path: a human-oriented call/dependency
 //! graph aimed at GitHub's native mermaid rendering in PR comments/
@@ -6,7 +6,7 @@
 //! Falls back to a file-level aggregation when the symbol-level graph
 //! would exceed `MERMAID_NODE_BUDGET`, so the output stays legible instead
 //! of degrading into a hairball. `report.removed` (ADR 0014) renders as
-//! `removed`-classed nodes in the same graph — see ADR 0035 for why a
+//! `removed`-classed nodes in the same graph — see ADR 0037 for why a
 //! merged graph rather than a separate before/after diagram.
 
 use crate::extract::Classification;
@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 /// graph (ADR 0021) instead of one node per symbol. Chosen as a size a
 /// `flowchart` still renders legibly in a PR comment's viewport; see the
 /// ADR's Consequences for the judgment-call caveat. Measured against
-/// `graph.nodes.len() + removed.len()` (ADR 0035) so a bulk-deletion diff
+/// `graph.nodes.len() + removed.len()` (ADR 0037) so a bulk-deletion diff
 /// can't dodge the fallback merely because a deleted symbol has no
 /// head-side node.
 const MERMAID_NODE_BUDGET: usize = 30;
@@ -76,7 +76,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
     // `change_graph_summary`'s path tie-break) — this is what produces one
     // `subgraph` per file, in source order. Removed symbols join the same
     // grouping below so a removed-only file still gets a subgraph (ADR
-    // 0035).
+    // 0037).
     let mut path_order: Vec<&str> = Vec::new();
     let mut nodes_by_path: HashMap<&str, Vec<&Node>> = HashMap::new();
     for n in &report.graph.nodes {
@@ -176,7 +176,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
 /// output stays legible instead of degrading into a hairball. A leading
 /// `%% aggregated to file level` comment marks that this fallback fired.
 /// Also folds in `report.removed` so a removed-only file still gets a node
-/// (ADR 0035).
+/// (ADR 0037).
 fn render_mermaid_file_level(report: &Report) -> String {
     let mut out = String::new();
     out.push_str("flowchart LR\n");
@@ -231,7 +231,7 @@ fn render_mermaid_file_level(report: &Report) -> String {
         .collect();
 
     // File-level counterpart to `render_mermaid`'s per-node `removed` class
-    // (ADR 0035).
+    // (ADR 0037).
     let removed_only_paths: HashSet<&str> = report
         .removed
         .iter()
@@ -297,7 +297,7 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// top of its own fill, in addition to `changed`'s (SignatureChanged)
 /// styling, since `fan-in` styling takes precedence over `changed` for a
 /// node that qualifies as both (see `render_mermaid`'s class-assignment
-/// comment). `removed` (ADR 0035) is dashed rather than solid-bordered,
+/// comment). `removed` (ADR 0037) is dashed rather than solid-bordered,
 /// echoing the cycle-edge convention (`-.->`) for "no longer normal."
 const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",

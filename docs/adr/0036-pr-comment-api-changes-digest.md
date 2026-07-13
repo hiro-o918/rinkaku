@@ -22,7 +22,7 @@ When an LLM review tool reads the whole comment as context (as the
 dogfooding workflow's own review pass does, per this repository's
 `CLAUDE.md` "Reviewing changes" section), the full Markdown report
 inside the `<details>` duplicates most of what the mermaid graph (now
-also carrying `removed` nodes, ADR 0035) already conveys, at several
+also carrying `removed` nodes, ADR 0037) already conveys, at several
 times the token cost, without adding the one thing a `<details>`
 by nature discourages a skimming reader from opening anyway.
 
@@ -90,7 +90,7 @@ it (see Consequences).
     needing a second visual language.
   - `Removed`: `~~name (path)~~ — removed`, using Markdown
     strikethrough (renders natively on github.com) since there is no
-    signature left to show at all (same data gap ADR 0035 hit for the
+    signature left to show at all (same data gap ADR 0037 hit for the
     mermaid case) — the strikethrough itself communicates "gone"
     without more text. `path` here is `RemovedSymbol.path` directly
     (removed symbols aren't grouped under a `FileReport` the way
@@ -150,7 +150,7 @@ it (see Consequences).
   contract" without pulling in the full report.
 - **Embed added-symbol field/member details in the mermaid nodes
   themselves** (so the graph carries more than a bare name). Rejected
-  for the same reason ADR 0021 and ADR 0035 already reject signature
+  for the same reason ADR 0021 and ADR 0037 already reject signature
   text in node labels: it's noisy at the node level and risks pushing
   more graphs over `MERMAID_NODE_BUDGET`'s size (nodes stay countable,
   but a labeled node with embedded detail defeats the "glance at the
@@ -191,8 +191,8 @@ it (see Consequences).
   digest` flag, not a retrofit onto this one — kept out of scope until
   a concrete request shows up, per this repository's
   don't-introduce-shared-abstractions-speculatively convention.
-- **Inherits ADR 0035's whole-file-deletion gap**: `render_digest`
-  reads `report.removed`, the same source ADR 0035 documents as never
+- **Inherits ADR 0037's whole-file-deletion gap**: `render_digest`
+  reads `report.removed`, the same source ADR 0037 documents as never
   populated for a `ChangeKind::Deleted` file (pre-existing, ADR 0014 —
   [#115](https://github.com/hiro-o918/rinkaku/issues/115)). A PR that
   deletes a file outright produces no `~~name~~ — removed` line for
