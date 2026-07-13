@@ -7,9 +7,10 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Paragraph;
+use rinkaku_core::render::Report;
 
-pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
-    let text = status_line_text(app);
+pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
+    let text = status_line_text(app, report);
 
     let style = if app.status().is_some() {
         Style::default().fg(Color::Yellow)
@@ -42,7 +43,20 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
 /// itself — not just that *something* renders — is unit-testable, mirroring
 /// [`super::scroll::clamp_scroll`]/[`super::scroll::scroll_indicator`]'s own precedent in this module for
 /// layout-adjacent pure logic.
-pub(crate) fn status_line_text(app: &App) -> String {
+///
+/// The `warn:N split:M file-size` suffix (ADR 0028) is appended to the
+/// help segment whenever `report.file_size_warnings` is non-empty, so the
+/// aggregate counts are visible from any pane without a dedicated screen.
+/// The severity split (`warn:N` for `FileSizeSeverity::Warn`, `split:M`
+/// for `FileSizeSeverity::Split`) preserves the "how many yellow" /
+/// "how many red" distinction the Tree pane badge already surfaces; a
+/// half with a zero count is dropped so a small warnings vec never
+/// gains a stray `split:0`. Text labels (no emoji glyphs) — terminal
+/// emoji rendering width is inconsistent enough that a status-line
+/// glyph can push the help hints past the frame edge. The whole suffix
+/// is dropped when the vec is empty (mirrors ADR 0013's "Hotspots is
+/// skipped when empty" rule).
+pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
     let help = match app.screen() {
         Screen::Entry => {
             let order = match app.order_mode() {
@@ -67,10 +81,42 @@ pub(crate) fn status_line_text(app: &App) -> String {
         }
     };
 
+    let help = match file_size_warning_suffix(report) {
+        Some(suffix) => format!("{help}  |  {suffix}"),
+        None => help,
+    };
+
     match app.status() {
         Some(status) => format!("{status}  |  {help}"),
         None => help,
     }
+}
+
+/// Builds the trailing `warn:N split:M file-size` suffix for the status
+/// line (ADR 0028) — `Some(text)` when at least one severity has a
+/// nonzero count, `None` when the report has no warnings (matching the
+/// "skipped when empty" rule at the caller).
+fn file_size_warning_suffix(report: &Report) -> Option<String> {
+    use rinkaku_core::file_size::FileSizeSeverity;
+    let mut warn_count = 0usize;
+    let mut split_count = 0usize;
+    for warning in &report.file_size_warnings {
+        match warning.severity {
+            FileSizeSeverity::Warn => warn_count += 1,
+            FileSizeSeverity::Split => split_count += 1,
+        }
+    }
+    if warn_count == 0 && split_count == 0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if warn_count > 0 {
+        parts.push(format!("warn:{warn_count}"));
+    }
+    if split_count > 0 {
+        parts.push(format!("split:{split_count}"));
+    }
+    Some(format!("{} file-size", parts.join(" ")))
 }
 
 #[cfg(test)]
@@ -117,6 +163,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -146,6 +193,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -187,7 +235,7 @@ mod tests {
         let report = empty_report_for_status_line();
         let app = App::new(&report);
 
-        let actual = status_line_text(&app);
+        let actual = status_line_text(&app, &report);
 
         assert_eq!(
             "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
@@ -201,7 +249,7 @@ mod tests {
         let report = empty_report_for_status_line();
         let app = App::new(&report).handle_key(crate::app::InputKey::ToggleOrder);
 
-        let actual = status_line_text(&app);
+        let actual = status_line_text(&app, &report);
 
         assert!(actual.starts_with("order: alphabetical  |  "));
     }
@@ -215,7 +263,7 @@ mod tests {
         // `]/[: next/prev hunk` hint actually applies to.
         let app = App::new(&report).handle_key(crate::app::InputKey::Open);
 
-        let actual = status_line_text(&app);
+        let actual = status_line_text(&app, &report);
 
         assert_eq!(
             "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
@@ -236,7 +284,7 @@ mod tests {
             .handle_key(crate::app::InputKey::ToggleDiff);
         assert_eq!(crate::app::RightPane::Detail, app.right_pane());
 
-        let actual = status_line_text(&app);
+        let actual = status_line_text(&app, &report);
 
         assert_eq!(
             "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
@@ -258,7 +306,7 @@ mod tests {
             .handle_key(crate::app::InputKey::Down)
             .handle_key(crate::app::InputKey::Source); // opens Screen::Source
 
-        let actual = status_line_text(&app);
+        let actual = status_line_text(&app, &report);
 
         assert_eq!(
             "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  esc/q: back".to_string(),
@@ -272,8 +320,80 @@ mod tests {
         let mut app = App::new(&report);
         app.set_status("a source read failed");
 
-        let actual = status_line_text(&app);
+        let actual = status_line_text(&app, &report);
 
         assert!(actual.starts_with("a source read failed  |  order: topological  |  "));
+    }
+
+    // ADR 0028: a report carrying at least one file-size warning must
+    // append the per-severity aggregate to the help text so the reviewer
+    // sees the totals from any pane. The suffix uses text labels
+    // (`warn:N split:M file-size`) rather than emoji glyphs — terminal
+    // emoji rendering width is inconsistent, and the color coding lives
+    // on the Tree pane badge anyway.
+    #[test]
+    fn should_append_file_size_warning_count_to_status_line_when_report_has_warnings() {
+        let report = Report {
+            file_size_warnings: vec![
+                rinkaku_core::file_size::FileSizeWarning {
+                    path: "src/big.rs".to_string(),
+                    line_count: 1734,
+                    severity: rinkaku_core::file_size::FileSizeSeverity::Warn,
+                },
+                rinkaku_core::file_size::FileSizeWarning {
+                    path: "src/huge.rs".to_string(),
+                    line_count: 4837,
+                    severity: rinkaku_core::file_size::FileSizeSeverity::Split,
+                },
+            ],
+            ..empty_report_for_status_line()
+        };
+        let app = App::new(&report);
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            actual.ends_with("  |  warn:1 split:1 file-size"),
+            "expected trailing per-severity warnings segment, got: {actual}",
+        );
+    }
+
+    #[test]
+    fn should_drop_zero_severity_half_from_status_line_when_only_one_severity_present() {
+        // ADR 0028: with only Warn (no Split) files, the suffix reads
+        // `warn:N file-size` — the split:0 half is dropped, mirroring
+        // how the Tree pane badge omits a zero half.
+        let report = Report {
+            file_size_warnings: vec![rinkaku_core::file_size::FileSizeWarning {
+                path: "src/big.rs".to_string(),
+                line_count: 1734,
+                severity: rinkaku_core::file_size::FileSizeSeverity::Warn,
+            }],
+            ..empty_report_for_status_line()
+        };
+        let app = App::new(&report);
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            actual.ends_with("  |  warn:1 file-size"),
+            "expected trailing warn-only segment, got: {actual}",
+        );
+    }
+
+    // Companion to the test above: an empty `file_size_warnings` vec
+    // leaves the help text untouched — mirrors ADR 0013's "Hotspots is
+    // skipped when empty" rule for the Markdown surface.
+    #[test]
+    fn should_not_append_when_report_has_no_warnings() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report);
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            !actual.contains("file-size warnings"),
+            "expected no warnings segment, got: {actual}",
+        );
     }
 }

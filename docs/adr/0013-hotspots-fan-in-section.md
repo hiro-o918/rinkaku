@@ -103,3 +103,23 @@ already there.
   concepts (file-level symbol density vs. per-symbol fan-in) living in
   the same output, so naming or wording may need a follow-up pass if
   this reads as ambiguous in practice.
+
+## Amendment (2026-07-13, feat/file-size-warnings)
+
+The tree pane badge originally rendered `~N` for changed symbols and `^N`
+for fan-in aggregate (ADR 0015/0016). During work on ADR 0028 (file-size
+warnings, which added `lines:N` and `warn:N split:M` badges alongside),
+the terse single-glyph prefixes proved illegible to first-time
+reviewers: `~` and `^` conveyed no semantic hint by themselves.
+
+Change: the tree pane badges are relabeled as `chg:N` (changed symbols)
+and `ref:N` (references, i.e. fan-in aggregate) — text prefixes matching
+the file-size badges' `lines:` / `warn:` / `split:` convention. Number
+coloring is unchanged; only the label prefix is replaced. `Badges`
+struct field names (`Badges.fan_in`, etc.) are left as-is — the change
+is purely presentational.
+
+This is a breaking change to the TUI's badge presentation, but has never
+shipped a release (per ADR 0015/0016), so no compatibility path is
+needed. Consumers of `Report` (Markdown / JSON / Mermaid) are
+untouched.

@@ -316,6 +316,7 @@ mod tests {
             graph,
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -551,6 +552,7 @@ flowchart LR
                 name: "shared".to_string(),
                 used_by: vec!["a".to_string(), "b".to_string()],
             }],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -603,6 +605,7 @@ flowchart LR
                 name: "new_helper".to_string(),
                 used_by: vec!["a".to_string(), "b".to_string()],
             }],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 

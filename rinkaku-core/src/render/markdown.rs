@@ -8,6 +8,9 @@
 //! each section shape.
 
 use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
+use crate::file_size::{
+    FileSizeSeverity, FileSizeWarning, SPLIT_LINE_THRESHOLD, WARN_LINE_THRESHOLD,
+};
 use crate::graph::{Hotspot, Node, NodeId, SymbolGraph};
 use crate::render::RenderError;
 use crate::render::report::{Report, ReportOrigin, SkipReason, SkippedFile, skip_reason_label};
@@ -98,6 +101,15 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
                     hotspot.used_by.len(),
                     hotspot.used_by.join(", ")
                 )?;
+            }
+            writeln!(out)?;
+        }
+
+        if !report.file_size_warnings.is_empty() {
+            writeln!(out, "## File size warnings")?;
+            writeln!(out)?;
+            for warning in &report.file_size_warnings {
+                writeln!(out, "- {}", file_size_warning_label(warning))?;
             }
             writeln!(out)?;
         }
@@ -516,6 +528,26 @@ fn hotspot_label(hotspot: &Hotspot, lookup: &SymbolLookup) -> String {
     }
 }
 
+/// Builds the "File size warnings" line label for a [`FileSizeWarning`]
+/// (ADR 0028): `⚠` for [`FileSizeSeverity::Warn`] / `🚨` for
+/// [`FileSizeSeverity::Split`], followed by the path (in `code span`), the
+/// line count, and a short explanation naming the threshold crossed. The
+/// threshold numbers are pulled from [`WARN_LINE_THRESHOLD`] and
+/// [`SPLIT_LINE_THRESHOLD`] rather than duplicated inline, so the Markdown
+/// text stays in sync with the file_size module's single source of truth.
+fn file_size_warning_label(warning: &FileSizeWarning) -> String {
+    match warning.severity {
+        FileSizeSeverity::Warn => format!(
+            "⚠ `{}` ({} lines) — over the {}-line watch threshold; consider splitting",
+            warning.path, warning.line_count, WARN_LINE_THRESHOLD,
+        ),
+        FileSizeSeverity::Split => format!(
+            "🚨 `{}` ({} lines) — over the {}-line split threshold",
+            warning.path, warning.line_count, SPLIT_LINE_THRESHOLD,
+        ),
+    }
+}
+
 /// Builds the "Removed symbols" line label for a [`RemovedSymbol`]:
 /// `{prefix} {name} ({path})`, the same form [`tree_label`] uses, minus the
 /// `:{start_line}` disambiguation suffix — `RemovedSymbol` carries no
@@ -766,6 +798,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -800,6 +833,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -846,6 +880,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -894,6 +929,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -928,6 +964,7 @@ fn foo()
                 symbol_count: 1,
             }],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -959,6 +996,7 @@ fn foo()
                 symbol_count: 3,
             }],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -999,6 +1037,7 @@ fn foo()
                 symbol_count: 2,
             }],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1052,6 +1091,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1086,6 +1126,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1120,6 +1161,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1173,6 +1215,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1223,6 +1266,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1260,6 +1304,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1305,6 +1350,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1370,6 +1416,7 @@ fn foo(a: i32) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1442,6 +1489,7 @@ fn foo(a: i32, b: i32)
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1525,6 +1573,7 @@ fn resolve_pr_base_sha() -> Result<String>
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1614,6 +1663,7 @@ fn c()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1683,6 +1733,7 @@ fn bar()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1794,6 +1845,7 @@ fn resolve_pr_base_sha()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -1908,6 +1960,7 @@ struct Config { path: String }
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2004,6 +2057,7 @@ type UpsertItemsResponse struct { Count int }
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2087,6 +2141,7 @@ struct Dup { b: i32 }
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2151,6 +2206,7 @@ fn bar()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2228,6 +2284,7 @@ struct Config { path: String }
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2309,6 +2366,7 @@ struct Inner { x: i32 }
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2366,6 +2424,7 @@ struct Node { next: Option<Box<Node>> }
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2419,6 +2478,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2480,6 +2540,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2537,6 +2598,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2596,6 +2658,7 @@ Depends on:
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2648,6 +2711,7 @@ fn example_macro() { let s = \"```rust\\nfn f() {}\\n```\"; }
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2700,6 +2764,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2740,6 +2805,7 @@ fn bar(&self) -> i32
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2789,6 +2855,7 @@ fn foo()
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2884,6 +2951,7 @@ fn foo()
                 name: "UpsertItemsRequest".to_string(),
                 used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
             }],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2955,6 +3023,7 @@ func HandleBar(req UpsertItemsRequest) error
                 name: "ghost".to_string(),
                 used_by: vec!["a".to_string(), "b".to_string()],
             }],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -2973,6 +3042,284 @@ func HandleBar(req UpsertItemsRequest) error
 "
         .to_string();
         let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_file_size_warnings_section_when_warnings_are_present() {
+        // Two warnings across both severities: the `Split` entry must come
+        // first (ADR 0028 orders `Split` before `Warn`), each glyph and the
+        // threshold-numbered explanation pinned exactly as the ADR spec
+        // shows.
+        let report = Report {
+            origin: ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    SymbolKind::Function,
+                    "fn foo()",
+                )],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            file_size_warnings: vec![
+                crate::file_size::FileSizeWarning {
+                    path: "b.rs".to_string(),
+                    line_count: 2500,
+                    severity: crate::file_size::FileSizeSeverity::Split,
+                },
+                crate::file_size::FileSizeWarning {
+                    path: "a.rs".to_string(),
+                    line_count: 1600,
+                    severity: crate::file_size::FileSizeSeverity::Warn,
+                },
+            ],
+            removed: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs)
+
+## File size warnings
+
+- 🚨 `b.rs` (2500 lines) — over the 2000-line split threshold
+- ⚠ `a.rs` (1600 lines) — over the 1500-line watch threshold; consider splitting
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_omit_file_size_warnings_section_when_report_has_no_warnings() {
+        // Empty `file_size_warnings` must drop the whole section — no bare
+        // "## File size warnings" heading with nothing under it.
+        let report = Report {
+            origin: ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    SymbolKind::Function,
+                    "fn foo()",
+                )],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            file_size_warnings: vec![],
+            removed: vec![],
+        };
+
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert!(!actual.contains("## File size warnings"));
+    }
+
+    #[test]
+    fn should_place_file_size_warnings_between_hotspots_and_definitions() {
+        // A report with both a hotspot and a file-size warning: the
+        // `## File size warnings` section must land after `## Hotspots` and
+        // before `## Definitions`, matching ADR 0028's placement decision.
+        let report = Report {
+            origin: ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "store/items.go".to_string(),
+                symbols: vec![
+                    symbol(
+                        "store/items.go::HandleFoo",
+                        "HandleFoo",
+                        SymbolKind::Function,
+                        "func HandleFoo(req UpsertItemsRequest) error",
+                    ),
+                    symbol(
+                        "store/items.go::HandleBar",
+                        "HandleBar",
+                        SymbolKind::Function,
+                        "func HandleBar(req UpsertItemsRequest) error",
+                    ),
+                    symbol(
+                        "store/items.go::UpsertItemsRequest",
+                        "UpsertItemsRequest",
+                        SymbolKind::Struct,
+                        "type UpsertItemsRequest struct { Items []Item }",
+                    ),
+                ],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("store/items.go::HandleFoo", "store/items.go", "HandleFoo"),
+                    node("store/items.go::HandleBar", "store/items.go", "HandleBar"),
+                    node(
+                        "store/items.go::UpsertItemsRequest",
+                        "store/items.go",
+                        "UpsertItemsRequest",
+                    ),
+                ],
+                edges: vec![
+                    Edge {
+                        from: "store/items.go::HandleFoo".to_string(),
+                        to: "store/items.go::UpsertItemsRequest".to_string(),
+                        is_cycle: false,
+                    },
+                    Edge {
+                        from: "store/items.go::HandleBar".to_string(),
+                        to: "store/items.go::UpsertItemsRequest".to_string(),
+                        is_cycle: false,
+                    },
+                ],
+                roots: vec![
+                    "store/items.go::HandleFoo".to_string(),
+                    "store/items.go::HandleBar".to_string(),
+                ],
+            },
+            tests: vec![],
+            hotspots: vec![Hotspot {
+                id: "store/items.go::UpsertItemsRequest".to_string(),
+                path: "store/items.go".to_string(),
+                name: "UpsertItemsRequest".to_string(),
+                used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
+            }],
+            file_size_warnings: vec![crate::file_size::FileSizeWarning {
+                path: "store/items.go".to_string(),
+                line_count: 2100,
+                severity: crate::file_size::FileSizeSeverity::Split,
+            }],
+            removed: vec![],
+        };
+
+        let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn HandleFoo (store/items.go) — uses: UpsertItemsRequest
+- fn HandleBar (store/items.go) — uses: UpsertItemsRequest
+
+## Hotspots
+
+- struct UpsertItemsRequest (store/items.go) — used by 2: HandleBar, HandleFoo
+
+## File size warnings
+
+- 🚨 `store/items.go` (2100 lines) — over the 2000-line split threshold
+
+## Definitions
+
+### fn HandleFoo (store/items.go)
+
+```
+func HandleFoo(req UpsertItemsRequest) error
+```
+
+### struct UpsertItemsRequest (store/items.go)
+
+```
+type UpsertItemsRequest struct { Items []Item }
+```
+
+### fn HandleBar (store/items.go)
+
+```
+func HandleBar(req UpsertItemsRequest) error
+```
+
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    // ADR 0028: JSON output must always carry `file_size_warnings` as a
+    // top-level field, present-and-empty when nothing warns (mirroring how
+    // `hotspots` is always present). This pins that shape end-to-end via
+    // the same `render` entry point the Markdown tests above use.
+    #[test]
+    fn should_include_file_size_warnings_in_json_output() {
+        let report = Report {
+            origin: ReportOrigin::Diff,
+            files: vec![],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            file_size_warnings: vec![
+                crate::file_size::FileSizeWarning {
+                    path: "b.rs".to_string(),
+                    line_count: 2500,
+                    severity: crate::file_size::FileSizeSeverity::Split,
+                },
+                crate::file_size::FileSizeWarning {
+                    path: "a.rs".to_string(),
+                    line_count: 1600,
+                    severity: crate::file_size::FileSizeSeverity::Warn,
+                },
+            ],
+            removed: vec![],
+        };
+
+        let expected = "\
+{
+  \"files\": [],
+  \"skipped\": [],
+  \"graph\": {
+    \"nodes\": [],
+    \"edges\": [],
+    \"roots\": []
+  },
+  \"tests\": [],
+  \"hotspots\": [],
+  \"file_size_warnings\": [
+    {
+      \"path\": \"b.rs\",
+      \"line_count\": 2500,
+      \"severity\": \"split\"
+    },
+    {
+      \"path\": \"a.rs\",
+      \"line_count\": 1600,
+      \"severity\": \"warn\"
+    }
+  ],
+  \"removed\": []
+}"
+        .to_string();
+        let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
 
         assert_eq!(expected, actual);
     }
@@ -3003,6 +3350,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -3038,6 +3386,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -3091,6 +3440,7 @@ func HandleBar(req UpsertItemsRequest) error
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -3140,6 +3490,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -3189,6 +3540,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -3245,6 +3597,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -3299,6 +3652,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -3353,6 +3707,7 @@ fn foo()
                     name: "shared".to_string(),
                     used_by: vec!["caller_one".to_string(), "caller_two".to_string()],
                 }],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -3399,6 +3754,7 @@ fn foo()
                     symbol_count: 1,
                 }],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![RemovedSymbol {
                     name: "old_helper".to_string(),
                     kind: SymbolKind::Function,
@@ -3457,6 +3813,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![RemovedSymbol {
                     name: "old_helper".to_string(),
                     kind: SymbolKind::Function,
@@ -3497,6 +3854,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![
                     RemovedSymbol {
                         name: "save".to_string(),
@@ -3557,6 +3915,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -3598,6 +3957,7 @@ fn foo()
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 

@@ -280,6 +280,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -393,6 +394,7 @@ index e69de29..4b825dc 100644
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
             files: vec![],
         };
@@ -456,6 +458,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
             files: vec![],
         };
@@ -522,6 +525,7 @@ index e69de29..4b825dc 100644
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let app = App::new(&report);
@@ -584,6 +588,7 @@ index e69de29..4b825dc 100644
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol.
@@ -816,6 +821,7 @@ index e69de29..4b825dc 100644
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // ADR 0020 defaults the right pane to Diff already, so no
