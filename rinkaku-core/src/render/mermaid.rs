@@ -1,4 +1,4 @@
-//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037).
+//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037, ADR 0039).
 //!
 //! The `--format mermaid` output path: a human-oriented call/dependency
 //! graph aimed at GitHub's native mermaid rendering in PR comments/
@@ -7,7 +7,10 @@
 //! would exceed `MERMAID_NODE_BUDGET`, so the output stays legible instead
 //! of degrading into a hairball. `report.removed` (ADR 0014) renders as
 //! `removed`-classed nodes in the same graph — see ADR 0037 for why a
-//! merged graph rather than a separate before/after diagram.
+//! merged graph rather than a separate before/after diagram. A trailing
+//! `Legend` subgraph (ADR 0039) renders one real, styled node per class so
+//! the diagram explains its own color/style vocabulary without a separate
+//! prose legend.
 
 use crate::extract::Classification;
 use crate::graph::Node;
@@ -50,11 +53,20 @@ pub(super) fn render_mermaid(report: &Report) -> String {
 
     if report.graph.nodes.is_empty() && report.removed.is_empty() {
         out.push_str("%% no symbols\n");
+        write_legend_and_class_defs(&mut out);
         return out;
     }
 
     let lookup = SymbolLookup::build(&report.files);
-    let fan_in_ids: HashSet<&str> = report.fan_ins.iter().map(|h| h.id.as_str()).collect();
+    // Fan-in count (`used_by.len()`) per node id, used both for class
+    // selection and the `(in:N)` label suffix (ADR 0039) — a node present
+    // here is by definition a high-fan-in symbol (`compute_fan_ins` only
+    // includes nodes with fan-in >= 2, per ADR 0013).
+    let fan_in_counts: HashMap<&str, usize> = report
+        .fan_ins
+        .iter()
+        .map(|h| (h.id.as_str(), h.used_by.len()))
+        .collect();
 
     // Sequential, mermaid-safe node ids (`n0`, `n1`, ...), mapped from the
     // original `NodeId` — a `NodeId` like `src/lib.rs::foo@10` contains
@@ -105,7 +117,11 @@ pub(super) fn render_mermaid(report: &Report) -> String {
         if let Some(nodes) = nodes_by_path.get(path) {
             for n in nodes {
                 let safe_id = &safe_id_by_node[n.id.as_str()];
-                writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(&n.name))
+                let label = match fan_in_counts.get(n.id.as_str()) {
+                    Some(count) => format!("{} (in:{count})", n.name),
+                    None => n.name.clone(),
+                };
+                writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(&label))
                     .expect("writing to a String cannot fail");
             }
         }
@@ -135,7 +151,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
     // `changed`) and a high-fan-in symbol gets `fan-in` styling, checked
     // first — see this function's doc comment / ADR 0021's Decision on
     // precedence. This overlap is real, not just theoretical: fan-in
-    // (`fan_in_ids`, from `compute_fan_ins`) counts referrers among
+    // (`fan_in_counts`, from `compute_fan_ins`) counts referrers among
     // *changed* symbols regardless of the target's own classification, so
     // a brand-new (`Added`) symbol referenced by two or more other
     // changed symbols is a perfectly ordinary high-fan-in symbol too —
@@ -147,7 +163,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
     // companion Markdown/JSON output's Definitions section either way.
     for n in &report.graph.nodes {
         let safe_id = &safe_id_by_node[n.id.as_str()];
-        let class = if fan_in_ids.contains(n.id.as_str()) {
+        let class = if fan_in_counts.contains_key(n.id.as_str()) {
             Some("fan-in")
         } else {
             match lookup.get(&n.id).and_then(|(_, s)| s.classification) {
@@ -166,7 +182,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
         writeln!(out, "  class {safe_id} removed").expect("writing to a String cannot fail");
     }
 
-    out.push_str(MERMAID_CLASS_DEFS);
+    write_legend_and_class_defs(&mut out);
     out
 }
 
@@ -285,7 +301,7 @@ fn render_mermaid_file_level(report: &Report) -> String {
         }
     }
 
-    out.push_str(MERMAID_CLASS_DEFS);
+    write_legend_and_class_defs(&mut out);
     out
 }
 
@@ -293,18 +309,53 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// [`render_mermaid_file_level`]. Colors are chosen with explicit
 /// dark-on-light text (rather than relying on mermaid's theme defaults) so
 /// they stay legible under both GitHub's light and dark PR-comment themes
-/// (ADR 0021) — `stroke-width` on `fan-in` gives it a heavier outline on
-/// top of its own fill, in addition to `changed`'s (SignatureChanged)
-/// styling, since `fan-in` styling takes precedence over `changed` for a
-/// node that qualifies as both (see `render_mermaid`'s class-assignment
-/// comment). `removed` (ADR 0037) is dashed rather than solid-bordered,
-/// echoing the cycle-edge convention (`-.->`) for "no longer normal."
+/// (ADR 0021). `removed` (ADR 0037, recolored red by ADR 0039) is dashed
+/// rather than solid-bordered, echoing the cycle-edge convention (`-.->`)
+/// for "no longer normal." `fan-in` (ADR 0039) uses a violet/blue stroke
+/// distinct from `removed`'s red, plus its own heavier `stroke-width`, so
+/// the two classes cannot be confused for each other at a glance — a node
+/// that is both `changed`/`added` and high-fan-in still gets `fan-in`
+/// styling (see `render_mermaid`'s class-assignment comment for the
+/// precedence rule), and its label additionally carries a `(in:N)` suffix
+/// so the signal survives even without color (ADR 0039).
 const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
     "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
-    "  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;\n",
-    "  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;\n",
+    "  classDef fan-in fill:#e9d8fd,stroke:#553c9a,stroke-width:3px,color:#1a202c;\n",
+    "  classDef removed fill:#fed7d7,stroke:#9b2c2c,color:#1a202c,stroke-dasharray: 5 5;\n",
 );
+
+/// Fixed-id, real-node `subgraph Legend` block appended by
+/// [`write_legend_and_class_defs`] (ADR 0039): one node per class, styled
+/// with the same `classDef` a real graph node of that class would use.
+/// Always emitted — including the empty-graph and file-level-fallback
+/// paths — so a reader never sees the diagram without its own key, and a
+/// future `classDef` change re-styles the legend automatically instead of
+/// risking drift against a hand-written prose description (the problem ADR
+/// 0039 replaces). Node ids are fixed rather than drawn from the `n{i}`
+/// sequence since the legend has no corresponding `report.graph.nodes`
+/// entry to derive one from.
+const MERMAID_LEGEND: &str = concat!(
+    "  subgraph Legend\n",
+    "    legend_added[\"added\"]\n",
+    "    legend_changed[\"API changed\"]\n",
+    "    legend_removed[\"removed\"]\n",
+    "    legend_fan_in[\"fan-in (in:N)\"]\n",
+    "  end\n",
+    "  class legend_added added\n",
+    "  class legend_changed changed\n",
+    "  class legend_removed removed\n",
+    "  class legend_fan_in fan-in\n",
+);
+
+/// Appends [`MERMAID_LEGEND`] followed by [`MERMAID_CLASS_DEFS`] — every
+/// [`render_mermaid`]/[`render_mermaid_file_level`] return path ends with
+/// this same pair, in this order, so the legend's `class` assignments
+/// above always have a matching `classDef` below them.
+fn write_legend_and_class_defs(out: &mut String) {
+    out.push_str(MERMAID_LEGEND);
+    out.push_str(MERMAID_CLASS_DEFS);
+}
 
 /// Escapes text embedded in a quoted mermaid node/subgraph label
 /// (`id["text"]`): `&` first (so the escape sequences below aren't
@@ -325,685 +376,5 @@ fn escape_mermaid_label(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::diff::LineRange;
-    use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
-    use crate::graph::{Edge, FanIn, Node, SymbolGraph};
-    use crate::render::report::{FileReport, ReportOrigin};
-    use crate::render::{OutputFormat, render};
-    use pretty_assertions::assert_eq;
-
-    /// Same shape as the sibling `tests::symbol` helper, plus a
-    /// `classification` parameter these tests need to exercise
-    /// added/changed/fan-in styling.
-    fn symbol(
-        id: &str,
-        name: &str,
-        kind: SymbolKind,
-        classification: Option<Classification>,
-    ) -> ExtractedSymbol {
-        ExtractedSymbol {
-            id: id.to_string(),
-            name: name.to_string(),
-            kind,
-            signature: format!("{name}()"),
-            range: LineRange { start: 1, end: 1 },
-            container: None,
-            referenced_names: vec![],
-            dependencies: vec![],
-            omitted_dependency_matches: 0,
-            is_test: false,
-            classification,
-            previous_signature: None,
-        }
-    }
-
-    fn node(id: &str, path: &str, name: &str) -> Node {
-        Node {
-            id: id.to_string(),
-            path: path.to_string(),
-            name: name.to_string(),
-        }
-    }
-
-    fn empty_report(graph: SymbolGraph, files: Vec<FileReport>) -> Report {
-        Report {
-            origin: ReportOrigin::Diff,
-            files,
-            skipped: vec![],
-            graph,
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        }
-    }
-
-    fn removed_symbol(name: &str, path: &str) -> RemovedSymbol {
-        RemovedSymbol {
-            name: name.to_string(),
-            kind: SymbolKind::Function,
-            path: path.to_string(),
-            signature: format!("{name}()"),
-        }
-    }
-
-    #[test]
-    fn should_render_minimal_valid_document_when_graph_is_empty() {
-        let report = empty_report(
-            SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            vec![],
-        );
-
-        let expected = "\
-flowchart LR
-%% no symbols
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_render_subgraph_per_file_with_class_assignments_when_report_has_classified_symbols() {
-        // "foo" is Added, "bar" is SignatureChanged, both in src/lib.rs;
-        // "baz" (unclassified/body-only) lives in src/other.rs and depends
-        // on "foo" — pins subgraph grouping, node labels (name only, no
-        // kind prefix), the edge, and the `added`/`changed` class
-        // assignments together in one full-string comparison.
-        let report = empty_report(
-            SymbolGraph {
-                nodes: vec![
-                    node("src/lib.rs::foo", "src/lib.rs", "foo"),
-                    node("src/lib.rs::bar", "src/lib.rs", "bar"),
-                    node("src/other.rs::baz", "src/other.rs", "baz"),
-                ],
-                edges: vec![Edge {
-                    from: "src/other.rs::baz".to_string(),
-                    to: "src/lib.rs::foo".to_string(),
-                    is_cycle: false,
-                }],
-                roots: vec![
-                    "src/lib.rs::foo".to_string(),
-                    "src/lib.rs::bar".to_string(),
-                    "src/other.rs::baz".to_string(),
-                ],
-            },
-            vec![
-                FileReport {
-                    path: "src/lib.rs".to_string(),
-                    symbols: vec![
-                        symbol(
-                            "src/lib.rs::foo",
-                            "foo",
-                            SymbolKind::Function,
-                            Some(Classification::Added),
-                        ),
-                        symbol(
-                            "src/lib.rs::bar",
-                            "bar",
-                            SymbolKind::Function,
-                            Some(Classification::SignatureChanged),
-                        ),
-                    ],
-                },
-                FileReport {
-                    path: "src/other.rs".to_string(),
-                    symbols: vec![symbol(
-                        "src/other.rs::baz",
-                        "baz",
-                        SymbolKind::Function,
-                        Some(Classification::BodyOnly),
-                    )],
-                },
-            ],
-        );
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/lib.rs\"]
-    n0[\"foo\"]
-    n1[\"bar\"]
-  end
-  subgraph sub1[\"src/other.rs\"]
-    n2[\"baz\"]
-  end
-  n2 --> n0
-  class n0 added
-  class n1 changed
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_render_dashed_arrow_when_edge_is_a_cycle() {
-        let report = empty_report(
-            SymbolGraph {
-                nodes: vec![
-                    node("src/lib.rs::foo", "src/lib.rs", "foo"),
-                    node("src/lib.rs::bar", "src/lib.rs", "bar"),
-                ],
-                edges: vec![
-                    Edge {
-                        from: "src/lib.rs::foo".to_string(),
-                        to: "src/lib.rs::bar".to_string(),
-                        is_cycle: false,
-                    },
-                    Edge {
-                        from: "src/lib.rs::bar".to_string(),
-                        to: "src/lib.rs::foo".to_string(),
-                        is_cycle: true,
-                    },
-                ],
-                roots: vec!["src/lib.rs::foo".to_string()],
-            },
-            vec![],
-        );
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/lib.rs\"]
-    n0[\"foo\"]
-    n1[\"bar\"]
-  end
-  n0 --> n1
-  n1 -.-> n0
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_escape_label_when_name_contains_quote_and_bracket() {
-        let report = empty_report(
-            SymbolGraph {
-                nodes: vec![node(
-                    "src/lib.rs::weird",
-                    "src/lib.rs",
-                    "weird\"name[with]brackets",
-                )],
-                edges: vec![],
-                roots: vec!["src/lib.rs::weird".to_string()],
-            },
-            vec![],
-        );
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/lib.rs\"]
-    n0[\"weird&quot;name&#91;with&#93;brackets\"]
-  end
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_replace_embedded_newline_with_space_when_path_contains_one() {
-        // A path/name is not expected to legitimately contain a newline,
-        // but nothing upstream guarantees it can't — an unescaped `\n`
-        // inside a quoted mermaid label would break the single-line label
-        // syntax, so it is normalized to a space defensively rather than
-        // left as-is or escaped like the other special characters.
-        let report = empty_report(
-            SymbolGraph {
-                nodes: vec![node("src/lib.rs::weird", "src/li\nb.rs", "weird")],
-                edges: vec![],
-                roots: vec!["src/lib.rs::weird".to_string()],
-            },
-            vec![],
-        );
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/li b.rs\"]
-    n0[\"weird\"]
-  end
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_prefer_fan_in_class_over_changed_class_when_node_is_both() {
-        // "shared" is SignatureChanged *and* referenced by two other
-        // symbols (fan-in >= 2, so it's also a high-fan-in symbol) —
-        // precedence goes to `fan-in` styling per this module's documented
-        // choice.
-        let report = Report {
-            origin: ReportOrigin::Diff,
-            files: vec![FileReport {
-                path: "src/lib.rs".to_string(),
-                symbols: vec![symbol(
-                    "src/lib.rs::shared",
-                    "shared",
-                    SymbolKind::Function,
-                    Some(Classification::SignatureChanged),
-                )],
-            }],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes: vec![node("src/lib.rs::shared", "src/lib.rs", "shared")],
-                edges: vec![],
-                roots: vec!["src/lib.rs::shared".to_string()],
-            },
-            tests: vec![],
-            fan_ins: vec![FanIn {
-                id: "src/lib.rs::shared".to_string(),
-                path: "src/lib.rs".to_string(),
-                name: "shared".to_string(),
-                used_by: vec!["a".to_string(), "b".to_string()],
-            }],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        };
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/lib.rs\"]
-    n0[\"shared\"]
-  end
-  class n0 fan-in
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_prefer_fan_in_class_over_added_class_when_a_new_symbol_has_high_fan_in() {
-        // Fan-in (`compute_fan_ins`) counts referrers among *changed*
-        // symbols regardless of the referenced node's own classification —
-        // a brand-new ("added") symbol referenced by two or more other
-        // changed symbols in the same diff (e.g. a new helper two other
-        // new/changed call sites both use) is a perfectly ordinary
-        // high-fan-in symbol too, not a case that can't occur. Same
-        // precedence as the SignatureChanged sibling test above: `fan-in`
-        // wins.
-        let report = Report {
-            origin: ReportOrigin::Diff,
-            files: vec![FileReport {
-                path: "src/lib.rs".to_string(),
-                symbols: vec![symbol(
-                    "src/lib.rs::new_helper",
-                    "new_helper",
-                    SymbolKind::Function,
-                    Some(Classification::Added),
-                )],
-            }],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes: vec![node("src/lib.rs::new_helper", "src/lib.rs", "new_helper")],
-                edges: vec![],
-                roots: vec!["src/lib.rs::new_helper".to_string()],
-            },
-            tests: vec![],
-            fan_ins: vec![FanIn {
-                id: "src/lib.rs::new_helper".to_string(),
-                path: "src/lib.rs".to_string(),
-                name: "new_helper".to_string(),
-                used_by: vec!["a".to_string(), "b".to_string()],
-            }],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        };
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/lib.rs\"]
-    n0[\"new_helper\"]
-  end
-  class n0 fan-in
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_stay_symbol_level_when_node_count_equals_budget_exactly() {
-        // Exactly MERMAID_NODE_BUDGET (30) nodes: the fallback condition
-        // is `> budget`, so this boundary case must still render one
-        // subgraph/node per symbol, not the file-level aggregation — pins
-        // the off-by-one the sibling over-budget test alone can't rule
-        // out (that test only proves 31 falls back, not that 30 doesn't).
-        let mut nodes = Vec::new();
-        let mut symbols = Vec::new();
-        for i in 0..30 {
-            let id = format!("src/lib.rs::s{i}");
-            nodes.push(node(&id, "src/lib.rs", &format!("s{i}")));
-            symbols.push(symbol(&id, &format!("s{i}"), SymbolKind::Function, None));
-        }
-        assert_eq!(30, nodes.len());
-
-        let report = empty_report(
-            SymbolGraph {
-                nodes,
-                edges: vec![],
-                roots: vec!["src/lib.rs::s0".to_string()],
-            },
-            vec![FileReport {
-                path: "src/lib.rs".to_string(),
-                symbols,
-            }],
-        );
-
-        let mut expected = String::from("flowchart LR\n  subgraph sub0[\"src/lib.rs\"]\n");
-        for i in 0..30 {
-            expected.push_str(&format!("    n{i}[\"s{i}\"]\n"));
-        }
-        expected.push_str("  end\n");
-        expected.push_str(MERMAID_CLASS_DEFS);
-
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_fall_back_to_file_level_graph_when_node_count_exceeds_budget() {
-        // 31 nodes (one over MERMAID_NODE_BUDGET's 30) across two files:
-        // 16 in src/a.rs (one classified Added, so a.rs is "changed"), 15
-        // in src/b.rs. Two edges cross from a.rs to b.rs (aggregated with
-        // count 2); one edge stays within a.rs (dropped: an intra-file
-        // edge carries no file-level signal).
-        let mut nodes = Vec::new();
-        let mut files_a_symbols = Vec::new();
-        for i in 0..16 {
-            let id = format!("src/a.rs::a{i}");
-            nodes.push(node(&id, "src/a.rs", &format!("a{i}")));
-            let classification = if i == 0 {
-                Some(Classification::Added)
-            } else {
-                None
-            };
-            files_a_symbols.push(symbol(
-                &id,
-                &format!("a{i}"),
-                SymbolKind::Function,
-                classification,
-            ));
-        }
-        let mut files_b_symbols = Vec::new();
-        for i in 0..15 {
-            let id = format!("src/b.rs::b{i}");
-            nodes.push(node(&id, "src/b.rs", &format!("b{i}")));
-            files_b_symbols.push(symbol(&id, &format!("b{i}"), SymbolKind::Function, None));
-        }
-        assert_eq!(31, nodes.len());
-
-        let edges = vec![
-            Edge {
-                from: "src/a.rs::a0".to_string(),
-                to: "src/b.rs::b0".to_string(),
-                is_cycle: false,
-            },
-            Edge {
-                from: "src/a.rs::a1".to_string(),
-                to: "src/b.rs::b1".to_string(),
-                is_cycle: false,
-            },
-            Edge {
-                from: "src/a.rs::a0".to_string(),
-                to: "src/a.rs::a1".to_string(),
-                is_cycle: false,
-            },
-        ];
-        let roots = vec!["src/a.rs::a0".to_string(), "src/b.rs::b0".to_string()];
-
-        let report = empty_report(
-            SymbolGraph {
-                nodes,
-                edges,
-                roots,
-            },
-            vec![
-                FileReport {
-                    path: "src/a.rs".to_string(),
-                    symbols: files_a_symbols,
-                },
-                FileReport {
-                    path: "src/b.rs".to_string(),
-                    symbols: files_b_symbols,
-                },
-            ],
-        );
-
-        let expected = "\
-flowchart LR
-%% aggregated to file level (31 symbols > budget)
-  n0[\"src/a.rs\"]
-  n1[\"src/b.rs\"]
-  n0 -- 2 --> n1
-  class n0 changed
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_render_removed_node_in_its_file_subgraph_when_report_has_removed_symbols() {
-        // "foo" survives alongside the removed "old_helper" so the
-        // expected output can pin ordering: removed after surviving.
-        let mut report = empty_report(
-            SymbolGraph {
-                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
-                edges: vec![],
-                roots: vec!["src/lib.rs::foo".to_string()],
-            },
-            vec![FileReport {
-                path: "src/lib.rs".to_string(),
-                symbols: vec![symbol(
-                    "src/lib.rs::foo",
-                    "foo",
-                    SymbolKind::Function,
-                    Some(Classification::Added),
-                )],
-            }],
-        );
-        report.removed = vec![removed_symbol("old_helper", "src/lib.rs")];
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/lib.rs\"]
-    n0[\"foo\"]
-    n1[\"old_helper\"]
-  end
-  class n0 added
-  class n1 removed
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_render_removed_only_file_subgraph_when_file_has_no_surviving_symbols() {
-        let mut report = empty_report(
-            SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            vec![],
-        );
-        report.removed = vec![removed_symbol("old_only", "src/gone.rs")];
-
-        let expected = "\
-flowchart LR
-  subgraph sub0[\"src/gone.rs\"]
-    n0[\"old_only\"]
-  end
-  class n0 removed
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn should_count_removed_symbols_toward_node_budget_when_deciding_fallback() {
-        // 30 head-side nodes alone stay symbol-level (see the sibling
-        // boundary test above); the 1 removed symbol added here must be
-        // what tips this report over budget.
-        let mut nodes = Vec::new();
-        let mut symbols = Vec::new();
-        for i in 0..30 {
-            let id = format!("src/lib.rs::s{i}");
-            nodes.push(node(&id, "src/lib.rs", &format!("s{i}")));
-            symbols.push(symbol(&id, &format!("s{i}"), SymbolKind::Function, None));
-        }
-        let mut report = empty_report(
-            SymbolGraph {
-                nodes,
-                edges: vec![],
-                roots: vec!["src/lib.rs::s0".to_string()],
-            },
-            vec![FileReport {
-                path: "src/lib.rs".to_string(),
-                symbols,
-            }],
-        );
-        report.removed = vec![removed_symbol("old_helper", "src/lib.rs")];
-
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert!(
-            actual.contains("%% aggregated to file level (31 symbols > budget)"),
-            "expected file-level fallback comment in output, got:\n{actual}"
-        );
-    }
-
-    #[test]
-    fn should_render_removed_only_file_as_removed_node_when_fallback_fires() {
-        // src/a.rs (16 nodes) + src/b.rs (15) already exceed the budget;
-        // src/gone.rs adds only a removed symbol, no head-side node.
-        let mut nodes = Vec::new();
-        let mut files_a_symbols = Vec::new();
-        for i in 0..16 {
-            let id = format!("src/a.rs::a{i}");
-            nodes.push(node(&id, "src/a.rs", &format!("a{i}")));
-            let classification = if i == 0 {
-                Some(Classification::Added)
-            } else {
-                None
-            };
-            files_a_symbols.push(symbol(
-                &id,
-                &format!("a{i}"),
-                SymbolKind::Function,
-                classification,
-            ));
-        }
-        let mut files_b_symbols = Vec::new();
-        for i in 0..15 {
-            let id = format!("src/b.rs::b{i}");
-            nodes.push(node(&id, "src/b.rs", &format!("b{i}")));
-            files_b_symbols.push(symbol(&id, &format!("b{i}"), SymbolKind::Function, None));
-        }
-        assert_eq!(31, nodes.len());
-
-        let report = Report {
-            origin: ReportOrigin::Diff,
-            files: vec![
-                FileReport {
-                    path: "src/a.rs".to_string(),
-                    symbols: files_a_symbols,
-                },
-                FileReport {
-                    path: "src/b.rs".to_string(),
-                    symbols: files_b_symbols,
-                },
-            ],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes,
-                edges: vec![],
-                roots: vec!["src/a.rs::a0".to_string(), "src/b.rs::b0".to_string()],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![removed_symbol("old_only", "src/gone.rs")],
-        };
-
-        let expected = "\
-flowchart LR
-%% aggregated to file level (32 symbols > budget)
-  n0[\"src/a.rs\"]
-  n1[\"src/b.rs\"]
-  n2[\"src/gone.rs\"]
-  class n0 changed
-  class n2 removed
-  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
-  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
-  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
-"
-        .to_string();
-        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
-
-        assert_eq!(expected, actual);
-    }
-}
+#[path = "mermaid_tests/mod.rs"]
+mod tests;
