@@ -200,7 +200,16 @@ runs:
         markdown_only=false
 
         if echo "${help_output}" | grep -q -- 'mermaid'; then
-          if run_rinkaku --format mermaid > "${mermaid_path}" 2>/dev/null; then
+          # The mermaid graph is for at-a-glance structure, where test-symbol
+          # nodes are noise; `--exclude-tests` is opt-in itself (ADR 0025),
+          # so guard it the same way as the mermaid/digest formats above —
+          # older binaries may support `--format mermaid` but predate
+          # `--exclude-tests`.
+          mermaid_args=(--format mermaid)
+          if echo "${help_output}" | grep -q -- 'exclude-tests'; then
+            mermaid_args+=(--exclude-tests)
+          fi
+          if run_rinkaku "${mermaid_args[@]}" > "${mermaid_path}" 2>/dev/null; then
             echo "mermaid-path=${mermaid_path}" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::rinkaku --format mermaid failed even though --help mentions --format; falling back to a Markdown-only report"
