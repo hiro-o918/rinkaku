@@ -2,7 +2,7 @@
 name = "rinkaku"
 # See rinkaku-core/Cargo.toml for why this is a literal version instead
 # of `version.workspace = true`.
-version = "0.5.0"
+version = "0.5.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -18,8 +18,8 @@ name = "rinkaku"
 path = "src/main.rs"
 
 [dependencies]
-rinkaku-core = { path = "../rinkaku-core", version = "0.2.0" }
-rinkaku-tui = { path = "../rinkaku-tui", version = "0.1.0" }
+rinkaku-core = { path = "../rinkaku-core", version = "0.2.1" }
+rinkaku-tui = { path = "../rinkaku-tui", version = "0.2.0" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
