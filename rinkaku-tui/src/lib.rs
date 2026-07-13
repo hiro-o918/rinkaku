@@ -191,7 +191,7 @@ fn run_app(
     // (ADR 0026) can size its step against the same viewport the reviewer
     // just saw — the very first keypress before any frame has drawn (a
     // near-impossible edge case, but guarded rather than defaulting to a
-    // zero step) falls back to [`DEFAULT_SOURCE_VIEWPORT_HEIGHT`].
+    // zero step) falls back to [`DEFAULT_SCROLL_VIEWPORT_HEIGHT`].
     let mut last_scroll_viewport_height: Option<usize> = None;
 
     loop {
@@ -270,7 +270,7 @@ fn run_app(
                     (app.screen(), source_content.as_ref())
                 {
                     let viewport_height =
-                        last_scroll_viewport_height.unwrap_or(DEFAULT_SOURCE_VIEWPORT_HEIGHT);
+                        last_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT);
                     let (start, _end) = source::visible_window(
                         highlighted.view.lines.len(),
                         highlighted.view.highlight_start,
@@ -292,7 +292,7 @@ fn run_app(
                 // lives here.
                 app = app.handle_key(input_key);
                 let viewport_height =
-                    last_scroll_viewport_height.unwrap_or(DEFAULT_SOURCE_VIEWPORT_HEIGHT);
+                    last_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT);
                 app = app.handle_scroll_key(input_key, viewport_height);
             } else {
                 // Every non-`Source` key's dispatch is pure (no IO), so it
@@ -362,7 +362,7 @@ fn run_app(
 /// 24-row terminal) rather than a 0-line no-op. Not user-visible past this
 /// one edge; the very next frame's `DrawOutcome::scroll_viewport_height`
 /// replaces it with the real inner-pane height.
-const DEFAULT_SOURCE_VIEWPORT_HEIGHT: usize = 24;
+const DEFAULT_SCROLL_VIEWPORT_HEIGHT: usize = 24;
 
 /// Whether `input_key` is one of ADR 0026's four scroll variants — the
 /// ones [`run_app`] routes through [`App::handle_scroll_key`] (which needs

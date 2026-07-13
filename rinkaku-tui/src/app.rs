@@ -1303,15 +1303,18 @@ impl App {
             // will no-op when Tree-focused, and having the gate live in
             // one place rather than duplicated here keeps the "which
             // focus/screen actually scrolls" answer discoverable in one
-            // spot. The blanket end-of-function scroll reset below still
-            // wipes `right_pane_scroll` for these variants, which is the
-            // correct behavior only for the Tree-focus no-op case;
-            // `handle_scroll_key` is called separately by `crate::run_app`
-            // after this method returns and sets the real value then.
+            // spot.
             //
-            // Also included in `preserve_scroll`'s exception list above
-            // for `Focus::Right`, so the blanket reset does not wipe the
-            // pane-scroll `handle_scroll_key` is about to set.
+            // On `Focus::Right`, the blanket end-of-function
+            // `right_pane_scroll = 0` reset is skipped via `preserve_scroll`'s
+            // exception list above, so `handle_scroll_key`'s subsequent write
+            // is not silently wiped. On `Focus::Tree`, that exception does
+            // *not* fire and the reset runs — which is fine because Tree
+            // focus never has a right-pane scroll to preserve in the first
+            // place (the reviewer is looking at the tree cursor, not a
+            // scrolled right pane), and `handle_scroll_key` also no-ops in
+            // that case, so this arm's blanket-reset behavior on Tree focus
+            // is a harmless zero-to-zero write rather than a data loss.
             (
                 Screen::Entry,
                 _,
