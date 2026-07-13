@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-# Composes rinkaku's mermaid + Markdown output into a single PR comment body
-# and posts it as a sticky comment (identified by MARKER below), updating an
-# existing one instead of piling up duplicates on every push. Falls back to
-# $GITHUB_STEP_SUMMARY when posting isn't possible at all (a fork PR's
-# `pull_request` token is read-only regardless of the workflow's
-# `permissions:` block).
+# Composes rinkaku's mermaid + API-changes-digest output into a single PR
+# comment body and posts it as a sticky comment (identified by MARKER
+# below), updating an existing one instead of piling up duplicates on
+# every push. Falls back to $GITHUB_STEP_SUMMARY when posting isn't
+# possible at all (a fork PR's `pull_request` token is read-only
+# regardless of the workflow's `permissions:` block).
+#
+# The comment's <details> section holds the digest (ADR 0036: added/
+# signature-changed/removed symbols only), not the full Markdown report —
+# the full report stays available as this action's `markdown-path`
+# output for callers that want it, it just no longer inflates the PR
+# comment itself.
 #
 # Pulled out of action.yaml's inline `run:` block so it has a path a human
 # (or this repository's own dogfooding workflow) can execute directly for
 # dynamic verification, rather than only ever running inside a GitHub Actions
 # composite step.
 #
-# Required environment:
-#   MARKDOWN_PATH  path to the generated Markdown report
-#
-# Optional environment:
-#   MERMAID_PATH   path to the generated mermaid report. Empty/unset when
-#                  the resolved rinkaku binary doesn't support
-#                  `--format mermaid` (action.yaml's bootstrap-safety
-#                  fallback) — the comment then omits the mermaid section
-#                  entirely instead of embedding an empty fence.
+# Optional environment (both PATH inputs below are optional in the same
+# sense MERMAID_PATH always was: empty/unset when the resolved rinkaku
+# binary doesn't support the corresponding `--format`, action.yaml's
+# bootstrap-safety fallback):
+#   MERMAID_PATH   path to the generated mermaid report. Omitting it
+#                  drops the mermaid section entirely instead of
+#                  embedding an empty fence.
+#   DIGEST_PATH    path to the generated API-changes digest (ADR 0036).
+#                  Omitting it drops the <details> section's content
+#                  down to a short "no digest available" note instead of
+#                  an empty block.
 #   REPO           "owner/repo", passed to `gh api`. Required unless
 #                  DRY_RUN=1.
 #   PR_NUMBER      pull request number to comment on. Required unless
@@ -62,10 +70,18 @@ MAX_BODY_LENGTH=65536
 # GitHub anyway (ADR 0021's node budget already keeps a healthy graph well
 # under this), so past this size the section is replaced with a short note
 # rather than spending the whole comment budget on an unrenderable-in-
-# practice diagram and leaving nothing for the Markdown details.
+# practice diagram and leaving nothing for the digest details.
 MAX_MERMAID_LENGTH=32768
 
-: "${MARKDOWN_PATH:?MARKDOWN_PATH is required}"
+# One line spelling out the mermaid `classDef` colors (ADR 0021/0035) in
+# English, since GitHub's rendered mermaid diagram carries no legend of
+# its own — composed here, not by `render_mermaid`/`render_digest`,
+# because it's prose about this comment's presentation, not data derived
+# from the `Report` (ADR 0036's Decision). No emoji/color swatches (this
+# repository avoids decorative glyphs in rendered output on principle,
+# per ADR 0028's terminal-rendering rationale) — plain text names of the
+# `classDef`s themselves.
+MERMAID_LEGEND="_Legend: green = added · orange = API changed · gray dashed = removed · red heavy border = fan-in_"
 
 # Truncates `text` to at most `budget` bytes, then backs off up to 3 more
 # bytes (bounded: the longest a single UTF-8 character's continuation-byte
@@ -85,12 +101,16 @@ truncate_utf8_safe() {
   printf '%s' "${truncated}"
 }
 
-markdown_content=$(cat "${MARKDOWN_PATH}")
-
-# `MERMAID_PATH` is empty (not just unset) on the markdown-only fallback
-# path (action.yaml's bootstrap-safety check) — `${MERMAID_PATH:-}` reads
-# as empty either way, so both "input never set" and "set to empty by the
-# caller" collapse to the same "omit the mermaid section" branch below.
+# `MERMAID_PATH`/`DIGEST_PATH` are empty (not just unset) on the
+# markdown-only fallback path (action.yaml's bootstrap-safety check) —
+# `${VAR:-}` reads as empty either way, so both "input never set" and
+# "set to empty by the caller" collapse to the same "omit this section"
+# branch below. The `-f` check additionally guards a path that is *set*
+# but does not exist — this script is documented as runnable standalone
+# for dynamic verification (see the top-of-file comment), so a caller
+# passing a typo'd or since-deleted path should degrade to "section
+# omitted" rather than have `cat` fail under `set -e` and kill the whole
+# run.
 #
 # `mermaid_oversized` is tracked separately from "no mermaid content at
 # all" so the oversized case renders its explanatory note as plain text
@@ -100,7 +120,7 @@ markdown_content=$(cat "${MARKDOWN_PATH}")
 # just fail to parse the note as a diagram anyway.
 mermaid_content=""
 mermaid_oversized=0
-if [ -n "${MERMAID_PATH:-}" ]; then
+if [ -n "${MERMAID_PATH:-}" ] && [ -f "${MERMAID_PATH}" ]; then
   mermaid_content=$(cat "${MERMAID_PATH}")
   if [ "${#mermaid_content}" -gt "${MAX_MERMAID_LENGTH}" ]; then
     mermaid_content="*(mermaid graph omitted: it would exceed ${MAX_MERMAID_LENGTH} bytes, past the point a diagram this size renders usefully on GitHub anyway)*"
@@ -112,20 +132,50 @@ mermaid_section=""
 if [ -n "${mermaid_content}" ] && [ "${mermaid_oversized}" -eq 1 ]; then
   mermaid_section="
 ${mermaid_content}
+
+${MERMAID_LEGEND}
 "
 elif [ -n "${mermaid_content}" ]; then
   mermaid_section="
 \`\`\`mermaid
 ${mermaid_content}
 \`\`\`
+
+${MERMAID_LEGEND}
 "
+fi
+
+# `render_digest` (ADR 0036) already returns an empty string when there is
+# no contract change to report — that's a legitimate "nothing to see
+# here" for a PR with no added/changed/removed symbols, distinct from
+# "no digest file at all" (the markdown-only bootstrap fallback, or a
+# path that was set but doesn't exist — same `-f` guard reasoning as
+# MERMAID_PATH above), which gets its own explanatory note instead of a
+# silently empty `<details>`.
+digest_path_readable=0
+if [ -n "${DIGEST_PATH:-}" ] && [ -f "${DIGEST_PATH}" ]; then
+  digest_path_readable=1
+fi
+
+digest_content=""
+if [ "${digest_path_readable}" -eq 1 ]; then
+  digest_content=$(cat "${DIGEST_PATH}")
+fi
+if [ -z "${digest_content}" ] && [ "${digest_path_readable}" -eq 1 ]; then
+  digest_content="_(no API-surface changes detected in this diff)_"
+elif [ -z "${digest_content}" ]; then
+  # Deliberately non-committal about *why* the digest is missing — this
+  # branch also fires when action.yaml's --format digest probe passed but
+  # the actual invocation failed (not just "binary predates the flag"),
+  # so naming one specific cause here would be misleading for the other.
+  digest_content="_(API-changes digest unavailable: older rinkaku binary or generation failed)_"
 fi
 
 body_prefix="${MARKER}
 ## rinkaku PR report
 ${mermaid_section}
 <details>
-<summary>Details (full signature outline)</summary>
+<summary>Details</summary>
 
 "
 
@@ -133,13 +183,16 @@ body_suffix="
 </details>
 "
 
-# Reserve space for everything except the Markdown details section itself,
-# then truncate that section to what's left — this is what keeps the
-# mermaid graph (the human-first part of the comment) intact even under the
-# size cap.
+# Reserve space for everything except the digest section itself, then
+# truncate that section to what's left — this is what keeps the mermaid
+# graph (the human-first part of the comment) intact even under the size
+# cap. A digest is bounded by the number of contract-changing symbols
+# rather than total diff size (ADR 0036), so this is expected to fire far
+# less often than it did for the old full-Markdown details, but the
+# safety net stays for a pathologically large rename-everything PR.
 truncation_note="
 
-*(details truncated: diff too large for a single PR comment)*"
+*(details truncated: too large for a single PR comment)*"
 reserved=$((${#body_prefix} + ${#body_suffix} + ${#truncation_note}))
 budget=$((MAX_BODY_LENGTH - reserved))
 
@@ -147,12 +200,12 @@ if [ "${budget}" -lt 0 ]; then
   budget=0
 fi
 
-if [ "${#markdown_content}" -gt "${budget}" ]; then
-  markdown_content=$(truncate_utf8_safe "${markdown_content}" "${budget}")
-  markdown_content="${markdown_content}${truncation_note}"
+if [ "${#digest_content}" -gt "${budget}" ]; then
+  digest_content=$(truncate_utf8_safe "${digest_content}" "${budget}")
+  digest_content="${digest_content}${truncation_note}"
 fi
 
-body="${body_prefix}${markdown_content}${body_suffix}"
+body="${body_prefix}${digest_content}${body_suffix}"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
   printf '%s' "${body}"

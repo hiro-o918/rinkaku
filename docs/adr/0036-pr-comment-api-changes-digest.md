@@ -1,0 +1,202 @@
+# 0036. Replace the PR comment's full-Markdown `<details>` with an API changes digest
+
+- Status: accepted
+- Date: 2026-07-13
+
+## Context
+
+`action.yaml`/`compose_and_post_comment.sh` currently compose the sticky
+PR comment as: the mermaid graph up front, then the **entire** Markdown
+report (every section `render_markdown` produces — Change graph,
+High fan-in symbols, Definitions with full signatures, Removed symbols,
+Tests, Other changed files, Skipped files) collapsed into a
+`<details>` block underneath.
+
+That full Markdown report is designed for a different consumer: ADR
+0015 built it for `gh pr diff | rinkaku` piped straight into an LLM
+review prompt, where every signature and dependency matters. Inside a
+GitHub PR *comment*, it plays a different role — it is scaffolding
+sitting between the mermaid graph (rendered natively, read at a glance)
+and whatever the reviewer or an LLM-assisted review pass reads next.
+When an LLM review tool reads the whole comment as context (as the
+dogfooding workflow's own review pass does, per this repository's
+`CLAUDE.md` "Reviewing changes" section), the full Markdown report
+inside the `<details>` duplicates most of what the mermaid graph (now
+also carrying `removed` nodes, ADR 0037) already conveys, at several
+times the token cost, without adding the one thing a `<details>`
+by nature discourages a skimming reader from opening anyway.
+
+The concrete question this PR resolves: what should live under the
+`<details>`, if not the full report? The answer graph attention should
+go to — per this repository's dogfooding practice — is the same signal
+ADR 0014 introduced classifications for in the first place: **did the
+public contract of any symbol change** (added, signature changed,
+removed)? Body-only changes and the full dependency tree are exactly
+the noise ADR 0021's mermaid design already excludes from the graph;
+they should not sneak back in via the comment's other half.
+
+## Decision
+
+Add a fourth output format, `OutputFormat::Digest` /
+`render_digest(&Report) -> String` (mirroring `render_mermaid`'s
+infallible signature — same reasoning: an owned `String` buffer being
+built and only ever handed back to the caller cannot error), exposed
+as `--format digest` (a fourth `clap::ValueEnum` value alongside
+`md`/`json`/`mermaid`, participating in the same `conflicts_with =
+"tui"` group). `compose_and_post_comment.sh`'s `<details>` now holds
+the digest instead of the full Markdown report; the full Markdown
+stays available as an action output for any caller that still wants
+it (see Consequences).
+
+- **Scope: contract changes only.** One line per `Added`,
+  `SignatureChanged`, or removed (`report.removed`) symbol; `BodyOnly`
+  and unclassified symbols are omitted entirely — a body-only edit is
+  exactly the kind of change the mermaid graph and this digest agree
+  is not "API surface," matching the existing classification vocabulary
+  (ADR 0014) rather than inventing a new one.
+- **Format, under an `### API changes` heading.** Every entry's header
+  is `name (path)`, not a bare name — the same `(path)` disambiguation
+  `render_markdown`'s `tree_label`/`removed_symbol_label` already
+  append, needed for the identical reason: two distinct files can each
+  define a symbol sharing a name (`new`, `run`, a common test helper,
+  ...), and a bare name alone cannot tell a reader which file's symbol
+  changed. Example, for a PR that adds `render_digest` to
+  `rinkaku-core/src/render/digest.rs`, changes `Cli::format`'s type in
+  `rinkaku/src/cli.rs`, and deletes `old_helper` from
+  `rinkaku-core/src/render/legacy.rs`:
+
+  ````markdown
+  ### API changes
+
+  - **+ render_digest (rinkaku-core/src/render/digest.rs)**
+    `pub(super) fn render_digest(report: &Report) -> String`
+  - **format (rinkaku/src/cli.rs)**
+    ```diff
+    -pub(crate) format: Format,
+    +pub(crate) format: Option<Format>,
+    ```
+  - ~~old_helper (rinkaku-core/src/render/legacy.rs)~~ — removed
+  ````
+
+  - `SignatureChanged`: `name (path)` header, then a ` ```diff ` block
+    showing `-` (previous signature) / `+` (current signature) —
+    reusing the exact `-`/`+` diff-block convention `render_markdown`'s
+    "Definitions" section already uses for the same classification, so
+    a reader who has seen either output recognizes the convention
+    immediately rather than learning a second one.
+  - `Added`: `+ name (path)` header followed by the one-line signature
+    in a fenced code span — the `+` prefix mirrors the diff convention
+    above (an addition, no "previous" side to diff against) without
+    needing a second visual language.
+  - `Removed`: `~~name (path)~~ — removed`, using Markdown
+    strikethrough (renders natively on github.com) since there is no
+    signature left to show at all (same data gap ADR 0037 hit for the
+    mermaid case) — the strikethrough itself communicates "gone"
+    without more text. `path` here is `RemovedSymbol.path` directly
+    (removed symbols aren't grouped under a `FileReport` the way
+    surviving symbols are).
+  - One line per symbol, walking `report.files` in source order (same
+    per-file order every other format starts from) and each file's
+    `symbols` in their own extraction order, with `report.removed`
+    appended after — a flat digest has no tree/call-order structure to
+    convey the way "Change graph"'s DFS does, so it reuses the
+    simpler, already-stable per-file ordering rather than pulling in
+    `render_markdown`'s private DFS helpers for a distinction that
+    would not be visible in a flat list anyway.
+- **A one-line legend accompanies the digest** (not generated by
+  `render_digest` itself — see below), spelling out the mermaid
+  `classDef` colors in English: added (green), API changed (orange),
+  removed (gray, dashed), fan-in (red) — so a reader who only glances
+  at the graph still has a one-line key instead of having to infer
+  color meaning.
+- **Legend placement: composed by `compose_and_post_comment.sh`, not
+  emitted by `rinkaku-core`.** The legend is prose about the mermaid
+  section's presentation (colors, dashing), not data derived from the
+  `Report` — it belongs next to the graph in the comment template, the
+  same layer that already decides section order and truncation
+  budgets, not baked into a render function whose job is turning a
+  `Report` into structured output. Keeping it in the shell script also
+  means `--format digest` run standalone (e.g. for `rinkaku --format
+  digest` on the command line) doesn't carry comment-specific prose
+  that only makes sense next to an adjacent mermaid diagram.
+- **`compose_and_post_comment.sh` swaps its second input.** `MARKDOWN_PATH`
+  is replaced by `DIGEST_PATH` for the `<details>` body; the size-budget/
+  truncation logic (`MAX_BODY_LENGTH`, `truncate_utf8_safe`) is unchanged
+  in shape, just applied to the (much smaller) digest content instead —
+  a digest is bounded by the number of contract-changing symbols, not
+  by total diff size, so truncation is expected to fire far less often
+  in practice, though the safety net stays for a pathologically large
+  rename-everything-style PR.
+- **`action.yaml` gains a third `run-rinkaku` output, `digest-path`**,
+  alongside the existing `mermaid-path`/`markdown-path` (kept — see
+  Consequences) — `markdown-only` bootstrap-fallback semantics extend to
+  cover `--format digest` the same way they already cover `--format
+  mermaid`, since both are newer than `md`/`json` and a caller-supplied
+  binary from an older base ref may predate either or both.
+
+## Alternatives
+
+- **Keep the full Markdown `<details>`.** Rejected per Context: it
+  duplicates the mermaid graph's signal at several times the token
+  cost for the exact audience (an LLM review pass reading the whole
+  comment) this change is aimed at, and a human reviewer skimming a PR
+  comment is unlikely to expand a multi-hundred-line `<details>` anyway.
+- **Drop the `<details>` entirely, no digest.** Rejected: the mermaid
+  graph shows *that* something changed (via node styling) but not the
+  actual before/after text — a reviewer or LLM pass would have no way
+  to see, say, a signature's exact old-vs-new parameter list from the
+  comment alone, only that the node is styled `changed`. The digest is
+  the minimum needed to answer "what, exactly, changed in the public
+  contract" without pulling in the full report.
+- **Embed added-symbol field/member details in the mermaid nodes
+  themselves** (so the graph carries more than a bare name). Rejected
+  for the same reason ADR 0021 and ADR 0037 already reject signature
+  text in node labels: it's noisy at the node level and risks pushing
+  more graphs over `MERMAID_NODE_BUDGET`'s size (nodes stay countable,
+  but a labeled node with embedded detail defeats the "glance at the
+  shape" purpose the budget exists to protect). The digest is exactly
+  where that detail belongs instead — a fenced signature per changed
+  symbol, without inflating the graph.
+- **Generate the digest via `jq`/shell text-processing over the JSON
+  report**, rather than a `rinkaku-core` renderer. Rejected: classifying
+  and formatting the diff-style signature block is logic, not
+  presentation glue, and belongs where it can be unit-tested directly
+  (per this repository's `CLAUDE.md` test strategy) rather than as
+  untested shell string manipulation — the same reasoning that already
+  put `render_mermaid`/`render_markdown` in `rinkaku-core` instead of in
+  `compose_and_post_comment.sh`.
+
+## Consequences
+
+- `rinkaku-core`'s render layer grows a fourth format
+  (`render_digest`), following the same `Result`-free signature pattern
+  `render_mermaid` already established; `render_markdown`/JSON output
+  are untouched (this is additive, same as ADR 0021 was for mermaid).
+- `--format digest` joins `md`/`json`/`mermaid` as a fourth
+  `conflicts_with = "tui"` value; no change to that exclusivity
+  machinery beyond the fourth arm.
+- `action.yaml`'s `markdown-path` output and the full Markdown report
+  file are kept (not removed) — a caller with `comment: false` who
+  wants the full report for its own purposes (or the fork-PR
+  `$GITHUB_STEP_SUMMARY` fallback, which still writes the composed
+  comment body, now digest-based) still has it; only the sticky
+  comment's own `<details>` content changes.
+- A reviewer or LLM pass that specifically wants the full dependency
+  tree/Definitions detail no longer gets it from the PR comment at all
+  and must fall back to `gh pr diff | rinkaku` directly or the
+  `markdown-path` action output — an explicit trade documented here so
+  it isn't rediscovered as a surprise later.
+- If a future need arises for "digest, but also show me the
+  dependency-only entries," that is a new format or a `--format
+  digest` flag, not a retrofit onto this one — kept out of scope until
+  a concrete request shows up, per this repository's
+  don't-introduce-shared-abstractions-speculatively convention.
+- **Inherits ADR 0037's whole-file-deletion gap**: `render_digest`
+  reads `report.removed`, the same source ADR 0037 documents as never
+  populated for a `ChangeKind::Deleted` file (pre-existing, ADR 0014 —
+  [#115](https://github.com/hiro-o918/rinkaku/issues/115)). A PR that
+  deletes a file outright produces no `~~name~~ — removed` line for
+  any symbol that file used to contain; only a file that survives the
+  diff with some or all of its symbols individually removed is
+  represented. Not a regression introduced by this ADR — tracked at
+  the same issue.

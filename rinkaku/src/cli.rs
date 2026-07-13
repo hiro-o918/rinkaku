@@ -131,6 +131,11 @@ pub(crate) enum Format {
     /// comments/descriptions, not the default Markdown output.
     // See ADR 0021 for the design behind this output format.
     Mermaid,
+    /// A slim "API changes" list — one line per added/signature-changed/
+    /// removed symbol, nothing else — meant for a PR comment's collapsed
+    /// details section rather than full-report reading.
+    // See ADR 0036 for the design behind this output format.
+    Digest,
 }
 impl From<Format> for OutputFormat {
     fn from(format: Format) -> Self {
@@ -138,6 +143,7 @@ impl From<Format> for OutputFormat {
             Format::Md => OutputFormat::Markdown,
             Format::Json => OutputFormat::Json,
             Format::Mermaid => OutputFormat::Mermaid,
+            Format::Digest => OutputFormat::Digest,
         }
     }
 }
