@@ -20,7 +20,7 @@ tree-sitter-go = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-typescript = "0.23"
 aho-corasick = "1.1"
-# ADR 0029: parallelises `pipeline::analyze_repo`'s per-file tree-sitter
+# ADR 0031: parallelises `pipeline::analyze_repo`'s per-file tree-sitter
 # parse. Only rinkaku-core depends on it directly today; declared at the
 # workspace level to match the convention every other core crate follows.
 rayon = "1.10"
