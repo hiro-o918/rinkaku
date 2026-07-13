@@ -41,13 +41,27 @@ pub enum InputKey {
     /// a distinct variant from [`Self::Open`] because Space must never move
     /// focus even on a file/symbol row, only Enter does.
     Select,
-    /// Enter on a file/symbol row: opens the source view on a symbol row
-    /// (unchanged from before ADR 0020) and additionally moves focus to
-    /// [`Focus::Right`] (ADR 0020's "drilling into a row is also a focus
-    /// change") — a no-op on a directory row (`App::handle_key`'s doc
-    /// comment; a directory row's Enter is [`Self::Select`]/`crate::run`'s
-    /// `translate_key`, matching on `KeyCode::Enter`, always emits `Open`
-    /// and lets `handle_key` decide what that means per row kind).
+    /// Enter on a file/symbol row: switches the right pane to
+    /// [`RightPane::Diff`] and moves focus to [`Focus::Right`] (ADR 0020's
+    /// "drilling into a row is also a focus change") — a no-op on a
+    /// directory row (`App::handle_key`'s doc comment; a directory row's
+    /// Enter is [`Self::Select`]/`crate::run`'s `translate_key`, matching on
+    /// `KeyCode::Enter`, always emits `Open` and lets `handle_key` decide
+    /// what that means per row kind).
+    ///
+    /// Post-ADR-0020 dogfooding finding: this used to open
+    /// [`Screen::Source`] for a symbol row specifically (reading the file
+    /// straight from the working tree, `crate::source::load_symbol_source`)
+    /// while a file row's Enter only changed focus — an asymmetry a
+    /// reviewer could not predict from the keypress alone, and one that
+    /// surfaced as an apparently random failure whenever the working tree
+    /// did not have the symbol's file in the expected state (a deleted or
+    /// not-yet-checked-out file, reported as "enter だと source を出そうとして
+    /// エラーになったりならなかったりする"). Enter now always means "show me
+    /// the diff for this row", which never touches the filesystem and so
+    /// never fails; opening the source view (which can fail, since it reads
+    /// a real file) stays behind the dedicated `s` key ([`Self::Source`])
+    /// only.
     Open,
     /// `e`/`E`: expand every row.
     ExpandAll,
@@ -885,19 +899,24 @@ impl App {
                     Some(NodeKind::Dir) => {
                         self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
                     }
-                    Some(NodeKind::File) => {
+                    // File and symbol rows behave identically (dogfooding
+                    // fix, `Self::Open`'s own doc comment): switch to the
+                    // Diff pane and move focus there. A symbol row used to
+                    // additionally jump into `Screen::Source` here, which
+                    // read the file from the working tree and could fail —
+                    // an asymmetric, occasionally-erroring behavior a file
+                    // row's Enter never had. Enter is now always a pure,
+                    // never-failing screen/pane transition regardless of row
+                    // kind (including a removed symbol, which no longer
+                    // needs its own guard here — this arm never touches the
+                    // filesystem, unlike `InputKey::Source`'s own
+                    // `!symbol_ref.removed` guard below, which still applies
+                    // there since that key does open the source view).
+                    Some(NodeKind::File) | Some(NodeKind::Symbol(_)) => {
+                        self.right_pane = RightPane::Diff;
                         self.focus = Focus::Right;
                     }
-                    Some(NodeKind::Symbol(symbol_ref)) if !symbol_ref.removed => {
-                        self.focus = Focus::Right;
-                        self.screen = Screen::Source {
-                            symbol_id: symbol_ref.id.clone(),
-                        };
-                    }
-                    // A removed symbol has no source to open (mirrors
-                    // `InputKey::Source`'s own `!symbol_ref.removed` guard
-                    // below) and no row at all is simply a no-op.
-                    Some(NodeKind::Symbol(_)) | None => {}
+                    None => {}
                 }
             }
             (Screen::Entry, _, InputKey::ExpandAll) => {
@@ -1808,19 +1827,47 @@ mod tests {
     }
 
     #[test]
-    fn should_move_focus_to_right_and_open_source_when_open_is_pressed_on_a_symbol_row() {
+    fn should_move_focus_to_right_and_switch_to_diff_pane_when_open_is_pressed_on_a_symbol_row() {
+        // Dogfooding fix: a symbol row's Enter used to open `Screen::Source`
+        // directly (reading the file from the working tree, which could
+        // fail), asymmetric with a file row's Enter, which only switched
+        // panes. Both row kinds now behave identically — see `InputKey::Open`'s
+        // own doc comment.
         let report = report_with_one_symbol();
         let app = App::new(&report).handle_key(InputKey::Down);
 
         let app = app.handle_key(InputKey::Open);
 
         assert_eq!(Focus::Right, app.focus());
-        assert_eq!(
-            Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
-            },
-            *app.screen()
-        );
+        assert_eq!(Screen::Entry, *app.screen());
+        assert_eq!(RightPane::Diff, app.right_pane());
+    }
+
+    #[test]
+    fn should_move_focus_to_right_and_switch_to_diff_pane_when_open_is_pressed_on_a_removed_symbol_row()
+     {
+        // A removed symbol has no source to open, but Enter no longer opens
+        // source at all (`InputKey::Open`'s own doc comment) — it is a pure
+        // pane switch regardless of row kind, so a removed symbol's Enter no
+        // longer needs a special no-op case the way `InputKey::Source`'s own
+        // `!symbol_ref.removed` guard still does.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            removed: vec![rinkaku_core::extract::RemovedSymbol {
+                name: "gone".to_string(),
+                kind: SymbolKind::Function,
+                path: "lib.rs".to_string(),
+                signature: "fn gone()".to_string(),
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        let app = app.handle_key(InputKey::Open);
+
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(Screen::Entry, *app.screen());
+        assert_eq!(RightPane::Diff, app.right_pane());
     }
 
     #[test]
@@ -2066,7 +2113,7 @@ mod tests {
     #[test]
     fn should_keep_right_pane_scroll_at_zero_when_returning_from_source_screen() {
         // Opening the source screen itself always resets scroll to 0
-        // (`InputKey::Open`'s own reset, per the blanket rule) and every
+        // (`InputKey::Source`'s own reset, per the blanket rule) and every
         // key but `Back` is then a no-op while `Screen::Source` is active
         // (`App::handle_key`'s `Screen::Source` arm) — so scroll can never
         // become nonzero while the source screen is open in the first
@@ -2075,10 +2122,15 @@ mod tests {
         // swallowed but which could still be pending from before entering.
         // This test pins that invariant end to end: `Back` finds scroll
         // already at 0 and leaves it there.
+        //
+        // Post-dogfooding-fix note: the source screen is now reached only
+        // via the dedicated `s` key (`InputKey::Source`), not `Enter`
+        // (`InputKey::Open`'s own doc comment) — `Open` is exercised
+        // separately by the `Open`-specific tests above.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(InputKey::Down) // cursor -> "foo" (a Symbol row)
-            .handle_key(InputKey::Open); // opens Screen::Source, focus -> Right
+            .handle_key(InputKey::Source); // opens Screen::Source
         assert_eq!(
             Screen::Source {
                 symbol_id: "lib.rs::foo".to_string()
@@ -2094,10 +2146,14 @@ mod tests {
 
     #[test]
     fn should_ignore_scroll_keys_while_source_screen_is_open() {
+        // Post-dogfooding-fix note: the source screen is now reached only
+        // via the dedicated `s` key (`InputKey::Source`), not `Enter` — see
+        // `should_keep_right_pane_scroll_at_zero_when_returning_from_source_screen`'s
+        // own note.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(InputKey::Down)
-            .handle_key(InputKey::Open); // opens source, focus -> Right
+            .handle_key(InputKey::Source); // opens source
 
         let app = app.handle_key(InputKey::Down);
 

@@ -237,3 +237,31 @@ needing to fit everything on one line.
   internals without changing this ADR's pane semantics — the module
   boundary (`Report` + `FileHunks` + selection in, shaped content out)
   is deliberately drawn to allow that later.
+
+## Amendment (dogfooding, post-acceptance)
+
+Decision 1 above states that a file/symbol row's `Enter` "additionally
+moves focus to `Right`", without itself deciding what a symbol row's
+`Enter` shows — that pre-dates this ADR (accreted incrementally, the
+same way this ADR's own Context describes) and had a symbol row's `Enter`
+open `Screen::Source` directly, reading the symbol's file from the
+working tree, while a file row's `Enter` only switched focus. Dogfooding
+surfaced this as an unpredictable failure ("enter だと source を出そうとし
+てエラーになったりならなかったりする"): the working tree does not always
+have the file in the state `Report` describes (a deleted file, a file not
+yet checked out, a stale local branch), so the *same physical keypress*
+sometimes worked and sometimes errored depending on row kind and
+filesystem state the reviewer had no way to predict from the keymap
+alone.
+
+`Enter` on a file or symbol row now always performs the identical,
+never-failing transition this ADR already describes for both row kinds:
+switch the right pane to `RightPane::Diff` and move focus to `Right`.
+Opening `Screen::Source` (the one operation in this whole interaction
+model that touches the filesystem, and so is the only one that can fail)
+stays behind the dedicated `s` key ([`InputKey::Source`]) exclusively —
+consistent with this ADR's own frame that motion/pane keys are cheap,
+predictable state transitions and `s` is the deliberate "go read the real
+file" action. No other decision in this ADR changes: the diff-shaping
+rules (decision 4), the pane-scoped `]`/`[` hunk jump (decision 1's Right
+focus bullet), and the help overlay are all unaffected.
