@@ -147,6 +147,78 @@ fn should_show_collapse_marker_when_dir_is_not_expanded() {
     assert_eq!("> src ", line_text(&line));
 }
 
+// ADR 0035 Phase B: a `NodeKind::Section` row renders like a `Dir` row
+// (expand marker, bold label, aggregated badges) but with its fixed
+// `SectionKind::label()` instead of a path-derived label, and never
+// shows the `(cycle)` marker — `ranks` never carries an entry for a
+// section's synthetic path (`crate::order::rank_directories` only ever
+// produces entries for real file-tree directories).
+
+#[test]
+fn should_render_section_row_with_its_fixed_label_and_badges() {
+    let node = section_node(
+        SectionKind::Tests,
+        Badges {
+            changed_symbols: 5,
+            ..Badges::default()
+        },
+        vec![file_node("a_test.go", Badges::default())],
+    );
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: true,
+    };
+
+    let line = entry_row_line(&row, "ignored-label", &HashMap::new(), false);
+
+    assert_eq!("v Tests chg:5", line_text(&line));
+}
+
+#[test]
+fn should_show_collapse_marker_for_a_collapsed_section_row() {
+    let node = section_node(
+        SectionKind::Tests,
+        Badges::default(),
+        vec![file_node("a_test.go", Badges::default())],
+    );
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(&row, "ignored-label", &HashMap::new(), false);
+
+    assert_eq!("> Tests ", line_text(&line));
+}
+
+#[test]
+fn should_never_show_cycle_marker_on_a_section_row_even_if_ranks_has_a_stray_entry() {
+    // Defensive: even if `ranks` somehow carried an entry keyed by the
+    // section's synthetic path, a Section row must never render
+    // `(cycle)` — cycle detection is a production-directory concept
+    // ADR 0035 Phase A already excludes test code from.
+    let node = section_node(SectionKind::Tests, Badges::default(), vec![]);
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+    let mut ranks = HashMap::new();
+    ranks.insert(
+        crate::tree::TESTS_SECTION_PATH.to_string(),
+        DirRank {
+            rank: 0,
+            in_cycle: true,
+        },
+    );
+
+    let line = entry_row_line(&row, "ignored-label", &ranks, false);
+
+    assert_eq!("  Tests ", line_text(&line));
+}
+
 #[test]
 fn should_append_cycle_marker_when_dir_path_is_in_cycle() {
     let node = dir_node("src", Badges::default(), vec![]);
@@ -243,6 +315,46 @@ fn should_mark_removed_symbol_with_x() {
     let line = entry_row_line(&row, "", &HashMap::new(), false);
 
     assert_eq!("  x fn gone_fn", line_text(&line));
+}
+
+// ADR 0035: a test symbol left in the production tree (only possible
+// for a *mixed* file — a whole-test-file's symbols never reach the
+// production tree at all, see `SymbolRef::is_test`'s doc comment)
+// renders a trailing `test` badge, magenta like the existing whole-file
+// `[test] (N symbols)` badge (`test_badge_span`) so the same color means
+// the same thing everywhere in the tree.
+
+#[test]
+fn should_append_test_badge_for_a_test_symbol_in_a_mixed_file() {
+    let symbol_ref = SymbolRef {
+        is_test: true,
+        ..plain_symbol("test_it")
+    };
+    let node = symbol_node("lib.rs", symbol_ref, Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(&row, "", &HashMap::new(), false);
+
+    assert_eq!("    fn test_it test", line_text(&line));
+    assert_eq!(Some(Color::Magenta), fg_of_span_with_content(&line, "test"));
+}
+
+#[test]
+fn should_not_append_test_badge_for_an_ordinary_non_test_symbol() {
+    let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(&row, "", &HashMap::new(), false);
+
+    assert_eq!("    fn foo", line_text(&line));
 }
 
 #[test]

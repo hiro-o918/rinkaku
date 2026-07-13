@@ -359,6 +359,9 @@ mod tests {
             crate::tree::NodeKind::File | crate::tree::NodeKind::Dir => {
                 cursor_row.node.path.clone()
             }
+            // Unreachable in this test fixture (no test files), but
+            // required to stay exhaustive.
+            crate::tree::NodeKind::Section(section_kind) => section_kind.label().to_string(),
         };
         let text = buffer_text(&terminal);
         assert!(

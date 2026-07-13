@@ -11,6 +11,8 @@ use rinkaku_core::file_size::FileSizeSeverity;
 use rinkaku_core::render::{Report, SkipReason};
 use std::collections::{BTreeMap, HashMap};
 
+mod tests_section;
+
 /// A symbol's identity, as carried by a [`NodeKind::Symbol`] leaf — enough
 /// for the entry view to render a badge-worthy row and for the detail view
 /// (`crate::detail`) to look the full symbol back up in the `Report` it was
@@ -33,6 +35,16 @@ pub struct SymbolRef {
     /// match went missing entirely.
     pub classification: Option<Classification>,
     pub removed: bool,
+    /// Mirrors [`rinkaku_core::extract::ExtractedSymbol::is_test`] (ADR
+    /// 0035): `true` for a test symbol that survives into the production
+    /// tree because it lives in a *mixed* file alongside non-test symbols
+    /// (a whole-test-file's symbols never reach the production tree at
+    /// all — see `TreeNode::test_symbol_count`'s doc comment — so this
+    /// field only ever matters for the mixed case). `false` for a
+    /// [`RemovedSymbol`], which carries no `is_test` flag of its own —
+    /// there is no head-side AST context left to classify a removed
+    /// symbol's test-ness by.
+    pub is_test: bool,
 }
 
 /// What kind of thing a [`TreeNode`] represents.
@@ -50,6 +62,38 @@ pub enum NodeKind {
     File,
     /// A leaf: one changed or removed symbol.
     Symbol(SymbolRef),
+    /// A synthetic grouping node, not derived from any single file/symbol
+    /// (ADR 0035 Phase B) — see [`tests_section`] for construction and
+    /// [`crate::order`] for how it sorts. A distinct variant rather than
+    /// a `Dir` with a synthetic path, since `crate::order` looks up a
+    /// `Dir`'s rank by path, and a fake path there risks an accidental
+    /// rank/collision bug (ADR 0035's Alternatives).
+    Section(SectionKind),
+}
+
+/// Which kind of synthetic grouping a [`NodeKind::Section`] is. An enum
+/// rather than a unit variant so a second section kind, if ever needed,
+/// does not require another `NodeKind` variant (and therefore another
+/// wave of exhaustive-match updates across `nav`/`order`/`row_view`/
+/// `detail`/`app`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionKind {
+    Tests,
+}
+
+/// The synthetic path a [`NodeKind::Section`] node carries on
+/// [`TreeNode::path`] — doubles as `crate::nav::Nav`'s collapse-state key
+/// (which is generic over `TreeNode::path`, so a section needs *some*
+/// stable path to participate) and the row label. `__tests__` cannot
+/// collide with a real slash-joined file path.
+pub const TESTS_SECTION_PATH: &str = "__tests__";
+
+impl SectionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            SectionKind::Tests => "Tests",
+        }
+    }
 }
 
 /// Badges aggregated bottom-up for a [`TreeNode`] (ADR 0015/0016): every
@@ -246,24 +290,41 @@ pub fn build_tree(report: &Report) -> Tree {
         })
         .collect();
 
-    let mut builder = TreeBuilder::new(fan_in_by_id, file_size_by_path);
+    let mut production = TreeBuilder::new(fan_in_by_id.clone(), file_size_by_path.clone());
+    let mut tests = TreeBuilder::new(fan_in_by_id, file_size_by_path);
 
+    // A mixed file (some non-test symbols alongside some test symbols)
+    // always stays in `production` untouched — only a *whole* test file
+    // routes into `tests` (ADR 0035 Phase B, see
+    // `tests_section::is_whole_test_file`).
     for file in &report.files {
-        builder.insert_file(&file.path, &file.symbols);
+        if tests_section::is_whole_test_file(&file.path, &file.symbols) {
+            tests.insert_file(&file.path, &file.symbols);
+        } else {
+            production.insert_file(&file.path, &file.symbols);
+        }
     }
+    // A `RemovedSymbol` carries no `is_test` flag and is never checked
+    // against `is_test_path` here, so it always stays in production
+    // regardless of the rest of its file's fate.
     for removed in &report.removed {
-        builder.insert_removed(&removed.path, removed);
+        production.insert_removed(&removed.path, removed);
     }
     for test_file in &report.tests {
-        builder.insert_test_file(&test_file.path, test_file.symbol_count);
+        production.insert_test_file(&test_file.path, test_file.symbol_count);
     }
     for skipped in &report.skipped {
         if !matches!(skipped.reason, SkipReason::Generated) {
-            builder.insert_skipped(&skipped.path, skipped.reason);
+            production.insert_skipped(&skipped.path, skipped.reason);
         }
     }
 
-    builder.finish()
+    let mut roots = production.finish().roots;
+    if let Some(section) = tests_section::wrap_section(tests.finish().roots) {
+        roots.push(section);
+    }
+
+    Tree { roots }
 }
 
 /// Intermediate mutable tree used only during construction — a
@@ -353,6 +414,7 @@ impl<'a> TreeBuilder<'a> {
                 kind: symbol.kind,
                 classification: symbol.classification,
                 removed: false,
+                is_test: symbol.is_test,
             });
         }
     }
@@ -366,6 +428,9 @@ impl<'a> TreeBuilder<'a> {
             kind: removed.kind,
             classification: None,
             removed: true,
+            // `RemovedSymbol` carries no `is_test` flag of its own — see
+            // `SymbolRef::is_test`'s doc comment.
+            is_test: false,
         });
     }
 

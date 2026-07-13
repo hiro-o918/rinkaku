@@ -69,6 +69,21 @@ pub fn entry_row_line(
                 ));
             }
         }
+        NodeKind::Section(section_kind) => {
+            // `label` is unused: a section's path is a synthetic
+            // constant, not a real file-tree path for `crate::ui`'s
+            // ancestor-prefix stripping to compute a label from. No
+            // `ranks` lookup either — that path never gets a `DirRank`
+            // entry (`crate::order::rank_directories` only ranks real
+            // directories).
+            spans.push(Span::raw(format!("{} ", expand_marker(row))));
+            spans.push(Span::styled(
+                section_kind.label(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+            push_badge_spans(&mut spans, &row.node.badges, BadgeContext::Dir);
+        }
         NodeKind::File => {
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
@@ -104,6 +119,13 @@ pub fn entry_row_line(
                 symbol_ref.name.clone(),
                 symbol_name_style(symbol_ref),
             ));
+            // Only reachable for a mixed-file test symbol — a
+            // whole-test-file's symbols never reach the production tree
+            // (they get the file-level `[test]` badge above instead).
+            if symbol_ref.is_test {
+                spans.push(Span::raw(" "));
+                spans.push(symbol_test_badge_span());
+            }
         }
     }
 
@@ -366,6 +388,16 @@ fn test_badge_span(symbol_count: usize) -> Span<'static> {
         format!("[test] ({symbol_count} {noun})"),
         Style::default().fg(Color::Magenta),
     )
+}
+
+/// The `test` badge for a single test-symbol row (ADR 0035) — same
+/// magenta as [`test_badge_span`]'s whole-file `[test] (N symbols)`
+/// badge, so one color consistently means "this is test code" whether
+/// it labels a whole file or one symbol inside a mixed file. Unlike the
+/// file-level badge, there is no count to show here: a `Symbol` row is
+/// already one symbol, so the badge is just the bare word.
+fn symbol_test_badge_span() -> Span<'static> {
+    Span::styled("test", Style::default().fg(Color::Magenta))
 }
 
 /// A symbol row's leading classification marker: `+` added, `~`

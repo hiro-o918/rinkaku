@@ -2,8 +2,8 @@
 //! grouped by which pub function / row-render concern each block pins:
 //!
 //! - `entry_row_line` — general `entry_row_line` behavior: indent,
-//!   badges, skip-reason, test-file badge, cycle marker, classification
-//!   markers, selection modifier
+//!   badges, skip-reason, test-file badge, per-symbol `test` badge (ADR
+//!   0035), cycle marker, classification markers, selection modifier
 //! - `relative_labels` — `relative_labels`' ancestor-prefix stripping
 //! - `file_size_badges` — ADR 0028 file-size warning badges on file and
 //!   dir rows (`lines:N`, `warn:N split:N`)
@@ -12,7 +12,7 @@
 //!   split-span coloring for `chg:N` / `api:N` / `fan-in:N` badges
 
 use super::*;
-use crate::tree::{NodeKind, TreeNode};
+use crate::tree::{NodeKind, SectionKind, TreeNode};
 
 mod entry_row_line;
 mod file_size_badges;
@@ -63,6 +63,17 @@ pub(super) fn test_file_node(path: &str, symbol_count: usize) -> TreeNode {
     }
 }
 
+pub(super) fn section_node(kind: SectionKind, badges: Badges, children: Vec<TreeNode>) -> TreeNode {
+    TreeNode {
+        kind: NodeKind::Section(kind),
+        path: crate::tree::TESTS_SECTION_PATH.to_string(),
+        badges,
+        children,
+        skip_reason: None,
+        test_symbol_count: None,
+    }
+}
+
 pub(super) fn symbol_node(path: &str, symbol_ref: SymbolRef, badges: Badges) -> TreeNode {
     TreeNode {
         kind: NodeKind::Symbol(symbol_ref),
@@ -81,6 +92,7 @@ pub(super) fn plain_symbol(name: &str) -> SymbolRef {
         kind: SymbolKind::Function,
         classification: None,
         removed: false,
+        is_test: false,
     }
 }
 

@@ -5,8 +5,9 @@
 //!   collapse, non-collapse, own-file-plus-subdir, bottom-up badge
 //!   aggregation, empty-file leaves, source-order preservation
 //! - `symbol_badges` — per-symbol badge derivation: contract-change
-//!   counting, removed-symbol marking, and fan-in propagation from
-//!   `report.fan_ins`
+//!   counting, removed-symbol marking, fan-in propagation from
+//!   `report.fan_ins`, and (ADR 0035) `SymbolRef::is_test` propagation
+//!   from `ExtractedSymbol::is_test`
 //! - `file_size_warnings` — ADR 0028 file-size badge propagation:
 //!   own line count, per-severity aggregation, and dir-node severity
 //!   invariant
@@ -15,6 +16,11 @@
 //! - `test_files_and_overlap` — whole-test-file rows, dir merge, the
 //!   ordinary-file guard, `debug_assert!` panic paths on invalid
 //!   overlap, and the valid mixed-file (files + tests) regression
+//! - `tests_section` — ADR 0035 Phase B: the trailing
+//!   `NodeKind::Section(SectionKind::Tests)` node, whole-test-file
+//!   detection (path convention and all-symbols-test), mixed files
+//!   staying in the production tree, A-Z internal ordering, and the
+//!   no-tests-at-all no-section case
 
 use super::*;
 use rinkaku_core::diff::LineRange;
@@ -27,6 +33,7 @@ mod file_size_warnings;
 mod skipped_files;
 mod symbol_badges;
 mod test_files_and_overlap;
+mod tests_section;
 
 pub(super) fn symbol(id: &str, name: &str, kind: SymbolKind) -> ExtractedSymbol {
     ExtractedSymbol {
