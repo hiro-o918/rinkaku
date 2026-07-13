@@ -56,13 +56,14 @@ unchanged.
   way `change_graph_summary`'s "most in ..." line does for Markdown,
   but visually instead of as a sentence.
 - **Styling via `classDef`**: `added` (green-tinted), `changed`
-  (orange-tinted), `hotspot` (red-tinted, heavier stroke). A node that
-  is both `changed` and a hotspot gets the `hotspot` class — precedence
-  documented at the call site in `render.rs` — since "this is a wide
-  blast radius" is the more actionable fact for a glance-level view than
-  "this signature changed," and the node's own subgraph/label already
-  shows it changed via the Definitions/Markdown companion output.
-  Colors are chosen with explicit dark-on-light text so they hold up
+  (orange-tinted), `hotspot` (red-tinted, heavier stroke; renamed to
+  `fan-in` by ADR 0034). A node that is both `changed` and a hotspot
+  gets the `hotspot` class — precedence documented at the call site in
+  `render.rs` — since "this is a wide blast radius" is the more
+  actionable fact for a glance-level view than "this signature
+  changed," and the node's own subgraph/label already shows it changed
+  via the Definitions/Markdown companion output. Colors are chosen with
+  explicit dark-on-light text so they hold up
   under both GitHub's light and dark themes (mermaid's own theming
   otherwise only flips background, not a fixed text color).
 - **Cycle edges** render as `-.->` (dashed) instead of `-->`, mirroring
