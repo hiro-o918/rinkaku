@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 190" width="680" height="190" role="img" aria-labelledby="rinkaku-logo-light-title">
+  <title id="rinkaku-logo-light-title">rinkaku</title>
+  <defs>
+    <linearGradient id="rinkakuStrokeLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="50%" stop-color="#0369a1"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="rinkakuFillLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#99f6e4"/>
+      <stop offset="50%" stop-color="#bae6fd"/>
+      <stop offset="100%" stop-color="#ddd6fe"/>
+    </linearGradient>
+  </defs>
+
+  <text
+    x="340" y="92"
+    text-anchor="middle"
+    font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+    font-size="76"
+    font-weight="700"
+    letter-spacing="6"
+    fill="url(#rinkakuFillLight)"
+    stroke="url(#rinkakuStrokeLight)"
+    stroke-width="2"
+    xml:space="preserve"
+  >rinkaku</text>
+
+  <text
+    x="340" y="132"
+    text-anchor="middle"
+    font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+    font-size="17"
+    letter-spacing="3"
+    fill="#475569"
+    xml:space="preserve"
+  >輪郭 &#8212; condense diffs to their outline</text>
+
+  <line x1="120" y1="152" x2="560" y2="152" stroke="url(#rinkakuStrokeLight)" stroke-width="1.5" stroke-opacity="0.55"/>
+</svg>
