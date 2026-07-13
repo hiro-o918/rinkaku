@@ -63,3 +63,36 @@ falls back per file to the current plain green/red styling.
 - Old-side reconstruction means removed lines get highlighted in
   old-code context — correct, at the cost of parsing each hunk twice.
   Hunks are small; the once-per-run budget absorbs it.
+
+## Amendment: extended to the source drill-down (`s`)
+
+Dogfooding after the diff pane shipped found the source screen (ADR 0015,
+`s` on a symbol row) had the opposite problem: it highlights the drilled-
+into symbol's own line range with a background tint, but renders every
+line's code with no token coloring at all. The same
+`tree-sitter-highlight` stack now covers this screen too
+(`highlight::highlight_source_lines` in `rinkaku-tui/src/highlight.rs`),
+reusing `config_for_path`'s existing per-extension table — a source file,
+unlike a hunk, is already contiguous parseable text, so this path needs
+only one reconstruction (the whole file joined by `\n`), not the diff
+pane's new-side/old-side split. Token foreground and the symbol-range
+background tint compose the same way the diff pane composes token
+foreground with its added/removed background: `bg` is applied uniformly
+across a line by `ui::styled_content_spans` regardless of which screen
+called it, so neither signal can mask the other.
+
+The source screen used to re-read the file from disk on every frame
+(cheap for a plain read, deliberately not cached — this file's own
+pre-amendment text explained why). Adding a highlighting pass on top of
+that would have repeated a full tree-sitter parse on every ~100ms idle
+poll tick while the screen merely sat open, reintroducing the exact per-
+frame recompute bug this ADR's main decision already had to fix once for
+the diff pane. `crate::run_app` now computes
+`source::load_highlighted_symbol_source`'s result exactly once, when the
+`s` key opens the screen, and caches it across the render loop the same
+way it already caches `diff_pane_content`/`blast_radius_selection` — the
+one deliberate behavior change from the pre-amendment version: a file
+edited on disk after opening the source screen no longer picks up the
+edit until the screen is re-opened (`s` again), trading that rare case
+for the "no per-frame reparse" invariant this crate holds everywhere
+else.

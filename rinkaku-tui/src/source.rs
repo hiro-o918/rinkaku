@@ -39,6 +39,20 @@ pub struct SourceView {
     pub highlight_end: usize,
 }
 
+/// A [`SourceView`] plus its per-line syntax highlighting (ADR 0018's
+/// tree-sitter-highlight stack, extended to the source screen) — computed
+/// together, once, by [`load_highlighted_symbol_source`] so `crate::ui`'s
+/// source screen never needs to touch disk or re-parse on every frame (see
+/// that function's own doc comment; mirrors `crate::highlight::HighlightedFile`
+/// pairing a file's hunks with their highlight data the same way).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HighlightedSourceView {
+    pub view: SourceView,
+    /// One entry per `view.lines`, same length/order — `crate::ui`'s
+    /// `source_lines` reads `token_highlights[i]` for `view.lines[i]`.
+    pub token_highlights: Vec<crate::highlight::LineHighlight>,
+}
+
 /// Reads `id`'s file off the working tree and builds a [`SourceView`] for
 /// it, or an error message suitable for the status line on failure (no
 /// such symbol in `report`, or the file read itself failing — a moved/
@@ -91,6 +105,34 @@ pub fn load_symbol_source(
         lines: content.lines().map(str::to_string).collect(),
         highlight_start: location.start_line,
         highlight_end: location.end_line,
+    })
+}
+
+/// [`load_symbol_source`] plus syntax highlighting
+/// (`crate::highlight::highlight_source_lines`), composed together as the
+/// single IO+highlight step `crate::run_app` performs exactly once when the
+/// `s` key opens [`crate::app::Screen::Source`] — not inside the render
+/// loop. Highlighting a file is a full tree-sitter parse, strictly more
+/// expensive than the plain file read `load_symbol_source` alone requires
+/// (mirroring ADR 0018's own "highlighting must not run inside the render
+/// loop" rule for the diff pane, `crate::highlight::highlight_diff_files`'s
+/// own doc comment), so this must be called once per `s` press and its
+/// result cached by the caller, the same discipline `crate::run_app`
+/// already applies to `diff_pane_content`/`blast_radius_selection`.
+///
+/// Returns the same `Err` as `load_symbol_source` on failure (unchanged
+/// error surface for `crate::run_app`'s status-line reporting) — a file
+/// that fails to load never reaches the highlighting step.
+pub fn load_highlighted_symbol_source(
+    report: &rinkaku_core::render::Report,
+    id: &str,
+    repo_root: &std::path::Path,
+) -> Result<HighlightedSourceView, String> {
+    let view = load_symbol_source(report, id, repo_root)?;
+    let token_highlights = crate::highlight::highlight_source_lines(&view.path, &view.lines);
+    Ok(HighlightedSourceView {
+        view,
+        token_highlights,
     })
 }
 
@@ -407,6 +449,104 @@ mod tests {
         };
 
         let actual = load_symbol_source(&report, "src/missing.rs::foo", dir.path());
+
+        let error = actual.expect_err("a missing file must fail rather than silently succeed");
+        assert!(
+            error.contains("not present in the working tree"),
+            "error message should explain the file may not be checked out locally, got: {error}"
+        );
+    }
+
+    // --- load_highlighted_symbol_source ---
+
+    #[test]
+    fn should_load_and_highlight_source_together_for_a_recognized_extension() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+        std::fs::write(dir.path().join("src/lib.rs"), "fn foo() {}\n").expect("write file");
+
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    LineRange { start: 1, end: 1 },
+                )],
+            }],
+            ..empty_report()
+        };
+
+        let actual = load_highlighted_symbol_source(&report, "src/lib.rs::foo", dir.path())
+            .expect("expected a successful load for an existing .rs file");
+
+        assert_eq!(
+            SourceView {
+                path: "src/lib.rs".to_string(),
+                lines: vec!["fn foo() {}".to_string()],
+                highlight_start: 1,
+                highlight_end: 1,
+            },
+            actual.view
+        );
+        assert_eq!(1, actual.token_highlights.len());
+        let spans = actual.token_highlights[0]
+            .clone()
+            .expect("expected Some(spans) for a .rs file");
+        let keyword_index = crate::highlight::PALETTE
+            .iter()
+            .position(|p| *p == "keyword")
+            .unwrap();
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.start == 0 && s.end == 2 && s.palette_index == keyword_index)
+        );
+    }
+
+    #[test]
+    fn should_fall_back_to_none_highlights_for_an_unrecognized_extension() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        std::fs::write(dir.path().join("config.yaml"), "key: value\n").expect("write file");
+
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "config.yaml".to_string(),
+                symbols: vec![symbol(
+                    "config.yaml::root",
+                    "root",
+                    LineRange { start: 1, end: 1 },
+                )],
+            }],
+            ..empty_report()
+        };
+
+        let actual = load_highlighted_symbol_source(&report, "config.yaml::root", dir.path())
+            .expect("expected a successful load for an existing file");
+
+        assert_eq!(vec![None], actual.token_highlights);
+    }
+
+    #[test]
+    fn should_propagate_load_error_without_attempting_to_highlight() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/missing.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/missing.rs::foo",
+                    "foo",
+                    LineRange { start: 1, end: 1 },
+                )],
+            }],
+            ..empty_report()
+        };
+
+        let actual = load_highlighted_symbol_source(&report, "src/missing.rs::foo", dir.path());
 
         let error = actual.expect_err("a missing file must fail rather than silently succeed");
         assert!(

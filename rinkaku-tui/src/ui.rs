@@ -15,7 +15,7 @@ use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, PALETTE, TokenSpan};
 use crate::row_view::{entry_row_line, relative_labels};
-use crate::source::{SourceView, load_symbol_source, visible_window};
+use crate::source::{HighlightedSourceView, SourceView, visible_window};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -35,11 +35,15 @@ use unicode_width::UnicodeWidthChar;
 /// `blast_radius_selection` are likewise computed once per handled key by
 /// `crate::run_app` (not here), for [`RightPane::Diff`]/[`RightPane::BlastRadius`]
 /// respectively — see `App::selected_blast_radius_view`'s own doc comment on why
-/// this function must not call either computation itself. `repo_root` is
-/// only consulted on [`Screen::Source`] (forwarded to
-/// [`load_symbol_source`], see that function's doc comment for why
-/// `Report` paths need it) — it is threaded through here rather than
-/// resolved lazily so this stays the single frame-drawing entry point.
+/// this function must not call either computation itself. `source_content` is
+/// the same discipline applied to [`Screen::Source`]: `crate::run_app` calls
+/// [`crate::source::load_highlighted_symbol_source`] exactly once, when the
+/// `s` key opens the screen (a file read plus a full tree-sitter parse — ADR
+/// 0018's own "must not run inside the render loop" rule, extended from the
+/// diff pane to this screen), and hands the `Result` here unchanged on every
+/// subsequent draw rather than this function re-reading/re-highlighting the
+/// file itself. `None` only when [`Screen::Source`] is not the active screen
+/// (`crate::run_app` has nothing to compute yet).
 ///
 /// The `?` help overlay (ADR 0020) draws last, on top of whatever screen
 /// was already rendered underneath — `app.help_open()` never changes what
@@ -66,7 +70,7 @@ pub fn draw(
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     blast_radius_selection: &BlastRadiusSelection,
-    repo_root: &std::path::Path,
+    source_content: Option<&Result<HighlightedSourceView, String>>,
 ) -> Option<usize> {
     let area = frame.area();
     let [body, status_area] =
@@ -83,7 +87,7 @@ pub fn draw(
             body,
         ),
         Screen::Source { symbol_id } => {
-            draw_source_screen(frame, report, symbol_id, repo_root, body);
+            draw_source_screen(frame, symbol_id, source_content, body);
             None
         }
     };
@@ -1274,31 +1278,36 @@ fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
     lines
 }
 
-/// Draws the source drill-down for `symbol_id`. Re-reads the file on every
-/// frame (via [`load_symbol_source`]) rather than caching the result on
-/// `App` — a source file read is cheap relative to a terminal redraw, this
-/// module has no cache-invalidation story of its own, and re-reading keeps
-/// the view correct across a terminal resize (which redraws without a new
-/// key event) without the event loop needing to distinguish "just entered
-/// this screen" from "still on it". A read failure here is a fallback
-/// display path only: `crate::run`'s event loop already attempts the same
-/// read when the user first presses `s` and records a failure on `app`'s
-/// status line (`App::set_status`) via that same code path, so a failure
-/// mid-session (e.g. the file was deleted after opening the view) is
-/// shown in the pane itself too, not just silently on the status line.
+/// Draws the source drill-down for `symbol_id`, given `source_content` —
+/// `crate::run_app`'s once-per-`s`-press [`Result`] from
+/// [`crate::source::load_highlighted_symbol_source`] (a file read plus a
+/// full tree-sitter parse). This function itself performs no IO and no
+/// highlighting: unlike an earlier version of this screen, which re-read the
+/// file from disk on every frame (cheap for a plain read, but a
+/// highlighting pass added on top of that would re-parse on every ~100ms
+/// idle poll tick too — the exact per-frame-recompute bug ADR 0018 already
+/// had to fix once for the diff pane, `crate::run_app`'s own doc comment on
+/// `diff_highlights`), this screen now only re-renders the already-computed
+/// `source_content` — including its windowing (`visible_window` below),
+/// which is cheap enough to stay per-frame and keeps the view correctly
+/// centered across a terminal resize without needing a new key event.
+///
+/// `source_content` is `None` only when `crate::run_app` has not yet reached
+/// the point of computing it (defensive — `draw`'s own `Screen::Source` arm
+/// is the only caller, and it always has a symbol id in hand by then); drawn
+/// as a bare bordered box with no body in that case, rather than panicking.
 fn draw_source_screen(
     frame: &mut Frame,
-    report: &Report,
     symbol_id: &str,
-    repo_root: &std::path::Path,
+    source_content: Option<&Result<HighlightedSourceView, String>>,
     area: Rect,
 ) {
     let title = format!(" Source: {symbol_id} ");
     let block = Block::bordered().title(title);
 
-    let source = match load_symbol_source(report, symbol_id, repo_root) {
-        Ok(source) => source,
-        Err(message) => {
+    let highlighted = match source_content {
+        Some(Ok(highlighted)) => highlighted,
+        Some(Err(message)) => {
             // `.wrap(Wrap { trim: false })`: the error message (full path +
             // io error + the "not present in the working tree" hint added
             // alongside repo-root resolution) routinely exceeds one line at
@@ -1308,13 +1317,18 @@ fn draw_source_screen(
             // the message's own leading whitespace (there isn't any here,
             // but matches this pane's other `Paragraph` usages that don't
             // opt into trimming either).
-            let paragraph = Paragraph::new(message)
+            let paragraph = Paragraph::new(message.as_str())
                 .block(block)
                 .wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
             return;
         }
+        None => {
+            frame.render_widget(Paragraph::new("").block(block), area);
+            return;
+        }
     };
+    let source = &highlighted.view;
 
     let viewport_height = area.height.saturating_sub(2) as usize; // borders
     let (start, end) = visible_window(
@@ -1324,25 +1338,52 @@ fn draw_source_screen(
         viewport_height,
     );
 
-    let lines = source_lines(&source, start, end);
+    let lines = source_lines(source, &highlighted.token_highlights, start, end);
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
 
-fn source_lines(source: &SourceView, start: usize, end: usize) -> Vec<Line<'static>> {
+/// Background tint for a source-screen line inside the drilled-into symbol's
+/// own range — reused as the uniform `bg` for [`styled_content_spans`] the
+/// same way the diff pane's `ADDED_BG`/`REMOVED_BG` are (this module's own
+/// precedent, ADR 0018), so a token's foreground color from
+/// [`palette_style`] is never lost underneath the symbol-range highlight;
+/// the two compose instead of one replacing the other.
+const SOURCE_HIGHLIGHT_BG: Color = Color::DarkGray;
+
+/// Renders `source.lines[start..end]` with a `{line_number:>5} | ` gutter,
+/// each line's code tokens colored per `token_highlights[i]` (`None` falls
+/// back to the plain unstyled line this screen always had, same contract as
+/// [`diff_line`]'s own fallback) and the symbol's own highlighted range
+/// (`source.highlight_start..=source.highlight_end`) composited on top as a
+/// background tint — mirrors the diff pane's own "token foreground + line-
+/// level background tint" composition (`diff_line`/`styled_content_spans`)
+/// rather than inventing a second scheme for this screen.
+fn source_lines(
+    source: &SourceView,
+    token_highlights: &[crate::highlight::LineHighlight],
+    start: usize,
+    end: usize,
+) -> Vec<Line<'static>> {
     source.lines[start..end]
         .iter()
         .enumerate()
         .map(|(offset, text)| {
-            let line_number = start + offset + 1;
+            let line_index = start + offset;
+            let line_number = line_index + 1;
             let is_highlighted =
                 line_number >= source.highlight_start && line_number <= source.highlight_end;
-            let style = if is_highlighted {
-                Style::default().bg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
-            Line::styled(format!("{line_number:>5} | {text}"), style)
+            let bg = is_highlighted.then_some(SOURCE_HIGHLIGHT_BG);
+
+            let gutter = format!("{line_number:>5} | ");
+            let mut spans = vec![gap_span(&gutter, bg)];
+            match token_highlights.get(line_index).cloned().flatten() {
+                Some(token_spans) => {
+                    spans.extend(styled_content_spans(text, &token_spans, bg));
+                }
+                None => spans.push(gap_span(text, bg)),
+            }
+            Line::from(spans)
         })
         .collect()
 }
@@ -1457,14 +1498,6 @@ mod tests {
         }
     }
 
-    /// A placeholder repo root for tests that don't exercise the source
-    /// drill-down's actual file read (every `draw` test except the two
-    /// `draw_source_screen` ones below) — `draw` still requires the
-    /// parameter, but nothing under this path is ever read.
-    fn test_repo_root() -> std::path::PathBuf {
-        std::path::PathBuf::from("/repo")
-    }
-
     /// `count` files (`f0.rs`..`f{count-1}.rs`), each with one symbol named
     /// after the file — a tree tall enough to exceed any reasonably sized
     /// terminal's viewport, for the tree pane's cursor-follow scroll tests
@@ -1544,7 +1577,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1586,7 +1619,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1636,7 +1669,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1669,7 +1702,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1698,7 +1731,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1733,7 +1766,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1775,7 +1808,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1805,7 +1838,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1844,7 +1877,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1888,7 +1921,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1937,7 +1970,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -1992,7 +2025,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2044,7 +2077,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2101,7 +2134,7 @@ mod tests {
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2142,7 +2175,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2203,7 +2236,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2270,7 +2303,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2335,7 +2368,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2395,7 +2428,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2446,7 +2479,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &blast_radius_selection,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2474,7 +2507,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &blast_radius_selection,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2517,7 +2550,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &blast_radius_selection,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2614,7 +2647,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2660,7 +2693,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2699,7 +2732,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2745,7 +2778,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2804,7 +2837,7 @@ index e69de29..4b825dc 100644
                     &diff_content,
                     &diff_highlights,
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2841,7 +2874,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2871,7 +2904,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -2881,6 +2914,23 @@ index e69de29..4b825dc 100644
         assert!(text.contains("order: topological"));
     }
 
+    /// A real `Err` from `crate::source::load_symbol_source`/
+    /// `load_highlighted_symbol_source`, produced by actually attempting a
+    /// read under a placeholder repo root nothing on disk matches — used to
+    /// build `source_content` for `draw_source_screen` tests below rather
+    /// than fabricating the error string by hand, so these tests stay
+    /// pinned to the real message format `crate::source` produces.
+    fn missing_file_source_content(
+        report: &Report,
+        symbol_id: &str,
+    ) -> Option<Result<crate::source::HighlightedSourceView, String>> {
+        Some(crate::source::load_highlighted_symbol_source(
+            report,
+            symbol_id,
+            std::path::Path::new("/repo"),
+        ))
+    }
+
     #[test]
     fn should_draw_source_screen_title_and_error_message_when_file_is_missing() {
         let report = report_with_one_symbol();
@@ -2888,6 +2938,7 @@ index e69de29..4b825dc 100644
             .handle_key(crate::app::InputKey::Down)
             .handle_key(crate::app::InputKey::Source);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let source_content = missing_file_source_content(&report, "lib.rs::foo");
 
         terminal
             .draw(|frame| {
@@ -2898,14 +2949,14 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    source_content.as_ref(),
                 );
             })
             .expect("draw");
 
-        // "lib.rs" does not exist under `test_repo_root()`'s placeholder
-        // path, so this exercises `draw_source_screen`'s error-message
-        // fallback path rather than needing a real file on disk.
+        // "lib.rs" does not exist under the placeholder repo root above, so
+        // this exercises `draw_source_screen`'s error-message fallback path
+        // rather than needing a real file on disk.
         let text = buffer_text(&terminal);
         assert!(text.contains("Source: lib.rs::foo"));
         assert!(text.contains("failed to read"));
@@ -2928,6 +2979,7 @@ index e69de29..4b825dc 100644
             .handle_key(crate::app::InputKey::Down)
             .handle_key(crate::app::InputKey::Source);
         let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("terminal");
+        let source_content = missing_file_source_content(&report, "lib.rs::foo");
 
         terminal
             .draw(|frame| {
@@ -2938,7 +2990,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    source_content.as_ref(),
                 );
             })
             .expect("draw");
@@ -2957,6 +3009,138 @@ index e69de29..4b825dc 100644
         assert!(text.contains("working tree"));
         assert!(text.contains("historical commit not checked out"));
         assert!(text.contains("locally)"));
+    }
+
+    // --- draw_source_screen: syntax highlighting ---
+
+    #[test]
+    fn should_apply_keyword_foreground_and_symbol_range_background_in_source_screen() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        std::fs::write(dir.path().join("lib.rs"), "fn a() {}\nfn foo() {}\n").expect("write file");
+
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    range: LineRange { start: 2, end: 2 },
+                    ..symbol("lib.rs::foo", "foo")
+                }],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Source);
+        let source_content = Some(crate::source::load_highlighted_symbol_source(
+            &report,
+            "lib.rs::foo",
+            dir.path(),
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    source_content.as_ref(),
+                );
+            })
+            .expect("draw");
+
+        // Line 2 ("fn foo() {}") is the symbol's own highlighted range: its
+        // "fn" keyword must carry both signals composited together — the
+        // token's own foreground color (ADR 0018's palette, extended to
+        // this screen) *and* the symbol-range background tint — mirroring
+        // how the diff pane composites a token's foreground with its
+        // added/removed background rather than one replacing the other.
+        let keyword_style = find_cell_style(&terminal, "2 | fn foo() {}", "fn");
+        assert_eq!(Some(Color::Magenta), keyword_style.fg);
+        assert_eq!(Some(SOURCE_HIGHLIGHT_BG), keyword_style.bg);
+
+        // Line 1 ("fn a() {}") is outside the symbol's range: its own "fn"
+        // keyword must still be colored (highlighting applies to every
+        // line, not just the highlighted range) but without the background
+        // tint, since only the drilled-into symbol's own lines get it.
+        // `Style::bg` reports an unset background as `Some(Color::Reset)`,
+        // not `None` (ratatui's own `Cell` default — see
+        // `should_keep_context_line_unstyled_background_in_diff_pane`'s own
+        // doc comment for this same convention on the diff pane).
+        let outside_range_style = find_cell_style(&terminal, "1 | fn a() {}", "fn");
+        assert_eq!(Some(Color::Magenta), outside_range_style.fg);
+        assert_eq!(Some(Color::Reset), outside_range_style.bg);
+    }
+
+    #[test]
+    fn should_fall_back_to_plain_source_style_when_file_extension_is_unrecognized() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        std::fs::write(dir.path().join("config.yaml"), "key: value\n").expect("write file");
+
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "config.yaml".to_string(),
+                symbols: vec![symbol("config.yaml::foo", "foo")],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        };
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Down)
+            .handle_key(crate::app::InputKey::Source);
+        let source_content = Some(crate::source::load_highlighted_symbol_source(
+            &report,
+            "config.yaml::foo",
+            dir.path(),
+        ));
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    source_content.as_ref(),
+                );
+            })
+            .expect("draw");
+
+        // No highlight configuration exists for `.yaml`
+        // (`highlight::config_for_path`), so the line still renders — with
+        // the symbol-range background tint (highlighting failing must never
+        // regress the pane below its pre-ADR-0018 plain style) but no
+        // per-token foreground coloring (`Style::fg` reports an unset
+        // foreground as `Some(Color::Reset)`, not `None` — same ratatui
+        // `Cell` default convention as `bg`, see the test above).
+        let text = buffer_text(&terminal);
+        assert!(text.contains("key: value"));
+        let style = find_cell_style(&terminal, "1 | key: value", "key");
+        assert_eq!(Some(SOURCE_HIGHLIGHT_BG), style.bg);
+        assert_eq!(Some(Color::Reset), style.fg);
     }
 
     // --- clamp_scroll / scroll_indicator (pure helpers) ---
@@ -3350,7 +3534,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3381,7 +3565,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3414,7 +3598,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3453,7 +3637,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3493,7 +3677,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3527,7 +3711,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3562,7 +3746,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3728,7 +3912,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
@@ -3778,7 +3962,7 @@ index e69de29..4b825dc 100644
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
                     &BlastRadiusSelection::NotApplicable,
-                    &test_repo_root(),
+                    None,
                 );
             })
             .expect("draw");
