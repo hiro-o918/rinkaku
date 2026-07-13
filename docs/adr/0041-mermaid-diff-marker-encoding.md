@@ -40,6 +40,11 @@ Applied in `render_mermaid`'s existing class-assignment loop as the
 `else` arm of the fan-in/added/changed match (previously "no class"),
 and symmetrically in `render_mermaid_file_level`'s per-path loop as
 the `else` arm of changed/removed-only (previously "no class").
+`render_mermaid_file_level`'s path labels get a `classDef` (`changed`/
+`removed`/`referenced`) the same way, but never a marker prefix: a
+path node aggregates every symbol in that file, so a single `+`/`~`/
+`-` character can't represent a file that may contain an added symbol
+next to an untouched one.
 
 ### Diff-style marker prefix on node labels
 
