@@ -122,6 +122,28 @@ pub enum InputKey {
     /// view is `InputKey::Quit`, a separate variant, since Esc has no
     /// "back" target to return to there).
     Back,
+    /// `Ctrl-d` (ADR 0026): scroll the reading pane down by half a viewport
+    /// (`Screen::Source`, or [`Screen::Entry`] + [`Focus::Right`]). The
+    /// actual step size depends on the pane's rendered height, which `App`
+    /// does not know, so this variant is handled by [`App::handle_scroll_key`]
+    /// (which takes the viewport height as an explicit argument) rather than
+    /// [`App::handle_key`]. A no-op on [`Screen::Entry`] + [`Focus::Tree`]
+    /// (nothing scrollable there — the tree already handles motion via
+    /// [`Self::Up`]/[`Self::Down`]).
+    ScrollHalfPageDown,
+    /// `Ctrl-u`: the reverse of [`Self::ScrollHalfPageDown`].
+    ScrollHalfPageUp,
+    /// `gg` (ADR 0026, resolved by `crate::lib::translate_key`'s `pending_prefix`
+    /// arm the same way `gd`/`gr` are, ADR 0022): scroll the reading pane
+    /// to the top (line 0). Handled by [`App::handle_scroll_key`] alongside
+    /// the half-page variants for uniformity, even though "top" itself does
+    /// not need the viewport height.
+    ScrollToTop,
+    /// `G` (`Shift-g`, ADR 0026): scroll the reading pane to the bottom.
+    /// Stored as `usize::MAX` and clamped down to
+    /// `total_lines - viewport_height` at draw time, matching
+    /// [`Screen::Source::scroll_top`]'s own sentinel convention.
+    ScrollToBottom,
     /// `q` or Ctrl-C on the entry view: exit the application.
     Quit,
     /// `?`: opens the help overlay (ADR 0020). While the overlay is open,
@@ -219,8 +241,31 @@ pub enum Screen {
     /// (not owned source text) so `App` stays cheap to clone/compare in
     /// tests — `crate::run`'s event loop resolves the actual file content
     /// via `crate::source` only when it redraws.
+    ///
+    /// `scroll_top` (ADR 0026) is the 0-based first-visible-line offset
+    /// requested by the reviewer — an unclamped request the same shape
+    /// [`App::right_pane_scroll`] uses. [`crate::ui::draw_source_screen`]
+    /// clamps it against the file's actual line count and the pane's
+    /// rendered height at draw time, keeping [`App`] free of any layout
+    /// concern.
+    ///
+    /// Initialized by `crate::run_app` (when the `s` key transitions into
+    /// this screen) to the same centered start [`crate::source::visible_window`]
+    /// already computes, so the first frame still shows the symbol's
+    /// definition centered in the viewport. Subsequent motion keys
+    /// (`j`/`k`/`Ctrl-d`/`Ctrl-u`/`gg`/`G`, ADR 0026) update this field
+    /// via [`App::handle_key`]/[`App::handle_scroll_key`] rather than
+    /// re-centering per frame — auto-recentering while the reviewer is
+    /// scrolling was the "wrong end of the design space" ADR 0026's
+    /// Context calls out.
+    ///
+    /// `usize::MAX` is the sentinel for "scroll to bottom": the
+    /// clamp-at-draw step folds it down to `total_lines - viewport_height`
+    /// cleanly, so no separate variant is needed for that state (see
+    /// ADR 0026's Alternatives).
     Source {
         symbol_id: String,
+        scroll_top: usize,
     },
 }
 
@@ -864,6 +909,18 @@ impl App {
             (&self.screen, self.focus, key),
             (Screen::Entry, Focus::Right, InputKey::Up)
                 | (Screen::Entry, Focus::Right, InputKey::Down)
+                // ADR 0026: half-page and top/bottom keys are dispatched
+                // through `handle_scroll_key` after this method returns
+                // (`crate::run_app`'s two-step dispatch). Without this
+                // exception, the blanket "reset scroll to 0" at the end
+                // of this function would wipe the scroll offset a moment
+                // before `handle_scroll_key` overwrote it — same class
+                // of bug the `Up`/`Down` case above already exists to
+                // prevent for plain j/k scrolling.
+                | (Screen::Entry, Focus::Right, InputKey::ScrollHalfPageDown)
+                | (Screen::Entry, Focus::Right, InputKey::ScrollHalfPageUp)
+                | (Screen::Entry, Focus::Right, InputKey::ScrollToTop)
+                | (Screen::Entry, Focus::Right, InputKey::ScrollToBottom)
                 // Independent-review finding: `crate::run_app`'s
                 // `dispatch_non_source_key` always calls `handle_key(input_key)`
                 // for `GotoDefinition`/`GotoReferences` first (ADR 0022's
@@ -924,6 +981,62 @@ impl App {
             (Screen::Source { .. }, _, InputKey::Back) => {
                 self.screen = Screen::Entry;
             }
+            // ADR 0026: `j`/`k` scroll the source pane by one line — the
+            // same "j/k scrolls the reading pane" rule ADR 0020 already
+            // applies to the entry view's right pane, extended here so a
+            // reviewer can read the caller a few lines above or the
+            // helper a few lines below the symbol they drilled into,
+            // rather than having to leave the TUI to see either.
+            //
+            // `scroll_top` is unclamped by design (see the field's own
+            // doc comment): `crate::ui::draw_source_screen` clamps it
+            // against the file's actual line count and the pane's
+            // rendered height at draw time, matching how
+            // `right_pane_scroll` already handles the same "App doesn't
+            // know the layout" problem.
+            (
+                Screen::Source {
+                    symbol_id,
+                    scroll_top,
+                },
+                _,
+                InputKey::Up,
+            ) => {
+                self.screen = Screen::Source {
+                    symbol_id: symbol_id.clone(),
+                    scroll_top: scroll_top.saturating_sub(1),
+                };
+            }
+            (
+                Screen::Source {
+                    symbol_id,
+                    scroll_top,
+                },
+                _,
+                InputKey::Down,
+            ) => {
+                self.screen = Screen::Source {
+                    symbol_id: symbol_id.clone(),
+                    scroll_top: scroll_top.saturating_add(1),
+                };
+            }
+            // Half-page steps and top/bottom jumps need the viewport
+            // height (or a `usize::MAX` sentinel) that `App::handle_key`
+            // doesn't know — they're handled by
+            // [`App::handle_scroll_key`] instead. This arm is still
+            // reached (via the ordinary `translate_key -> handle_key`
+            // path) so the blanket `status = None` /
+            // `pending_prefix = None` reset at the top of this function
+            // runs on this path too; the actual state mutation happens
+            // when `crate::run_app` calls `handle_scroll_key` next.
+            (
+                Screen::Source { .. },
+                _,
+                InputKey::ScrollHalfPageDown
+                | InputKey::ScrollHalfPageUp
+                | InputKey::ScrollToTop
+                | InputKey::ScrollToBottom,
+            ) => {}
             // Every other key is a no-op while the source view is open —
             // navigation/reordering only make sense against the entry
             // view's tree, and re-dispatching them would silently move
@@ -1030,8 +1143,19 @@ impl App {
                     && let NodeKind::Symbol(symbol_ref) = &row.node.kind
                     && !symbol_ref.removed
                 {
+                    // `scroll_top` starts at 0 here; `crate::run_app`
+                    // computes the centered start via `crate::source::
+                    // visible_window` once it has the file loaded, then
+                    // calls `Self::with_source_scroll_top` to overwrite
+                    // this initial 0. Kept as two steps (`App` transitions
+                    // to `Source`, then `run_app` back-fills the centered
+                    // scroll) because `App::handle_key` has no access to
+                    // the file's line count or the pane's rendered height
+                    // — the same seam `run_app` already uses to feed
+                    // `source_content` in after a file read.
                     self.screen = Screen::Source {
                         symbol_id: symbol_ref.id.clone(),
+                        scroll_top: 0,
                     };
                 }
             }
@@ -1171,6 +1295,31 @@ impl App {
                     self.status = Some("note: jumplist has no later location".to_string());
                 }
             }
+            // ADR 0026: half-page scroll and top/bottom jumps on the
+            // entry view are handled by [`App::handle_scroll_key`] (which
+            // has the viewport height) — same reasoning as the
+            // corresponding `Screen::Source` arm above. This is deliberately
+            // *not* gated on `Focus::Right`: `handle_scroll_key` itself
+            // will no-op when Tree-focused, and having the gate live in
+            // one place rather than duplicated here keeps the "which
+            // focus/screen actually scrolls" answer discoverable in one
+            // spot. The blanket end-of-function scroll reset below still
+            // wipes `right_pane_scroll` for these variants, which is the
+            // correct behavior only for the Tree-focus no-op case;
+            // `handle_scroll_key` is called separately by `crate::run_app`
+            // after this method returns and sets the real value then.
+            //
+            // Also included in `preserve_scroll`'s exception list above
+            // for `Focus::Right`, so the blanket reset does not wipe the
+            // pane-scroll `handle_scroll_key` is about to set.
+            (
+                Screen::Entry,
+                _,
+                InputKey::ScrollHalfPageDown
+                | InputKey::ScrollHalfPageUp
+                | InputKey::ScrollToTop
+                | InputKey::ScrollToBottom,
+            ) => {}
             // Unreachable while `handle_key` is entered directly (the popup
             // interception above returns before this match whenever
             // `jump_popup.is_some()`), kept only so the match stays
@@ -1247,6 +1396,120 @@ impl App {
     /// function's own comment on why the computation lives there).
     pub fn with_right_pane_scroll(mut self, scroll: usize) -> Self {
         self.right_pane_scroll = scroll;
+        self
+    }
+
+    /// Overwrites [`Screen::Source`]'s `scroll_top` to `scroll_top` —
+    /// used by `crate::run_app` right after the `s` key transitions to
+    /// [`Screen::Source`], to back-fill the centered starting position
+    /// [`crate::source::visible_window`] computes (see
+    /// [`InputKey::Source`]'s handling in [`Self::handle_key`]: the
+    /// transition itself sets `scroll_top = 0`, and this method
+    /// overwrites it with the centered value once `run_app` has loaded
+    /// the file and knows the layout). A no-op when the current screen
+    /// is [`Screen::Entry`] — defensive: callers are expected to check
+    /// [`Self::screen`] before invoking this, but `App` does not trust
+    /// that blindly.
+    pub fn with_source_scroll_top(mut self, scroll_top: usize) -> Self {
+        if let Screen::Source { symbol_id, .. } = &self.screen {
+            self.screen = Screen::Source {
+                symbol_id: symbol_id.clone(),
+                scroll_top,
+            };
+        }
+        self
+    }
+
+    /// Applies one of ADR 0026's four scroll [`InputKey`] variants against
+    /// whichever pane is scrollable right now, given `viewport_height` — the
+    /// last-drawn inner height of that pane, threaded in by `crate::run_app`
+    /// (which knows it from [`crate::ui::draw`]'s return value) since `App`
+    /// itself has no notion of the pane's layout.
+    ///
+    /// Split off from [`Self::handle_key`] rather than folded into it so
+    /// the other ~20 [`InputKey`] variants — which don't need viewport
+    /// height — don't pay the plumbing cost. `crate::run_app`'s two-step
+    /// dispatch is: call [`Self::handle_key`] first for the blanket
+    /// bookkeeping (`status`/`pending_prefix` reset, and — on the entry
+    /// view — `preserve_scroll` bookkeeping), then call this method for
+    /// the four scroll variants only. [`Self::handle_key`]'s own arms
+    /// for these four variants are deliberate no-ops that document this
+    /// split.
+    ///
+    /// Scoping:
+    ///
+    /// - On [`Screen::Source`], acts on `Screen::Source::scroll_top`.
+    /// - On [`Screen::Entry`] + [`Focus::Right`], acts on
+    ///   [`Self::right_pane_scroll`], the same field plain `j`/`k`
+    ///   already updates while Right-focused.
+    /// - On [`Screen::Entry`] + [`Focus::Tree`], a no-op — Tree-focused
+    ///   motion belongs on the tree cursor, not on any pane's scroll.
+    ///
+    /// `usize::MAX` is used as the "scroll to bottom" sentinel
+    /// ([`InputKey::ScrollToBottom`]'s doc comment): the clamp-at-draw
+    /// step folds it down to `total_lines - viewport_height` cleanly,
+    /// so no per-pane bottom sentinel is needed here.
+    pub fn handle_scroll_key(mut self, key: InputKey, viewport_height: usize) -> Self {
+        let step = viewport_height / 2;
+        match (&self.screen, self.focus, key) {
+            (
+                Screen::Source {
+                    symbol_id,
+                    scroll_top,
+                },
+                _,
+                InputKey::ScrollHalfPageDown,
+            ) => {
+                let next = scroll_top.saturating_add(step);
+                self.screen = Screen::Source {
+                    symbol_id: symbol_id.clone(),
+                    scroll_top: next,
+                };
+            }
+            (
+                Screen::Source {
+                    symbol_id,
+                    scroll_top,
+                },
+                _,
+                InputKey::ScrollHalfPageUp,
+            ) => {
+                let next = scroll_top.saturating_sub(step);
+                self.screen = Screen::Source {
+                    symbol_id: symbol_id.clone(),
+                    scroll_top: next,
+                };
+            }
+            (Screen::Source { symbol_id, .. }, _, InputKey::ScrollToTop) => {
+                self.screen = Screen::Source {
+                    symbol_id: symbol_id.clone(),
+                    scroll_top: 0,
+                };
+            }
+            (Screen::Source { symbol_id, .. }, _, InputKey::ScrollToBottom) => {
+                self.screen = Screen::Source {
+                    symbol_id: symbol_id.clone(),
+                    scroll_top: usize::MAX,
+                };
+            }
+            (Screen::Entry, Focus::Right, InputKey::ScrollHalfPageDown) => {
+                self.right_pane_scroll = self.right_pane_scroll.saturating_add(step);
+            }
+            (Screen::Entry, Focus::Right, InputKey::ScrollHalfPageUp) => {
+                self.right_pane_scroll = self.right_pane_scroll.saturating_sub(step);
+            }
+            (Screen::Entry, Focus::Right, InputKey::ScrollToTop) => {
+                self.right_pane_scroll = 0;
+            }
+            (Screen::Entry, Focus::Right, InputKey::ScrollToBottom) => {
+                self.right_pane_scroll = usize::MAX;
+            }
+            // Tree focus on the entry view, or any non-scroll key on the
+            // source screen — deliberate no-op. `crate::run_app` only
+            // calls this for the four scroll variants, so the non-scroll
+            // case is defensive.
+            _ => {}
+        }
         self
     }
 }
@@ -1362,7 +1625,8 @@ mod tests {
 
         assert_eq!(
             Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 0,
             },
             *app.screen()
         );
@@ -1387,7 +1651,8 @@ mod tests {
             .handle_key(InputKey::Source);
         assert_eq!(
             Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 0,
             },
             *app.screen()
         );
@@ -1398,7 +1663,14 @@ mod tests {
     }
 
     #[test]
-    fn should_ignore_navigation_keys_while_source_screen_is_open() {
+    fn should_scroll_source_screen_and_not_move_tree_cursor_when_down_is_pressed() {
+        // ADR 0026: `j`/`k` on the source screen scroll
+        // `Screen::Source::scroll_top` rather than moving the tree cursor
+        // (which the reviewer can't see move behind the source screen
+        // anyway — the point of ADR 0026's Context, and the whole reason
+        // Source used to be Back-only). Pins both halves of the new
+        // contract: the tree cursor stays put *and* the scroll offset
+        // moves.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(InputKey::Down)
@@ -1410,7 +1682,8 @@ mod tests {
         assert_eq!(cursor_before, app.nav().cursor());
         assert_eq!(
             Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 1,
             },
             *app.screen()
         );
@@ -1795,7 +2068,8 @@ mod tests {
         assert_eq!(RightPane::Diff, app.right_pane());
         assert_eq!(
             Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 0,
             },
             *app.screen()
         );
@@ -2294,7 +2568,8 @@ mod tests {
             .handle_key(InputKey::Source); // opens Screen::Source
         assert_eq!(
             Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 0,
             },
             *app.screen()
         );
@@ -2306,9 +2581,17 @@ mod tests {
     }
 
     #[test]
-    fn should_ignore_scroll_keys_while_source_screen_is_open() {
-        // Post-dogfooding-fix note: the source screen is now reached only
-        // via the dedicated `s` key (`InputKey::Source`), not `Enter` — see
+    fn should_scroll_source_screen_without_touching_right_pane_scroll_when_down_is_pressed() {
+        // ADR 0026: `j`/`k` on the source screen updates
+        // `Screen::Source::scroll_top`, not the entry view's own
+        // `right_pane_scroll` — the two are independent pieces of scroll
+        // state (see the field's own doc comment on why they were not
+        // unified). Pins both halves: `right_pane_scroll` stays at 0
+        // (the entry view has never scrolled) and the source screen's
+        // `scroll_top` moves.
+        //
+        // Post-dogfooding-fix note: the source screen is reached only via
+        // the dedicated `s` key (`InputKey::Source`), not `Enter` — see
         // `should_keep_right_pane_scroll_at_zero_when_returning_from_source_screen`'s
         // own note.
         let report = report_with_one_symbol();
@@ -2321,7 +2604,8 @@ mod tests {
         assert_eq!(0, app.right_pane_scroll());
         assert_eq!(
             Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 1,
             },
             *app.screen()
         );
@@ -2845,5 +3129,204 @@ mod tests {
 
         let app = app.handle_key(InputKey::JumpForward);
         assert_eq!(Some("note: jumplist has no later location"), app.status());
+    }
+
+    // ADR 0026: scroll bindings — `App::handle_key`'s Source-screen `Up`/
+    // `Down` arms plus `App::handle_scroll_key`'s four scroll variants,
+    // exercised against both `Screen::Source` and `Screen::Entry` +
+    // `Focus::Right`.
+
+    #[test]
+    fn should_scroll_source_up_from_a_nonzero_position_when_up_is_pressed() {
+        // Complements `should_scroll_source_screen_and_not_move_tree_cursor_when_down_is_pressed`
+        // above (which covers the Down direction from 0). Starts at
+        // scroll_top = 3 (via `with_source_scroll_top`, mirroring how
+        // `crate::run_app` back-fills the centered initial position) so
+        // the `Up` press has somewhere to move from, and pins the
+        // `saturating_sub(1)` step size.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source)
+            .with_source_scroll_top(3);
+
+        let app = app.handle_key(InputKey::Up);
+
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 2,
+            },
+            *app.screen()
+        );
+    }
+
+    #[test]
+    fn should_saturate_source_scroll_up_at_zero_when_already_at_the_top() {
+        // A `k` at scroll 0 must stay at 0 rather than underflowing to
+        // `usize::MAX` — the same `saturating_sub` discipline the entry
+        // view's own Up arm already uses for `right_pane_scroll`.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+
+        let app = app.handle_key(InputKey::Up);
+
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 0,
+            },
+            *app.screen()
+        );
+    }
+
+    #[test]
+    fn should_add_half_viewport_to_source_scroll_top_when_scroll_half_page_down_is_dispatched() {
+        // `handle_scroll_key` needs the viewport height, so this is
+        // exercised via `handle_scroll_key` directly (not `handle_key`)
+        // — the same two-step dispatch `crate::run_app` uses. Viewport
+        // height 20 → step size 10.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+
+        let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 20);
+
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 10,
+            },
+            *app.screen()
+        );
+    }
+
+    #[test]
+    fn should_saturate_source_scroll_half_page_up_at_zero() {
+        // Half-page up from a low scroll must not underflow — mirrors
+        // the Up arm's `saturating_sub` (`saturating_sub` inside
+        // `handle_scroll_key` for this one).
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source)
+            .with_source_scroll_top(3);
+
+        let app = app.handle_scroll_key(InputKey::ScrollHalfPageUp, 20);
+
+        // 3 - 10 saturates to 0.
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 0,
+            },
+            *app.screen()
+        );
+    }
+
+    #[test]
+    fn should_reset_source_scroll_top_to_zero_when_scroll_to_top_is_dispatched() {
+        // `gg` on the source screen. Viewport height is irrelevant for
+        // this variant (it does not read it) but still required by the
+        // shared `handle_scroll_key` signature.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source)
+            .with_source_scroll_top(50);
+
+        let app = app.handle_scroll_key(InputKey::ScrollToTop, 20);
+
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: 0,
+            },
+            *app.screen()
+        );
+    }
+
+    #[test]
+    fn should_set_source_scroll_top_to_usize_max_sentinel_when_scroll_to_bottom_is_dispatched() {
+        // `G` on the source screen. `App` has no notion of the file's
+        // line count — the actual "bottom" is resolved by `ui`'s
+        // `clamped_window` at draw time — so `handle_scroll_key` records
+        // `usize::MAX` here and lets the draw-time clamp fold it down.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Source);
+
+        let app = app.handle_scroll_key(InputKey::ScrollToBottom, 20);
+
+        assert_eq!(
+            Screen::Source {
+                symbol_id: "lib.rs::foo".to_string(),
+                scroll_top: usize::MAX,
+            },
+            *app.screen()
+        );
+    }
+
+    #[test]
+    fn should_add_half_viewport_to_right_pane_scroll_when_focus_right_scroll_half_page_down() {
+        // Entry-view side of ADR 0026: the same four scroll variants
+        // act on `right_pane_scroll` while `Focus::Right`. Reach
+        // `Focus::Right` via `Open` on the file row (ADR 0020) so the
+        // scroll actually applies to a real pane.
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(0, app.right_pane_scroll());
+
+        let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 30);
+
+        assert_eq!(15, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_leave_right_pane_scroll_untouched_when_focus_tree_and_scroll_half_page_down() {
+        // Tree focus is the entry view's default; `handle_scroll_key` must
+        // no-op there (ADR 0026's decision 3), leaving `right_pane_scroll`
+        // at 0 rather than scrolling a pane the reviewer is not looking
+        // at.
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        assert_eq!(Focus::Tree, app.focus());
+
+        let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 30);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_reset_right_pane_scroll_to_zero_on_focus_right_scroll_to_top() {
+        // `gg` on the entry view + `Focus::Right`.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Open)
+            .with_right_pane_scroll(42);
+        assert_eq!(Focus::Right, app.focus());
+
+        let app = app.handle_scroll_key(InputKey::ScrollToTop, 30);
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_set_right_pane_scroll_to_usize_max_sentinel_on_focus_right_scroll_to_bottom() {
+        // `G` on the entry view + `Focus::Right`. Same
+        // `usize::MAX`-sentinel-plus-draw-time-clamp discipline the
+        // source screen uses.
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(Focus::Right, app.focus());
+
+        let app = app.handle_scroll_key(InputKey::ScrollToBottom, 30);
+
+        assert_eq!(usize::MAX, app.right_pane_scroll());
     }
 }

@@ -15,7 +15,7 @@ use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, PALETTE, TokenSpan};
 use crate::row_view::{entry_row_line, relative_labels};
-use crate::source::{HighlightedSourceView, SourceView, visible_window};
+use crate::source::{HighlightedSourceView, SourceView};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -52,17 +52,44 @@ use unicode_width::UnicodeWidthChar;
 /// the overlay is open or not, and the overlay is simply composited over
 /// it as a final step.
 ///
-/// Returns the right-hand pane's scroll offset as actually clamped and
-/// rendered this frame (`None` on [`Screen::Source`], which scrolls via its
-/// own auto-centering window rather than `App::right_pane_scroll`, or when
-/// the active right pane rendered a placeholder with nothing to scroll —
-/// `draw_entry_screen`'s own doc comment). `crate::run_app` feeds this back
-/// into `App` (`App::with_right_pane_scroll`) after every draw so an
-/// overshot scroll request (dogfooding finding: repeated `j` past the
-/// content's end used to keep incrementing `App`'s unclamped "requested"
-/// scroll with no visible effect, so winding back down again took as many
-/// `k` presses as it took to overshoot) never survives past the frame that
-/// visibly clamped it.
+/// Everything [`crate::run_app`] needs to fold back into `App` after each
+/// draw: the pane-scroll actually rendered this frame (so an overshot
+/// request never survives past the visible clamp) and the inner height of
+/// the currently-scrolling pane (so the next `Ctrl-d`/`Ctrl-u` half-page
+/// step, ADR 0026, can be sized against the real viewport rather than a
+/// magic constant).
+///
+/// Both fields are `Option<usize>` because a given frame may not have
+/// anything to fold back at all — no right pane on [`Screen::Source`],
+/// no scrolling pane at all when the tree has focus, etc. `crate::run_app`
+/// treats each `None` as "nothing to update on that seam this frame",
+/// mirroring the pre-existing single-`Option<usize>` return this replaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DrawOutcome {
+    /// The right-hand pane's scroll offset as actually clamped and
+    /// rendered this frame (`None` on [`Screen::Source`], which scrolls
+    /// via its own `Screen::Source::scroll_top` rather than
+    /// `App::right_pane_scroll`, or when the active right pane rendered
+    /// a placeholder with nothing to scroll — `draw_entry_screen`'s own
+    /// doc comment). `crate::run_app` feeds this back into `App`
+    /// (`App::with_right_pane_scroll`) after every draw so an overshot
+    /// scroll request (dogfooding finding: repeated `j` past the
+    /// content's end used to keep incrementing `App`'s unclamped
+    /// "requested" scroll with no visible effect, so winding back down
+    /// again took as many `k` presses as it took to overshoot) never
+    /// survives past the frame that visibly clamped it.
+    pub clamped_right_pane_scroll: Option<usize>,
+    /// The inner height (borders excluded) of whichever pane is currently
+    /// scrollable — the source pane on [`Screen::Source`], the right pane
+    /// on [`Screen::Entry`] + [`crate::app::Focus::Right`], and `None`
+    /// otherwise (Tree-focused on the entry view has no scrollable pane
+    /// receiving motion). `crate::run_app` remembers this between frames
+    /// and passes it into [`crate::app::App::handle_scroll_key`] when a
+    /// half-page (ADR 0026) key arrives, so the step size scales with
+    /// the actual pane rather than a magic constant.
+    pub scroll_viewport_height: Option<usize>,
+}
+
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -71,24 +98,49 @@ pub fn draw(
     diff_highlights: &[HighlightedFile],
     blast_radius_selection: &BlastRadiusSelection,
     source_content: Option<&Result<HighlightedSourceView, String>>,
-) -> Option<usize> {
+) -> DrawOutcome {
     let area = frame.area();
     let [body, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
-    let clamped_scroll = match app.screen() {
-        Screen::Entry => draw_entry_screen(
-            frame,
-            app,
-            report,
-            diff_content,
-            diff_highlights,
-            blast_radius_selection,
-            body,
-        ),
-        Screen::Source { symbol_id } => {
-            draw_source_screen(frame, symbol_id, source_content, body);
-            None
+    let outcome = match app.screen() {
+        Screen::Entry => {
+            let clamped = draw_entry_screen(
+                frame,
+                app,
+                report,
+                diff_content,
+                diff_highlights,
+                blast_radius_selection,
+                body,
+            );
+            // Right-pane inner height (borders excluded), computed the
+            // same way `draw_entry_screen`'s split does when it actually
+            // renders — mirrored here so the scroll pipeline sees the
+            // very same viewport the reviewer just saw. Only reported
+            // while `Focus::Right` (the only state where scroll keys
+            // apply to the right pane); a Tree-focused frame has no
+            // scrolling pane to size, so returns `None`.
+            let scroll_viewport_height = if app.focus() == crate::app::Focus::Right {
+                Some(right_pane_viewport_height(body))
+            } else {
+                None
+            };
+            DrawOutcome {
+                clamped_right_pane_scroll: clamped,
+                scroll_viewport_height,
+            }
+        }
+        Screen::Source {
+            symbol_id,
+            scroll_top,
+        } => {
+            let inner_height = body.height.saturating_sub(2) as usize;
+            draw_source_screen(frame, symbol_id, *scroll_top, source_content, body);
+            DrawOutcome {
+                clamped_right_pane_scroll: None,
+                scroll_viewport_height: Some(inner_height),
+            }
         }
     };
 
@@ -101,8 +153,32 @@ pub fn draw(
         draw_jump_popup(frame, popup, area);
     }
 
-    clamped_scroll
+    outcome
 }
+
+/// The right pane's inner height (borders excluded), computed from `body`
+/// (the entry screen's full body area) using the same 60/40 horizontal
+/// split and `saturating_sub(2)` border deduction [`draw_entry_screen`]
+/// itself uses (`ENTRY_TREE_WIDTH_PERCENT`/`ENTRY_RIGHT_WIDTH_PERCENT`
+/// below, referenced both here and there so the two never drift).
+/// Extracted so [`DrawOutcome`]'s `scroll_viewport_height` reflects the
+/// exact viewport a reviewer just saw.
+fn right_pane_viewport_height(body: Rect) -> usize {
+    let [_, right] = Layout::horizontal([
+        Constraint::Percentage(ENTRY_TREE_WIDTH_PERCENT),
+        Constraint::Percentage(ENTRY_RIGHT_WIDTH_PERCENT),
+    ])
+    .areas(body);
+    right.height.saturating_sub(2) as usize
+}
+
+/// Tree-pane / right-pane horizontal split percentages for [`Screen::Entry`],
+/// shared between [`draw_entry_screen`]'s actual layout and
+/// [`right_pane_viewport_height`]'s report of that layout to
+/// [`DrawOutcome::scroll_viewport_height`] (ADR 0026) so the two cannot
+/// drift.
+const ENTRY_TREE_WIDTH_PERCENT: u16 = 60;
+const ENTRY_RIGHT_WIDTH_PERCENT: u16 = 40;
 
 /// Draws the `?` help overlay (ADR 0020) centered over `full_area`: a
 /// bordered box roughly 70% of the frame's width/height (capped so it
@@ -257,8 +333,11 @@ fn draw_entry_screen(
     blast_radius_selection: &BlastRadiusSelection,
     area: Rect,
 ) -> Option<usize> {
-    let [tree_area, right_area] =
-        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let [tree_area, right_area] = Layout::horizontal([
+        Constraint::Percentage(ENTRY_TREE_WIDTH_PERCENT),
+        Constraint::Percentage(ENTRY_RIGHT_WIDTH_PERCENT),
+    ])
+    .areas(area);
 
     draw_tree_pane(frame, app, tree_area);
     match app.right_pane() {
@@ -1288,9 +1367,18 @@ fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
 /// idle poll tick too — the exact per-frame-recompute bug ADR 0018 already
 /// had to fix once for the diff pane, `crate::run_app`'s own doc comment on
 /// `diff_highlights`), this screen now only re-renders the already-computed
-/// `source_content` — including its windowing (`visible_window` below),
-/// which is cheap enough to stay per-frame and keeps the view correctly
-/// centered across a terminal resize without needing a new key event.
+/// `source_content`.
+///
+/// `scroll_top` (ADR 0026) is the reviewer's requested 0-based first-visible
+/// line — an unclamped value stored in [`Screen::Source::scroll_top`] that
+/// this function clamps against the file's actual line count and the pane's
+/// rendered height at draw time (`scroll_top.min(max_start)`). The initial
+/// value, set by `crate::run_app` when the `s` key opens this screen, is
+/// [`crate::source::visible_window`]'s centered start so the first frame
+/// still shows the symbol's definition centered in the viewport; subsequent
+/// motion keys move `scroll_top` away from that starting position.
+/// [`InputKey::ScrollToBottom`]'s `usize::MAX` sentinel folds cleanly through
+/// this same clamp — no per-variant special case needed here.
 ///
 /// `source_content` is `None` only when `crate::run_app` has not yet reached
 /// the point of computing it (defensive — `draw`'s own `Screen::Source` arm
@@ -1299,6 +1387,7 @@ fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
 fn draw_source_screen(
     frame: &mut Frame,
     symbol_id: &str,
+    scroll_top: usize,
     source_content: Option<&Result<HighlightedSourceView, String>>,
     area: Rect,
 ) {
@@ -1331,16 +1420,33 @@ fn draw_source_screen(
     let source = &highlighted.view;
 
     let viewport_height = area.height.saturating_sub(2) as usize; // borders
-    let (start, end) = visible_window(
-        source.lines.len(),
-        source.highlight_start,
-        source.highlight_end,
-        viewport_height,
-    );
+    let (start, end) = clamped_window(source.lines.len(), scroll_top, viewport_height);
 
     let lines = source_lines(source, &highlighted.token_highlights, start, end);
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
+}
+
+/// Clamps a reviewer-requested `scroll_top` (ADR 0026) against a file of
+/// `total_lines` shown in a viewport `viewport_height` rows tall, returning
+/// the 0-based half-open `[start, end)` slice to render. Handles the two
+/// edge cases the source screen actually hits:
+///
+/// - `total_lines < viewport_height` — the whole file fits, so `start = 0`
+///   regardless of the requested `scroll_top`.
+/// - `scroll_top` past the end of the file (either a real overshoot from
+///   repeated `j`, or [`crate::app::InputKey::ScrollToBottom`]'s `usize::MAX`
+///   sentinel itself) — folded down to `total_lines - viewport_height` so
+///   the last line still lands at the bottom of the pane rather than
+///   scrolling off it.
+fn clamped_window(total_lines: usize, scroll_top: usize, viewport_height: usize) -> (usize, usize) {
+    if total_lines == 0 || viewport_height == 0 {
+        return (0, 0);
+    }
+    let max_start = total_lines.saturating_sub(viewport_height);
+    let start = scroll_top.min(max_start);
+    let end = (start + viewport_height).min(total_lines);
+    (start, end)
 }
 
 /// Background tint for a source-screen line inside the drilled-into symbol's
@@ -1434,15 +1540,17 @@ fn status_line_text(app: &App) -> String {
                     "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
-                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+                    "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right => {
-                    "j/k: scroll  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+                    "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 }
             };
             format!("order: {order}  |  {keys}")
         }
-        Screen::Source { .. } => "esc/q: back".to_string(),
+        Screen::Source { .. } => {
+            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  esc/q: back".to_string()
+        }
     };
 
     match app.status() {
@@ -1691,7 +1799,17 @@ mod tests {
     fn should_draw_help_overlay_with_keymap_and_glossary_when_help_is_open() {
         let report = report_with_one_symbol();
         let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
-        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+        // A 100x50 terminal (up from 100x40 before ADR 0026) so the
+        // overlay's 80% x 90% area (about 80x45 inner) fits every keymap
+        // group *and* the trailing Glossary section without the last
+        // section being pushed off the bottom. ADR 0026 added the
+        // "Source view" group and three extra "Right focus" entries
+        // (gg/G, Ctrl-d/u), which grew the pre-glossary content past
+        // the old 36-row overlay ceiling. Grown here rather than
+        // narrowing the keymap itself since discoverability of the new
+        // bindings is the whole point of adding them to the overlay in
+        // the first place.
+        let mut terminal = Terminal::new(TestBackend::new(100, 50)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -1711,6 +1829,7 @@ mod tests {
         assert!(text.contains("Help"));
         assert!(text.contains("Tree focus"));
         assert!(text.contains("Right focus"));
+        assert!(text.contains("Source view"));
         assert!(text.contains("Global"));
         assert!(text.contains("Glossary"));
         assert!(text.contains("blast radius"));
@@ -3414,7 +3533,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -3435,17 +3554,20 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
     }
 
     #[test]
-    fn should_show_back_hint_only_on_source_screen_regardless_of_focus() {
+    fn should_show_source_view_scroll_hints_on_source_screen_regardless_of_focus() {
         // The source screen is reached only via the dedicated `s` key
         // (`InputKey::Source`) now, not `Enter` — a dogfooding fix to
         // `InputKey::Open`'s own arm (see its doc comment in `crate::app`).
+        // ADR 0026 adds this screen's own scroll bindings to the status
+        // line so the reviewer can discover them without opening the
+        // help overlay first.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(crate::app::InputKey::Down)
@@ -3453,7 +3575,10 @@ index e69de29..4b825dc 100644
 
         let actual = status_line_text(&app);
 
-        assert_eq!("esc/q: back".to_string(), actual);
+        assert_eq!(
+            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  esc/q: back".to_string(),
+            actual
+        );
     }
 
     #[test]
@@ -3667,7 +3792,7 @@ index e69de29..4b825dc 100644
         );
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
-        let mut actual = None;
+        let mut actual = DrawOutcome::default();
         terminal
             .draw(|frame| {
                 actual = draw(
@@ -3682,26 +3807,37 @@ index e69de29..4b825dc 100644
             })
             .expect("draw");
 
-        assert!(actual.is_some());
+        let clamped = actual
+            .clamped_right_pane_scroll
+            .expect("right pane rendered scrollable content, so a clamped offset must be reported");
         assert!(
-            actual.unwrap() < app.right_pane_scroll(),
+            clamped < app.right_pane_scroll(),
             "clamped scroll must be strictly less than the overshot request"
         );
     }
 
     #[test]
-    fn should_return_none_from_draw_when_the_source_screen_is_open() {
-        // The source screen scrolls via its own auto-centering window, not
-        // `App::right_pane_scroll` (`ui::draw`'s own doc comment) — `draw`
-        // must not report a clamped offset for `crate::run_app` to fold
-        // back in that case.
+    fn should_report_none_clamped_scroll_but_source_viewport_height_when_source_screen_is_open() {
+        // ADR 0026: the source screen scrolls via its own
+        // `Screen::Source::scroll_top`, not `App::right_pane_scroll`, so
+        // `DrawOutcome::clamped_right_pane_scroll` must stay `None` on this
+        // screen (otherwise `crate::run_app`'s
+        // `clamp_right_pane_scroll_after_draw` would fold a source-screen
+        // offset back into the wrong field). At the same time the source
+        // pane's inner height must be surfaced via
+        // `scroll_viewport_height` — otherwise `Ctrl-d`/`Ctrl-u`/`G` from
+        // the source screen would have no viewport to size their step
+        // against, defaulting to `DEFAULT_SOURCE_VIEWPORT_HEIGHT`.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(crate::app::InputKey::Down)
             .handle_key(crate::app::InputKey::Source);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
-        let mut actual = Some(999); // sentinel: must be overwritten to None
+        let mut actual = DrawOutcome {
+            clamped_right_pane_scroll: Some(999),
+            scroll_viewport_height: None,
+        };
         terminal
             .draw(|frame| {
                 actual = draw(
@@ -3716,7 +3852,14 @@ index e69de29..4b825dc 100644
             })
             .expect("draw");
 
-        assert_eq!(None, actual);
+        assert_eq!(None, actual.clamped_right_pane_scroll);
+        // A 20-row terminal with a 1-row status line leaves 19 rows for
+        // the body; the source pane's bordered box takes 2 of them,
+        // leaving 17 rows inside. Pinned exactly (rather than a range)
+        // so a future layout refactor that silently changes the split
+        // is caught, matching the specificity `ADR 0020`'s own
+        // `right_pane_viewport_height` shares with `draw_entry_screen`.
+        assert_eq!(Some(17), actual.scroll_viewport_height);
     }
 
     #[test]

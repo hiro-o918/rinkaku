@@ -71,6 +71,14 @@ const RIGHT_FOCUS_BINDINGS: &[KeyBinding] = &[
         description: "Scroll the right pane by one line",
     },
     KeyBinding {
+        keys: "ctrl-d / ctrl-u",
+        description: "Scroll the right pane by half a page",
+    },
+    KeyBinding {
+        keys: "gg / G",
+        description: "Jump to the top / bottom of the right pane",
+    },
+    KeyBinding {
         keys: "h / esc",
         description: "Return focus to the tree",
     },
@@ -81,6 +89,25 @@ const RIGHT_FOCUS_BINDINGS: &[KeyBinding] = &[
     KeyBinding {
         keys: "[",
         description: "Jump to the previous hunk (Diff pane only)",
+    },
+];
+
+const SOURCE_SCREEN_BINDINGS: &[KeyBinding] = &[
+    KeyBinding {
+        keys: "j / k / ↓ / ↑",
+        description: "Scroll the source pane by one line",
+    },
+    KeyBinding {
+        keys: "ctrl-d / ctrl-u",
+        description: "Scroll the source pane by half a page",
+    },
+    KeyBinding {
+        keys: "gg / G",
+        description: "Jump to the top / bottom of the file",
+    },
+    KeyBinding {
+        keys: "esc / q",
+        description: "Return to the entry view",
     },
 ];
 
@@ -137,6 +164,10 @@ const KEYMAP_GROUPS: &[KeyBindingGroup] = &[
         bindings: RIGHT_FOCUS_BINDINGS,
     },
     KeyBindingGroup {
+        title: "Source view",
+        bindings: SOURCE_SCREEN_BINDINGS,
+    },
+    KeyBindingGroup {
         title: "Global",
         bindings: GLOBAL_BINDINGS,
     },
@@ -177,14 +208,42 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn should_include_a_tree_focus_right_focus_and_global_group_in_that_order() {
+    fn should_list_keymap_groups_in_tree_right_source_global_order() {
         let titles: Vec<&str> = HELP_CONTENT
             .keymap_groups
             .iter()
             .map(|group| group.title)
             .collect();
 
-        assert_eq!(vec!["Tree focus", "Right focus", "Global"], titles);
+        assert_eq!(
+            vec!["Tree focus", "Right focus", "Source view", "Global"],
+            titles
+        );
+    }
+
+    #[test]
+    fn should_document_source_view_scroll_bindings_in_the_source_view_group() {
+        // ADR 0026: the source view has its own scroll bindings (j/k,
+        // Ctrl-d/Ctrl-u, gg/G) plus esc/q to return to the entry view.
+        // Pinned so a future rename/typo/omission of any of them is
+        // caught, and so the group's own presence is not silently
+        // dropped by a keymap refactor.
+        let source_view = HELP_CONTENT
+            .keymap_groups
+            .iter()
+            .find(|group| group.title == "Source view")
+            .expect("Source view group present");
+
+        let keys: Vec<&str> = source_view
+            .bindings
+            .iter()
+            .map(|binding| binding.keys)
+            .collect();
+
+        assert!(keys.contains(&"j / k / ↓ / ↑"));
+        assert!(keys.contains(&"ctrl-d / ctrl-u"));
+        assert!(keys.contains(&"gg / G"));
+        assert!(keys.contains(&"esc / q"));
     }
 
     #[test]
