@@ -1,4 +1,4 @@
-# 0029. Parallel whole-repo tree-sitter parse with rayon
+# 0031. Parallel whole-repo tree-sitter parse with rayon
 
 - Status: accepted
 - Date: 2026-07-13

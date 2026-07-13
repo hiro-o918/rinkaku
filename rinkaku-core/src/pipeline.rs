@@ -374,7 +374,7 @@ pub fn analyze_repo(
     generated_paths: &std::collections::HashSet<String>,
     include_generated: bool,
 ) -> Report {
-    // ADR 0029: the per-file body below is embarrassingly parallel —
+    // ADR 0031: the per-file body below is embarrassingly parallel —
     // `extract_all_symbols` builds a fresh `tree_sitter::Parser` per call
     // (see `extract::with_definition_nodes`), the `read_file` port is
     // `Sync + Send` (bound tightened above), and every filter reads
@@ -2918,7 +2918,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
         }
     }
 
-    /// ADR 0029 regression: `analyze_repo`'s per-file loop is now driven
+    /// ADR 0031 regression: `analyze_repo`'s per-file loop is now driven
     /// by rayon's `par_iter`, whose ordered `collect` contract is what
     /// keeps the output for a given input deterministic (byte-identical
     /// across runs and, within a single run, in the same order as the
