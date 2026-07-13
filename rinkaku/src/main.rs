@@ -194,7 +194,14 @@ fn main() -> anyhow::Result<()> {
     // below — gave no feedback at all while running). `RUST_LOG` still
     // overrides this, same as any other `env_logger::Builder::from_env`
     // setup.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    //
+    // Timestamp and module path are dropped: this is a short-lived
+    // one-shot CLI, so there is nothing to correlate a timestamp against,
+    // and the binary is a single crate, making the module path redundant.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .format_target(false)
+        .init();
     let cli = Cli::parse();
 
     if let Some(Command::SelfUpdate { yes }) = cli.command {
