@@ -134,6 +134,17 @@ fn main() -> anyhow::Result<()> {
             logger_builder()
                 .target(env_logger::Target::Pipe(Box::new(log_sink.clone())))
                 .init();
+            // Declared before `TuiSession::init` so Rust's drop order (LIFO)
+            // runs `session`'s terminal-restoring `Drop` before this guard's
+            // log-release `Drop`, on *any* unwind past this point — a panic
+            // inside `run_analysis`/`TuiSession::run`, or an early `?`
+            // return from `TuiSession::init`/`draw_splash` below, neither of
+            // which reaches the explicit `release_log_sink` calls further
+            // down. Those explicit calls still run first on the normal exit
+            // paths (`release` is idempotent, see `DeferredLogSink::release`),
+            // giving deterministic logs-before-notes ordering there; this
+            // guard is purely the safety net for the paths that skip them.
+            let _log_sink_guard = log_writer::ReleaseGuard::new(log_sink.clone(), std::io::stderr);
 
             // No stderr spinner in this branch (ADR 0033 decision 1): the
             // splash screen drawn on the alternate screen is this run's
@@ -246,10 +257,13 @@ fn flush_notes(notes: Vec<String>) {
 }
 
 /// Releases a `--tui`-mode [`DeferredLogSink`] to stderr — the `log::`
-/// counterpart of [`flush_notes`], called at the same two points (both of
-/// this function's call sites in `main` are positioned identically; see
-/// each one's own comment) so buffered log records drain in order once the
-/// terminal has actually left the alternate screen.
+/// counterpart of [`flush_notes`]. Called explicitly at `main`'s two normal
+/// exit points, in the same position as each `flush_notes` call, so logs
+/// drain before notes in a fixed order on those paths (`release` is
+/// idempotent, so this is safe even though `_log_sink_guard`'s `Drop` will
+/// also release the same sink later). Paths that skip these explicit calls
+/// (a panic, or an early `?` return before either is reached) still get
+/// their buffered records drained by that guard.
 fn release_log_sink(sink: &DeferredLogSink<std::io::Stderr>) {
     // A failed `write_all`/`flush` to stderr here has nowhere left to be
     // reported (the process is already on its way out in every call site),

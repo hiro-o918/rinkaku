@@ -398,17 +398,32 @@ after `TuiSession::run` returns, and after an early-return analysis error
 drops the `TuiSession` — so both drain in order once the terminal has
 actually left the alternate screen.
 
+Those two explicit calls do not cover every exit path: a panic unwinding
+through `run_analysis`/`TuiSession::run`, or an early `?` return from
+`TuiSession::init`/`draw_splash` before either explicit call is reached,
+would silently discard whatever was buffered. `log_writer::ReleaseGuard`
+closes that gap — an RAII guard, constructed right after the sink and
+before `TuiSession::init` so Rust's LIFO drop order runs the session's
+terminal-restoring `Drop` first and the guard's log-release `Drop` second
+on any unwind, releasing the sink to a freshly-built stderr handle
+unconditionally. `DeferredLogSink::release` is idempotent (a no-op once
+already released), so the guard is a pure safety net: it changes nothing
+on the normal paths where the explicit calls already ran.
+
 This does not change any decision above: it is the same buffer-then-flush
 shape decision 8 already established, applied to the one write path that
 bypasses `AnalysisProgress`.
 
 - **`rinkaku` bin API** (all `pub(crate)`, no external surface): adds
   `log_writer::DeferredLogSink<W>` (`new`, `release`, `Write` impl,
-  `Clone`). `main.rs` gains a `logger_builder()` helper (the
-  `env_logger::Builder` construction shared by every display mode) and a
-  `release_log_sink` helper mirroring `flush_notes`.
+  `Clone`) and `log_writer::ReleaseGuard<W, F>` (`new`, `Drop`). `main.rs`
+  gains a `logger_builder()` helper (the `env_logger::Builder`
+  construction shared by every display mode) and a `release_log_sink`
+  helper mirroring `flush_notes`.
 - **Testing**: `DeferredLogSink` is unit tested as a pure `Write` sink
   against an injected in-memory destination (`rstest` +
   `pretty_assertions`) — buffering while deferring, in-order draining on
-  release, passthrough after release, and shared state across clones. No
-  real stderr is touched in tests.
+  release, idempotence on a second release, passthrough after release,
+  and shared state across clones. `ReleaseGuard` is tested the same way:
+  dropping it releases buffered bytes, and dropping it after an explicit
+  release is a no-op. No real stderr is touched in tests.
