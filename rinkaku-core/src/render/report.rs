@@ -59,6 +59,15 @@ pub struct Report {
     /// consumers get it as an always-present top-level field, matching how
     /// `fan_ins` above is already exposed.
     pub file_size_warnings: Vec<crate::file_size::FileSizeWarning>,
+    /// Every analyzed file's line count and [`crate::file_size::FileSizeBand`]
+    /// (ADR 0028 amendment) — unlike `file_size_warnings` above, which only
+    /// covers the Warn/Split subset, this covers every file so Markdown/TUI
+    /// can show a line count next to every file, not only the ones already
+    /// worth a dedicated warning. Derived from the same `(path, line_count)`
+    /// pairs as `file_size_warnings`, via
+    /// [`crate::file_size::compute_file_size_bands`], sorted by path
+    /// ascending (see that function's doc comment for why).
+    pub file_size_bands: Vec<crate::file_size::FileSizeEntry>,
     /// Symbols present on the base side of a diff but absent from the head
     /// side entirely (ADR 0014's `removed` classification) — reported
     /// separately from `files` since a removed symbol has no head-side
@@ -208,6 +217,7 @@ mod tests {
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         };
 
@@ -228,6 +238,7 @@ mod tests {
   \"tests\": [],
   \"fan_ins\": [],
   \"file_size_warnings\": [],
+  \"file_size_bands\": [],
   \"removed\": []
 }"
         .to_string();
@@ -257,6 +268,7 @@ mod tests {
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         };
 
@@ -273,6 +285,7 @@ mod tests {
   \"tests\": [],
   \"fan_ins\": [],
   \"file_size_warnings\": [],
+  \"file_size_bands\": [],
   \"removed\": []
 }"
         .to_string();
@@ -306,6 +319,7 @@ mod tests {
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         };
 
@@ -353,6 +367,7 @@ mod tests {
   \"tests\": [],
   \"fan_ins\": [],
   \"file_size_warnings\": [],
+  \"file_size_bands\": [],
   \"removed\": []
 }"
         .to_string();
@@ -386,6 +401,7 @@ mod tests {
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![RemovedSymbol {
                 name: "old_helper".to_string(),
                 kind: SymbolKind::Function,
@@ -435,6 +451,7 @@ mod tests {
   \"tests\": [],
   \"fan_ins\": [],
   \"file_size_warnings\": [],
+  \"file_size_bands\": [],
   \"removed\": [
     {
       \"name\": \"old_helper\",

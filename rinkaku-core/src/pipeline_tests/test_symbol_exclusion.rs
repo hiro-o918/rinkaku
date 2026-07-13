@@ -6,6 +6,7 @@
 use super::fake_reader;
 use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
+use crate::file_size::{FileSizeBand, FileSizeEntry};
 use crate::pipeline::analyze_diff;
 use crate::render::{FileReport, Report, ReportOrigin, TestFileSummary};
 use pretty_assertions::assert_eq;
@@ -108,6 +109,11 @@ fn should_add_two_numbers() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![FileSizeEntry {
+            path: "src/lib.rs".to_string(),
+            line_count: 4,
+            band: FileSizeBand::Normal,
+        }],
         removed: vec![],
     };
     let actual = analyze_diff(
@@ -285,6 +291,11 @@ mod tests {
         }],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![FileSizeEntry {
+            path: "src/lib.rs".to_string(),
+            line_count: 11,
+            band: FileSizeBand::Normal,
+        }],
         removed: vec![],
     };
     let actual = analyze_diff(

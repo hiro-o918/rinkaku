@@ -39,6 +39,7 @@ fn should_render_skipped_files_section_when_report_has_skips() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -80,6 +81,7 @@ fn should_render_change_graph_then_skipped_section_when_report_has_both() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -130,6 +132,7 @@ fn should_omit_high_fan_in_symbols_section_when_fan_ins_is_empty() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -226,6 +229,7 @@ fn should_render_high_fan_in_symbols_section_between_change_graph_and_definition
             used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
         }],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -298,6 +302,7 @@ fn should_render_fan_in_line_for_symbol_with_no_matching_definition() {
             used_by: vec!["a".to_string(), "b".to_string()],
         }],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -357,6 +362,7 @@ fn should_render_file_size_warnings_section_when_warnings_are_present() {
                 severity: crate::file_size::FileSizeSeverity::Warn,
             },
         ],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -411,6 +417,7 @@ fn should_omit_file_size_warnings_section_when_report_has_no_warnings() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -490,6 +497,7 @@ fn should_place_file_size_warnings_between_high_fan_in_symbols_and_definitions()
             line_count: 2500,
             severity: crate::file_size::FileSizeSeverity::Split,
         }],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -565,6 +573,7 @@ fn should_include_file_size_warnings_in_json_output() {
                 severity: crate::file_size::FileSizeSeverity::Warn,
             },
         ],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -591,6 +600,7 @@ fn should_include_file_size_warnings_in_json_output() {
       \"severity\": \"warn\"
     }
   ],
+  \"file_size_bands\": [],
   \"removed\": []
 }"
     .to_string();

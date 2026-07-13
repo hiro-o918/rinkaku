@@ -53,6 +53,7 @@ fn should_nest_callee_under_caller_in_change_graph_when_symbol_references_anothe
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -137,6 +138,7 @@ fn should_order_definitions_in_true_pre_order_when_first_child_has_its_own_child
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -227,6 +229,7 @@ fn should_mark_see_above_when_symbol_reachable_from_multiple_roots() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -297,6 +300,7 @@ fn should_render_cycle_warning_when_edge_is_marked_as_cycle() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -409,6 +413,7 @@ fn should_render_full_cycle_example_with_two_root_functions_and_a_dependency_cyc
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -524,6 +529,7 @@ fn should_inline_two_leaf_struct_children_as_uses_annotation_on_method_line() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -621,6 +627,7 @@ fn should_disambiguate_folded_names_when_duplicate_symbols_fold_under_same_paren
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -705,6 +712,7 @@ fn should_repeat_folded_struct_annotation_on_every_referencing_parent() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -770,6 +778,7 @@ fn should_render_childless_non_function_root_as_top_level_line_when_it_would_oth
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -848,6 +857,7 @@ fn should_render_nested_line_when_non_function_child_has_its_own_children() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -930,6 +940,7 @@ fn should_not_fold_non_function_child_when_its_only_children_are_cycle_edges() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 

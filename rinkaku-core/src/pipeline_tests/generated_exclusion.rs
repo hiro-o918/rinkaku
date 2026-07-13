@@ -7,6 +7,7 @@
 use super::fake_reader;
 use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
+use crate::file_size::{FileSizeBand, FileSizeEntry};
 use crate::pipeline::analyze_diff;
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile};
 use pretty_assertions::assert_eq;
@@ -216,6 +217,11 @@ func Foo() int { return 2 }
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![FileSizeEntry {
+            path: "models/user.go".to_string(),
+            line_count: 3,
+            band: FileSizeBand::Normal,
+        }],
         removed: vec![],
     };
     let actual = analyze_diff(
@@ -285,6 +291,11 @@ fn foo(a: i32) -> i32 {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![FileSizeEntry {
+            path: "src/lib.rs".to_string(),
+            line_count: 3,
+            band: FileSizeBand::Normal,
+        }],
         removed: vec![],
     };
     let actual = analyze_diff(
@@ -364,6 +375,11 @@ index e69de29..4b825dc 100644
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![FileSizeEntry {
+            path: "src/lib.rs".to_string(),
+            line_count: 3,
+            band: FileSizeBand::Normal,
+        }],
         removed: vec![],
     };
     let actual = analyze_diff(

@@ -47,6 +47,7 @@ pub(crate) fn run_base_pipeline(
                 tests: Vec::new(),
                 fan_ins: Vec::new(),
                 file_size_warnings: Vec::new(),
+                file_size_bands: vec![],
                 removed: Vec::new(),
             },
             diff_text,
@@ -343,6 +344,7 @@ mod tests {
                 tests: Vec::new(),
                 fan_ins: Vec::new(),
                 file_size_warnings: Vec::new(),
+                file_size_bands: vec![],
                 removed: Vec::new(),
             },
             actual_report

@@ -164,6 +164,7 @@ mod tests {
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         }
     }
@@ -194,6 +195,7 @@ mod tests {
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         }
     }
@@ -346,6 +348,7 @@ mod tests {
                     severity: rinkaku_core::file_size::FileSizeSeverity::Split,
                 },
             ],
+            file_size_bands: vec![],
             ..empty_report_for_status_line()
         };
         let app = App::new(&report);
@@ -369,6 +372,7 @@ mod tests {
                 line_count: 1734,
                 severity: rinkaku_core::file_size::FileSizeSeverity::Warn,
             }],
+            file_size_bands: vec![],
             ..empty_report_for_status_line()
         };
         let app = App::new(&report);
