@@ -75,11 +75,11 @@ const RIGHT_FOCUS_BINDINGS: &[KeyBinding] = &[
         description: "Return focus to the tree",
     },
     KeyBinding {
-        keys: "] c",
+        keys: "]",
         description: "Jump to the next hunk (Diff pane only)",
     },
     KeyBinding {
-        keys: "[ c",
+        keys: "[",
         description: "Jump to the previous hunk (Diff pane only)",
     },
 ];

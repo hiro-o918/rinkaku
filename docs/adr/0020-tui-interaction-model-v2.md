@@ -76,9 +76,11 @@ rather than always targeting the tree:
   the existing `right_pane_scroll` state and its clamp-at-draw-time
   design (PR #54) rather than introducing a second scroll mechanism.
   `h` or `Esc` returns focus to `Tree`. While the right pane is showing
-  the Diff view specifically, `]c`/`[c` jump the scroll offset to the
-  start of the next/previous hunk (computed from the same shaped diff
-  content this ADR introduces below, not by re-parsing).
+  the Diff view specifically, `]`/`[` (single keys, not neovim's `]c`/`[c`
+  chord — Context's reference model is neovim's idiom, but rinkaku binds
+  the plain bracket keys directly) jump the scroll offset to the start of
+  the next/previous hunk (computed from the same shaped diff content this
+  ADR introduces below, not by re-parsing).
 - `d` (Detail/Diff toggle), `p` (pivot toggle), `s` (source drill-down),
   `o` (order toggle), `q` (quit) remain global and ignore focus
   entirely — they are mode/screen transitions, not motion, so folding
