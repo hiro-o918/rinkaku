@@ -2,7 +2,7 @@
 //! ADR 0018/0020 for the shared "token foreground + line-level background
 //! tint" composition with the diff pane).
 
-use super::style::{gap_span, styled_content_spans};
+use super::style::{gap_span, pane_border_style, styled_content_spans};
 use crate::source::{HighlightedSourceView, SourceView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -53,7 +53,13 @@ pub(crate) fn draw_source_screen(
     area: Rect,
 ) {
     let title = format!(" Source: {symbol_id} ");
-    let block = Block::bordered().title(title);
+    // Always drawn as focused: this screen replaces the whole entry view
+    // (tree + right pane) while open, so there is no sibling pane it needs
+    // to be visually distinguished from (`render_scrollable_pane`'s own doc
+    // comment makes the same call for the `?` help overlay).
+    let block = Block::bordered()
+        .title(title)
+        .border_style(pane_border_style(true));
 
     let highlighted = match source_content {
         Some(Ok(highlighted)) => highlighted,

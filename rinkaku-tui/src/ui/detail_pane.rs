@@ -4,7 +4,8 @@
 //! (`DetailView`, `DirDetail`, `FileDetail`) come from `crate::detail`.
 
 use super::scroll::render_scrollable_pane;
-use crate::app::{App, SelectedDetail};
+use super::style::pane_border_style;
+use crate::app::{App, Focus, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -24,8 +25,11 @@ pub(crate) fn draw_detail_pane(
     report: &Report,
     area: Rect,
 ) -> Option<usize> {
+    let focused = app.focus() == Focus::Right;
     let Some(detail) = app.selected_detail(report) else {
-        let block = Block::bordered().title(" Detail ");
+        let block = Block::bordered()
+            .title(" Detail ")
+            .border_style(pane_border_style(focused));
         let paragraph = Paragraph::new("(select a row to see its detail)")
             .block(block)
             .wrap(ratatui::widgets::Wrap { trim: false });
@@ -44,6 +48,7 @@ pub(crate) fn draw_detail_pane(
         &lines,
         app.right_pane_scroll(),
         area,
+        focused,
     ))
 }
 
