@@ -178,6 +178,13 @@ fn run_app(
     // so there is no up-front computation to mirror `diff_pane_content`'s/
     // `blast_radius_selection`'s own `--entry`-driven initial state.
     let mut source_content: Option<Result<source::HighlightedSourceView, String>> = None;
+    // The symbol id `source_content` was computed for, kept alongside so
+    // the `s` key can skip the reload when re-pressed on the same row (see
+    // the re-entry guard inside the loop below). Held separately rather
+    // than folded into `HighlightedSourceView` itself: `HighlightedSourceView`
+    // carries the file *path*, not the symbol id, and two distinct symbols
+    // in one file would otherwise share a cache entry indistinguishably.
+    let mut source_content_symbol: Option<String> = None;
 
     loop {
         // `ui::draw`'s return value (the right-hand pane's scroll offset as
@@ -218,20 +225,27 @@ fn run_app(
         {
             if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
-                if let Screen::Source { symbol_id } = app.screen().clone() {
+                if let Screen::Source { symbol_id } = app.screen().clone()
+                    && should_reload_source_content(
+                        source_content_symbol.as_deref(),
+                        source_content.as_ref(),
+                        &symbol_id,
+                    )
+                {
                     let loaded =
                         source::load_highlighted_symbol_source(report, &symbol_id, repo_root);
                     // A failure is surfaced on the status line right away
-                    // (rather than only discovered on the next redraw) *and*
-                    // cached into `source_content` below so `ui::draw`'s
-                    // `draw_source_screen` shows the same error message in
-                    // the pane itself — mirrors the pre-caching behavior,
-                    // which attempted this same read eagerly for the same
-                    // early-feedback reason.
+                    // (rather than only discovered on the next redraw)
+                    // *and* cached into `source_content` below so
+                    // `ui::draw`'s `draw_source_screen` shows the same
+                    // error message in the pane itself — mirrors the
+                    // pre-caching behavior, which attempted this same
+                    // read eagerly for the same early-feedback reason.
                     if let Err(message) = &loaded {
                         app.set_status(message.clone());
                     }
                     source_content = Some(loaded);
+                    source_content_symbol = Some(symbol_id);
                 }
             } else {
                 // Every non-`Source` key's dispatch is pure (no IO), so it
@@ -388,6 +402,44 @@ fn dispatch_non_source_key(
 /// reasoning, just for [`RightPane::Diff`] instead of `RightPane::BlastRadius`.
 fn should_recompute_diff_pane_content(app: &App) -> bool {
     matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Diff
+}
+
+/// Whether `crate::run_app`'s [`InputKey::Source`] arm should re-run
+/// [`crate::source::load_highlighted_symbol_source`] this press, given the
+/// cache's current `(cached_symbol, cached_content)` pair and the
+/// `next_symbol` the just-pressed `s` would open. The general "must not
+/// reparse inside the render loop" invariant this cache holds against idle
+/// poll ticks is really a facet of a sharper rule — "no reparse per
+/// user-observable state change" — which idle poll ticks satisfy trivially
+/// (they change nothing) but explicit `s`-on-the-same-row presses also
+/// satisfy (the reviewer observes the same screen either way).
+///
+/// Returns `true` (reload) when:
+/// - nothing is cached yet (first `s` press);
+/// - the cache holds a *different* symbol (drilling into a new row);
+/// - or the cache holds an `Err(_)` for the same symbol — a previously
+///   failed load must remain retryable (`s` again after editing the file
+///   back into existence is the reviewer's own retry gesture, and denying
+///   it would be worse than the one-shot reparse cost).
+///
+/// Returns `false` (skip reload) only when the cache already holds a
+/// successful `Ok(_)` for this exact `next_symbol` — the "same-row
+/// re-entry" case this guard exists to save.
+///
+/// Extracted as its own pure function (rather than inlined in `run_app`,
+/// which takes a live `ratatui::DefaultTerminal` and so cannot be driven
+/// directly in a test) so this exact decision is unit-testable without a
+/// terminal — mirrors `should_recompute_diff_pane_content`'s own
+/// precedent just above.
+fn should_reload_source_content(
+    cached_symbol: Option<&str>,
+    cached_content: Option<&Result<source::HighlightedSourceView, String>>,
+    next_symbol: &str,
+) -> bool {
+    !matches!(
+        (cached_symbol, cached_content),
+        (Some(cached_id), Some(Ok(_))) if cached_id == next_symbol,
+    )
 }
 
 /// Whether `crate::run_app`'s event loop should act on an
@@ -964,6 +1016,81 @@ mod tests {
         let actual = should_recompute_diff_pane_content(&app);
 
         assert!(!actual);
+    }
+
+    // --- should_reload_source_content ---
+    //
+    // Regression coverage for the `s`-connot-invariant this guard closes:
+    // `run_app`'s [`InputKey::Source`] arm used to call
+    // `source::load_highlighted_symbol_source` unconditionally, so pressing
+    // `s` a second time on the same row re-read the file and re-ran a full
+    // tree-sitter parse — a leak in the "no reparse per user-observable
+    // state change" invariant this cache exists to hold, at the explicit-
+    // key-press granularity that the idle-poll-tick coverage did not close.
+
+    fn dummy_view(path: &str) -> source::HighlightedSourceView {
+        source::HighlightedSourceView {
+            view: source::SourceView {
+                path: path.to_string(),
+                lines: vec![],
+                highlight_start: 1,
+                highlight_end: 1,
+            },
+            token_highlights: vec![],
+        }
+    }
+
+    #[test]
+    fn should_reload_source_content_when_cache_is_empty() {
+        let actual = should_reload_source_content(None, None, "src/lib.rs::foo");
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_reload_source_content_when_cached_symbol_differs() {
+        let cached = Ok(dummy_view("src/lib.rs"));
+
+        let actual =
+            should_reload_source_content(Some("src/lib.rs::foo"), Some(&cached), "src/lib.rs::bar");
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_skip_reload_when_cached_ok_matches_next_symbol() {
+        let cached = Ok(dummy_view("src/lib.rs"));
+
+        let actual =
+            should_reload_source_content(Some("src/lib.rs::foo"), Some(&cached), "src/lib.rs::foo");
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_reload_source_content_when_cached_err_even_for_same_symbol() {
+        // Retryability contract: a failed load remains retryable on the
+        // reviewer's next `s` press (e.g. after editing the file back into
+        // existence), so a cached `Err(_)` must never suppress the reload —
+        // the small parse cost is worth keeping the recovery gesture live.
+        let cached: Result<source::HighlightedSourceView, String> =
+            Err("failed to read".to_string());
+
+        let actual =
+            should_reload_source_content(Some("src/lib.rs::foo"), Some(&cached), "src/lib.rs::foo");
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_reload_source_content_when_cache_has_symbol_but_no_content() {
+        // Defensive combination the loop never actually reaches today
+        // (`source_content` and `source_content_symbol` are always written
+        // together): if they ever fall out of sync, the safe default is to
+        // reload rather than trust the stale symbol id alone.
+        let actual = should_reload_source_content(Some("src/lib.rs::foo"), None, "src/lib.rs::foo");
+
+        assert!(actual);
     }
 
     // --- should_apply_hunk_jump ---
