@@ -660,6 +660,43 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    // Regression test (post-rebase integration check, PR #58): a skipped or
+    // whole-test-file row (ADR: "show skipped and test-only files in the
+    // entry tree") has no `FileReport` at all in `report.files`, so
+    // `build_file_content`'s `symbols` lookup falls back to `&[]` — every
+    // hunk must still land somewhere rather than being silently dropped or
+    // panicking on an out-of-bounds `sections` index.
+    #[test]
+    fn should_bucket_every_hunk_under_module_level_when_file_selection_has_no_symbols_at_all() {
+        // `report.files` has no entry for "assets/logo.png" at all — the
+        // exact shape of a skipped/whole-test-file row, which is tracked in
+        // `report.skipped`/`report.tests` instead of `report.files`.
+        let report = empty_report();
+        let diff_files = vec![FileHunks {
+            path: "assets/logo.png".to_string(),
+            hunks: vec![hunk(
+                "@@ -1,1 +1,2 @@",
+                Some((1, 2)),
+                vec!["binary blob line"],
+            )],
+        }];
+        let target = DiffTarget::File {
+            path: "assets/logo.png".to_string(),
+        };
+
+        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+        let expected = DiffPaneContent::File(vec![DiffSection {
+            title: MODULE_LEVEL_TITLE.to_string(),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["binary blob line"]),
+            )],
+        }]);
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn should_return_empty_when_file_has_no_hunks_at_all() {
         let report = Report {
@@ -696,6 +733,30 @@ mod tests {
         };
 
         let actual = build_diff_pane_content(&report, &[], Some(&target));
+
+        assert_eq!(DiffPaneContent::Empty, actual);
+    }
+
+    // Regression test (post-rebase integration check, PR #58): a binary
+    // skipped file has a `FileHunks` entry (git still reports the path
+    // touched a diff) but zero `@@` hunks in it ("Binary files ... differ"
+    // has no hunk syntax for `crate::diff_view::parse_diff_hunks` to parse)
+    // and no `FileReport`/symbols at all — the pane must degrade to `Empty`
+    // (rendered by `crate::ui::draw_diff_pane` as its own placeholder text)
+    // rather than panicking or fabricating a module-level section with no
+    // hunks in it.
+    #[test]
+    fn should_return_empty_when_skipped_file_has_no_symbols_and_no_hunks() {
+        let report = empty_report();
+        let diff_files = vec![FileHunks {
+            path: "assets/logo.png".to_string(),
+            hunks: vec![],
+        }];
+        let target = DiffTarget::File {
+            path: "assets/logo.png".to_string(),
+        };
+
+        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
 
         assert_eq!(DiffPaneContent::Empty, actual);
     }
