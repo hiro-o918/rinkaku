@@ -84,19 +84,11 @@ impl LanguageSupport for RustSupport {
         REFERENCE_QUERY
     }
 
-    /// Rust's `tests/` directory convention (integration test crates,
-    /// compiled as their own binary by `cargo test`), plus this repo's
-    /// ADR 0028 split-test-file convention: a `#[cfg(test)] #[path =
-    /// "foo_tests/mod.rs"] mod tests;` include, where the split file itself
-    /// has no `#[cfg(test)] mod` wrapper and would otherwise be
-    /// misclassified as production code. Matched by path *segment*
-    /// (directory name or file stem), not substring, so `latest_stats.rs`
-    /// and `contests/mod.rs` stay production while `nav_tests/mod.rs` and
-    /// `foo_tests.rs` are recognized; the bare `tests` match applies equally
-    /// to a directory segment (`tests/it.rs`) and a file stem
-    /// (`src/tests.rs`, ADR 0028's own split-file example). Unit tests
-    /// colocated in an inline `#[cfg(test)] mod tests { ... }` block are not
-    /// caught by path at all — see `is_test_definition`.
+    /// Covers Rust's `tests/` integration-test convention and ADR 0028
+    /// split test files (`#[cfg(test)] #[path = "foo_tests/mod.rs"] mod
+    /// tests;`): the split file carries no `#[cfg(test)]` wrapper, so its
+    /// path is the only classification signal. Inline `#[cfg(test)] mod
+    /// tests` blocks are handled by `is_test_definition` instead.
     fn is_test_path(&self, path: &str) -> bool {
         path.split('/').any(|segment| {
             let stem = segment.strip_suffix(".rs").unwrap_or(segment);
