@@ -2104,6 +2104,7 @@ dependencies = [
  "anyhow",
  "clap",
  "env_logger",
+ "indicatif",
  "log",
  "pretty_assertions",
  "rinkaku-core",

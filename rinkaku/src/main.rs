@@ -40,12 +40,14 @@
 //!   may not line up with the actual file content.
 
 mod self_update;
+mod spinner;
 
 use clap::{Parser, Subcommand};
 use rinkaku_core::deps::TagsResolver;
 use rinkaku_core::language::language_for_path;
 use rinkaku_core::pipeline::analyze_diff;
 use rinkaku_core::render::{OutputFormat, render};
+use spinner::{AnalysisPhase, Spinner, phase_message};
 use std::io::BufRead;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -218,12 +220,22 @@ fn main() -> anyhow::Result<()> {
     // unrelated file if one happens to exist at the same relative path
     // there.
     let mut resolved_workdir: Option<std::path::PathBuf> = None;
+    // Started before any branch below runs and cleared right after the
+    // pipeline finishes (`spinner.finish_and_clear()`), so the whole
+    // synchronous analysis phase — the only part of a run with no
+    // per-symbol feedback of its own — gets a visible heartbeat on stderr.
+    // `Spinner::start` is a no-op-looking wrapper around `indicatif`, whose
+    // stderr draw target already suppresses drawing when stderr isn't a
+    // terminal (see `spinner.rs`'s own doc comment), so this is safe to run
+    // unconditionally in every input mode, including piped stderr.
+    let spinner = Spinner::start(phase_message(AnalysisPhase::Starting));
     let (report, diff_text) = if let Some(pr_arg) = &cli.pr {
         // Validate the arg and derive the fetch refspec's PR number, but
         // pass the original (trimmed) value — not the parsed number — to
         // `gh pr view` (see that function's doc comment for why).
         let parsed = parse_pr_arg(pr_arg)?;
         let number = parsed.number();
+        spinner.set_message(phase_message(AnalysisPhase::ResolvingPr));
         let workdir = resolve_pr_workdir(&parsed)?;
         resolved_workdir = workdir.clone();
         log::info!("resolving PR #{number} via gh");
@@ -256,9 +268,9 @@ fn main() -> anyhow::Result<()> {
                 base_branch = pr_info.base_ref_name,
             );
         }
-        run_base_pipeline(&cli, &base_sha, &head_sha, cwd)?
+        run_base_pipeline(&cli, &base_sha, &head_sha, cwd, &spinner)?
     } else if let Some(base) = &cli.base {
-        run_base_pipeline(&cli, base, &cli.head, None)?
+        run_base_pipeline(&cli, base, &cli.head, None, &spinner)?
     } else if std::io::stdin().is_terminal() {
         // ADR 0017: this is the third arm of an `if let Some(pr) ... else if
         // let Some(base) ... else if <here>` chain, so reaching it already
@@ -276,6 +288,7 @@ fn main() -> anyhow::Result<()> {
         // is ever restructured — e.g. a future flag added between this arm
         // and the plain stdin-read fallback below.
         log::info!("no diff input and stdin is a terminal; building a whole-repo outline");
+        spinner.set_message(phase_message(AnalysisPhase::ParsingRepository));
         let paths = list_repo_files_for_outline(None)?;
         // `check_generated_paths_batch`, not `resolve_generated_paths`
         // (which shells out via `check_generated_paths`'s CLI-argument
@@ -308,10 +321,18 @@ fn main() -> anyhow::Result<()> {
         if diff_text.trim().is_empty() {
             eprintln!("note: diff is empty, nothing to analyze");
         }
-        let resolver = build_resolver(&cli, &diff_text, read_working_tree_file, None, None)?;
+        let resolver = build_resolver(
+            &cli,
+            &diff_text,
+            read_working_tree_file,
+            None,
+            None,
+            &spinner,
+        )?;
         let changed_paths = changed_paths(&diff_text)?;
         let generated_paths = resolve_generated_paths(&cli, &changed_paths, None);
         log::info!("analyzing diff");
+        spinner.set_message(phase_message(AnalysisPhase::AnalyzingDiff));
         let report = analyze_diff(
             &diff_text,
             read_working_tree_file,
@@ -335,6 +356,12 @@ fn main() -> anyhow::Result<()> {
         }
         (report, diff_text)
     };
+    // Cleared as soon as the `Report` is built, before the `--entry` pivot
+    // (pure/instant) and the display-mode dispatch below — in particular
+    // before `DisplayMode::Tui` enters the alternate screen, since a
+    // spinner line still drawn on stderr at that point would corrupt the
+    // TUI's first frame (`spinner.rs`'s own doc comment).
+    spinner.finish_and_clear();
 
     let report = if let Some(entry) = &cli.entry {
         let pivoted = apply_entry_pivot(report, entry);
@@ -559,13 +586,21 @@ fn resolve_pr_workdir(parsed: &PrArg) -> anyhow::Result<Option<std::path::PathBu
 /// from to slice hunks out of, and this is the only place that owns it for
 /// `--base`/`--pr` mode — `main`'s stdin branch already has `diff_text` in
 /// a local variable, so it needs no such plumbing.
+///
+/// `spinner` updates its message as each phase (diffing, then building the
+/// dependency index via `build_resolver`, then the diff analysis itself)
+/// starts, so the pre-TUI stderr spinner (`main`'s `Spinner::start`) tracks
+/// which phase is running rather than sitting on a single static message
+/// for the whole `--base`/`--pr` pipeline.
 fn run_base_pipeline(
     cli: &Cli,
     base: &str,
     head: &str,
     cwd: Option<&std::path::Path>,
+    spinner: &Spinner,
 ) -> anyhow::Result<(rinkaku_core::render::Report, String)> {
     log::info!("diffing {base}...{head}");
+    spinner.set_message(phase_message(AnalysisPhase::Diffing));
     let diff_text = run_git_diff(base, head, cwd)?;
     if diff_text.trim().is_empty() {
         eprintln!("note: diff is empty, nothing to analyze");
@@ -604,10 +639,11 @@ fn run_base_pipeline(
         let base = base.to_string();
         move |path: &str| read_git_show_file(cwd, &base, path)
     };
-    let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd)?;
+    let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd, spinner)?;
     let changed_paths = changed_paths(&diff_text)?;
     let generated_paths = resolve_generated_paths(cli, &changed_paths, cwd);
     log::info!("analyzing diff");
+    spinner.set_message(phase_message(AnalysisPhase::AnalyzingDiff));
     let report = analyze_diff(
         &diff_text,
         read_file,
@@ -771,16 +807,23 @@ fn repo_outline_empty_note(report: &rinkaku_core::render::Report) -> Option<&'st
 /// generated file's definition (e.g. an ORM's model struct, dragging in
 /// every column as noise) as a test helper — see ADR 0010/0011's
 /// Consequences.
+///
+/// `spinner`'s message is updated to reflect the indexing phase once it's
+/// clear there is indexing work to do (i.e. after the `cli.deps == 0` early
+/// return) — same pre-TUI stderr spinner `main` starts before dispatching
+/// to any input-mode branch.
 fn build_resolver(
     cli: &Cli,
     diff_text: &str,
     diff_read_file: impl Fn(&str) -> std::io::Result<String>,
     head: Option<&str>,
     cwd: Option<&std::path::Path>,
+    spinner: &Spinner,
 ) -> anyhow::Result<Option<TagsResolver>> {
     if cli.deps == 0 {
         return Ok(None);
     }
+    spinner.set_message(phase_message(AnalysisPhase::BuildingDependencyIndex));
 
     let reference_names =
         rinkaku_core::pipeline::collect_referenced_names(diff_text, diff_read_file)?;
@@ -3621,7 +3664,8 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             panic!("read_file must not be called when deps == 0")
         };
 
-        let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()))
+        let spinner = Spinner::start("test");
+        let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()), &spinner)
             .expect("deps == 0 must not touch the repository at all");
 
         assert!(actual.is_none());
@@ -3649,7 +3693,8 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
         };
         let read_file = |_: &str| -> std::io::Result<String> { Ok(String::new()) };
 
-        let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()));
+        let spinner = Spinner::start("test");
+        let actual = build_resolver(&cli, "", read_file, None, Some(dir.path()), &spinner);
 
         assert!(actual.is_err());
     }
@@ -3693,7 +3738,8 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             entry: None,
             tui: false,
         };
-        let actual = run_base_pipeline(&cli, "HEAD", "HEAD", Some(dir.path()));
+        let spinner = Spinner::start("test");
+        let actual = run_base_pipeline(&cli, "HEAD", "HEAD", Some(dir.path()), &spinner);
 
         // Restore permissions before asserting so a failed assertion
         // doesn't leave an unreadable file behind for the tempdir cleanup.
@@ -3780,8 +3826,10 @@ fn should_add_two_numbers() {
             entry: None,
             tui: false,
         };
-        let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
-            .expect("run_base_pipeline should succeed for a test-only diff");
+        let spinner = Spinner::start("test");
+        let (actual, _diff_text) =
+            run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()), &spinner)
+                .expect("run_base_pipeline should succeed for a test-only diff");
 
         let expected_files: Vec<rinkaku_core::render::FileReport> = Vec::new();
         let expected_skipped: Vec<rinkaku_core::render::SkippedFile> = Vec::new();
@@ -3841,8 +3889,10 @@ fn should_add_two_numbers() {
             entry: None,
             tui: false,
         };
-        let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
-            .expect("run_base_pipeline should succeed for a test-only diff");
+        let spinner = Spinner::start("test");
+        let (actual, _diff_text) =
+            run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()), &spinner)
+                .expect("run_base_pipeline should succeed for a test-only diff");
 
         let expected_tests: Vec<rinkaku_core::render::TestFileSummary> = Vec::new();
         assert_eq!(expected_tests, actual.tests);
@@ -3883,8 +3933,10 @@ fn should_add_two_numbers() {
             entry: None,
             tui: false,
         };
-        let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
-            .expect("run_base_pipeline should succeed");
+        let spinner = Spinner::start("test");
+        let (actual, _diff_text) =
+            run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()), &spinner)
+                .expect("run_base_pipeline should succeed");
 
         let symbol = &actual.files[0].symbols[0];
         assert_eq!(
