@@ -67,7 +67,28 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
 
+      # Bootstrap guard: the very PR that *introduces* this workflow (and
+      # action.yaml) is, by definition, the one case where the trusted
+      # base checkout above cannot contain either — they don't exist on
+      # `main` yet. Trying to run them anyway would mean falling back to
+      # the PR-head copy, exactly the trust-boundary violation this
+      # workflow exists to prevent. Skip cleanly instead: every step from
+      # here on is gated on this check, and the job still succeeds (the
+      # skip is expected and self-explanatory via the notice), rather
+      # than failing with a confusing "can't find action.yaml" error the
+      # way an unguarded `uses: ./` does.
+      - name: Check whether the trusted base checkout has this action
+        id: check-action
+        run: |
+          if [ -f action.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::action.yaml does not exist on the PR base ref yet (this is expected on the PR that introduces it) — skipping the report step rather than running untrusted PR-head code"
+          fi
+
       - name: Checkout PR head into a subdirectory (data only)
+        if: steps.check-action.outputs.present == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -75,19 +96,23 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch base branch into the head checkout
+        if: steps.check-action.outputs.present == 'true'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         working-directory: rinkaku-pr-head
         run: git fetch origin "${BASE_REF}"
 
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        if: steps.check-action.outputs.present == 'true'
         with:
           key: rinkaku-report-build
 
       - name: Build rinkaku from the base ref
+        if: steps.check-action.outputs.present == 'true'
         run: cargo build --release -p rinkaku
 
       - name: Run rinkaku report action
+        if: steps.check-action.outputs.present == 'true'
         uses: ./
         with:
           binary: ${{ github.workspace }}/target/release/rinkaku
