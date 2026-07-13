@@ -214,9 +214,15 @@ enum BadgeContext {
 ///   replaced (`~` for changed, `!` for contract change, `^` for
 ///   fan-in) conveyed no semantic hint on their own to a first-time
 ///   reviewer — `!` in particular read as generic "warning" rather than
-///   pointing at *what* changed. Only the numeric N picks up cyan; the
-///   label stays default so the eye lands on the number, matching the
-///   file-size badges' split-span pattern.
+///   pointing at *what* changed. The label stays default color so the
+///   eye lands on the number, matching the file-size badges' split-span
+///   pattern.
+/// - `chg:`/`ref:` numbers are cyan (informational counts), but `api:`
+///   is yellow — the same warning color as the file-size `warn:` badge
+///   below — because a contract change (signature-changed or removed
+///   symbol) is the one badge that flags something a caller should
+///   double-check, restoring in color the "pay attention" signal the
+///   original `!` glyph carried on its own.
 /// - The file-size warnings (ADR 0028) deliberately use **text labels
 ///   plus color** rather than an emoji glyph (`⚠` / `🚨`): terminal
 ///   emoji rendering width is inconsistent enough to distort the tree
@@ -237,7 +243,10 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
             spans.push(Span::raw(" "));
         }
         spans.push(Span::raw("api:"));
-        spans.push(Span::styled(badges.contract_changes.to_string(), cyan));
+        spans.push(Span::styled(
+            badges.contract_changes.to_string(),
+            Style::default().fg(Color::Yellow),
+        ));
         wrote_any_ascii_badge = true;
     }
     if badges.fan_in > 0 {

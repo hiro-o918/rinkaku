@@ -173,3 +173,8 @@ replaces it entirely rather than prefixing it, matching how `chg:`/
 `ref:` fully replaced `~`/`^` rather than combining with them.
 `Badges.contract_changes` (the field name) is unchanged — as with the
 prior amendment, this is purely presentational.
+
+Unlike `chg:N`/`ref:N` (cyan, informational counts), `api:N`'s number is
+rendered in yellow — the same warning color the file-size `warn:` badge
+uses — so the color, not just the label, restores the "pay attention"
+signal the original `!` glyph carried on its own.
