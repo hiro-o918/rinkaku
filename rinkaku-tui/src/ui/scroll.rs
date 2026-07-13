@@ -1,10 +1,10 @@
 //! Pure scroll/wrap helpers shared by the panes in this module — extracted so
 //! `clamp_scroll`, `scroll_indicator`, `visible_index_window`,
-//! `window_overflow_indicators`, `windowed_rows_with_indicators`, and
-//! `wrap_lines`/`wrap_one_line` stay unit-testable without a live
-//! `ratatui::backend::TestBackend`, and so [`render_scrollable_pane`] itself
-//! (the one non-pure helper here) has a single home shared by every pane
-//! that scrolls.
+//! `window_overflow_indicators`, `windowed_rows_with_indicators`,
+//! `wrap_lines`/`wrap_one_line`, and `truncate_to_width` stay unit-testable
+//! without a live `ratatui::backend::TestBackend`, and so
+//! [`render_scrollable_pane`] itself (the one non-pure helper here) has a
+//! single home shared by every pane that scrolls.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -161,6 +161,53 @@ pub(crate) fn wrap_one_line(line: &Line<'static>, width: usize) -> Vec<Line<'sta
 
     result_lines.push(Line::from(current_spans).style(line.style));
     result_lines
+}
+
+/// Truncates `text` to fit within `width` display columns, replacing the
+/// tail with a single `…` (1 column) when it does not fit — unlike
+/// [`wrap_lines`], which turns overflow into *more rows*, this turns
+/// overflow into a shorter *single* row, for callers whose windowing math
+/// (e.g. [`windowed_rows_with_indicators`]) has already committed to
+/// "one logical item = one rendered row" and would desync if a row were
+/// allowed to wrap (`draw_jump_popup`'s own fix for exactly that: a
+/// `Paragraph::wrap`-ed candidate label taller than one row pushed later
+/// candidates, including the cursor row, out of the popup's viewport with
+/// no visual feedback, defeating `windowed_rows_with_indicators`'s own
+/// "cursor always inside the window" contract).
+///
+/// Width is measured with [`UnicodeWidthChar::width`] (same fallback-to-1
+/// convention as [`wrap_one_line`]) so a wide (e.g. CJK) character is never
+/// sliced in half — if the last character that would fit is wide and only
+/// one column of room remains, it is dropped along with the rest of the
+/// tail rather than emitted half-width.
+///
+/// `text` already fitting within `width` (including exactly, or when
+/// `width == 0`) is returned unchanged/empty respectively without adding
+/// the `…` marker — nothing was actually cut off.
+pub(crate) fn truncate_to_width(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let text_width: usize = text.chars().map(|ch| ch.width().unwrap_or(1)).sum();
+    if text_width <= width {
+        return text.to_string();
+    }
+
+    // Reserve 1 column for the trailing `…` marker, then greedily take
+    // characters until the next one would overflow the remaining budget.
+    let budget = width - 1;
+    let mut result = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(1);
+        if used + char_width > budget {
+            break;
+        }
+        result.push(ch);
+        used += char_width;
+    }
+    result.push('…');
+    result
 }
 
 /// Clamps a requested scroll offset (lines) to `[0, content_len -
@@ -646,5 +693,78 @@ mod tests {
             vec![Line::raw("abcd"), Line::raw("ef"), Line::raw("xy")],
             actual
         );
+    }
+
+    // --- truncate_to_width (pure helper, jump popup one-row-per-candidate fix) ---
+
+    #[test]
+    fn should_return_text_unchanged_when_it_fits_exactly_within_width() {
+        let actual = truncate_to_width("abcde", 5);
+
+        assert_eq!("abcde".to_string(), actual);
+    }
+
+    #[test]
+    fn should_return_text_unchanged_when_it_is_shorter_than_width() {
+        let actual = truncate_to_width("abc", 10);
+
+        assert_eq!("abc".to_string(), actual);
+    }
+
+    #[test]
+    fn should_return_empty_string_when_width_is_zero() {
+        let actual = truncate_to_width("abcdef", 0);
+
+        assert_eq!("".to_string(), actual);
+    }
+
+    #[test]
+    fn should_truncate_long_ascii_text_with_trailing_marker_when_it_overflows_width() {
+        // width=5 -> 4 chars of budget + 1 column for the trailing "…".
+        let actual = truncate_to_width("abcdefgh", 5);
+
+        assert_eq!("abcd…".to_string(), actual);
+    }
+
+    #[test]
+    fn should_not_split_a_double_width_character_when_truncating() {
+        // "あ" is 2 columns; a width-4 budget after reserving 1 column for
+        // "…" leaves 3 columns, which fits "a" (1) + "あ" (2) exactly but
+        // not a second "あ" (would need 5) — so the second "あ" and
+        // everything after it is dropped rather than sliced in half.
+        let actual = truncate_to_width("aああb", 4);
+
+        assert_eq!("aあ…".to_string(), actual);
+    }
+
+    #[test]
+    fn should_truncate_mixed_cjk_and_ascii_label_when_it_overflows_width() {
+        let actual = truncate_to_width("シンボル名 (path/to/very/long/file.rs)", 10);
+
+        assert_eq!("シンボル…".to_string(), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_when_width_is_one() {
+        // width=1 leaves a budget of 0 after reserving 1 column for "…", so
+        // every character of the input is dropped and only the marker
+        // itself remains — the narrowest width at which truncation still
+        // produces non-empty output (width=0 is the separate empty-string
+        // case covered above).
+        let actual = truncate_to_width("abcdef", 1);
+
+        assert_eq!("…".to_string(), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_when_width_is_one_and_first_char_is_double_width() {
+        // Same width=1 boundary, but the first character of the input is a
+        // 2-column CJK character that would not fit in the 0-column budget
+        // either — makes sure the double-width guard and the width=1
+        // budget-exhaustion guard compose correctly instead of one
+        // masking a bug in the other.
+        let actual = truncate_to_width("あいう", 1);
+
+        assert_eq!("…".to_string(), actual);
     }
 }
