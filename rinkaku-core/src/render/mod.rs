@@ -46,6 +46,7 @@
 //! know "did this change come with tests?" even though the individual test
 //! signatures are noise (ADR 0009).
 
+mod digest;
 mod markdown;
 mod mermaid;
 mod report;
@@ -67,6 +68,11 @@ pub enum OutputFormat {
     /// mermaid rendering (PR comments/descriptions), not the default
     /// Markdown output ADR 0013/0015 keep machine-facing.
     Mermaid,
+    /// A slim "API changes" list — one line per `Added`/`SignatureChanged`
+    /// symbol plus every removed symbol, nothing else (ADR 0036). Built for
+    /// the PR comment's `<details>` section, cheap for an LLM review pass
+    /// to read alongside the mermaid graph, unlike the full Markdown report.
+    Digest,
 }
 
 /// Errors that can occur while rendering a [`Report`].
@@ -89,5 +95,6 @@ pub fn render(report: &Report, format: OutputFormat) -> Result<String, RenderErr
         OutputFormat::Markdown => markdown::render_markdown(report),
         OutputFormat::Json => Ok(serde_json::to_string_pretty(report)?),
         OutputFormat::Mermaid => Ok(mermaid::render_mermaid(report)),
+        OutputFormat::Digest => Ok(digest::render_digest(report)),
     }
 }
