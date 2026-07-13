@@ -48,14 +48,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Explicit `ref:` on BOTH checkouts below, not the trigger's default —
+      # `actions/checkout` on a `pull_request` event defaults to
+      # `refs/remotes/pull/<N>/merge`, GitHub's ephemeral merge-of-head-
+      # into-base commit, whichever `ref:` is omitted. Omitting it here
+      # would silently defeat the whole trust-boundary point of this
+      # workflow: a "base" checkout with no explicit `ref:` still contains
+      # every change from the PR head (merged in), so the "trusted" binary
+      # and orchestration code would actually be built from a tree that
+      # includes the PR's own — unreviewed — changes. This was found by
+      # actually running this workflow (see PR #59's dogfooding comment,
+      # which posted a full mermaid section despite `main` not having
+      # `--format mermaid` yet — proof the base checkout was not really
+      # base).
       - name: Checkout PR base (trusted build source and orchestration code)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
 
       - name: Checkout PR head into a subdirectory (data only)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           path: rinkaku-pr-head
           fetch-depth: 0
 
