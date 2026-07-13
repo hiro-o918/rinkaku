@@ -4,7 +4,7 @@ name = "rinkaku-core"
 # literal string; `version.workspace = true` resolves to a TOML table
 # rather than a string and is rejected as invalid. Declare it directly
 # here (and in rinkaku/Cargo.toml) while other fields stay inherited.
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
