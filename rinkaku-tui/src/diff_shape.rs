@@ -413,6 +413,52 @@ mod tests {
     }
 
     #[test]
+    fn should_include_pure_deletion_hunk_in_symbol_selection_when_it_intersects_the_symbol() {
+        // Finding-2 regression: a pure-deletion hunk (`new_range` a
+        // zero-width position, `crate::diff_view::Hunk`'s own doc comment)
+        // used to always report `hunk_intersects == false`, so it silently
+        // vanished from a symbol-scoped diff view entirely instead of
+        // showing the deleted lines under the symbol they were removed
+        // from.
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 4 })],
+            }],
+            ..empty_report()
+        };
+        let diff_files = vec![FileHunks {
+            path: "lib.rs".to_string(),
+            hunks: vec![hunk(
+                "@@ -4 +3,0 @@",
+                Some((3, 2)),
+                vec!["println!(\"removed\");"],
+            )],
+        }];
+        let target = DiffTarget::Symbol {
+            path: "lib.rs".to_string(),
+            range_start: 1,
+            range_end: 4,
+        };
+
+        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+        let expected = DiffPaneContent::Symbol(DiffSection {
+            title: "fn foo()".to_string(),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk(
+                    "@@ -4 +3,0 @@",
+                    Some((3, 2)),
+                    vec!["println!(\"removed\");"],
+                ),
+            )],
+        });
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn should_include_contract_header_when_symbol_selection_signature_changed() {
         let report = Report {
             files: vec![FileReport {
@@ -499,6 +545,49 @@ mod tests {
                 )],
             },
         ]);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_attribute_pure_deletion_hunk_to_owning_symbol_instead_of_module_level() {
+        // Finding-2 regression: `hunk_intersects` always returning `false`
+        // for a pure-deletion hunk meant `build_file_content`'s owner lookup
+        // (`symbols.iter().position(...)`) never matched, so every deletion
+        // hunk landed in the `MODULE_LEVEL_TITLE` bucket regardless of which
+        // symbol's body it actually came from.
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 4 })],
+            }],
+            ..empty_report()
+        };
+        let diff_files = vec![FileHunks {
+            path: "lib.rs".to_string(),
+            hunks: vec![hunk(
+                "@@ -4 +3,0 @@",
+                Some((3, 2)),
+                vec!["println!(\"removed\");"],
+            )],
+        }];
+        let target = DiffTarget::File {
+            path: "lib.rs".to_string(),
+        };
+
+        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+        let expected = DiffPaneContent::File(vec![DiffSection {
+            title: "fn foo()".to_string(),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk(
+                    "@@ -4 +3,0 @@",
+                    Some((3, 2)),
+                    vec!["println!(\"removed\");"],
+                ),
+            )],
+        }]);
         assert_eq!(expected, actual);
     }
 
