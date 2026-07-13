@@ -376,6 +376,7 @@ mod tests {
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         }
     }
@@ -626,6 +627,7 @@ flowchart LR
                 used_by: vec!["a".to_string(), "b".to_string()],
             }],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         };
 
@@ -681,6 +683,7 @@ flowchart LR
                 used_by: vec!["a".to_string(), "b".to_string()],
             }],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![],
         };
 
@@ -981,6 +984,7 @@ flowchart LR
             tests: vec![],
             fan_ins: vec![],
             file_size_warnings: vec![],
+            file_size_bands: vec![],
             removed: vec![removed_symbol("old_only", "src/gone.rs")],
         };
 

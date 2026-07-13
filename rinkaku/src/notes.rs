@@ -115,6 +115,7 @@ mod tests {
                 tests: vec![],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             }
         }
@@ -131,6 +132,7 @@ mod tests {
                 tests: vec![],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             }
         }
@@ -179,6 +181,7 @@ mod tests {
                 tests: vec![],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             };
 
@@ -206,6 +209,7 @@ mod tests {
                 }],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             };
 
@@ -245,6 +249,7 @@ mod tests {
                 tests: vec![],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             };
 
@@ -304,6 +309,7 @@ mod tests {
                 tests: vec![],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             }
         }
@@ -363,6 +369,7 @@ mod tests {
                 tests: vec![],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             };
 
@@ -393,6 +400,7 @@ mod tests {
                 tests: vec![],
                 fan_ins: vec![],
                 file_size_warnings: vec![],
+                file_size_bands: vec![],
                 removed: vec![],
             }
         }

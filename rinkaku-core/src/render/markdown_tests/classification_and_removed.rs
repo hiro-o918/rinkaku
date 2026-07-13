@@ -33,6 +33,7 @@ fn should_append_new_marker_to_tree_and_definition_when_symbol_is_added() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -83,6 +84,7 @@ fn should_render_diff_block_and_marker_when_symbol_is_signature_changed() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -139,6 +141,7 @@ fn should_render_container_comment_above_diff_lines_when_signature_changed_symbo
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -190,6 +193,7 @@ fn should_render_unmarked_tree_and_definition(#[case] classification: Option<Cla
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -245,6 +249,7 @@ fn should_append_marker_to_fan_in_line_before_used_by() {
             used_by: vec!["caller_one".to_string(), "caller_two".to_string()],
         }],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -291,6 +296,7 @@ fn should_render_removed_symbols_section_between_definitions_and_tests() {
         }],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![RemovedSymbol {
             name: "old_helper".to_string(),
             kind: SymbolKind::Function,
@@ -350,6 +356,7 @@ fn should_render_removed_symbols_section_alone_when_graph_is_empty() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![RemovedSymbol {
             name: "old_helper".to_string(),
             kind: SymbolKind::Function,
@@ -391,6 +398,7 @@ fn should_deduplicate_identical_removed_symbol_lines() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![
             RemovedSymbol {
                 name: "save".to_string(),
@@ -452,6 +460,7 @@ fn should_omit_removed_symbols_section_when_removed_is_empty() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -493,6 +502,7 @@ fn should_widen_fence_when_previous_signature_contains_a_backtick_run() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 

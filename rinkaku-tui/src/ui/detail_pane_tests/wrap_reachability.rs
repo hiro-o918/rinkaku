@@ -28,6 +28,7 @@ fn should_reach_the_last_wrapped_line_of_content_via_scrolling_when_a_logical_li
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
     // ADR 0020 defaults the right pane to Diff, whose own placeholder
@@ -88,6 +89,7 @@ fn should_report_indicator_total_as_wrapped_row_count_not_logical_line_count_whe
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
     // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to

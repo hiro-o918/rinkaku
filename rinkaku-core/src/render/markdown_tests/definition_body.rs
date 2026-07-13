@@ -35,6 +35,7 @@ fn should_render_container_comment_when_symbol_has_container() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -89,6 +90,7 @@ fn should_render_depends_on_list_when_symbol_has_dependencies() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -151,6 +153,7 @@ fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencie
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -209,6 +212,7 @@ fn should_render_omitted_matches_note_when_dependency_matches_were_capped() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -269,6 +273,7 @@ fn should_widen_fence_when_signature_contains_a_backtick_run() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -322,6 +327,7 @@ fn should_widen_fence_when_container_contains_a_backtick_run() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 

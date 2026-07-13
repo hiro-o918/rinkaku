@@ -133,10 +133,10 @@ one context window.
 
 - **Thresholds** (mirror the `pub const`s in `rinkaku-core/src/file_size.rs`;
   changing them is an ADR amendment):
-  - ≤ 1000 lines — normal, no action.
-  - 1000–1500 lines — watch; a follow-up split is on the horizon.
-  - > 1500 lines — warn; start planning the split now.
-  - > 2000 lines — split it, or write down in the PR body why not.
+  - ≤ 600 lines — normal, no action.
+  - 600–1000 lines — watch; a follow-up split is on the horizon.
+  - > 1000 lines — warn; start planning the split now.
+  - > 1500 lines — split it, or write down in the PR body why not.
 - **Co-locate tests, but move them out when they push the file over.**
   Default to `#[cfg(test)] mod tests { ... }` in the same file. When
   production + test lines together exceed a threshold, switch to
@@ -155,7 +155,7 @@ one context window.
   Don't wait for a line count to force the obvious split.
 - **rinkaku's own warning is authoritative.** When
   `rinkaku --base main` (from a trusted `main` build, per the
-  dogfooding rule above) prints a `## File size warnings` entry for a
+  dogfooding rule above) prints a warn/split entry in `## File sizes` for a
   file this PR touches, treat it as a review-blocker hint: either
   perform the split in the same PR, or justify the continued growth
   in the PR body. Do not merge past the warning silently.

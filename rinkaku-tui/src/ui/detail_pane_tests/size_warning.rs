@@ -41,7 +41,7 @@ fn should_render_size_warning_line_when_file_detail_has_size_warning() {
     assert!(
         rendered
             .iter()
-            .any(|line| line == "Warn: 1734 lines \u{2014} consider splitting (>1500 watch)"),
+            .any(|line| line == "Warn: 1734 lines \u{2014} consider splitting (>1000 watch)"),
         "expected watch-severity warning line among: {rendered:?}",
     );
 }
@@ -77,7 +77,7 @@ fn should_render_split_severity_label_when_file_detail_size_warning_is_split() {
     assert!(
         rendered
             .iter()
-            .any(|line| line == "Split: 4837 lines \u{2014} over the 2000-line split threshold"),
+            .any(|line| line == "Split: 4837 lines \u{2014} over the 1500-line split threshold"),
         "expected split-severity warning line among: {rendered:?}",
     );
 }

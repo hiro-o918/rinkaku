@@ -18,7 +18,7 @@ use crate::tree::{Badges, NodeKind, SymbolRef};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use rinkaku_core::extract::{Classification, SymbolKind};
-use rinkaku_core::file_size::FileSizeSeverity;
+use rinkaku_core::file_size::FileSizeBand;
 use std::collections::HashMap;
 
 /// Indent width per tree depth level, in columns.
@@ -251,13 +251,13 @@ enum BadgeContext {
 ///   removed symbol) is the one badge that flags something a caller
 ///   should double-check, restoring in color the "pay attention" signal
 ///   the original `!` glyph carried on its own.
-/// - The file-size warnings (ADR 0028) deliberately use **text labels
-///   plus color** rather than an emoji glyph (`⚠` / `🚨`): terminal
-///   emoji rendering width is inconsistent enough to distort the tree
-///   column layout, and the color already encodes severity. Only the
-///   numeric N portion is colored (yellow for Warn, red for Split); the
-///   `lines:` / `warn:` / `split:` label stays default so the eye lands
-///   on the number.
+/// - The file-size badges (ADR 0028, amended to always show a line count)
+///   deliberately use **text labels plus color** rather than an emoji
+///   glyph (`⚠` / `🚨`): terminal emoji rendering width is inconsistent
+///   enough to distort the tree column layout. The per-file `lines:N`
+///   badge's color follows [`band_style`]'s 4-band scale, independent of
+///   the directory-level `warn:N split:N` aggregate, which only ever
+///   counts `Warn`/`Split` files (see `Badges`' doc comment).
 fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: BadgeContext) {
     let cyan = Style::default().fg(Color::Cyan);
     let mut wrote_any_ascii_badge = false;
@@ -286,13 +286,10 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
         wrote_any_ascii_badge = true;
     }
 
-    // File-size warning badges (ADR 0028) — text label + color, no
-    // emoji. Rendered as separate spans so only the numeric N picks up
-    // the severity color.
     match context {
         BadgeContext::File => {
-            if let (Some(severity), Some(line_count)) =
-                (badges.own_file_size_severity, badges.own_file_line_count)
+            if let (Some(band), Some(line_count)) =
+                (badges.own_file_size_band, badges.own_file_line_count)
             {
                 // Leading space only when a preceding badge wrote
                 // something — otherwise the row would gain a stray gap.
@@ -300,10 +297,7 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
                     spans.push(Span::raw(" "));
                 }
                 spans.push(Span::raw("lines:"));
-                spans.push(Span::styled(
-                    line_count.to_string(),
-                    Style::default().fg(severity_color(severity)),
-                ));
+                spans.push(Span::styled(line_count.to_string(), band_style(band)));
             }
         }
         BadgeContext::Dir => {
@@ -333,14 +327,15 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
     }
 }
 
-/// Maps a [`FileSizeSeverity`] to its display color — yellow for `Warn`,
-/// red for `Split`. Shared by the file-row `lines:N` badge and the
-/// directory-row `warn:N` / `split:N` aggregates so both surfaces agree
-/// on the color legend.
-fn severity_color(severity: FileSizeSeverity) -> Color {
-    match severity {
-        FileSizeSeverity::Warn => Color::Yellow,
-        FileSizeSeverity::Split => Color::Red,
+/// File-row `lines:N` badge style per [`FileSizeBand`] (ADR 0028
+/// amendment). `Split` is additionally bold so it doesn't read
+/// identically to `Warn`, which shares its red foreground.
+fn band_style(band: FileSizeBand) -> Style {
+    match band {
+        FileSizeBand::Normal => Style::default(),
+        FileSizeBand::Watch => Style::default().fg(Color::Yellow),
+        FileSizeBand::Warn => Style::default().fg(Color::Red),
+        FileSizeBand::Split => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
     }
 }
 

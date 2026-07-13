@@ -12,7 +12,7 @@ use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::{
     ExtractedSymbol, RemovedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
 };
-use crate::file_size::compute_file_size_warnings;
+use crate::file_size::{compute_file_size_bands, compute_file_size_warnings};
 use crate::graph::{build_graph, compute_fan_ins, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
 use crate::progress::{OnProgress, should_report_progress};
@@ -321,6 +321,8 @@ pub fn analyze_diff(
     // ADR 0028: file-size warnings from the `(path, line_count)` pairs
     // collected inline above during the per-file read loop.
     let file_size_warnings = compute_file_size_warnings(&sized_files);
+    // ADR 0028 amendment: every file's band, from the same pairs.
+    let file_size_bands = compute_file_size_bands(&sized_files);
 
     Ok(Report {
         origin: ReportOrigin::Diff,
@@ -330,6 +332,7 @@ pub fn analyze_diff(
         tests,
         fan_ins,
         file_size_warnings,
+        file_size_bands,
         removed,
     })
 }
@@ -526,6 +529,7 @@ pub fn analyze_repo(
     stamp_ids(&mut files, &graph);
     let fan_ins = compute_fan_ins(&graph);
     let file_size_warnings = compute_file_size_warnings(&sized_files);
+    let file_size_bands = compute_file_size_bands(&sized_files);
 
     Report {
         origin: ReportOrigin::RepoOutline,
@@ -535,6 +539,7 @@ pub fn analyze_repo(
         tests: Vec::new(),
         fan_ins,
         file_size_warnings,
+        file_size_bands,
         removed: Vec::new(),
     }
 }

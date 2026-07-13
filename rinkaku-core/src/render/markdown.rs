@@ -8,9 +8,7 @@
 //! output for each section shape.
 
 use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
-use crate::file_size::{
-    FileSizeSeverity, FileSizeWarning, SPLIT_LINE_THRESHOLD, WARN_LINE_THRESHOLD,
-};
+use crate::file_size::{FileSizeBand, FileSizeEntry};
 use crate::graph::{FanIn, Node, NodeId, SymbolGraph};
 use crate::render::RenderError;
 use crate::render::report::{Report, ReportOrigin, SkipReason, SkippedFile, skip_reason_label};
@@ -105,11 +103,11 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
             writeln!(out)?;
         }
 
-        if !report.file_size_warnings.is_empty() {
-            writeln!(out, "## File size warnings")?;
+        if !report.file_size_bands.is_empty() {
+            writeln!(out, "## File sizes")?;
             writeln!(out)?;
-            for warning in &report.file_size_warnings {
-                writeln!(out, "- {}", file_size_warning_label(warning))?;
+            for entry in &report.file_size_bands {
+                writeln!(out, "- {}", file_size_entry_label(entry))?;
             }
             writeln!(out)?;
         }
@@ -528,23 +526,15 @@ fn fan_in_label(fan_in: &FanIn, lookup: &SymbolLookup) -> String {
     }
 }
 
-/// Builds the "File size warnings" line label for a [`FileSizeWarning`]
-/// (ADR 0028): `⚠` for [`FileSizeSeverity::Warn`] / `🚨` for
-/// [`FileSizeSeverity::Split`], followed by the path (in `code span`), the
-/// line count, and a short explanation naming the threshold crossed. The
-/// threshold numbers are pulled from [`WARN_LINE_THRESHOLD`] and
-/// [`SPLIT_LINE_THRESHOLD`] rather than duplicated inline, so the Markdown
-/// text stays in sync with the file_size module's single source of truth.
-fn file_size_warning_label(warning: &FileSizeWarning) -> String {
-    match warning.severity {
-        FileSizeSeverity::Warn => format!(
-            "⚠ `{}` ({} lines) — over the {}-line watch threshold; consider splitting",
-            warning.path, warning.line_count, WARN_LINE_THRESHOLD,
-        ),
-        FileSizeSeverity::Split => format!(
-            "🚨 `{}` ({} lines) — over the {}-line split threshold",
-            warning.path, warning.line_count, SPLIT_LINE_THRESHOLD,
-        ),
+/// Builds the "File sizes" line label for a [`FileSizeEntry`] (ADR 0028
+/// amendment): `path (N lines)` for [`FileSizeBand::Normal`], with a
+/// `, {band}` suffix for every other band.
+fn file_size_entry_label(entry: &FileSizeEntry) -> String {
+    match entry.band {
+        FileSizeBand::Normal => format!("`{}` ({} lines)", entry.path, entry.line_count),
+        FileSizeBand::Watch => format!("`{}` ({} lines, watch)", entry.path, entry.line_count),
+        FileSizeBand::Warn => format!("`{}` ({} lines, warn)", entry.path, entry.line_count),
+        FileSizeBand::Split => format!("`{}` ({} lines, split)", entry.path, entry.line_count),
     }
 }
 

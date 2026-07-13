@@ -1,6 +1,6 @@
 //! The three optional post-graph sections — "## Skipped files",
 //! "## High fan-in symbols" (ADR 0013, named per ADR 0034), and
-//! "## File size warnings" (ADR 0028) — plus the ADR 0028 shape of
+//! "## File sizes" (ADR 0028, amended) — plus the ADR 0028 shape of
 //! `file_size_warnings` in JSON output. Pins that each section is
 //! emitted only when its list is non-empty and that they land in the
 //! correct order relative to "Change graph" / "Definitions".
@@ -39,6 +39,7 @@ fn should_render_skipped_files_section_when_report_has_skips() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -80,6 +81,7 @@ fn should_render_change_graph_then_skipped_section_when_report_has_both() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -130,6 +132,7 @@ fn should_omit_high_fan_in_symbols_section_when_fan_ins_is_empty() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -226,6 +229,7 @@ fn should_render_high_fan_in_symbols_section_between_change_graph_and_definition
             used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
         }],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -298,6 +302,7 @@ fn should_render_fan_in_line_for_symbol_with_no_matching_definition() {
             used_by: vec!["a".to_string(), "b".to_string()],
         }],
         file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -321,76 +326,7 @@ fn should_render_fan_in_line_for_symbol_with_no_matching_definition() {
 }
 
 #[test]
-fn should_render_file_size_warnings_section_when_warnings_are_present() {
-    // Two warnings across both severities: the `Split` entry must come
-    // first (ADR 0028 orders `Split` before `Warn`), each glyph and the
-    // threshold-numbered explanation pinned exactly as the ADR spec
-    // shows.
-    let report = Report {
-        origin: ReportOrigin::Diff,
-        files: vec![FileReport {
-            path: "src/lib.rs".to_string(),
-            symbols: vec![symbol(
-                "src/lib.rs::foo",
-                "foo",
-                SymbolKind::Function,
-                "fn foo()",
-            )],
-        }],
-        skipped: vec![],
-        graph: SymbolGraph {
-            nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
-            edges: vec![],
-            roots: vec!["src/lib.rs::foo".to_string()],
-        },
-        tests: vec![],
-        fan_ins: vec![],
-        file_size_warnings: vec![
-            crate::file_size::FileSizeWarning {
-                path: "b.rs".to_string(),
-                line_count: 2500,
-                severity: crate::file_size::FileSizeSeverity::Split,
-            },
-            crate::file_size::FileSizeWarning {
-                path: "a.rs".to_string(),
-                line_count: 1600,
-                severity: crate::file_size::FileSizeSeverity::Warn,
-            },
-        ],
-        removed: vec![],
-    };
-
-    let expected = "\
-## Change graph
-
-1 changed symbol in 1 file
-
-- fn foo (src/lib.rs)
-
-## File size warnings
-
-- 🚨 `b.rs` (2500 lines) — over the 2000-line split threshold
-- ⚠ `a.rs` (1600 lines) — over the 1500-line watch threshold; consider splitting
-
-## Definitions
-
-### fn foo (src/lib.rs)
-
-```
-fn foo()
-```
-
-"
-    .to_string();
-    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
-
-    assert_eq!(expected, actual);
-}
-
-#[test]
-fn should_omit_file_size_warnings_section_when_report_has_no_warnings() {
-    // Empty `file_size_warnings` must drop the whole section — no bare
-    // "## File size warnings" heading with nothing under it.
+fn should_render_file_sizes_section_in_report_order_across_all_bands() {
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![FileReport {
@@ -411,20 +347,93 @@ fn should_omit_file_size_warnings_section_when_report_has_no_warnings() {
         tests: vec![],
         fan_ins: vec![],
         file_size_warnings: vec![],
+        file_size_bands: vec![
+            crate::file_size::FileSizeEntry {
+                path: "a.rs".to_string(),
+                line_count: 80,
+                band: crate::file_size::FileSizeBand::Normal,
+            },
+            crate::file_size::FileSizeEntry {
+                path: "b.rs".to_string(),
+                line_count: 700,
+                band: crate::file_size::FileSizeBand::Watch,
+            },
+            crate::file_size::FileSizeEntry {
+                path: "c.rs".to_string(),
+                line_count: 1200,
+                band: crate::file_size::FileSizeBand::Warn,
+            },
+            crate::file_size::FileSizeEntry {
+                path: "d.rs".to_string(),
+                line_count: 2500,
+                band: crate::file_size::FileSizeBand::Split,
+            },
+        ],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs)
+
+## File sizes
+
+- `a.rs` (80 lines)
+- `b.rs` (700 lines, watch)
+- `c.rs` (1200 lines, warn)
+- `d.rs` (2500 lines, split)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_omit_file_sizes_section_when_report_has_no_bands() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![symbol(
+                "src/lib.rs::foo",
+                "foo",
+                SymbolKind::Function,
+                "fn foo()",
+            )],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+            edges: vec![],
+            roots: vec!["src/lib.rs::foo".to_string()],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
     let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
 
-    assert!(!actual.contains("## File size warnings"));
+    assert!(!actual.contains("## File sizes"));
 }
 
 #[test]
-fn should_place_file_size_warnings_between_high_fan_in_symbols_and_definitions() {
-    // A report with both a high-fan-in symbol and a file-size warning:
-    // the `## File size warnings` section must land after
-    // `## High fan-in symbols` and before `## Definitions`, matching
-    // ADR 0028's placement decision.
+fn should_place_file_sizes_between_high_fan_in_symbols_and_definitions() {
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![FileReport {
@@ -485,10 +494,11 @@ fn should_place_file_size_warnings_between_high_fan_in_symbols_and_definitions()
             name: "UpsertItemsRequest".to_string(),
             used_by: vec!["HandleBar".to_string(), "HandleFoo".to_string()],
         }],
-        file_size_warnings: vec![crate::file_size::FileSizeWarning {
+        file_size_warnings: vec![],
+        file_size_bands: vec![crate::file_size::FileSizeEntry {
             path: "store/items.go".to_string(),
             line_count: 2500,
-            severity: crate::file_size::FileSizeSeverity::Split,
+            band: crate::file_size::FileSizeBand::Split,
         }],
         removed: vec![],
     };
@@ -505,9 +515,9 @@ fn should_place_file_size_warnings_between_high_fan_in_symbols_and_definitions()
 
 - struct UpsertItemsRequest (store/items.go) — used by 2: HandleBar, HandleFoo
 
-## File size warnings
+## File sizes
 
-- 🚨 `store/items.go` (2500 lines) — over the 2000-line split threshold
+- `store/items.go` (2500 lines, split)
 
 ## Definitions
 
@@ -565,6 +575,7 @@ fn should_include_file_size_warnings_in_json_output() {
                 severity: crate::file_size::FileSizeSeverity::Warn,
             },
         ],
+        file_size_bands: vec![],
         removed: vec![],
     };
 
@@ -591,6 +602,7 @@ fn should_include_file_size_warnings_in_json_output() {
       \"severity\": \"warn\"
     }
   ],
+  \"file_size_bands\": [],
   \"removed\": []
 }"
     .to_string();
