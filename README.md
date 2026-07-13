@@ -171,7 +171,7 @@ with or without the defaults introduced in
 [ADR 0009](docs/adr/0009-exclude-test-symbols-from-output-by-default.md),
 [ADR 0010](docs/adr/0010-skip-files-marked-no-diff-or-generated-in-gitattributes.md),
 and [ADR 0011](docs/adr/0011-detect-generated-files-by-content-markers.md)
-— see `--include-tests`/`--include-generated` below for what changes when a
+— see `--exclude-tests`/`--include-generated` below for what changes when a
 diff does touch test symbols or generated files.
 
 Running `rinkaku` on
@@ -362,14 +362,21 @@ remains dramatically faster since indexing cost does not depend on diff
 size. Prefer `--deps 0` for quick iteration or CI checks where the
 dependency context isn't needed.
 
-### `--include-tests`
+### `--exclude-tests`
 
-By default (see [ADR 0009](docs/adr/0009-exclude-test-symbols-from-output-by-default.md)),
-test symbols are excluded from "Change graph"/"Definitions" — detected per
-language (Go's `*_test.go`, Python's `test_*.py`/`*_test.py` and `tests/`
-directories, TypeScript's `*.test.ts(x)`/`*.spec.ts(x)` and `__tests__/`,
-and Rust's `tests/` directory plus `#[cfg(test)]` modules and
-`#[test]`/`#[rstest]`/`#[tokio::test]`-attributed functions) — and
+By default (see [ADR 0025](docs/adr/0025-default-to-including-tests.md),
+superseding the prior ADR 0009 default), test symbols appear in
+"Change graph"/"Definitions" alongside production symbols, and the
+`## Tests` summary section is omitted — this shape is designed for LLM
+consumers of the Markdown/JSON output, for which "which contracts have
+which tests changed alongside them" is useful signal rather than noise.
+
+Pass `--exclude-tests` to opt into the previous behavior: test symbols
+are detected per language (Go's `*_test.go`, Python's
+`test_*.py`/`*_test.py` and `tests/` directories, TypeScript's
+`*.test.ts(x)`/`*.spec.ts(x)` and `__tests__/`, and Rust's `tests/`
+directory plus `#[cfg(test)]` modules and
+`#[test]`/`#[rstest]`/`#[tokio::test]`-attributed functions) and
 summarized instead as a per-file count under a `## Tests` section:
 
 ```markdown
@@ -378,10 +385,10 @@ summarized instead as a per-file count under a `## Tests` section:
 - rinkaku-core/src/pipeline.rs: 3 changed test symbols
 ```
 
-This keeps the primary output focused on implementation entry points while
-still surfacing "did this change come with tests?" as a signal. Pass
-`--include-tests` to restore the previous behavior (test symbols appear in
-the graph and definitions like any other symbol, and `## Tests` is omitted).
+Under `--exclude-tests`, `TagsResolver`'s repo-wide dependency index
+applies the same exclusion, so a changed production symbol's "Depends
+on:" cannot resolve to a same-named test helper or fixture elsewhere in
+the repo (ADR 0009).
 
 ### `--include-generated`
 

@@ -1,6 +1,8 @@
 # 0009. Exclude test symbols from output by default
 
-- Status: accepted
+- Status: superseded by [ADR 0025](0025-default-to-including-tests.md)
+  (flag polarity and default flipped; per-language detection heuristics
+  and the `## Tests` summary section — now opt-in — are unchanged)
 - Date: 2026-07-12
 
 ## Context

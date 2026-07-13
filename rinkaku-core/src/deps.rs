@@ -109,11 +109,13 @@ impl TagsResolver {
     /// name is referenced, so no definition needs to be found.
     ///
     /// `include_tests` mirrors `pipeline::analyze_diff`'s flag of the same
-    /// name (ADR 0009), extended to this repo-wide index: `false` (the CLI
-    /// default) excludes test symbols the same two ways `analyze_diff`
-    /// does — a whole file `language.is_test_path` considers a test file
-    /// is skipped entirely, and within every other file, only symbols
-    /// [`crate::extract::extract_all_symbols`] marked
+    /// name (ADR 0009's mechanism; ADR 0025 flipped the CLI-facing default
+    /// to include tests and renamed the flag to `--exclude-tests`),
+    /// extended to this repo-wide index: `false` (the CLI's
+    /// `--exclude-tests`) excludes test symbols the same two ways
+    /// `analyze_diff` does — a whole file `language.is_test_path`
+    /// considers a test file is skipped entirely, and within every other
+    /// file, only symbols [`crate::extract::extract_all_symbols`] marked
     /// `ExtractedSymbol::is_test` (AST context, e.g. Rust's `#[cfg(test)]`)
     /// are dropped from indexing. Without this, a changed production
     /// symbol's `referenced_names` could resolve to a same-named test
@@ -121,7 +123,7 @@ impl TagsResolver {
     /// would almost always read as coincidental noise in "Depends on:",
     /// not a real dependency, since production code should not actually
     /// depend on test-only definitions (see ADR 0009's Consequences).
-    /// `true` (`--include-tests`) indexes every symbol as before, matching
+    /// `true` (the CLI's new default) indexes every symbol, matching
     /// `analyze_diff`'s own `include_tests: true` behavior.
     ///
     /// `generated_paths` and `include_generated` extend the same exclusion

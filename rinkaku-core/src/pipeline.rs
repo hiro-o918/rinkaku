@@ -61,15 +61,17 @@ pub enum AnalyzeError {
 /// resolution entirely — no `Resolver::resolve` calls are made — which is
 /// how the CLI's `--deps 0` is wired (`main.rs`).
 ///
-/// `include_tests` controls ADR 0009's test-symbol exclusion: `false` (the
-/// CLI's default) drops every symbol a file's
+/// `include_tests` controls ADR 0009's test-symbol exclusion mechanism
+/// (kept intact, though ADR 0025 flipped the CLI-facing default to
+/// include tests and renamed the flag to `--exclude-tests`): `false`
+/// (the CLI's `--exclude-tests`) drops every symbol a file's
 /// [`crate::language::LanguageSupport`] considers a test — by path
 /// ([`LanguageSupport::is_test_path`], the whole file) or by AST context
 /// ([`ExtractedSymbol::is_test`], set per-definition during extraction) —
 /// from `files` before dependency resolution and graph-building run, and
 /// summarizes the excluded counts per file in the returned `Report`'s
-/// `tests`. `true` (`--include-tests`) keeps every symbol in `files` as
-/// before and leaves `tests` empty. Filtering happens before
+/// `tests`. `true` (the CLI's new default) keeps every symbol in `files`
+/// and leaves `tests` empty. Filtering happens before
 /// `resolve_dependencies`/`build_graph` rather than at render time so test
 /// symbols are excluded from the dependency graph and 1-hop resolution too,
 /// not just hidden from the rendered "Change graph"/"Definitions" sections.
