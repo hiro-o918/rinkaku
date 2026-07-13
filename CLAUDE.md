@@ -61,6 +61,12 @@ Design rationale for the choices above is recorded in
   that takes plain data in and returns plain data out, and unit-test
   that. Reserve integration-style tests (using real fixtures under
   `resources/` or `tempfile::TempDir`) for the adapter boundary itself.
+- **When a test module grows large, split it by topic**, not by
+  mechanical top/bottom cut: sibling in-module `mod`s, or
+  `#[cfg(test)] #[path = "..."] mod tests;` files under a `*_tests/`
+  directory (ADR 0028). Don't let one file's tests grow into a single
+  monolithic block. Precedents: PR #93 (`rinkaku-core`) and PR #95
+  (`rinkaku-tui`).
 - Run `make test` before committing; it must pass together with
   `make lint`.
 
