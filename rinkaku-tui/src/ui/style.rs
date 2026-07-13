@@ -63,6 +63,34 @@ pub(crate) fn gap_span(text: &str, bg: Option<Color>) -> Span<'static> {
     Span::styled(text.to_string(), style)
 }
 
+/// Border style for a pane's `Block`, keyed only on whether that pane
+/// currently has focus (`crate::app::Focus`) — dogfooding finding: every
+/// pane's `Block::bordered()` looked identical regardless of which one
+/// `Tab`/`h`/`l` had routed motion keys to, so a reviewer had no visual way
+/// to tell which pane `j`/`k` would actually move. Centralized here rather
+/// than matched inline in each of `draw_tree_pane`/`render_scrollable_pane`/
+/// the placeholder `Block`s so the two states can never drift apart between
+/// panes.
+///
+/// Focused uses `Color::Cyan` (the crate's existing accent color — the
+/// splash screen's logo/progress gauge and the tree pane's `chg:`/`fan-in:`
+/// badge counts, `crate::row_view::push_badge_spans`, already use it) plus
+/// `Modifier::BOLD` so the focused border reads as "active" rather than just
+/// a different hue. Unfocused is a plain `Color::DarkGray` with no
+/// `Modifier::DIM` stacked on top — a sibling fix (comment-token styling,
+/// ADR-less color cleanup) is removing that exact double-dimming
+/// combination elsewhere in this crate, so a new call site is deliberately
+/// not reintroducing it.
+pub(crate) fn pane_border_style(focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
 /// Maps a [`PALETTE`] index to its display style — the minimal token
 /// palette ADR 0018 asks for. Falls back to the default (unstyled)
 /// foreground for a palette index this match doesn't special-case (there
@@ -111,6 +139,30 @@ mod tests {
             .enumerate()
             .map(|(index, name)| (*name, palette_style(index)))
             .collect();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_bold_cyan_style_when_pane_is_focused() {
+        let expected = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+
+        let actual = pane_border_style(true);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_return_plain_dark_gray_style_when_pane_is_unfocused() {
+        // Deliberately no `Modifier::DIM` stacked on top of `DarkGray` — a
+        // sibling fix elsewhere in this crate is removing that exact
+        // combination from the comment-token style, so this pane border
+        // must not reintroduce it (`pane_border_style`'s own doc comment).
+        let expected = Style::default().fg(Color::DarkGray);
+
+        let actual = pane_border_style(false);
 
         assert_eq!(expected, actual);
     }

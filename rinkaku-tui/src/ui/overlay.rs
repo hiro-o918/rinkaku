@@ -74,12 +74,17 @@ pub(crate) fn draw_help_overlay(
 
     let lines = help_overlay_lines();
     let inner_height = overlay_area.height.saturating_sub(2) as usize;
+    // Always drawn as focused: this overlay is modal (composited on top of
+    // whatever screen was already showing) and is always the surface `?`'s
+    // own scroll keys act on while open, so there is no competing pane to
+    // distinguish it from (`render_scrollable_pane`'s own doc comment).
     let scroll = render_scrollable_pane(
         frame,
         " Help (? to close) ",
         &lines,
         requested_scroll,
         overlay_area,
+        true,
     );
     (scroll, inner_height)
 }

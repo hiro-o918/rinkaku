@@ -4,7 +4,8 @@
 //! computed once per handled key by `crate::run_app` and handed in.
 
 use super::scroll::render_scrollable_pane;
-use crate::app::{App, BlastRadiusSelection};
+use super::style::pane_border_style;
+use crate::app::{App, BlastRadiusSelection, Focus};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -42,9 +43,12 @@ pub(crate) fn draw_blast_radius_pane(
     selection: &BlastRadiusSelection,
     area: Rect,
 ) -> Option<usize> {
+    let focused = app.focus() == Focus::Right;
     match selection {
         BlastRadiusSelection::NotApplicable => {
-            let block = Block::bordered().title(" Blast radius ");
+            let block = Block::bordered()
+                .title(" Blast radius ")
+                .border_style(pane_border_style(focused));
             let paragraph =
                 Paragraph::new("(select a directory or file row to see its blast radius)")
                     .block(block)
@@ -53,7 +57,9 @@ pub(crate) fn draw_blast_radius_pane(
             None
         }
         BlastRadiusSelection::Empty { path } => {
-            let block = Block::bordered().title(format!(" Blast radius of {path} "));
+            let block = Block::bordered()
+                .title(format!(" Blast radius of {path} "))
+                .border_style(pane_border_style(focused));
             let paragraph = Paragraph::new(format!("(nothing under {path} is reachable)"))
                 .block(block)
                 .wrap(ratatui::widgets::Wrap { trim: false });
@@ -69,6 +75,7 @@ pub(crate) fn draw_blast_radius_pane(
                 &lines,
                 app.right_pane_scroll(),
                 area,
+                focused,
             ))
         }
     }

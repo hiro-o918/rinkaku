@@ -6,6 +6,7 @@
 //! [`render_scrollable_pane`] itself (the one non-pure helper here) has a
 //! single home shared by every pane that scrolls.
 
+use super::style::pane_border_style;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -49,12 +50,21 @@ use unicode_width::UnicodeWidthChar;
 /// `App::with_right_pane_scroll` after every draw, so the *next* `k` moves
 /// the visible content immediately instead of first re-tracing the
 /// overshoot.
+///
+/// `focused` selects the pane's border style via
+/// [`pane_border_style`] — dogfooding finding: every bordered pane looked
+/// identical regardless of which one currently received motion keys, so a
+/// reviewer had no visual way to tell which pane `j`/`k` would move. The
+/// Detail/Diff/Blast-radius panes pass `app.focus() == Focus::Right`; the
+/// `?` help overlay and jump popup, which are modal and always the active
+/// surface while shown, pass `true` unconditionally.
 pub(crate) fn render_scrollable_pane(
     frame: &mut Frame,
     title: &str,
     lines: &[Line<'static>],
     requested_scroll: usize,
     area: Rect,
+    focused: bool,
 ) -> usize {
     // 2 columns/rows for the left/right and top/bottom border, matching
     // `draw_source_screen`'s own `saturating_sub(2)` convention for a
@@ -73,7 +83,9 @@ pub(crate) fn render_scrollable_pane(
         None => title.to_string(),
     };
 
-    let block = Block::bordered().title(title);
+    let block = Block::bordered()
+        .title(title)
+        .border_style(pane_border_style(focused));
     let paragraph = Paragraph::new(wrapped)
         .block(block)
         .scroll((scroll as u16, 0));

@@ -6,8 +6,9 @@ use super::blast_radius::draw_blast_radius_pane;
 use super::detail_pane::draw_detail_pane;
 use super::diff_pane::draw_diff_pane;
 use super::scroll::{scroll_indicator, windowed_rows_with_indicators};
+use super::style::pane_border_style;
 use super::{ENTRY_RIGHT_WIDTH_PERCENT, ENTRY_TREE_WIDTH_PERCENT};
-use crate::app::{App, BlastRadiusSelection, RightPane};
+use crate::app::{App, BlastRadiusSelection, Focus, RightPane};
 use crate::highlight::HighlightedFile;
 use crate::row_view::{entry_row_line, relative_labels};
 use ratatui::Frame;
@@ -117,7 +118,9 @@ pub(crate) fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
         Some(indicator) => format!("{}{indicator} ", " Entry".trim_end()),
         None => " Entry ".to_string(),
     };
-    let block = Block::bordered().title(title);
+    let block = Block::bordered()
+        .title(title)
+        .border_style(pane_border_style(app.focus() == Focus::Tree));
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -128,6 +131,7 @@ mod tests {
     use crate::ui::draw;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Modifier};
     use rinkaku_core::diff::LineRange;
     use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
     use rinkaku_core::graph::SymbolGraph;
@@ -237,6 +241,79 @@ mod tests {
         // the detail pane actually rendered file-detail content rather than
         // asserting on the placeholder text that used to show here.
         assert!(text.contains("Symbols"));
+    }
+
+    // NOTE: asserts only `fg`/`add_modifier` rather than the whole `Style`
+    // returned by `buffer[..].style()` — a rendered `Cell`'s `Style` always
+    // carries ratatui's own default `bg`/`underline_color` (`Color::Reset`)
+    // filled in, unlike the bare `Style` `pane_border_style` constructs, so
+    // a fully-qualified comparison would fail for a reason unrelated to
+    // this test's actual claim. Mirrors the same partial-comparison
+    // precedent `diff_pane`/`source_screen`'s own `find_cell_style` tests
+    // already use for the identical reason.
+    #[test]
+    fn should_swap_border_emphasis_between_tree_and_right_pane_when_focus_moves_right() {
+        // Dogfooding finding: every pane's `Block` looked identical
+        // regardless of which one currently received motion keys, so a
+        // reviewer had no visual way to tell which pane `j`/`k` would move.
+        // This pins the actual rendered border cell style (not just the
+        // pure `pane_border_style` helper in isolation) swapping sides as
+        // `Focus` changes.
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        assert_eq!(crate::app::Focus::Tree, app.focus());
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        // Tree pane's own top-left border corner is at (0, 0); the right
+        // pane's 60/40 split (`ENTRY_TREE_WIDTH_PERCENT`) puts its top-left
+        // corner at column 48 of an 80-column terminal.
+        let buffer = terminal.backend().buffer();
+        let tree_border_style = buffer[(0, 0)].style();
+        let right_border_style = buffer[(48, 0)].style();
+        assert_eq!(Some(Color::Cyan), tree_border_style.fg);
+        assert!(tree_border_style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(Some(Color::DarkGray), right_border_style.fg);
+        assert!(!right_border_style.add_modifier.contains(Modifier::BOLD));
+
+        let app = app.handle_key(crate::app::InputKey::Open);
+        assert_eq!(crate::app::Focus::Right, app.focus());
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let tree_border_style = buffer[(0, 0)].style();
+        let right_border_style = buffer[(48, 0)].style();
+        assert_eq!(Some(Color::DarkGray), tree_border_style.fg);
+        assert!(!tree_border_style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(Some(Color::Cyan), right_border_style.fg);
+        assert!(right_border_style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]

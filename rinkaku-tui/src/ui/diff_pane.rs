@@ -4,8 +4,8 @@
 //! grouped into per-symbol sections for a file row.
 
 use super::scroll::render_scrollable_pane;
-use super::style::styled_content_spans;
-use crate::app::{App, DiffTarget};
+use super::style::{pane_border_style, styled_content_spans};
+use crate::app::{App, DiffTarget, Focus};
 use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, TokenSpan};
@@ -59,6 +59,7 @@ pub(crate) fn draw_diff_pane(
 ) -> Option<usize> {
     use crate::diff_shape::DiffPaneContent;
 
+    let focused = app.focus() == Focus::Right;
     let target = app.selected_diff_target(report);
     let path: &str = match &target {
         Some(DiffTarget::File { path }) => path.as_str(),
@@ -71,7 +72,9 @@ pub(crate) fn draw_diff_pane(
                 None => "(select a symbol or file row to see its diff)".to_string(),
                 Some(_) => format!("(no diff hunks found for {path})"),
             };
-            let block = Block::bordered().title(" Diff ");
+            let block = Block::bordered()
+                .title(" Diff ")
+                .border_style(pane_border_style(focused));
             let paragraph = Paragraph::new(message)
                 .block(block)
                 .wrap(ratatui::widgets::Wrap { trim: false });
@@ -94,6 +97,7 @@ pub(crate) fn draw_diff_pane(
         &lines,
         app.right_pane_scroll(),
         area,
+        focused,
     ))
 }
 
