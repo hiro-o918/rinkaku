@@ -18,7 +18,7 @@ name: rinkaku PR report
 #      fork) PR, `pull_request` grants the real repo token, not a
 #      restricted one, so this is not merely theoretical.
 # Same rule this repository's own README documents for the "map-assisted
-# LLM review" recipe (docs/experiments/0001-map-assisted-llm-review.md):
+# LLM review" recipe (docs/experiments/0001-map-assisted-llm-review/):
 # "built from a trusted `main` checkout, never from the branch under
 # review" — extended here to cover the script that runs the tool, not
 # just the tool itself.

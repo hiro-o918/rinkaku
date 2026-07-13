@@ -68,7 +68,7 @@ Design rationale for the choices above is recorded in
 
 When reviewing a branch or PR of this repository (directly or via
 review subagents), always cover **three complementary angles** — see
-[`docs/experiments/0001-map-assisted-llm-review.md`](docs/experiments/0001-map-assisted-llm-review.md)
+[`docs/experiments/0001-map-assisted-llm-review/`](docs/experiments/0001-map-assisted-llm-review/README.md)
 for why:
 
 1. **Map-assisted pass**: generate rinkaku's own output for the diff
