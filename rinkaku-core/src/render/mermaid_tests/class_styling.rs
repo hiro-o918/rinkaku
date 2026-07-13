@@ -73,7 +73,7 @@ fn should_render_subgraph_per_file_with_class_assignments_when_report_has_classi
         "  class n1 changed\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
@@ -114,7 +114,7 @@ fn should_render_dashed_arrow_when_edge_is_a_cycle() {
         "  n1 -.-> n0\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
@@ -159,7 +159,7 @@ fn should_append_fan_in_count_suffix_to_label_when_node_is_high_fan_in() {
         "  class n0 fan-in\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
@@ -207,7 +207,7 @@ fn should_prefer_fan_in_class_over_changed_class_when_node_is_both() {
         "  class n0 fan-in\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
@@ -259,7 +259,7 @@ fn should_prefer_fan_in_class_over_added_class_when_a_new_symbol_has_high_fan_in
         "  class n0 fan-in\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
@@ -308,7 +308,7 @@ fn should_render_removed_and_fan_in_nodes_distinctly_when_both_present_in_one_re
         "  class n1 removed\n",
     )
     .to_string()
-        + LEGEND_AND_CLASS_DEFS;
+        + CLASS_DEFS;
     let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
 
     assert_eq!(expected, actual);
