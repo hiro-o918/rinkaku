@@ -1,11 +1,13 @@
-//! Mermaid `flowchart` rendering (ADR 0021).
+//! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0035).
 //!
 //! The `--format mermaid` output path: a human-oriented call/dependency
 //! graph aimed at GitHub's native mermaid rendering in PR comments/
 //! descriptions, separate from the machine-facing Markdown/JSON paths.
 //! Falls back to a file-level aggregation when the symbol-level graph
 //! would exceed `MERMAID_NODE_BUDGET`, so the output stays legible instead
-//! of degrading into a hairball.
+//! of degrading into a hairball. Deleted symbols (`report.removed`, ADR
+//! 0014) render as isolated `removed`-classed nodes in the same graph
+//! (ADR 0035) rather than a separate before/after diagram.
 
 use crate::extract::Classification;
 use crate::graph::Node;
@@ -17,7 +19,10 @@ use std::fmt::Write as _;
 /// Node count above which [`render_mermaid`] falls back to a file-level
 /// graph (ADR 0021) instead of one node per symbol. Chosen as a size a
 /// `flowchart` still renders legibly in a PR comment's viewport; see the
-/// ADR's Consequences for the judgment-call caveat.
+/// ADR's Consequences for the judgment-call caveat. Compared against
+/// `graph.nodes.len() + removed.len()` (ADR 0035) so a bulk-deletion diff
+/// cannot dodge the fallback just because deleted symbols carry no
+/// head-side node.
 const MERMAID_NODE_BUDGET: usize = 30;
 
 /// Renders a [`Report`] as a mermaid `flowchart LR` document (ADR 0021): a
@@ -25,10 +30,10 @@ const MERMAID_NODE_BUDGET: usize = 30;
 /// separate from the machine-facing Markdown/JSON paths (`render_markdown`
 /// is untouched by this function).
 ///
-/// Falls back to [`render_mermaid_file_level`] when `graph.nodes.len()`
-/// exceeds [`MERMAID_NODE_BUDGET`] — the hairball concern ADR 0013 raised
-/// against a symbol-level flowchart, addressed by demoting to file
-/// granularity rather than rendering every node anyway.
+/// Falls back to [`render_mermaid_file_level`] when `graph.nodes.len() +
+/// removed.len()` exceeds [`MERMAID_NODE_BUDGET`] — the hairball concern
+/// ADR 0013 raised against a symbol-level flowchart, addressed by demoting
+/// to file granularity rather than rendering every node anyway.
 ///
 /// Infallible (`Result` in [`crate::render::render`]'s signature is uniform
 /// across formats, not because this can fail): unlike `render_markdown`'s
@@ -36,14 +41,14 @@ const MERMAID_NODE_BUDGET: usize = 30;
 /// into an owned buffer that is only ever handed back to the caller cannot
 /// error the way a fallible `io::Write` sink could.
 pub(super) fn render_mermaid(report: &Report) -> String {
-    if report.graph.nodes.len() > MERMAID_NODE_BUDGET {
+    if report.graph.nodes.len() + report.removed.len() > MERMAID_NODE_BUDGET {
         return render_mermaid_file_level(report);
     }
 
     let mut out = String::new();
     out.push_str("flowchart LR\n");
 
-    if report.graph.nodes.is_empty() {
+    if report.graph.nodes.is_empty() && report.removed.is_empty() {
         out.push_str("%% no symbols\n");
         return out;
     }
@@ -54,15 +59,25 @@ pub(super) fn render_mermaid(report: &Report) -> String {
     // Sequential, mermaid-safe node ids (`n0`, `n1`, ...), mapped from the
     // original `NodeId` — a `NodeId` like `src/lib.rs::foo@10` contains
     // characters (`/`, `:`, `@`, `.`) mermaid does not accept in a bare
-    // node id.
+    // node id. Removed symbols have no `NodeId` (ADR 0014: no head-side
+    // symbol to derive one from), so they get their own id space keyed by
+    // position in `report.removed` instead, continuing the `n{i}` sequence
+    // after every head-side node.
     let mut safe_id_by_node: HashMap<&str, String> = HashMap::new();
     for (i, n) in report.graph.nodes.iter().enumerate() {
         safe_id_by_node.insert(n.id.as_str(), format!("n{i}"));
     }
+    let removed_offset = report.graph.nodes.len();
+    let safe_id_by_removed: Vec<String> = (0..report.removed.len())
+        .map(|i| format!("n{}", removed_offset + i))
+        .collect();
 
     // Group nodes by path, preserving first-seen order (same convention as
     // `change_graph_summary`'s path tie-break) — this is what produces one
-    // `subgraph` per file, in source order.
+    // `subgraph` per file, in source order. Removed symbols extend the same
+    // per-path grouping (ADR 0035) so a file whose only change was deleting
+    // every symbol in it still gets a subgraph, and a file with both
+    // surviving and removed symbols shows them together.
     let mut path_order: Vec<&str> = Vec::new();
     let mut nodes_by_path: HashMap<&str, Vec<&Node>> = HashMap::new();
     for n in &report.graph.nodes {
@@ -72,6 +87,14 @@ pub(super) fn render_mermaid(report: &Report) -> String {
         }
         nodes_by_path.entry(path).or_default().push(n);
     }
+    let mut removed_by_path: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, removed) in report.removed.iter().enumerate() {
+        let path = removed.path.as_str();
+        if !nodes_by_path.contains_key(path) && !removed_by_path.contains_key(path) {
+            path_order.push(path);
+        }
+        removed_by_path.entry(path).or_default().push(i);
+    }
 
     for (subgraph_i, path) in path_order.iter().enumerate() {
         writeln!(
@@ -80,10 +103,20 @@ pub(super) fn render_mermaid(report: &Report) -> String {
             escape_mermaid_label(path)
         )
         .expect("writing to a String cannot fail");
-        for n in &nodes_by_path[path] {
-            let safe_id = &safe_id_by_node[n.id.as_str()];
-            writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(&n.name))
-                .expect("writing to a String cannot fail");
+        if let Some(nodes) = nodes_by_path.get(path) {
+            for n in nodes {
+                let safe_id = &safe_id_by_node[n.id.as_str()];
+                writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(&n.name))
+                    .expect("writing to a String cannot fail");
+            }
+        }
+        if let Some(indices) = removed_by_path.get(path) {
+            for &i in indices {
+                let safe_id = &safe_id_by_removed[i];
+                let name = &report.removed[i].name;
+                writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(name))
+                    .expect("writing to a String cannot fail");
+            }
         }
         out.push_str("  end\n");
     }
@@ -128,6 +161,12 @@ pub(super) fn render_mermaid(report: &Report) -> String {
             writeln!(out, "  class {safe_id} {class}").expect("writing to a String cannot fail");
         }
     }
+    // Removed nodes never overlap the loop above: a `RemovedSymbol` has no
+    // `graph.nodes` entry to begin with (ADR 0035's Decision), so its class
+    // assignment is a separate, unconditional `removed` for every entry.
+    for safe_id in &safe_id_by_removed {
+        writeln!(out, "  class {safe_id} removed").expect("writing to a String cannot fail");
+    }
 
     out.push_str(MERMAID_CLASS_DEFS);
     out
@@ -138,13 +177,16 @@ pub(super) fn render_mermaid(report: &Report) -> String {
 /// aggregated between files and deduplicated with a count label, so the
 /// output stays legible instead of degrading into a hairball. A leading
 /// `%% aggregated to file level` comment marks that this fallback fired.
+/// Includes `report.removed` in both the reported symbol count and the
+/// file enumeration (ADR 0035), so a file whose only change was deleting
+/// every symbol in it still gets a node.
 fn render_mermaid_file_level(report: &Report) -> String {
     let mut out = String::new();
     out.push_str("flowchart LR\n");
     writeln!(
         out,
         "%% aggregated to file level ({} symbols > budget)",
-        report.graph.nodes.len()
+        report.graph.nodes.len() + report.removed.len()
     )
     .expect("writing to a String cannot fail");
 
@@ -156,12 +198,20 @@ fn render_mermaid_file_level(report: &Report) -> String {
         .collect();
 
     // First-seen path order, matching `render_mermaid`'s subgraph order
-    // convention.
+    // convention. Removed-only paths (no head-side node at all) are
+    // appended after every path with a head-side node, in `report.removed`'s
+    // own order (ADR 0035) — a removed symbol has no `graph.nodes` entry to
+    // interleave it by.
     let mut path_order: Vec<&str> = Vec::new();
     let mut seen_paths: HashSet<&str> = HashSet::new();
     for n in &report.graph.nodes {
         if seen_paths.insert(n.path.as_str()) {
             path_order.push(n.path.as_str());
+        }
+    }
+    for removed in &report.removed {
+        if seen_paths.insert(removed.path.as_str()) {
+            path_order.push(removed.path.as_str());
         }
     }
 
@@ -182,6 +232,17 @@ fn render_mermaid_file_level(report: &Report) -> String {
             })
         })
         .map(|f| f.path.as_str())
+        .collect();
+
+    // A path with a removed symbol but no surviving/changed node of its own
+    // (e.g. every symbol in the file was deleted) gets `removed` styling
+    // instead — checked as the fallback path's counterpart to
+    // `render_mermaid`'s per-node removed class assignment (ADR 0035).
+    let removed_only_paths: HashSet<&str> = report
+        .removed
+        .iter()
+        .map(|r| r.path.as_str())
+        .filter(|path| !changed_paths.contains(path))
         .collect();
 
     for path in &path_order {
@@ -222,9 +283,11 @@ fn render_mermaid_file_level(report: &Report) -> String {
     }
 
     for path in &path_order {
+        let safe_id = &safe_id_by_path[path];
         if changed_paths.contains(path) {
-            let safe_id = &safe_id_by_path[path];
             writeln!(out, "  class {safe_id} changed").expect("writing to a String cannot fail");
+        } else if removed_only_paths.contains(path) {
+            writeln!(out, "  class {safe_id} removed").expect("writing to a String cannot fail");
         }
     }
 
@@ -240,11 +303,15 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// top of its own fill, in addition to `changed`'s (SignatureChanged)
 /// styling, since `fan-in` styling takes precedence over `changed` for a
 /// node that qualifies as both (see `render_mermaid`'s class-assignment
-/// comment).
+/// comment). `removed` (ADR 0035) uses a muted gray fill with a dashed
+/// stroke — distinct from the three solid-border classes above, echoing
+/// the dashed cycle-edge convention (`-.->`) to give "no longer a normal
+/// solid connection/node" one consistent visual vocabulary.
 const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
     "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
     "  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;\n",
+    "  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;\n",
 );
 
 /// Escapes text embedded in a quoted mermaid node/subgraph label
@@ -269,7 +336,7 @@ fn escape_mermaid_label(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::diff::LineRange;
-    use crate::extract::{Classification, ExtractedSymbol, SymbolKind};
+    use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
     use crate::graph::{Edge, FanIn, Node, SymbolGraph};
     use crate::render::report::{FileReport, ReportOrigin};
     use crate::render::{OutputFormat, render};
@@ -318,6 +385,15 @@ mod tests {
             fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
+        }
+    }
+
+    fn removed_symbol(name: &str, path: &str) -> RemovedSymbol {
+        RemovedSymbol {
+            name: name.to_string(),
+            kind: SymbolKind::Function,
+            path: path.to_string(),
+            signature: format!("{name}()"),
         }
     }
 
@@ -412,6 +488,7 @@ flowchart LR
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
   classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -455,6 +532,7 @@ flowchart LR
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
   classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -485,6 +563,7 @@ flowchart LR
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
   classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -516,6 +595,7 @@ flowchart LR
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
   classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -566,6 +646,7 @@ flowchart LR
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
   classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -620,6 +701,7 @@ flowchart LR
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
   classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -746,6 +828,194 @@ flowchart LR
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
   classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_removed_node_in_its_file_subgraph_when_report_has_removed_symbols() {
+        // "foo" survives (Added); "old_helper" was deleted from the same
+        // file (ADR 0014's `removed`) — pins that the removed node lands
+        // inside src/lib.rs's existing subgraph, after the surviving node,
+        // classed `removed`, with no edges of its own.
+        let mut report = empty_report(
+            SymbolGraph {
+                nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::foo".to_string()],
+            },
+            vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    SymbolKind::Function,
+                    Some(Classification::Added),
+                )],
+            }],
+        );
+        report.removed = vec![removed_symbol("old_helper", "src/lib.rs")];
+
+        let expected = "\
+flowchart LR
+  subgraph sub0[\"src/lib.rs\"]
+    n0[\"foo\"]
+    n1[\"old_helper\"]
+  end
+  class n0 added
+  class n1 removed
+  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
+  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_render_removed_only_file_subgraph_when_file_has_no_surviving_symbols() {
+        // Every symbol in src/gone.rs was deleted — no head-side node
+        // exists for that file at all, so `report.graph.nodes` never
+        // mentions the path. The removed node must still create its own
+        // subgraph rather than being dropped for lack of a head-side node.
+        let mut report = empty_report(
+            SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            vec![],
+        );
+        report.removed = vec![removed_symbol("old_only", "src/gone.rs")];
+
+        let expected = "\
+flowchart LR
+  subgraph sub0[\"src/gone.rs\"]
+    n0[\"old_only\"]
+  end
+  class n0 removed
+  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
+  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_count_removed_symbols_toward_node_budget_when_deciding_fallback() {
+        // 30 head-side nodes (exactly at MERMAID_NODE_BUDGET, which the
+        // sibling boundary test above pins as still symbol-level on its
+        // own) plus 1 removed symbol pushes the *combined* count to 31 —
+        // one over budget. Must fall back to file-level, proving removed
+        // symbols count toward the budget rather than being invisible to
+        // it.
+        let mut nodes = Vec::new();
+        let mut symbols = Vec::new();
+        for i in 0..30 {
+            let id = format!("src/lib.rs::s{i}");
+            nodes.push(node(&id, "src/lib.rs", &format!("s{i}")));
+            symbols.push(symbol(&id, &format!("s{i}"), SymbolKind::Function, None));
+        }
+        let mut report = empty_report(
+            SymbolGraph {
+                nodes,
+                edges: vec![],
+                roots: vec!["src/lib.rs::s0".to_string()],
+            },
+            vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols,
+            }],
+        );
+        report.removed = vec![removed_symbol("old_helper", "src/lib.rs")];
+
+        let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+        assert!(
+            actual.contains("%% aggregated to file level (31 symbols > budget)"),
+            "expected file-level fallback comment in output, got:\n{actual}"
+        );
+    }
+
+    #[test]
+    fn should_render_removed_only_file_as_removed_node_when_fallback_fires() {
+        // File-level fallback (31 nodes > budget): src/a.rs has 16 nodes
+        // (one Added), src/b.rs has 15; src/gone.rs contributes zero
+        // head-side nodes but one removed symbol. The fallback must still
+        // emit a node for src/gone.rs, classed `removed` since it has no
+        // surviving/changed symbol of its own.
+        let mut nodes = Vec::new();
+        let mut files_a_symbols = Vec::new();
+        for i in 0..16 {
+            let id = format!("src/a.rs::a{i}");
+            nodes.push(node(&id, "src/a.rs", &format!("a{i}")));
+            let classification = if i == 0 {
+                Some(Classification::Added)
+            } else {
+                None
+            };
+            files_a_symbols.push(symbol(
+                &id,
+                &format!("a{i}"),
+                SymbolKind::Function,
+                classification,
+            ));
+        }
+        let mut files_b_symbols = Vec::new();
+        for i in 0..15 {
+            let id = format!("src/b.rs::b{i}");
+            nodes.push(node(&id, "src/b.rs", &format!("b{i}")));
+            files_b_symbols.push(symbol(&id, &format!("b{i}"), SymbolKind::Function, None));
+        }
+        assert_eq!(31, nodes.len());
+
+        let report = Report {
+            origin: ReportOrigin::Diff,
+            files: vec![
+                FileReport {
+                    path: "src/a.rs".to_string(),
+                    symbols: files_a_symbols,
+                },
+                FileReport {
+                    path: "src/b.rs".to_string(),
+                    symbols: files_b_symbols,
+                },
+            ],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes,
+                edges: vec![],
+                roots: vec!["src/a.rs::a0".to_string(), "src/b.rs::b0".to_string()],
+            },
+            tests: vec![],
+            fan_ins: vec![],
+            file_size_warnings: vec![],
+            removed: vec![removed_symbol("old_only", "src/gone.rs")],
+        };
+
+        let expected = "\
+flowchart LR
+%% aggregated to file level (32 symbols > budget)
+  n0[\"src/a.rs\"]
+  n1[\"src/b.rs\"]
+  n2[\"src/gone.rs\"]
+  class n0 changed
+  class n2 removed
+  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
+  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#e2e8f0,stroke:#4a5568,color:#1a202c,stroke-dasharray: 5 5;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
