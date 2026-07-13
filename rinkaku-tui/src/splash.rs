@@ -22,12 +22,11 @@ use ratatui::widgets::{Gauge, Paragraph};
 /// than tall, so it still fits above the phase label on a modest terminal
 /// height (e.g. a CI pty running at 24 rows).
 pub const LOGO_LINES: &[&str] = &[
-    r"      _       _              _          ",
-    r"     (_)     | |            | |         ",
-    r" _ __ _ _ __ | | ____ _ _ __| |___   _   ",
-    r"| '__| | '_ \| |/ / _` | '__| / / | | |  ",
-    r"| |  | | | | |   < (_| | |  | . \ |_| |  ",
-    r"|_|  |_|_| |_|_|\_\__,_|_|  |_|\_\__,_|  ",
+    r"       _       _         _            ",
+    r"  _ __(_)_ __ | | ____ _| | ___   _   ",
+    r" | '__| | '_ \| |/ / _` | |/ / | | |  ",
+    r" | |  | | | | |   < (_| |   <| |_| |  ",
+    r" |_|  |_|_| |_|_|\_\__,_|_|\_\\__,_|  ",
 ];
 
 /// The splash screen's pure view-model: which phase label to show under the
