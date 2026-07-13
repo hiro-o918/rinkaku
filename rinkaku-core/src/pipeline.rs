@@ -16,6 +16,7 @@ use crate::file_size::compute_file_size_warnings;
 use crate::graph::{build_graph, compute_hotspots, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile, TestFileSummary};
+use rayon::prelude::*;
 use thiserror::Error;
 
 /// A `read_file`-shaped port for fetching a changed file's *base*-side
@@ -368,53 +369,86 @@ pub fn analyze_diff(
 /// regardless of which pipeline entry point produced it.
 pub fn analyze_repo(
     paths: &[String],
-    read_file: impl Fn(&str) -> std::io::Result<String>,
+    read_file: impl Fn(&str) -> std::io::Result<String> + Sync + Send,
     include_tests: bool,
     generated_paths: &std::collections::HashSet<String>,
     include_generated: bool,
 ) -> Report {
-    let mut files = Vec::new();
+    // ADR 0029: the per-file body below is embarrassingly parallel —
+    // `extract_all_symbols` builds a fresh `tree_sitter::Parser` per call
+    // (see `extract::with_definition_nodes`), the `read_file` port is
+    // `Sync + Send` (bound tightened above), and every filter reads
+    // borrowed state (`generated_paths`, `include_*` flags) without
+    // mutation, so rayon can fan the work across CPU cores without any
+    // shared-mutable-state hazard. `par_iter().collect::<Vec<_>>()`
+    // preserves source order, so `files`/`sized_files` end up in the same
+    // order the sequential loop produced (locked in by
+    // `should_produce_deterministic_output_on_repeated_calls`).
+    //
+    // Each per-file body returns `Option<PerFileOutcome>`: the outer
+    // `None` covers every "skip this path" branch (unsupported language,
+    // test path, generated attribute, unreadable file, generated content
+    // marker); `PerFileOutcome::report` is `None` when the file's content
+    // was successfully read (so its size entry is kept) but every
+    // extracted symbol was filtered out (so no report is emitted).
+    // Splitting the two lets `sized_files` include size-warning
+    // candidates whose symbols were all tests without adding a phantom
+    // `FileReport` for them — matching the sequential loop's
+    // `sized_files.push` then `if symbols.is_empty() { continue; }` order
+    // exactly.
+    struct PerFileOutcome {
+        sized: (String, usize),
+        report: Option<FileReport>,
+    }
+    let per_file: Vec<Option<PerFileOutcome>> = paths
+        .par_iter()
+        .map(|path| {
+            let lang = language_for_path(path)?;
+            if !include_tests && lang.is_test_path(path) {
+                return None;
+            }
+            if !include_generated && generated_paths.contains(path) {
+                return None;
+            }
+            // A path `git ls-files` lists can still fail to read (e.g. a
+            // submodule gitlink entry, or a file deleted in the working
+            // tree but not yet staged) — skipped rather than aborting the
+            // whole outline, same best-effort stance `main.rs`'s
+            // `build_resolver` already takes for its own working-tree read
+            // loop.
+            let content = read_file(path).ok()?;
+            if !include_generated && is_generated_content(&content) {
+                return None;
+            }
+            let sized = (path.clone(), content.lines().count());
+
+            let symbols: Vec<ExtractedSymbol> = extract_all_symbols(&content, lang)
+                .into_iter()
+                .filter(|symbol| include_tests || !symbol.is_test)
+                .collect();
+            let report = if symbols.is_empty() {
+                None
+            } else {
+                Some(FileReport {
+                    path: path.clone(),
+                    symbols,
+                })
+            };
+            Some(PerFileOutcome { sized, report })
+        })
+        .collect();
+
     // ADR 0028: same collection strategy as `analyze_diff` — record every
     // file whose content actually got read past the per-file filters, so
     // filtered-out files (unsupported language, test path, generated) are
     // never measured.
-    let mut sized_files: Vec<(String, usize)> = Vec::new();
-
-    for path in paths {
-        let Some(lang) = language_for_path(path) else {
-            continue;
-        };
-        if !include_tests && lang.is_test_path(path) {
-            continue;
+    let mut sized_files: Vec<(String, usize)> = Vec::with_capacity(per_file.len());
+    let mut files: Vec<FileReport> = Vec::with_capacity(per_file.len());
+    for outcome in per_file.into_iter().flatten() {
+        sized_files.push(outcome.sized);
+        if let Some(report) = outcome.report {
+            files.push(report);
         }
-        if !include_generated && generated_paths.contains(path) {
-            continue;
-        }
-        // A path `git ls-files` lists can still fail to read (e.g. a
-        // submodule gitlink entry, or a file deleted in the working tree
-        // but not yet staged) — skipped rather than aborting the whole
-        // outline, same best-effort stance `main.rs`'s `build_resolver`
-        // already takes for its own working-tree read loop.
-        let Ok(content) = read_file(path) else {
-            continue;
-        };
-        if !include_generated && is_generated_content(&content) {
-            continue;
-        }
-        sized_files.push((path.clone(), content.lines().count()));
-
-        let symbols: Vec<ExtractedSymbol> = extract_all_symbols(&content, lang)
-            .into_iter()
-            .filter(|symbol| include_tests || !symbol.is_test)
-            .collect();
-        if symbols.is_empty() {
-            continue;
-        }
-
-        files.push(FileReport {
-            path: path.clone(),
-            symbols,
-        });
     }
 
     let graph = build_graph(&files);
@@ -2881,6 +2915,68 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                 severity: FileSizeSeverity::Warn,
             }];
             assert_eq!(expected, report.file_size_warnings);
+        }
+    }
+
+    /// ADR 0029 regression: `analyze_repo`'s per-file loop is now driven
+    /// by rayon's `par_iter`, whose ordered `collect` contract is what
+    /// keeps the output for a given input deterministic (byte-identical
+    /// across runs and, within a single run, in the same order as the
+    /// input `paths`). Locks that invariant down at the top-level `Report`
+    /// so any future accidental switch to an unordered combinator (e.g.
+    /// `par_bridge`, unordered `flat_map`, `fold`+`reduce` without a
+    /// merge) fails loudly here rather than only misbehaving on the
+    /// three-crate-workspace test set that happens to have short enough
+    /// inputs to hide it.
+    mod parallel_determinism_tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn should_produce_deterministic_output_on_repeated_calls() {
+            // Ten distinct files with distinct symbol shapes across three
+            // languages: enough distinct paths that a shuffled order would
+            // show up in the `Vec<FileReport>`/graph node lists rather
+            // than being masked by a same-content file being reordered
+            // with itself.
+            let files: Vec<(&'static str, &'static str)> = vec![
+                ("src/a.rs", "fn a1() {}\nfn a2() {}\n"),
+                ("src/b.rs", "fn b1() {}\nstruct B { x: i32 }\n"),
+                ("src/c.rs", "fn c1() {}\ntrait C { fn m(&self); }\n"),
+                ("src/d.rs", "fn d1() {}\nenum D { X, Y }\n"),
+                ("src/e.rs", "fn e1(x: i32) -> i32 { x }\n"),
+                ("pkg/f.go", "package pkg\n\nfunc F1() {}\nfunc F2() {}\n"),
+                ("pkg/g.go", "package pkg\n\ntype G struct{}\n"),
+                ("py/h.py", "def h1():\n    pass\n\ndef h2():\n    pass\n"),
+                ("py/i.py", "class I:\n    def m(self):\n        pass\n"),
+                (
+                    "py/j.py",
+                    "def j1(x):\n    return x\n\ndef j2(y):\n    return y\n",
+                ),
+            ];
+            let read_file = fake_reader(HashMap::from_iter(files.iter().copied()));
+            let paths: Vec<String> = files.iter().map(|(p, _)| p.to_string()).collect();
+
+            let first = analyze_repo(&paths, &read_file, true, &HashSet::new(), true);
+            // Repeated calls must produce byte-identical `Report`s: the
+            // per-file body is pure (no interior mutability, no
+            // wall-clock), rayon's `par_iter().collect()` preserves source
+            // order, and downstream graph building is already
+            // deterministic — so any inequality here means one of those
+            // invariants regressed.
+            for _ in 0..4 {
+                let again = analyze_repo(&paths, &read_file, true, &HashSet::new(), true);
+                assert_eq!(first, again);
+            }
+
+            // Source-order invariant: the `Vec<FileReport>` must be in
+            // the same order as the input `paths` (rayon's ordered
+            // `collect` contract). Every path here maps to one
+            // `FileReport`, so equality of the two path lists is the
+            // strongest possible check.
+            let expected_paths: Vec<String> = paths.clone();
+            let actual_paths: Vec<String> = first.files.iter().map(|f| f.path.clone()).collect();
+            assert_eq!(expected_paths, actual_paths);
         }
     }
 }
