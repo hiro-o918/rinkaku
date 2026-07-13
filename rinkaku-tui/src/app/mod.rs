@@ -23,7 +23,7 @@ mod input_key;
 pub use input_key::InputKey;
 
 #[cfg(test)]
-#[path = "tests.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
 
 /// Which pane currently receives motion keys (ADR 0020): [`Focus::Tree`]
