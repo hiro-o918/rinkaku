@@ -185,17 +185,24 @@ fn run_app(
     // carries the file *path*, not the symbol id, and two distinct symbols
     // in one file would otherwise share a cache entry indistinguishably.
     let mut source_content_symbol: Option<String> = None;
+    // The inner height (borders excluded) of whichever pane was scrollable
+    // as of the last drawn frame (`ui::DrawOutcome::scroll_viewport_height`),
+    // remembered here so the next `Ctrl-d`/`Ctrl-u`/`gg`/`G` key press
+    // (ADR 0026) can size its step against the same viewport the reviewer
+    // just saw — the very first keypress before any frame has drawn (a
+    // near-impossible edge case, but guarded rather than defaulting to a
+    // zero step) falls back to [`DEFAULT_SCROLL_VIEWPORT_HEIGHT`].
+    let mut last_scroll_viewport_height: Option<usize> = None;
 
     loop {
-        // `ui::draw`'s return value (the right-hand pane's scroll offset as
-        // actually clamped and rendered this frame, `ui::draw`'s own doc
+        // `ui::draw`'s return value (`DrawOutcome`, `ui::draw`'s own doc
         // comment) cannot flow out of the closure itself — `Terminal::draw`
         // requires an `FnOnce(&mut Frame)` returning `()` — so it is
         // captured into this outer binding instead and folded back into
-        // `app` right after, via `clamp_right_pane_scroll_after_draw`.
-        let mut clamped_scroll = None;
+        // `app`/`last_scroll_viewport_height` right after.
+        let mut outcome = ui::DrawOutcome::default();
         terminal.draw(|frame| {
-            clamped_scroll = ui::draw(
+            outcome = ui::draw(
                 frame,
                 &app,
                 report,
@@ -205,7 +212,10 @@ fn run_app(
                 source_content.as_ref(),
             );
         })?;
-        app = clamp_right_pane_scroll_after_draw(app, clamped_scroll);
+        app = clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll);
+        if outcome.scroll_viewport_height.is_some() {
+            last_scroll_viewport_height = outcome.scroll_viewport_height;
+        }
 
         if app.should_quit() {
             return Ok(());
@@ -225,7 +235,7 @@ fn run_app(
         {
             if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
-                if let Screen::Source { symbol_id } = app.screen().clone()
+                if let Screen::Source { symbol_id, .. } = app.screen().clone()
                     && should_reload_source_content(
                         source_content_symbol.as_deref(),
                         source_content.as_ref(),
@@ -247,6 +257,43 @@ fn run_app(
                     source_content = Some(loaded);
                     source_content_symbol = Some(symbol_id);
                 }
+                // ADR 0026: back-fill `Screen::Source::scroll_top` with the
+                // centered starting position `crate::source::visible_window`
+                // computes, now that the file has been loaded and its line
+                // count is known. `App::handle_key(InputKey::Source)` above
+                // sets `scroll_top = 0` (it has no access to the file), so
+                // without this back-fill the first frame after `s` would
+                // land at the file's very top rather than centered on the
+                // symbol's definition — the old auto-centering behavior
+                // this ADR preserves as the initial position.
+                if let (Screen::Source { .. }, Some(Ok(highlighted))) =
+                    (app.screen(), source_content.as_ref())
+                {
+                    let viewport_height =
+                        last_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT);
+                    let (start, _end) = source::visible_window(
+                        highlighted.view.lines.len(),
+                        highlighted.view.highlight_start,
+                        highlighted.view.highlight_end,
+                        viewport_height,
+                    );
+                    app = app.with_source_scroll_top(start);
+                }
+            } else if is_scroll_input_key(input_key) {
+                // ADR 0026 two-step dispatch: `handle_key` first for the
+                // blanket `status`/`pending_prefix`/`preserve_scroll`
+                // bookkeeping every key needs (mirroring how
+                // `dispatch_non_source_key` also calls `handle_key`
+                // unconditionally for `GotoDefinition`/`GotoReferences`
+                // for the same reason), then `handle_scroll_key` with
+                // the last-drawn viewport height for the actual scroll
+                // mutation. `handle_key`'s own arm for these four
+                // variants is deliberately a no-op; the state change
+                // lives here.
+                app = app.handle_key(input_key);
+                let viewport_height =
+                    last_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT);
+                app = app.handle_scroll_key(input_key, viewport_height);
             } else {
                 // Every non-`Source` key's dispatch is pure (no IO), so it
                 // lives in its own function rather than inline here — see
@@ -305,6 +352,36 @@ fn run_app(
 /// shrinks their terminal mid-read and then grows it back finds the pane
 /// scrolled less far than before the resize — judged an acceptable, rare
 /// edge case relative to the far more common overshoot this fold-back fixes.
+/// Fallback viewport height used by [`run_app`]'s ADR 0026 scroll dispatch
+/// (`Ctrl-d`/`Ctrl-u`/`gg`/`G`) when a key press arrives *before* any frame
+/// has drawn — a near-impossible edge case in practice (a terminal that
+/// finished initializing and accepted its very first key press without ever
+/// polling for an idle draw once, or a `run_app` invocation whose first
+/// user action is somehow one of these keys with no intervening frame), but
+/// still gets a sensible half-page step (12 lines is roughly half a typical
+/// 24-row terminal) rather than a 0-line no-op. Not user-visible past this
+/// one edge; the very next frame's `DrawOutcome::scroll_viewport_height`
+/// replaces it with the real inner-pane height.
+const DEFAULT_SCROLL_VIEWPORT_HEIGHT: usize = 24;
+
+/// Whether `input_key` is one of ADR 0026's four scroll variants — the
+/// ones [`run_app`] routes through [`App::handle_scroll_key`] (which needs
+/// the viewport height) instead of the ordinary
+/// [`dispatch_non_source_key`] path. Kept as its own predicate rather than
+/// inlined into `run_app` so the two-step dispatch's exact set of variants
+/// stays in one obvious place, and so a future addition to that set
+/// (e.g. `ScrollLineToCenter`) is a one-line change here rather than a
+/// hunt through `run_app`.
+fn is_scroll_input_key(input_key: InputKey) -> bool {
+    matches!(
+        input_key,
+        InputKey::ScrollHalfPageDown
+            | InputKey::ScrollHalfPageUp
+            | InputKey::ScrollToTop
+            | InputKey::ScrollToBottom,
+    )
+}
+
 fn clamp_right_pane_scroll_after_draw(app: App, clamped: Option<usize>) -> App {
     match clamped {
         Some(scroll) => app.with_right_pane_scroll(scroll),
@@ -618,6 +695,14 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         match code {
             KeyCode::Char('d') | KeyCode::Char('D') => return Some(InputKey::GotoDefinition),
             KeyCode::Char('r') | KeyCode::Char('R') => return Some(InputKey::GotoReferences),
+            // `gg` (ADR 0026): scroll the reading pane to the top —
+            // resolved here the same way `gd`/`gr` are, piggybacking on
+            // the existing `g`-prefix state machine (ADR 0022) rather
+            // than reserving single-key `g` for this and breaking the
+            // two-key sequences above. Uppercase `G` is a *distinct*
+            // single-key gesture (`ScrollToBottom` below), unrelated to
+            // this prefix — a second `g` in this arm is what means "top".
+            KeyCode::Char('g') => return Some(InputKey::ScrollToTop),
             _ => {}
         }
     }
@@ -655,8 +740,27 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
             Some(InputKey::JumpForward)
         }
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
+        // `Ctrl-d`/`Ctrl-u` (ADR 0026): half-page scroll on the reading
+        // pane (`Screen::Source`, or `Screen::Entry` + `Focus::Right`).
+        // Must come *before* the plain `Char('d')`/`Char('u')` arms —
+        // otherwise a `Ctrl-d` press would match `ToggleDiff` first and
+        // the modifier would be ignored, silently rebinding "half-page
+        // down" to "toggle diff pane". Emitted regardless of screen/
+        // focus; `App::handle_scroll_key` no-ops on `Focus::Tree` in the
+        // entry view (ADR 0026 decision 3's Tree-focus rule).
+        KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(InputKey::ScrollHalfPageDown)
+        }
+        KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(InputKey::ScrollHalfPageUp)
+        }
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
         KeyCode::Char('r') | KeyCode::Char('R') => Some(InputKey::ToggleBlastRadius),
+        // `G` (`Shift-g`, ADR 0026): scroll to the bottom. Distinct from
+        // single-key lowercase `g` (`PendingGoto` below), which is the
+        // leading key of the `gd`/`gr`/`gg` two-key sequences resolved
+        // at the top of this function.
+        KeyCode::Char('G') => Some(InputKey::ScrollToBottom),
         // `h`, or Esc while the right pane has focus: return focus to the
         // tree (ADR 0020's neovim-style "move left/back"). Checked before
         // the source-screen Esc arm below so `h`/Esc while Right-focused
@@ -1355,6 +1459,60 @@ mod tests {
         let actual = translate_key(KeyCode::Char('o'), KeyModifiers::NONE, &app);
 
         assert_eq!(Some(InputKey::ToggleOrder), actual);
+    }
+
+    // ADR 0026 scroll bindings (translate_key half).
+
+    #[test]
+    fn should_translate_ctrl_d_to_scroll_half_page_down() {
+        // Must resolve *before* the plain `Char('d')` arm below (which
+        // maps to `ToggleDiff`) — a stale ordering would silently
+        // rebind Ctrl-d to Diff-toggle instead of half-page-down.
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('d'), KeyModifiers::CONTROL, &app);
+
+        assert_eq!(Some(InputKey::ScrollHalfPageDown), actual);
+    }
+
+    #[test]
+    fn should_translate_ctrl_u_to_scroll_half_page_up() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('u'), KeyModifiers::CONTROL, &app);
+
+        assert_eq!(Some(InputKey::ScrollHalfPageUp), actual);
+    }
+
+    #[test]
+    fn should_translate_second_g_to_scroll_to_top_when_g_prefix_is_pending() {
+        // `gg` (ADR 0026) resolves through the same `pending_prefix`
+        // arm `gd`/`gr` do (ADR 0022) — this test pins that a *second*
+        // `g` after a pending `g` means "scroll to top", not restart
+        // the prefix. Restarting is what a *first* `g` does when no
+        // prefix is pending (the `should_translate_g_to_pending_goto`
+        // test above); this arm's behavior is the second-key half of
+        // the two-key `gg` sequence.
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+        let actual = translate_key(KeyCode::Char('g'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ScrollToTop), actual);
+    }
+
+    #[test]
+    fn should_translate_uppercase_g_to_scroll_to_bottom() {
+        // Distinct from single-key lowercase `g` (`PendingGoto`, tested
+        // above): `G` is a one-key gesture, not the leader of a sequence.
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('G'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ScrollToBottom), actual);
     }
 
     fn candidate(id: &str, name: &str, path: &str) -> app::JumpCandidate {
