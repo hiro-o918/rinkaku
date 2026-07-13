@@ -1647,9 +1647,9 @@ index e69de29..4b825dc 100644
             files: vec![],
         };
         // Row 0 is the collapsing "assets" dir; row 1 is the skipped file.
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/assets/logo.png b/assets/logo.png
 index e69de29..4b825dc 100644
@@ -1710,9 +1710,9 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             files: vec![],
         };
         // Row 0 is the collapsing "vendor" dir; row 1 is the skipped file.
-        let app = App::new(&report)
-            .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::ToggleDiff);
+        // ADR 0020 defaults the right pane to Diff already, so no
+        // `ToggleDiff` press is needed to reach it here.
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
         let diff_text = "\
 diff --git a/vendor/lib.zig b/vendor/lib.zig
 index e69de29..4b825dc 100644
