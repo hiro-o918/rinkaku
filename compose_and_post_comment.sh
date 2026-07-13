@@ -121,12 +121,14 @@ fi
 # Hand-maintained class-name -> description text (ADR 0040), the one part
 # of the legend that can't be derived from the diagram itself. `case`, not
 # `declare -A`, for bash 3.2 compatibility (macOS's stock `/bin/bash`).
+# Marker prefixes (+/~/-, ADR 0041) mirror rinkaku-core's own node labels.
 legend_description() {
   case "$1" in
-  added) echo "added — new symbol" ;;
-  changed) echo "API changed — signature changed" ;;
-  removed) echo "removed (dashed border in graph)" ;;
+  added) echo "+ added — new symbol" ;;
+  changed) echo "~ API changed — signature changed" ;;
+  removed) echo "- removed (dashed border in graph)" ;;
   fan-in) echo "fan-in — highly referenced, thick border, label shows (in:N)" ;;
+  referenced) echo "referenced — unchanged dependency (not part of the diff)" ;;
   *) echo "" ;;
   esac
 }
