@@ -2,24 +2,18 @@
 //! composited on top of whatever screen was already rendered underneath,
 //! after the pane split has drawn everything else.
 
-use super::scroll::{truncate_to_width, windowed_rows_with_indicators};
+use super::scroll::{render_scrollable_pane, truncate_to_width, windowed_rows_with_indicators};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph};
 
-/// Draws the `?` help overlay (ADR 0020) centered over `full_area`: a
-/// bordered box roughly 70% of the frame's width/height (capped so it
-/// never claims more than the frame itself on a small terminal), listing
-/// every [`crate::help::HELP_CONTENT`] keymap group followed by the
-/// glossary. [`Clear`] is rendered first so the overlay's background is
-/// opaque rather than letting the underlying frame's glyphs show through
-/// gaps in the overlay's own text.
-pub(crate) fn draw_help_overlay(frame: &mut Frame, full_area: Rect) {
-    let overlay_area = centered_rect(full_area, 80, 90);
-    frame.render_widget(Clear, overlay_area);
-
+/// The `?` help overlay's content laid out once, independent of the pane's
+/// rendered size — extracted from [`draw_help_overlay`] so tests can pin
+/// its shape without a live `Frame`, mirroring how `crate::help::HELP_CONTENT`
+/// itself is already plain data rather than something computed at draw time.
+fn help_overlay_lines() -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     for group in crate::help::HELP_CONTENT.keymap_groups {
         lines.push(Line::styled(
@@ -44,12 +38,50 @@ pub(crate) fn draw_help_overlay(frame: &mut Frame, full_area: Rect) {
             entry.term, entry.explanation
         )));
     }
+    lines
+}
 
-    let block = Block::bordered().title(" Help (? to close) ");
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(ratatui::widgets::Wrap { trim: false });
-    frame.render_widget(paragraph, overlay_area);
+/// Draws the `?` help overlay (ADR 0020, scrolling added post-hoc once the
+/// keymap grew past what always fit on screen — ADR 0026's own "Source
+/// view" group plus the `gd`/`gr`/jumplist entries pushed the pre-glossary
+/// content past a typical terminal's height) centered over `full_area`: a
+/// bordered box roughly 80%/90% of the frame's width/height (capped so it
+/// never claims more than the frame itself on a small terminal), listing
+/// every [`crate::help::HELP_CONTENT`] keymap group followed by the
+/// glossary. [`Clear`] is rendered first so the overlay's background is
+/// opaque rather than letting the underlying frame's glyphs show through
+/// gaps in the overlay's own text.
+///
+/// Scrolled via [`render_scrollable_pane`] — the same clamp/indicator/
+/// `Paragraph::scroll` machinery the Detail and Diff panes already share
+/// (`crate::ui::scroll`'s own module doc comment), rather than a bespoke
+/// mechanism just for this overlay: a terminal short enough that the
+/// keymap + glossary overflow the box now scrolls via `j`/`k`/`Ctrl-d`/
+/// `Ctrl-u`/`gg`/`G` (`App::handle_key`/`App::handle_scroll_key`'s own
+/// `help_open` branches) instead of silently clipping the bottom of the
+/// content with no way to reach it.
+///
+/// Returns the actually-clamped scroll offset and the overlay's own inner
+/// height, for `crate::ui::draw` to fold into [`crate::ui::DrawOutcome`]
+/// the same way every other scrollable pane's draw call already does.
+pub(crate) fn draw_help_overlay(
+    frame: &mut Frame,
+    full_area: Rect,
+    requested_scroll: usize,
+) -> (usize, usize) {
+    let overlay_area = centered_rect(full_area, 80, 90);
+    frame.render_widget(Clear, overlay_area);
+
+    let lines = help_overlay_lines();
+    let inner_height = overlay_area.height.saturating_sub(2) as usize;
+    let scroll = render_scrollable_pane(
+        frame,
+        " Help (? to close) ",
+        &lines,
+        requested_scroll,
+        overlay_area,
+    );
+    (scroll, inner_height)
 }
 
 /// A `Rect` centered within `area`, `percent_width`/`percent_height` of
@@ -255,6 +287,114 @@ mod tests {
         assert!(text.contains("Global"));
         assert!(text.contains("Glossary"));
         assert!(text.contains("blast radius"));
+    }
+
+    #[test]
+    fn should_not_show_glossary_when_terminal_is_too_short_to_fit_the_whole_keymap_and_scroll_is_zero()
+     {
+        // A small terminal (30 rows) whose overlay box cannot fit every
+        // keymap group *and* the trailing Glossary section at once — the
+        // gap this feature exists to close (previously: the unscrolled
+        // `Paragraph` simply clipped the bottom of the content with no way
+        // to reach it, `draw_help_overlay`'s pre-scroll doc comment).
+        // Pinning that the Glossary is *not* visible at scroll 0 here, and
+        // *is* visible after scrolling in the next test, is what proves
+        // scrolling actually moves the rendered content rather than the
+        // box merely being tall enough by coincidence.
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Tree focus"));
+        assert!(!text.contains("Glossary"), "Glossary should not fit yet");
+    }
+
+    #[test]
+    fn should_reveal_glossary_after_scrolling_down_when_terminal_is_too_short_to_fit_the_whole_keymap()
+     {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        // Scroll well past every keymap group — `handle_scroll_key`'s own
+        // clamp-free "requested" semantics mean this overshoots on
+        // purpose; `render_scrollable_pane`'s clamp inside `draw` below is
+        // what brings it back in bounds, mirroring how every other
+        // scrollable pane in this crate is exercised in its own tests.
+        let app = app.handle_scroll_key(crate::app::InputKey::ScrollToBottom, 20);
+
+        let mut actual_outcome = crate::ui::DrawOutcome::default();
+        terminal
+            .draw(|frame| {
+                actual_outcome = draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Glossary"),
+            "Glossary should be visible after scrolling to the bottom"
+        );
+        assert!(
+            text.contains("jumplist"),
+            "the last glossary entry should be visible at the bottom"
+        );
+        // The scroll actually applied must be reported back (`DrawOutcome`'s
+        // own doc comment on why `crate::run_app` needs this to fold the
+        // overshot request back down) rather than staying at the
+        // unclamped `usize::MAX` sentinel `ScrollToBottom` set.
+        assert!(actual_outcome.clamped_help_scroll.is_some());
+        assert_ne!(Some(usize::MAX), actual_outcome.clamped_help_scroll);
+        assert!(actual_outcome.help_scroll_viewport_height.is_some());
+    }
+
+    #[test]
+    fn should_report_none_clamped_help_scroll_and_none_viewport_height_when_help_overlay_is_closed()
+    {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        let mut actual_outcome = crate::ui::DrawOutcome::default();
+        terminal
+            .draw(|frame| {
+                actual_outcome = draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        assert_eq!(None, actual_outcome.clamped_help_scroll);
+        assert_eq!(None, actual_outcome.help_scroll_viewport_height);
     }
 
     #[test]

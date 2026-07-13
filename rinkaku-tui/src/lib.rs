@@ -202,6 +202,14 @@ fn run_app(
     // near-impossible edge case, but guarded rather than defaulting to a
     // zero step) falls back to [`DEFAULT_SCROLL_VIEWPORT_HEIGHT`].
     let mut last_scroll_viewport_height: Option<usize> = None;
+    // The `?` help overlay's own last-drawn inner height, tracked
+    // separately from `last_scroll_viewport_height` above: the overlay can
+    // be open on top of either screen, and its box is a different size
+    // than whichever pane sits underneath it — sizing a `Ctrl-d` press
+    // while the overlay is open against the *underlying* pane's height
+    // would produce a step that does not match what the reviewer is
+    // actually looking at.
+    let mut last_help_scroll_viewport_height: Option<usize> = None;
 
     loop {
         // `ui::draw`'s return value (`DrawOutcome`, `ui::draw`'s own doc
@@ -224,6 +232,10 @@ fn run_app(
         app = clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll);
         if outcome.scroll_viewport_height.is_some() {
             last_scroll_viewport_height = outcome.scroll_viewport_height;
+        }
+        app = clamp_help_scroll_after_draw(app, outcome.clamped_help_scroll);
+        if outcome.help_scroll_viewport_height.is_some() {
+            last_help_scroll_viewport_height = outcome.help_scroll_viewport_height;
         }
 
         if app.should_quit() {
@@ -299,9 +311,19 @@ fn run_app(
                 // mutation. `handle_key`'s own arm for these four
                 // variants is deliberately a no-op; the state change
                 // lives here.
+                //
+                // While the help overlay is open, both steps size against
+                // and act on the overlay's own scroll state instead of
+                // whichever pane is underneath it (`App::handle_key`/
+                // `App::handle_scroll_key`'s own `help_open` branches) —
+                // `last_help_scroll_viewport_height` is this loop's mirror
+                // of `last_scroll_viewport_height` for that surface.
                 app = app.handle_key(input_key);
-                let viewport_height =
-                    last_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT);
+                let viewport_height = if app.help_open() {
+                    last_help_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT)
+                } else {
+                    last_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT)
+                };
                 app = app.handle_scroll_key(input_key, viewport_height);
             } else {
                 // Every non-`Source` key's dispatch is pure (no IO), so it
@@ -415,6 +437,18 @@ fn is_scroll_input_key(input_key: InputKey) -> bool {
 fn clamp_right_pane_scroll_after_draw(app: App, clamped: Option<usize>) -> App {
     match clamped {
         Some(scroll) => app.with_right_pane_scroll(scroll),
+        None => app,
+    }
+}
+
+/// The `?` help overlay's own version of [`clamp_right_pane_scroll_after_draw`]
+/// — folds `ui::DrawOutcome::clamped_help_scroll` back into `App` after every
+/// draw so an overshot request (repeated `j` past the overlay's own last
+/// line) never survives past the frame that visibly clamped it, mirroring
+/// that function's own reasoning for the right pane.
+fn clamp_help_scroll_after_draw(app: App, clamped: Option<usize>) -> App {
+    match clamped {
+        Some(scroll) => app.with_help_scroll(scroll),
         None => app,
     }
 }
@@ -724,8 +758,33 @@ fn should_recompute_blast_radius_selection(app: &App) -> bool {
 /// unwind on any key that is not `d`/`r`.
 fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
     if app.help_open() {
+        // The overlay's own content can run longer than its box (this
+        // feature's whole reason for existing) — `j`/`k`/`Ctrl-d`/`Ctrl-u`/
+        // `G` scroll it, mirroring the plain-key mapping each already has
+        // outside the overlay so a reviewer does not have to learn a
+        // second gesture just because the overlay is open. `gg`'s
+        // second-`g` resolution still goes through the `pending_prefix`
+        // branch below (this early return only covers `?`/Esc/`q`/`Ctrl-d`/
+        // `Ctrl-u`/`G` and the bare `j`/`k`/arrow keys; a first `g` press
+        // is deliberately *not* matched here so it falls through to the
+        // ordinary `PendingGoto` arm at the bottom of this function, which
+        // works identically whether the overlay is open or not since it
+        // only touches `app.pending_prefix()`).
         return match code {
             KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::ToggleHelp),
+            KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
+            KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
+            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputKey::ScrollHalfPageDown)
+            }
+            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(InputKey::ScrollHalfPageUp)
+            }
+            KeyCode::Char('G') => Some(InputKey::ScrollToBottom),
+            KeyCode::Char('g') if app.pending_prefix() == Some(app::PendingPrefix::G) => {
+                Some(InputKey::ScrollToTop)
+            }
+            KeyCode::Char('g') => Some(InputKey::PendingGoto),
             _ => None,
         };
     }
@@ -1030,13 +1089,85 @@ mod tests {
     }
 
     #[test]
-    fn should_translate_arbitrary_key_to_none_when_overlay_is_open() {
+    fn should_translate_unbound_key_to_none_when_overlay_is_open() {
+        // `'j'` used to be this test's example key, back when the overlay
+        // had no scroll gestures of its own and swallowed every key but
+        // `?`/Esc/`q` (`should_ignore_navigation_keys_while_help_overlay_is_open`'s
+        // own App-level counterpart). Scrolling the overlay now maps `'j'`
+        // to `InputKey::Down` even while it is open — see
+        // `should_translate_j_to_down_for_overlay_scroll_when_overlay_is_open`
+        // below — so this test switched to `'z'`, a key with no meaning
+        // anywhere in the keymap, to keep pinning "arbitrary keys are
+        // swallowed" without asserting something that is no longer true.
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('z'), KeyModifiers::NONE, &app);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_j_to_down_for_overlay_scroll_when_overlay_is_open() {
         let report = empty_report();
         let app = App::new(&report).handle_key(InputKey::ToggleHelp);
 
         let actual = translate_key(KeyCode::Char('j'), KeyModifiers::NONE, &app);
 
-        assert_eq!(None, actual);
+        assert_eq!(Some(InputKey::Down), actual);
+    }
+
+    #[test]
+    fn should_translate_k_to_up_for_overlay_scroll_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('k'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::Up), actual);
+    }
+
+    #[test]
+    fn should_translate_ctrl_d_to_scroll_half_page_down_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('d'), KeyModifiers::CONTROL, &app);
+
+        assert_eq!(Some(InputKey::ScrollHalfPageDown), actual);
+    }
+
+    #[test]
+    fn should_translate_ctrl_u_to_scroll_half_page_up_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('u'), KeyModifiers::CONTROL, &app);
+
+        assert_eq!(Some(InputKey::ScrollHalfPageUp), actual);
+    }
+
+    #[test]
+    fn should_translate_uppercase_g_to_scroll_to_bottom_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+
+        let actual = translate_key(KeyCode::Char('G'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ScrollToBottom), actual);
+    }
+
+    #[test]
+    fn should_translate_double_g_to_scroll_to_top_when_overlay_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::ToggleHelp);
+        let first_g = translate_key(KeyCode::Char('g'), KeyModifiers::NONE, &app);
+        assert_eq!(Some(InputKey::PendingGoto), first_g);
+        let app = app.handle_key(first_g.expect("first g translates"));
+
+        let actual = translate_key(KeyCode::Char('g'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ScrollToTop), actual);
     }
 
     #[test]
@@ -1407,6 +1538,57 @@ mod tests {
         let app = clamp_right_pane_scroll_after_draw(app, None);
 
         assert_eq!(3, app.right_pane_scroll());
+    }
+
+    // --- clamp_help_scroll_after_draw ---
+    //
+    // Same fold-back discipline as `clamp_right_pane_scroll_after_draw`
+    // above, applied to the `?` help overlay's own independent scroll
+    // state (this feature).
+
+    #[test]
+    fn should_overwrite_help_scroll_with_the_clamped_value_when_some() {
+        let report = empty_report();
+        let app = App::new(&report).with_help_scroll(999);
+
+        let app = clamp_help_scroll_after_draw(app, Some(4));
+
+        assert_eq!(4, app.help_scroll());
+    }
+
+    #[test]
+    fn should_leave_help_scroll_untouched_when_none() {
+        let report = empty_report();
+        let app = App::new(&report).with_help_scroll(2);
+
+        let app = clamp_help_scroll_after_draw(app, None);
+
+        assert_eq!(2, app.help_scroll());
+    }
+
+    // --- is_scroll_input_key ---
+
+    #[test]
+    fn should_treat_the_four_adr_0026_scroll_variants_as_scroll_input_keys() {
+        for key in [
+            InputKey::ScrollHalfPageDown,
+            InputKey::ScrollHalfPageUp,
+            InputKey::ScrollToTop,
+            InputKey::ScrollToBottom,
+        ] {
+            assert!(is_scroll_input_key(key), "{key:?} should be a scroll key");
+        }
+    }
+
+    #[test]
+    fn should_not_treat_up_or_down_as_scroll_input_keys() {
+        // `Up`/`Down` scroll the help overlay too, but through the ordinary
+        // `dispatch_non_source_key` path (`App::handle_key`'s own
+        // `help_open` branch), not the two-step `handle_scroll_key`
+        // dispatch reserved for the four ADR 0026 variants — this pins
+        // that boundary stays where `run_app`'s own dispatch expects it.
+        assert!(!is_scroll_input_key(InputKey::Up));
+        assert!(!is_scroll_input_key(InputKey::Down));
     }
 
     // g-prefix and jump-popup translate_key tests (ADR 0022).
