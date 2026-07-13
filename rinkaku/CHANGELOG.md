@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.6.0](https://github.com/hiro-o918/rinkaku/compare/v0.5.3...v0.6.0) (2026-07-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* the Markdown "## Hotspots" heading is now "## High fan-in symbols"; the JSON "hotspots" field is now "fan_ins"; the Mermaid "hotspot" class is now "fan-in".
+
+### refactor
+
+* rename hotspot vocabulary to fan-in (ADR 0033) ([#101](https://github.com/hiro-o918/rinkaku/issues/101)) ([d8dcc0f](https://github.com/hiro-o918/rinkaku/commit/d8dcc0f29dba399f933c91cfd3693376c61f3b77))
+
+
+### Features
+
+* **cli:** drop timestamp and module path from stderr logs ([#79](https://github.com/hiro-o918/rinkaku/issues/79)) ([057ec20](https://github.com/hiro-o918/rinkaku/commit/057ec20b23f051ebd3a36dda0f3ec796b436dd4e))
+* **cli:** show a stderr spinner while analyzing before the TUI starts ([#91](https://github.com/hiro-o918/rinkaku/issues/91)) ([8b6d55f](https://github.com/hiro-o918/rinkaku/commit/8b6d55fbe0b68264c370b7dda931b43aa726c302))
+* surface file-size warnings in rinkaku output (ADR 0028) ([#86](https://github.com/hiro-o918/rinkaku/issues/86)) ([00c7c5a](https://github.com/hiro-o918/rinkaku/commit/00c7c5a7aef57f18eaa30acc0c03775af26b54c2))
+* **tui:** add a startup splash screen with real progress (ADR 0033) ([#100](https://github.com/hiro-o918/rinkaku/issues/100)) ([38673bc](https://github.com/hiro-o918/rinkaku/commit/38673bcc42450acc2bca132ae770fdbc6ffb310a))
+* **tui:** report per-file progress during diff analysis ([#107](https://github.com/hiro-o918/rinkaku/issues/107)) ([b590601](https://github.com/hiro-o918/rinkaku/commit/b590601a748dfaaf8a69c709d42b236546b71f3c))
+
+
+### Documentation
+
+* **cli:** drop ADR references from user-facing --help text ([#98](https://github.com/hiro-o918/rinkaku/issues/98)) ([544f5ac](https://github.com/hiro-o918/rinkaku/commit/544f5ace599f36b22ceb94e53d80805cfbd69f46))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.4.0 to 0.5.0
+    * rinkaku-tui bumped from 0.4.0 to 0.5.0
+
 ## [0.5.3](https://github.com/hiro-o918/rinkaku/compare/v0.5.2...v0.5.3) (2026-07-13)
 
 
