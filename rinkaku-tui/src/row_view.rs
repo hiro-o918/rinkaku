@@ -207,9 +207,17 @@ enum BadgeContext {
 /// quiet).
 ///
 /// Badge encoding rationale:
-/// - The count/fan-in badges use ASCII-only glyphs (`~`/`!`/`^`), chosen
-///   over Unicode/emoji for terminal-compatibility (see the README's
-///   Interactive TUI section for the legend), and are all cyan.
+/// - The changed-symbol and fan-in badges use text labels
+///   (`chg:` / `ref:`) matching the file-size badges' `lines:` / `warn:`
+///   / `split:` convention (see ADR 0013 amendment 2026-07-13). The
+///   single-glyph prefixes they replaced (`~` for changed, `^` for
+///   fan-in) conveyed no semantic hint on their own to a first-time
+///   reviewer. Only the numeric N picks up cyan; the label stays
+///   default so the eye lands on the number, matching the file-size
+///   badges' split-span pattern.
+/// - `!{N}` (contract-change count) keeps its compact `!` glyph — the
+///   ADR 0013 amendment that added `chg:`/`ref:` explicitly scopes the
+///   rename to `~` and `^`, so `!N` is left untouched.
 /// - The file-size warnings (ADR 0028) deliberately use **text labels
 ///   plus color** rather than an emoji glyph (`⚠` / `🚨`): terminal
 ///   emoji rendering width is inconsistent enough to distort the tree
@@ -218,20 +226,28 @@ enum BadgeContext {
 ///   `lines:` / `warn:` / `split:` label stays default so the eye lands
 ///   on the number.
 fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: BadgeContext) {
-    let mut ascii_parts = Vec::new();
+    let cyan = Style::default().fg(Color::Cyan);
+    let mut wrote_any_ascii_badge = false;
     if badges.changed_symbols > 0 {
-        ascii_parts.push(format!("~{}", badges.changed_symbols));
+        spans.push(Span::raw("chg:"));
+        spans.push(Span::styled(badges.changed_symbols.to_string(), cyan));
+        wrote_any_ascii_badge = true;
     }
     if badges.contract_changes > 0 {
-        ascii_parts.push(format!("!{}", badges.contract_changes));
+        if wrote_any_ascii_badge {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(format!("!{}", badges.contract_changes), cyan));
+        wrote_any_ascii_badge = true;
     }
     if badges.fan_in > 0 {
-        ascii_parts.push(format!("^{}", badges.fan_in));
+        if wrote_any_ascii_badge {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::raw("ref:"));
+        spans.push(Span::styled(badges.fan_in.to_string(), cyan));
+        wrote_any_ascii_badge = true;
     }
-    spans.push(Span::styled(
-        ascii_parts.join(" "),
-        Style::default().fg(Color::Cyan),
-    ));
 
     // File-size warning badges (ADR 0028) — text label + color, no
     // emoji. Rendered as separate spans so only the numeric N picks up
@@ -241,9 +257,11 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
             if let (Some(severity), Some(line_count)) =
                 (badges.own_file_size_severity, badges.own_file_line_count)
             {
-                // Leading space only when the cyan span above wrote
+                // Leading space only when a preceding badge wrote
                 // something — otherwise the row would gain a stray gap.
-                spans.push(Span::raw(if ascii_parts.is_empty() { "" } else { " " }));
+                if wrote_any_ascii_badge {
+                    spans.push(Span::raw(" "));
+                }
                 spans.push(Span::raw("lines:"));
                 spans.push(Span::styled(
                     line_count.to_string(),
@@ -254,8 +272,8 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
         BadgeContext::Dir => {
             let has_warn = badges.file_size_warn_count > 0;
             let has_split = badges.file_size_split_count > 0;
-            if has_warn || has_split {
-                spans.push(Span::raw(if ascii_parts.is_empty() { "" } else { " " }));
+            if (has_warn || has_split) && wrote_any_ascii_badge {
+                spans.push(Span::raw(" "));
             }
             if has_warn {
                 spans.push(Span::raw("warn:"));
@@ -474,7 +492,12 @@ mod tests {
     }
 
     #[test]
-    fn should_include_badge_glyphs_for_nonzero_badges_on_a_dir_row() {
+    fn should_include_badge_labels_for_nonzero_badges_on_a_dir_row() {
+        // ADR 0013 amendment (2026-07-13): the changed-symbol and fan-in
+        // badges use `chg:` / `ref:` text labels instead of the original
+        // `~` / `^` glyphs. `!{N}` (contract-change count) is
+        // intentionally left as a compact glyph — see `push_badge_spans`'
+        // doc comment for the scope split.
         let node = dir_node(
             "src",
             Badges {
@@ -493,7 +516,7 @@ mod tests {
 
         let line = entry_row_line(&row, "src", &HashMap::new(), false);
 
-        assert_eq!("v src ~2 !1 ^3", line_text(&line));
+        assert_eq!("v src chg:2 !1 ref:3", line_text(&line));
     }
 
     #[test]
@@ -1019,5 +1042,56 @@ mod tests {
         let line = entry_row_line(&row, "src", &HashMap::new(), false);
 
         assert_eq!("v src warn:3", line_text(&line));
+    }
+
+    // ADR 0013 amendment (2026-07-13): `chg:N` and `ref:N` badges split
+    // their label from their number across two spans so only the number
+    // picks up cyan — matching the file-size badges' split-span pattern
+    // (`lines:N`, `warn:N`, `split:N`). The label prefix reads at the
+    // default color to keep the eye on the numeric part.
+    #[test]
+    fn should_color_only_the_number_of_chg_badge_and_leave_label_uncolored() {
+        let node = dir_node(
+            "src",
+            Badges {
+                changed_symbols: 299,
+                ..Badges::default()
+            },
+            vec![file_node("src/a.rs", Badges::default())],
+        );
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: true,
+        };
+
+        let line = entry_row_line(&row, "src", &HashMap::new(), false);
+
+        assert_eq!("v src chg:299", line_text(&line));
+        assert_eq!(Some(Color::Cyan), fg_of_span_with_content(&line, "299"));
+        assert_eq!(None, fg_of_span_with_content(&line, "chg:"));
+    }
+
+    #[test]
+    fn should_color_only_the_number_of_ref_badge_and_leave_label_uncolored() {
+        let node = dir_node(
+            "src",
+            Badges {
+                fan_in: 1072,
+                ..Badges::default()
+            },
+            vec![file_node("src/a.rs", Badges::default())],
+        );
+        let row = Row {
+            node: &node,
+            depth: 0,
+            expanded: true,
+        };
+
+        let line = entry_row_line(&row, "src", &HashMap::new(), false);
+
+        assert_eq!("v src ref:1072", line_text(&line));
+        assert_eq!(Some(Color::Cyan), fg_of_span_with_content(&line, "1072"));
+        assert_eq!(None, fg_of_span_with_content(&line, "ref:"));
     }
 }

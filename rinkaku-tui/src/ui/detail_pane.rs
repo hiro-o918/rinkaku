@@ -203,8 +203,11 @@ pub(crate) fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
                     Some(Classification::BodyOnly) | None => " ",
                 }
             };
+            // ADR 0013 amendment (2026-07-13): the compact fan-in badge
+            // matches `row_view::push_badge_spans`' `ref:N` labeling so
+            // the two panes agree on the badge legend.
             let fan_in = if symbol.fan_in > 0 {
-                format!(" ^{}", symbol.fan_in)
+                format!(" ref:{}", symbol.fan_in)
             } else {
                 String::new()
             };
