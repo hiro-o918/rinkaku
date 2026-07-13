@@ -112,13 +112,17 @@ pub enum InputKey {
     /// `App::handle_key` does not have access to — mirroring
     /// `InputKey::NextHunk`/`PrevHunk`'s own precedent (that jump target
     /// needs the shaped diff content `App` also lacks), `crate::run_app`
-    /// resolves candidates before calling into `App` at all, via
-    /// `App::begin_goto`/`App::jump_to_symbol`/`App::open_jump_popup`
-    /// rather than this `InputKey` variant reaching `App::handle_key`'s
-    /// match directly. Kept as its own `InputKey` variant regardless (rather
-    /// than folding the two `g`-prefixed keys into `PendingGoto`'s own
-    /// resolution) so `crate::lib::translate_key`'s key-to-intent mapping
-    /// stays legible independent of where the intent is actually processed.
+    /// resolves candidates and applies the outcome itself, via
+    /// `App::jump_to_symbol`/`App::open_jump_popup`/`App::set_status`. It
+    /// still calls `App::handle_key(input_key)` first, same as every other
+    /// key (`App::handle_key`'s own match arm for this variant is a no-op
+    /// stub, but the unconditional `pending_prefix` clear at the top of that
+    /// function is not — skipping the call entirely, an earlier version of
+    /// this feature did, left `pending_prefix` stuck after every `gd`/`gr`
+    /// press). Kept as its own `InputKey` variant (rather than folding the
+    /// two `g`-prefixed keys into `PendingGoto`'s own resolution) so
+    /// `crate::lib::translate_key`'s key-to-intent mapping stays legible
+    /// independent of where the intent is actually processed.
     GotoDefinition,
     /// `gr`: the caller-direction mirror of [`Self::GotoDefinition`].
     GotoReferences,
@@ -708,6 +712,16 @@ impl App {
     /// entry first if this would exceed [`JUMPLIST_CAP`].
     fn push_jumplist_entry(&mut self, entry: JumplistEntry) {
         if self.jump_back.len() >= JUMPLIST_CAP {
+            // `Vec::remove(0)` is O(n) (shifts every remaining element down
+            // one slot) rather than O(1) — a `VecDeque` would make this
+            // O(1), but at `JUMPLIST_CAP` = 100 small (`String` + `usize`)
+            // entries, shifting is at most ~100 pointer-sized moves, only
+            // once per jump and only once the cap is already full (every
+            // jump before that is a plain `push`, already O(1)) — not a
+            // measurable cost against a single keypress in an interactive
+            // TUI. `Vec` also keeps this consistent with `jump_forward`
+            // (`Vec<JumplistEntry>` too) without introducing a second
+            // container type for one already-negligible operation.
             self.jump_back.remove(0);
         }
         self.jump_back.push(entry);
@@ -753,13 +767,29 @@ impl App {
     ///
     /// `pending_prefix` (ADR 0022's minimal `g`-prefix state machine) is
     /// cleared by every key except [`InputKey::PendingGoto`] itself, which
-    /// sets it — a blanket rule (applied once, alongside the scroll-reset
-    /// rule above) rather than each arm deciding individually, so a `g`
-    /// press followed by anything other than `d`/`r` (already resolved by
-    /// `crate::lib::translate_key` before this function ever sees the key)
-    /// cannot leave a stale pending prefix behind.
+    /// sets it — a blanket rule applied *unconditionally at the very top of
+    /// this function*, before the `help_open`/`jump_popup` early returns
+    /// below, rather than alongside the scroll-reset rule further down
+    /// (post-review finding: clearing it after those early returns let a
+    /// pending prefix survive both of them — the help overlay's own early
+    /// return, and more importantly the jump-popup one, since opening the
+    /// popup is itself the direct result of a `gd`/`gr` press that
+    /// `crate::run_app` resolves *without ever calling this method at all*,
+    /// see that resolution's own doc comment — so the clear could not
+    /// safely live only "later in the normal path" the way scroll-reset
+    /// does; it has to run before anything can return early). Every key
+    /// this method is ever called with, from every call site, hits this one
+    /// line before doing anything else, so a `g` press followed by anything
+    /// other than `d`/`r` (already resolved by `crate::lib::translate_key`
+    /// before this function ever sees the key) cannot leave a stale pending
+    /// prefix behind regardless of which branch handles the key afterward.
     pub fn handle_key(mut self, key: InputKey) -> Self {
         self.status = None;
+        self.pending_prefix = if key == InputKey::PendingGoto {
+            Some(PendingPrefix::G)
+        } else {
+            None
+        };
 
         if self.help_open {
             if key == InputKey::ToggleHelp {
@@ -775,12 +805,6 @@ impl App {
         if self.jump_popup.is_some() {
             return self.handle_key_with_popup_open(key);
         }
-
-        self.pending_prefix = if key == InputKey::PendingGoto {
-            Some(PendingPrefix::G)
-        } else {
-            None
-        };
 
         let preserve_scroll = matches!(
             (&self.screen, self.focus, key),
@@ -964,15 +988,18 @@ impl App {
                 // this function's own doc comment describes.
             }
             // `gd`/`gr` candidate resolution needs `report`, which this
-            // function does not have — `crate::run_app` intercepts these two
-            // before they ever reach `handle_key` (`InputKey::
-            // GotoDefinition`'s own doc comment), calling
-            // `Self::jump_to_symbol`/`Self::open_jump_popup`/`Self::set_status`
-            // directly instead. Reaching this arm at all means `run_app`'s
-            // interception was bypassed (e.g. a future direct `handle_key`
-            // call in a test) — a no-op rather than a panic, since silently
-            // doing nothing is safer than crashing the TUI over a
-            // programming mistake in a caller.
+            // function does not have — `crate::run_app` reads
+            // `report.graph.edges` itself (`resolve_goto`) and applies the
+            // outcome via `Self::jump_to_symbol`/`Self::open_jump_popup`/
+            // `Self::set_status`. This arm is still reached, though: `run_app`
+            // calls `handle_key(input_key)` for these two variants same as
+            // every other key (post-review fix), specifically so the
+            // unconditional `pending_prefix` clear at the top of this
+            // function runs on this path too — before this fix, `run_app`
+            // skipped `handle_key` entirely for `gd`/`gr`, leaving
+            // `pending_prefix` stuck at `Some(G)` after every jump. The arm
+            // itself stays a no-op: `resolve_goto`/the actual jump/popup/
+            // status mutation happen in `run_app`, not here.
             (Screen::Entry, _, InputKey::GotoDefinition | InputKey::GotoReferences) => {}
             (Screen::Entry, _, InputKey::JumpBack) => {
                 if let Some(entry) = self.jump_back.pop() {
