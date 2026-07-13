@@ -223,3 +223,163 @@ each other without either silently working around the other.
 - CI enforcement, CLI configurability, and a dedicated Mermaid /
   Change-graph annotation for file size are all out of scope; each
   can arrive as its own ADR when there is concrete demand.
+
+## Amendment (2026-07-14, feat/tighten-file-size-thresholds)
+
+The original thresholds (`WARN_LINE_THRESHOLD: 1500`,
+`SPLIT_LINE_THRESHOLD: 2000`) were calibrated against PR #82's
+outlier files (3000-4800+ lines). In practice they proved too loose
+for rinkaku's primary use case — reviewing LLM-generated diffs, which
+tend to grow a single file past a healthy size well before either
+number is crossed. The `#[path = "tests.rs"]` test-extraction
+convention this ADR's Decision section already establishes (point 8)
+means a file over `WARN_LINE_THRESHOLD` on production code alone is
+already a responsibility-mixing signal, not just a size one — the old
+1500/2000 pair let that signal go unraised for too long.
+
+Change: lower both constants by 500 lines, keeping the 500-line gap
+between them:
+
+- `WARN_LINE_THRESHOLD: usize = 1000` (was `1500`)
+- `SPLIT_LINE_THRESHOLD: usize = 1500` (was `2000`)
+
+CLAUDE.md's "File size discipline" table is updated to match: normal
+≤600, watch 600-1000, warn >1000, split >1500. The `≤600` "normal" and
+"600-1000" "watch" bands are descriptive only (no corresponding
+consts) and shift down by the same 500 lines, keeping every band's
+width unchanged.
+
+A one-tier shift, rather than a more aggressive drop, is a deliberate
+compromise against alert fatigue: tightening further would start
+flagging files that are legitimately at rest, not drifting, and repeat
+warnings a reviewer learns to ignore defeat the whole point of ADR
+0028. The existing escape hatch (justify continued growth in the PR
+body instead of splitting) is unchanged.
+
+No change to `FileSizeWarning`, `FileSizeSeverity`, or the sort order —
+this amendment is a constant-value change only. The always-present
+per-file line count/band surface described below is a separate
+amendment landing in the same PR, not a consequence of the threshold
+change itself.
+
+## Amendment (2026-07-14, feat/tighten-file-size-thresholds, part 2)
+
+Decision 2 above only reports files that already cross
+`WARN_LINE_THRESHOLD`. Dogfooding this PR itself surfaced the gap: a
+file sitting just under the threshold gives a reviewer no signal at
+all, even though "how close is this file to the line" is exactly the
+kind of drift-over-time question ADR 0028's Context section is about.
+
+**1. Four-tier classification, always computed.** New
+`FileSizeBand { Normal, Watch, Warn, Split }` in `file_size.rs`,
+alongside a new `NORMAL_LINE_THRESHOLD: usize = 600` (the boundary
+CLAUDE.md's table already described informally but had no constant
+for) and `classify_file_size(line_count) -> FileSizeBand`, the single
+function both the existing `compute_file_size_warnings` (refactored to
+call it) and the new `compute_file_size_bands` build on — one threshold
+ladder, not two independently-maintained ones. `compute_file_size_bands`
+returns a `FileSizeEntry { path, line_count, band }` for *every* file in
+its input, sorted by path ascending (there is no "most attention-worthy
+first" concern the way `compute_file_size_warnings` has — every file is
+listed, not just the ones worth flagging).
+
+**2. `Report.file_size_bands: Vec<FileSizeEntry>`, additive.** Same
+`(path, line_count)` pairs `analyze_diff`/`analyze_repo` already collect
+for `file_size_warnings`, so no new IO. `file_size_warnings` and
+`FileSizeSeverity` are unchanged and still drive nothing new — kept
+because `Badges.file_size_warn_count`/`file_size_split_count` (the
+directory-level aggregate badges) intentionally stay Warn/Split-only
+(see point 4).
+
+**3. Markdown: `## File size warnings` becomes `## File sizes`.**
+Renamed and widened to list every analyzed file, not only Warn/Split
+ones — the two sections would otherwise show overlapping information
+for exactly the files a reviewer most wants to see (a Warn/Split file
+would appear twice under the old scheme: once in the warnings section,
+once if a future "always show" section were added alongside it).
+Format, one line per file in `file_size_bands`'s order:
+
+```markdown
+## File sizes
+
+- `path/to/normal.rs` (80 lines)
+- `path/to/watch.rs` (700 lines, watch)
+- `path/to/warn.rs` (1200 lines, warn)
+- `path/to/split.rs` (2500 lines, split)
+```
+
+`Normal` gets no suffix (nothing to flag); every other band appends
+`, {band}`. The `⚠`/`🚨` glyphs the old section used are dropped: with
+four bands instead of two, a growing zoo of glyphs was worse than a
+plain word, and the TUI surface (point 4) already establishes
+"text label, no emoji" as this feature's house style. Section placement
+(after `## High fan-in symbols`, before `## Definitions`) is unchanged
+from the original decision. Skipped entirely when `file_size_bands` is
+empty, same "skip when empty" rule as every other optional section.
+
+**4. TUI: the file-row `lines:N` badge is now unconditional.**
+`Badges.own_file_size_severity: Option<FileSizeSeverity>` becomes
+`own_file_size_band: Option<FileSizeBand>`, populated from
+`file_size_bands` (every file) rather than `file_size_warnings`
+(Warn/Split only) — so `lines:N` renders on every file row, not only
+oversized ones. Color follows the band: `Normal` unstyled, `Watch`
+yellow, `Warn`/`Split` red with `Split` additionally bold, so the two
+red bands remain visually distinguishable. `Badges.file_size_warn_count`
+/ `file_size_split_count` (the directory-level `warn:N split:N`
+aggregate) are deliberately **not** widened to count `Watch` files —
+those two counts exist to answer "how many files need action", and a
+`Watch` file needs none yet; widening them would dilute a signal that
+today means "these directories have Warn/Split files in them" into a
+vaguer "these directories have some files that are somewhat large."
+No emoji, matching the crate's established TUI convention (this ADR's
+original decision 6, reaffirmed after PR #104 removed `DIM` from
+`DarkGray` text for the same "keep it legible across terminals" reason).
+
+**5. JSON: `file_size_bands` is a new additive top-level field**,
+always present (empty array when `files` is empty), mirroring how
+`file_size_warnings`/`fan_ins` are always present. `file_size_warnings`
+is untouched — this is a pure addition, not a replacement, at the JSON
+level (unlike the Markdown section, which does replace the old one).
+
+## Alternatives (amendment)
+
+- **Fold the new field into `file_size_warnings` by adding
+  `FileSizeSeverity::Normal`/`Watch` variants** — rejected.
+  `FileSizeSeverity` is deliberately the Warn/Split-only type the
+  directory aggregate badges (`file_size_warn_count`/
+  `file_size_split_count`) and the Markdown warnings label depend on;
+  widening it would force every existing match over `FileSizeSeverity`
+  to grow two new arms it has no use for, whereas a sibling
+  `FileSizeBand` type keeps each concept's match exhaustive over only
+  the variants it actually cares about.
+- **Keep `## File size warnings` alongside a new, separate "## File
+  sizes" section** — rejected as the redundant-information outcome
+  point 3 above already argues against: a Warn/Split file would appear
+  in both sections with the same line count, just formatted two ways.
+- **Show the line count in the Detail pane's per-file view unconditionally
+  too** (today: only when `size_warning` is `Some`) — deferred. The
+  Detail pane's dedicated warning line answers "why is this file
+  flagged", which only makes sense for Warn/Split; showing an
+  unconditional "N lines, normal" line there as well was judged noise
+  for the common case (most files are Normal) without a concrete
+  request driving it. Can follow later if it turns out to matter.
+
+## Consequences (amendment)
+
+- Markdown output for every repository with at least one analyzed file
+  now includes a `## File sizes` section (previously only shown when a
+  file crossed `WARN_LINE_THRESHOLD`) — a bigger, but purely additive
+  (in the "more information, not less accurate" sense), change to the
+  default Markdown surface than decision 2's threshold shift alone.
+  Downstream Markdown parsers pinning section presence/absence need to
+  account for `## File sizes` now appearing on ordinary diffs, not only
+  large-file ones.
+- JSON gains one new field (`file_size_bands`); no existing field
+  changes shape.
+- TUI file rows always show `lines:N`; directory rows are unchanged
+  (still Warn/Split-only aggregates).
+- `docs/experiments/0001-map-assisted-llm-review/rounds/021.md` and
+  `022.md` reference the old `## File size warnings` heading as
+  historical fact about those specific review rounds — left unedited,
+  same "historical record, not rewritten" rule this ADR's own
+  Consequences section already applies to itself.

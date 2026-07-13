@@ -11,7 +11,7 @@
 //! - [`definition_body`] — one symbol's "### ..." entry: container
 //!   comment, `Depends on:` list, and the fence-widening rules.
 //! - [`sections_skipped_fan_in_filesize`] — the "Skipped files",
-//!   "High fan-in symbols", and "File size warnings" sections plus the
+//!   "High fan-in symbols", and "File sizes" sections plus the
 //!   ADR 0028 JSON shape.
 //! - [`lookup_miss_defenses`] — defensive branches for a `graph` node
 //!   with no matching `ExtractedSymbol` in `files`.

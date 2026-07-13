@@ -495,6 +495,10 @@ func (r *repoImpl) Save(id string) error {
 - interface Repo (repo.go)
   - fn Save (repo.go)
 
+## File sizes
+
+- `repo.go` (11 lines)
+
 ## Definitions
 
 ### interface Repo (repo.go)

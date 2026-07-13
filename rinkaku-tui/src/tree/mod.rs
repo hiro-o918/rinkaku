@@ -7,7 +7,7 @@
 //! separate concern, see `crate::order`).
 
 use rinkaku_core::extract::{Classification, SymbolKind};
-use rinkaku_core::file_size::FileSizeSeverity;
+use rinkaku_core::file_size::FileSizeBand;
 use rinkaku_core::render::{Report, SkipReason};
 use std::collections::{BTreeMap, HashMap};
 
@@ -129,33 +129,22 @@ impl SectionKind {
 ///   nothing to any ancestor directory's `fan_in` badge here — expected,
 ///   not a bug, since the badge's whole purpose is to flag high-fan-in
 ///   symbols specifically, not fan-in in general.
-/// - `own_file_size_severity`: the severity of this file node's own
-///   [`FileSizeWarning`] (ADR 0028), or `None` when the file is under
-///   the watch threshold and for every non-file node. Paired with
-///   `own_file_line_count`. Deliberately **not** merged upward: a
-///   directory has no single severity of its own, only the aggregated
-///   counts below (which are split by severity, so a mixed subtree of
-///   `Warn` and `Split` files reads as `warn:N split:M` rather than
-///   collapsing into one meaningless total).
-/// - `own_file_line_count`: this file node's own line count, matching
-///   the [`FileSizeWarning`] it carries. `None` when the file is under
-///   the watch threshold and for every non-file node. Kept alongside
-///   `own_file_size_severity` so the file row can render `lines:{N}`
-///   without a second lookup back into the report.
-/// - `file_size_warn_count`: bottom-up **count** of file nodes in this
-///   subtree whose own severity is `FileSizeSeverity::Warn`. A directory
-///   row displays this as `warn:N` (colored yellow) when nonzero — same
-///   aggregation pattern as `fan_in` — and severity is kept split from
-///   `file_size_split_count` so the reader sees "how many yellow" and
-///   "how many red" separately.
-/// - `file_size_split_count`: same as above for `FileSizeSeverity::Split`;
-///   renders as `split:N` (colored red) on directory rows.
+/// - `own_file_size_band`/`own_file_line_count`: this file node's own
+///   [`FileSizeBand`] and line count (ADR 0028 amendment), `None` for
+///   every non-file node. Deliberately **not** merged upward — a
+///   directory has no single band of its own, only the aggregates below.
+/// - `file_size_warn_count`/`file_size_split_count`: bottom-up count of
+///   file nodes in this subtree at [`FileSizeBand::Warn`]/`Split`
+///   respectively, rendered as `warn:N`/`split:N` on directory rows.
+///   `Normal`/`Watch` files contribute to neither — those two bands are
+///   shown per-file only, not aggregated, since they are not
+///   "attention-worthy" the way `Warn`/`Split` are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Badges {
     pub changed_symbols: usize,
     pub contract_changes: usize,
     pub fan_in: usize,
-    pub own_file_size_severity: Option<FileSizeSeverity>,
+    pub own_file_size_band: Option<FileSizeBand>,
     pub own_file_line_count: Option<usize>,
     pub file_size_warn_count: usize,
     pub file_size_split_count: usize,
@@ -168,10 +157,6 @@ impl Badges {
         self.fan_in += other.fan_in;
         self.file_size_warn_count += other.file_size_warn_count;
         self.file_size_split_count += other.file_size_split_count;
-        // `own_file_size_severity` / `own_file_line_count` are per-file
-        // attributes, not aggregates — see this struct's doc comment.
-        // The aggregates live in `file_size_warn_count` /
-        // `file_size_split_count` above, split by severity.
     }
 }
 
@@ -279,15 +264,14 @@ pub fn build_tree(report: &Report) -> Tree {
         .map(|fan_in| (fan_in.id.as_str(), fan_in.used_by.len()))
         .collect();
 
-    let file_size_by_path: HashMap<&str, (FileSizeSeverity, usize)> = report
-        .file_size_warnings
+    // ADR 0028 amendment: built from `file_size_bands` (every analyzed
+    // file), not `file_size_warnings` (the Warn/Split subset) — so a
+    // file row can always show its line count, not only when it crosses
+    // the warn threshold.
+    let file_size_by_path: HashMap<&str, (FileSizeBand, usize)> = report
+        .file_size_bands
         .iter()
-        .map(|warning| {
-            (
-                warning.path.as_str(),
-                (warning.severity, warning.line_count),
-            )
-        })
+        .map(|entry| (entry.path.as_str(), (entry.band, entry.line_count)))
         .collect();
 
     let mut production = TreeBuilder::new(fan_in_by_id.clone(), file_size_by_path.clone());
@@ -340,14 +324,10 @@ struct TreeBuilder<'a> {
     /// `report.files` — built once in `build_tree` rather than per-symbol,
     /// since `report.fan_ins` doesn't change during one `build_tree` call.
     fan_in_by_id: HashMap<&'a str, usize>,
-    /// `report.file_size_warnings`, keyed by path — the value is
-    /// `(severity, line_count)` so a file node can populate both
-    /// `own_file_size_severity` and `own_file_line_count` (and its
-    /// per-severity contribution to the aggregate `file_size_warn_count` /
-    /// `file_size_split_count`) in one lookup, while walking every source
-    /// of file rows (`report.files`, `report.tests`, `report.skipped`).
-    /// Built once in `build_tree`, same reasoning as `fan_in_by_id`.
-    file_size_by_path: HashMap<&'a str, (FileSizeSeverity, usize)>,
+    /// `report.file_size_bands` keyed by path (ADR 0028 amendment):
+    /// covers every analyzed file, not only `Warn`/`Split` as the
+    /// pre-amendment `file_size_warnings`-derived map did.
+    file_size_by_path: HashMap<&'a str, (FileSizeBand, usize)>,
 }
 
 #[derive(Default)]
@@ -374,7 +354,7 @@ struct FileBuilder {
 impl<'a> TreeBuilder<'a> {
     fn new(
         fan_in_by_id: HashMap<&'a str, usize>,
-        file_size_by_path: HashMap<&'a str, (FileSizeSeverity, usize)>,
+        file_size_by_path: HashMap<&'a str, (FileSizeBand, usize)>,
     ) -> Self {
         Self {
             root: DirBuilder::default(),
@@ -519,15 +499,12 @@ impl DirBuilder {
     /// order, applying single-child directory collapsing (see
     /// `build_tree`'s doc comment) and computing bottom-up [`Badges`] as it
     /// goes. `fan_in_by_id` is threaded through to leaf symbols unchanged —
-    /// see `symbol_badges`. `file_size_by_path` is threaded to file nodes,
-    /// where a match seeds `own_file_size_severity` /
-    /// `own_file_line_count` and the per-severity contribution to the
-    /// aggregated `file_size_warn_count` / `file_size_split_count`.
+    /// see `symbol_badges`.
     fn into_nodes(
         self,
         prefix: String,
         fan_in_by_id: &HashMap<&str, usize>,
-        file_size_by_path: &HashMap<&str, (FileSizeSeverity, usize)>,
+        file_size_by_path: &HashMap<&str, (FileSizeBand, usize)>,
     ) -> Vec<TreeNode> {
         let DirBuilder {
             mut dirs,
@@ -575,7 +552,7 @@ fn build_dir_node(
     prefix: &str,
     mut dir: DirBuilder,
     fan_in_by_id: &HashMap<&str, usize>,
-    file_size_by_path: &HashMap<&str, (FileSizeSeverity, usize)>,
+    file_size_by_path: &HashMap<&str, (FileSizeBand, usize)>,
 ) -> TreeNode {
     let mut label = name;
     loop {
@@ -615,29 +592,21 @@ fn build_file_node(
     prefix: &str,
     file: FileBuilder,
     fan_in_by_id: &HashMap<&str, usize>,
-    file_size_by_path: &HashMap<&str, (FileSizeSeverity, usize)>,
+    file_size_by_path: &HashMap<&str, (FileSizeBand, usize)>,
 ) -> TreeNode {
     let path = join_path(prefix, &name);
-    let (own_file_size_severity, own_file_line_count) = match file_size_by_path.get(path.as_str()) {
-        Some((severity, line_count)) => (Some(*severity), Some(*line_count)),
+    let (own_file_size_band, own_file_line_count) = match file_size_by_path.get(path.as_str()) {
+        Some((band, line_count)) => (Some(*band), Some(*line_count)),
         None => (None, None),
     };
-    // A file with its own warning contributes 1 to the matching aggregate
-    // count so an ancestor directory's `Badges::merge` sums the correct
-    // per-severity totals (which `Badges::merge` does — the aggregate
-    // fields — while it deliberately does not merge
-    // `own_file_size_severity` / `own_file_line_count`, see `Badges`'
-    // doc comment).
-    let file_size_warn_count = usize::from(matches!(
-        own_file_size_severity,
-        Some(FileSizeSeverity::Warn)
-    ));
-    let file_size_split_count = usize::from(matches!(
-        own_file_size_severity,
-        Some(FileSizeSeverity::Split)
-    ));
+    // A Warn/Split file contributes 1 to the matching aggregate count so
+    // an ancestor directory's `Badges::merge` sums the correct per-band
+    // totals — see `Badges`' doc comment.
+    let file_size_warn_count = usize::from(matches!(own_file_size_band, Some(FileSizeBand::Warn)));
+    let file_size_split_count =
+        usize::from(matches!(own_file_size_band, Some(FileSizeBand::Split)));
     let mut badges = Badges {
-        own_file_size_severity,
+        own_file_size_band,
         own_file_line_count,
         file_size_warn_count,
         file_size_split_count,
@@ -689,10 +658,10 @@ fn symbol_badges(symbol_ref: &SymbolRef, fan_in_by_id: &HashMap<&str, usize>) ->
             .get(symbol_ref.id.as_str())
             .copied()
             .unwrap_or(0),
-        // File-size warnings are a per-file attribute (ADR 0028), not a
-        // per-symbol one, so a symbol never contributes to any of the
-        // file-size fields.
-        own_file_size_severity: None,
+        // File size is a per-file attribute (ADR 0028), not a per-symbol
+        // one, so a symbol never contributes to any of the file-size
+        // fields.
+        own_file_size_band: None,
         own_file_line_count: None,
         file_size_warn_count: 0,
         file_size_split_count: 0,
