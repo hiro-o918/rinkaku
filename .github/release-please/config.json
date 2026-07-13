@@ -4,6 +4,7 @@
   "include-component-in-tag": false,
   "include-v-in-tag": true,
   "separate-pull-requests": false,
+  "pull-request-title-pattern": "chore${scope}: release v${version}",
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
   "changelog-sections": [
@@ -45,12 +46,10 @@
   ],
   "packages": {
     "rinkaku-core": {
-      "component": "rinkaku-core",
-      "include-component-in-tag": true
+      "component": "rinkaku-core"
     },
     "rinkaku-tui": {
-      "component": "rinkaku-tui",
-      "include-component-in-tag": true
+      "component": "rinkaku-tui"
     },
     "rinkaku": {
       "component": "rinkaku"
