@@ -647,15 +647,17 @@ impl App {
             }
             // `]c`/`[c` hunk jumping is layout-dependent (it needs to know
             // where each hunk's shaped content actually starts once
-            // wrapped to the pane's width), so `App` only remembers *that*
-            // the key was pressed via a status-line no-op here today; the
-            // actual scroll-offset jump is wired in `crate::ui`/`crate::run`
-            // once the shaped diff content (this ADR's diff-scoping commit)
-            // exists to jump against. Scoped to `Focus::Right` + a
-            // `RightPane::Diff` check the same way scrolling itself is
-            // scoped to focus, so pressing `]c` while Tree-focused or while
-            // viewing Detail/Pivot is a no-op rather than silently doing
-            // nothing that *looks* like it should have worked.
+            // wrapped to the pane's width), so `App` itself is always a
+            // no-op here regardless of focus — the actual scroll-offset
+            // jump is computed and applied in `crate::run_app`, the one
+            // place both `App` and the shaped diff content
+            // (`crate::diff_shape`) are in scope. `run_app` additionally
+            // gates that jump on `Focus::Right` *and* `RightPane::Diff`
+            // (not just `Focus::Right`, which is all this match can see) —
+            // so pressing `]c` while Tree-focused, or while Right-focused
+            // but viewing Detail/Pivot, is a no-op there too, rather than
+            // scrolling those panes against a hunk-offset table computed
+            // for the Diff pane.
             (Screen::Entry, Focus::Right, InputKey::NextHunk | InputKey::PrevHunk) => {}
             (Screen::Entry, Focus::Tree, InputKey::NextHunk | InputKey::PrevHunk) => {}
             (Screen::Entry, _, InputKey::Back) => {

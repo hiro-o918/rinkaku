@@ -210,7 +210,9 @@ fn run_app(
                         Err(message) => app.set_status(message),
                     }
                 }
-            } else if let InputKey::NextHunk | InputKey::PrevHunk = input_key {
+            } else if let InputKey::NextHunk | InputKey::PrevHunk = input_key
+                && should_apply_hunk_jump(&app)
+            {
                 // Hunk jumping needs the shaped diff content already
                 // cached above (`diff_pane_content`) to know where each
                 // hunk starts — `App::handle_key` itself has no notion of
@@ -247,6 +249,24 @@ fn run_app(
 /// reasoning, just for [`RightPane::Diff`] instead of `RightPane::Pivot`.
 fn should_recompute_diff_pane_content(app: &App) -> bool {
     matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Diff
+}
+
+/// Whether `crate::run_app`'s event loop should act on an
+/// [`InputKey::NextHunk`]/[`InputKey::PrevHunk`] press by jumping
+/// `diff_pane_content`'s scroll offset, rather than treating the key as a
+/// no-op. `true` only while [`app::Focus::Right`] *and* [`app::RightPane::Diff`]
+/// is showing — gating on focus alone let `]`/`[` scroll the Detail/Pivot
+/// pane using `diff_pane_content`'s hunk-start table, which is only ever
+/// recomputed for the Diff pane (`should_recompute_diff_pane_content` above),
+/// so it goes stale (pinned to whichever file/symbol was selected the last
+/// time Diff was shown) the moment the user switches away from Diff. That
+/// produced a jump with no relation to what is actually on screen.
+///
+/// Extracted as its own pure function, mirroring `should_recompute_pivot_selection`'s
+/// own reasoning, so this exact gate is unit-testable without a live
+/// `ratatui::DefaultTerminal`.
+fn should_apply_hunk_jump(app: &App) -> bool {
+    app.focus() == app::Focus::Right && app.right_pane() == app::RightPane::Diff
 }
 
 /// The scroll offset [`InputKey::NextHunk`]/[`InputKey::PrevHunk`] should
@@ -666,6 +686,75 @@ mod tests {
             .handle_key(InputKey::Source);
 
         let actual = should_recompute_diff_pane_content(&app);
+
+        assert!(!actual);
+    }
+
+    // --- should_apply_hunk_jump ---
+    //
+    // Regression coverage for the cross-pane key-leak this gate was added
+    // to fix: `]`/`[` used to fire (scrolling `diff_pane_content`'s cached
+    // hunk-offset table) whenever `Focus::Right` held, regardless of which
+    // right pane was actually showing — so opening a file (Focus::Right,
+    // RightPane::Diff by default), pressing `d` to switch to Detail, then
+    // pressing `]`, silently jumped the Detail pane's scroll to a Diff-pane
+    // offset that has no meaning there. `should_recompute_pivot_selection`'s
+    // own existing tests only pin cache-staleness for the pivot pane's
+    // *recompute* trigger; none of them cover this key's *application* gate,
+    // which is a separate condition (`run_app` applies the jump only when
+    // this returns true, independent of whether anything gets recomputed).
+    #[test]
+    fn should_apply_hunk_jump_when_right_focused_on_diff_pane() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Open);
+        assert_eq!(app::Focus::Right, app.focus());
+        assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+        let actual = should_apply_hunk_jump(&app);
+
+        assert!(actual);
+    }
+
+    #[test]
+    fn should_not_apply_hunk_jump_when_right_focused_on_detail_pane() {
+        let report = report_with_one_symbol();
+        // Open reaches Focus::Right on RightPane::Diff (its default), then
+        // ToggleDiff ('d') switches to RightPane::Detail without touching
+        // focus — exactly the sequence (Enter -> d -> ]) the bug report
+        // describes.
+        let app = App::new(&report)
+            .handle_key(InputKey::Open)
+            .handle_key(InputKey::ToggleDiff);
+        assert_eq!(app::Focus::Right, app.focus());
+        assert_eq!(app::RightPane::Detail, app.right_pane());
+
+        let actual = should_apply_hunk_jump(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_apply_hunk_jump_when_right_focused_on_pivot_pane() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Open)
+            .handle_key(InputKey::TogglePivot);
+        assert_eq!(app::Focus::Right, app.focus());
+        assert_eq!(app::RightPane::Pivot, app.right_pane());
+
+        let actual = should_apply_hunk_jump(&app);
+
+        assert!(!actual);
+    }
+
+    #[test]
+    fn should_not_apply_hunk_jump_when_tree_focused_even_if_right_pane_is_diff() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        assert_eq!(app::Focus::Tree, app.focus());
+        assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+        let actual = should_apply_hunk_jump(&app);
 
         assert!(!actual);
     }

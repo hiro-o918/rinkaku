@@ -1072,6 +1072,13 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
 /// into source is reached only via [`Focus::Right`] already, so a focus
 /// distinction there would be redundant).
 ///
+/// The `]/[: next/prev hunk` hint only appears while Right-focused *and*
+/// [`RightPane::Diff`] is showing — `crate::run_app` only wires up the
+/// `]`/`[` jump for that pane/focus combination (it needs the Diff pane's
+/// shaped hunk-offset table, which Detail/Pivot have no equivalent of), so
+/// advertising the key while Detail/Pivot is showing would describe a
+/// binding that does nothing there.
+///
 /// Extracted as its own pure function (no `ratatui` types) so the text
 /// itself — not just that *something* renders — is unit-testable, mirroring
 /// [`clamp_scroll`]/[`scroll_indicator`]'s own precedent in this module for
@@ -1087,8 +1094,11 @@ fn status_line_text(app: &App) -> String {
                 crate::app::Focus::Tree => {
                     "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
                 }
-                crate::app::Focus::Right => {
+                crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
                     "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                }
+                crate::app::Focus::Right => {
+                    "j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
                 }
             };
             format!("order: {order}  |  {keys}")
@@ -2472,16 +2482,39 @@ index e69de29..4b825dc 100644
     }
 
     #[test]
-    fn should_show_right_focus_hints_when_focus_is_right() {
+    fn should_show_right_focus_hints_with_hunk_jump_when_diff_pane_is_showing() {
         let report = report_with_one_symbol();
         // `Open` on the file row (cursor starts there) reaches Focus::Right
-        // (ADR 0020) without leaving Screen::Entry.
+        // (ADR 0020) without leaving Screen::Entry, and lands on
+        // `RightPane::Diff` (its default, `f3c4b98`) — the pane the
+        // `]/[: next/prev hunk` hint actually applies to.
         let app = App::new(&report).handle_key(crate::app::InputKey::Open);
 
         let actual = status_line_text(&app);
 
         assert_eq!(
             "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                .to_string(),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_show_right_focus_hints_without_hunk_jump_when_detail_pane_is_showing() {
+        let report = report_with_one_symbol();
+        // `Open` reaches Focus::Right on RightPane::Diff (its default), then
+        // `ToggleDiff` (`d`) switches to RightPane::Detail — the hunk-jump
+        // hint must disappear here since `crate::run_app` never wires `]`/`[`
+        // up for Detail (finding: `]`/`[` used to fire regardless of pane).
+        let app = App::new(&report)
+            .handle_key(crate::app::InputKey::Open)
+            .handle_key(crate::app::InputKey::ToggleDiff);
+        assert_eq!(crate::app::RightPane::Detail, app.right_pane());
+
+        let actual = status_line_text(&app);
+
+        assert_eq!(
+            "order: topological  |  j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
                 .to_string(),
             actual
         );
