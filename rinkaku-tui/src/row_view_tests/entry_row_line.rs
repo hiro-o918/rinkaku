@@ -102,7 +102,12 @@ fn should_not_append_skip_reason_for_an_ordinary_file_row() {
 }
 
 #[test]
-fn should_append_test_badge_with_plural_symbols_noun_for_a_whole_test_file_row() {
+fn should_prepend_test_badge_with_plural_symbols_noun_before_a_whole_test_file_label() {
+    // The test badge sits before the file label (left of the name),
+    // not after the trailing badges — a badge trailing a long label
+    // gets clipped first when the row overflows the pane width, but a
+    // reviewer still needs "this is a test file" to be visible at a
+    // glance, so it must survive truncation.
     let node = test_file_node("src/lib_test.go", 3);
     let row = Row {
         node: &node,
@@ -112,11 +117,11 @@ fn should_append_test_badge_with_plural_symbols_noun_for_a_whole_test_file_row()
 
     let line = entry_row_line(&row, "src/lib_test.go", &HashMap::new(), false);
 
-    assert_eq!("  src/lib_test.go  [test] (3 symbols)", line_text(&line));
+    assert_eq!("  [test] (3 symbols) src/lib_test.go ", line_text(&line));
 }
 
 #[test]
-fn should_append_test_badge_with_singular_symbol_noun_when_count_is_one() {
+fn should_prepend_test_badge_with_singular_symbol_noun_when_count_is_one() {
     let node = test_file_node("src/lib_test.go", 1);
     let row = Row {
         node: &node,
@@ -126,7 +131,7 @@ fn should_append_test_badge_with_singular_symbol_noun_when_count_is_one() {
 
     let line = entry_row_line(&row, "src/lib_test.go", &HashMap::new(), false);
 
-    assert_eq!("  src/lib_test.go  [test] (1 symbol)", line_text(&line));
+    assert_eq!("  [test] (1 symbol) src/lib_test.go ", line_text(&line));
 }
 
 #[test]
