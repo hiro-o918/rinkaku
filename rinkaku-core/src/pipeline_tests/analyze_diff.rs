@@ -2,13 +2,13 @@
 //! (deleted / binary / unsupported-language / pure rename), diff-parse
 //! and read-file error paths, multi-file mixed outcomes, Go
 //! interface/receiver nesting end-to-end (ADR 0012 decision 2), resolver
-//! invocation contract (`Some`/`None`), and hotspot wiring (ADR 0013
-//! end-to-end).
+//! invocation contract (`Some`/`None`), and fan-in wiring (ADR 0013,
+//! named per ADR 0033, end-to-end).
 
 use super::{empty_graph, fake_reader};
 use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
-use crate::graph::Hotspot;
+use crate::graph::FanIn;
 use crate::pipeline::{AnalyzeError, analyze_diff};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile};
 use pretty_assertions::assert_eq;
@@ -24,7 +24,7 @@ fn should_return_empty_report_when_diff_is_empty() {
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -84,7 +84,7 @@ fn foo(a: i32) -> i32 {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -119,7 +119,7 @@ index 4b825dc..0000000
         }],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -147,7 +147,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
         }],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -183,7 +183,7 @@ index e69de29..4b825dc 100644
         }],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -223,7 +223,7 @@ rename to src/new_name.rs
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -328,7 +328,7 @@ index e69de29..4b825dc 100644
             roots: vec!["src/lib.rs::a".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -516,16 +516,16 @@ fn foo(p: Point) -> i32 {
 
 // ADR 0013 end-to-end: two changed functions ("caller_one",
 // "caller_two") both call "shared_helper" in the same file — fan-in
-// 2 qualifies "shared_helper" as a hotspot, and `analyze_diff` must
-// populate `Report::hotspots` from the graph it builds, not leave
-// it empty.
+// 2 qualifies "shared_helper" as a high-fan-in symbol, and
+// `analyze_diff` must populate `Report::fan_ins` from the graph it
+// builds, not leave it empty.
 //
-// NOTE: asserts only `report.hotspots` instead of the whole
+// NOTE: asserts only `report.fan_ins` instead of the whole
 // `Report` — files/graph/tests wiring is already covered by the
 // surrounding analyze_diff tests, and this module's concern is
-// solely that the hotspot aggregation is hooked up.
+// solely that the fan-in aggregation is hooked up.
 #[test]
-fn should_populate_hotspots_when_diff_has_a_symbol_with_fan_in_of_two() {
+fn should_populate_fan_ins_when_diff_has_a_symbol_with_fan_in_of_two() {
     let diff = "\
 diff --git a/src/lib.rs b/src/lib.rs
 index e69de29..4b825dc 100644
@@ -565,19 +565,19 @@ fn caller_two() -> i32 {
     let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
         .expect("analyze should succeed");
 
-    let expected = vec![Hotspot {
+    let expected = vec![FanIn {
         id: "src/lib.rs::shared_helper".to_string(),
         path: "src/lib.rs".to_string(),
         name: "shared_helper".to_string(),
         used_by: vec!["caller_one".to_string(), "caller_two".to_string()],
     }];
-    assert_eq!(expected, report.hotspots);
+    assert_eq!(expected, report.fan_ins);
 }
 
-// NOTE: partial assert on `report.hotspots` only, same rationale
+// NOTE: partial assert on `report.fan_ins` only, same rationale
 // as the test above.
 #[test]
-fn should_return_empty_hotspots_when_no_node_has_fan_in_of_two() {
+fn should_return_empty_fan_ins_when_no_node_has_fan_in_of_two() {
     let diff = "\
 diff --git a/src/lib.rs b/src/lib.rs
 index e69de29..4b825dc 100644
@@ -599,6 +599,6 @@ fn foo(a: i32) -> i32 {
     let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
         .expect("analyze should succeed");
 
-    let expected: Vec<Hotspot> = Vec::new();
-    assert_eq!(expected, report.hotspots);
+    let expected: Vec<FanIn> = Vec::new();
+    assert_eq!(expected, report.fan_ins);
 }

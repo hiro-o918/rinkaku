@@ -13,7 +13,7 @@ use crate::extract::{
     ExtractedSymbol, RemovedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
 };
 use crate::file_size::compute_file_size_warnings;
-use crate::graph::{build_graph, compute_hotspots, stamp_ids};
+use crate::graph::{build_graph, compute_fan_ins, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile, TestFileSummary};
 use rayon::prelude::*;
@@ -277,9 +277,9 @@ pub fn analyze_diff(
     let graph = build_graph(&files);
     stamp_ids(&mut files, &graph);
     // Computed from the same final `graph` as everything else above, so a
-    // hotspot's `used_by` names always match the stamped ids/nodes
+    // fan-in entry's `used_by` names always match the stamped ids/nodes
     // (ADR 0013).
-    let hotspots = compute_hotspots(&graph);
+    let fan_ins = compute_fan_ins(&graph);
     // ADR 0028: file-size warnings from the `(path, line_count)` pairs
     // collected inline above during the per-file read loop.
     let file_size_warnings = compute_file_size_warnings(&sized_files);
@@ -290,7 +290,7 @@ pub fn analyze_diff(
         skipped,
         graph,
         tests,
-        hotspots,
+        fan_ins,
         file_size_warnings,
         removed,
     })
@@ -363,8 +363,8 @@ pub fn analyze_diff(
 /// indexable), and `container` on each symbol already records the nesting
 /// relationship for renderers/the TUI to use.
 ///
-/// `files`/`graph`/`hotspots` are built the same way `analyze_diff` builds
-/// them (`build_graph`, `stamp_ids`, `compute_hotspots`), so every
+/// `files`/`graph`/`fan_ins` are built the same way `analyze_diff` builds
+/// them (`build_graph`, `stamp_ids`, `compute_fan_ins`), so every
 /// downstream renderer (Markdown, JSON, TUI) sees the same `Report` shape
 /// regardless of which pipeline entry point produced it.
 pub fn analyze_repo(
@@ -453,7 +453,7 @@ pub fn analyze_repo(
 
     let graph = build_graph(&files);
     stamp_ids(&mut files, &graph);
-    let hotspots = compute_hotspots(&graph);
+    let fan_ins = compute_fan_ins(&graph);
     let file_size_warnings = compute_file_size_warnings(&sized_files);
 
     Report {
@@ -462,7 +462,7 @@ pub fn analyze_repo(
         skipped: Vec::new(),
         graph,
         tests: Vec::new(),
-        hotspots,
+        fan_ins,
         file_size_warnings,
         removed: Vec::new(),
     }

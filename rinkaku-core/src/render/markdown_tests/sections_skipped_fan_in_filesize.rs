@@ -1,13 +1,13 @@
 //! The three optional post-graph sections — "## Skipped files",
-//! "## Hotspots", and "## File size warnings" (ADR 0028) — plus the
-//! ADR 0028 shape of `file_size_warnings` in JSON output. Pins that
-//! each section is emitted only when its list is non-empty and that
-//! they land in the correct order relative to "Change graph" /
-//! "Definitions".
+//! "## High fan-in symbols" (ADR 0013, named per ADR 0033), and
+//! "## File size warnings" (ADR 0028) — plus the ADR 0028 shape of
+//! `file_size_warnings` in JSON output. Pins that each section is
+//! emitted only when its list is non-empty and that they land in the
+//! correct order relative to "Change graph" / "Definitions".
 
 use super::*;
 use crate::extract::SymbolKind;
-use crate::graph::Hotspot;
+use crate::graph::FanIn;
 use crate::render::report::{FileReport, ReportOrigin, SkipReason, SkippedFile};
 use crate::render::{OutputFormat, render};
 use pretty_assertions::assert_eq;
@@ -37,7 +37,7 @@ fn should_render_skipped_files_section_when_report_has_skips() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -78,7 +78,7 @@ fn should_render_change_graph_then_skipped_section_when_report_has_both() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -109,7 +109,7 @@ fn foo()
 }
 
 #[test]
-fn should_omit_hotspots_section_when_hotspots_is_empty() {
+fn should_omit_high_fan_in_symbols_section_when_fan_ins_is_empty() {
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![FileReport {
@@ -128,7 +128,7 @@ fn should_omit_hotspots_section_when_hotspots_is_empty() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -156,14 +156,14 @@ fn foo()
 }
 
 #[test]
-fn should_render_hotspots_section_between_change_graph_and_definitions_when_hotspots_is_non_empty()
-{
+fn should_render_high_fan_in_symbols_section_between_change_graph_and_definitions_when_fan_ins_is_non_empty()
+ {
     // `UpsertItemsRequest` (a struct) is referenced by two changed
     // functions — the label reuses tree_label's `{kind} {name}
     // ({path})` form, so the line reads
     // "struct UpsertItemsRequest (store/items.go) — used by 2: ..."
     // exactly as the ADR spec requires, and used_by names are joined
-    // in the order `compute_hotspots` already sorted them in (not
+    // in the order `compute_fan_ins` already sorted them in (not
     // re-sorted here).
     let report = Report {
         origin: ReportOrigin::Diff,
@@ -219,7 +219,7 @@ fn should_render_hotspots_section_between_change_graph_and_definitions_when_hots
             ],
         },
         tests: vec![],
-        hotspots: vec![Hotspot {
+        fan_ins: vec![FanIn {
             id: "store/items.go::UpsertItemsRequest".to_string(),
             path: "store/items.go".to_string(),
             name: "UpsertItemsRequest".to_string(),
@@ -237,7 +237,7 @@ fn should_render_hotspots_section_between_change_graph_and_definitions_when_hots
 - fn HandleFoo (store/items.go) — uses: UpsertItemsRequest
 - fn HandleBar (store/items.go) — uses: UpsertItemsRequest
 
-## Hotspots
+## High fan-in symbols
 
 - struct UpsertItemsRequest (store/items.go) — used by 2: HandleBar, HandleFoo
 
@@ -269,18 +269,18 @@ func HandleBar(req UpsertItemsRequest) error
 }
 
 #[test]
-fn should_render_hotspot_line_for_symbol_with_no_matching_definition() {
-    // Same defensive rationale as the "NOTE" block below: `hotspots`
+fn should_render_fan_in_line_for_symbol_with_no_matching_definition() {
+    // Same defensive rationale as the "NOTE" block below: `fan_ins`
     // could in principle reference a node id with no corresponding
     // `ExtractedSymbol` in `files` (the node is present in `graph`, so
     // the empty-output guard does not short-circuit, but `files` itself
     // has no matching symbol — mirroring the other lookup-miss tests'
     // setup). Unlike "Change graph"/"Definitions" (which use
     // `SymbolLookup`, keyed by symbol id, to find the container/
-    // signature and skip the line entirely on a miss), the "Hotspots"
-    // line still renders on a lookup miss, falling back to a bare
-    // `{name} ({path})` label with no kind prefix, rather than being
-    // dropped outright.
+    // signature and skip the line entirely on a miss), the "High fan-in
+    // symbols" line still renders on a lookup miss, falling back to a
+    // bare `{name} ({path})` label with no kind prefix, rather than
+    // being dropped outright.
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![],
@@ -291,7 +291,7 @@ fn should_render_hotspot_line_for_symbol_with_no_matching_definition() {
             roots: vec!["src/lib.rs::ghost".to_string()],
         },
         tests: vec![],
-        hotspots: vec![Hotspot {
+        fan_ins: vec![FanIn {
             id: "src/lib.rs::ghost".to_string(),
             path: "src/lib.rs".to_string(),
             name: "ghost".to_string(),
@@ -307,7 +307,7 @@ fn should_render_hotspot_line_for_symbol_with_no_matching_definition() {
 1 changed symbol in 1 file
 
 
-## Hotspots
+## High fan-in symbols
 
 - ghost (src/lib.rs) — used by 2: a, b
 
@@ -344,7 +344,7 @@ fn should_render_file_size_warnings_section_when_warnings_are_present() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![
             crate::file_size::FileSizeWarning {
                 path: "b.rs".to_string(),
@@ -409,7 +409,7 @@ fn should_omit_file_size_warnings_section_when_report_has_no_warnings() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -420,10 +420,11 @@ fn should_omit_file_size_warnings_section_when_report_has_no_warnings() {
 }
 
 #[test]
-fn should_place_file_size_warnings_between_hotspots_and_definitions() {
-    // A report with both a hotspot and a file-size warning: the
-    // `## File size warnings` section must land after `## Hotspots` and
-    // before `## Definitions`, matching ADR 0028's placement decision.
+fn should_place_file_size_warnings_between_high_fan_in_symbols_and_definitions() {
+    // A report with both a high-fan-in symbol and a file-size warning:
+    // the `## File size warnings` section must land after
+    // `## High fan-in symbols` and before `## Definitions`, matching
+    // ADR 0028's placement decision.
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![FileReport {
@@ -478,7 +479,7 @@ fn should_place_file_size_warnings_between_hotspots_and_definitions() {
             ],
         },
         tests: vec![],
-        hotspots: vec![Hotspot {
+        fan_ins: vec![FanIn {
             id: "store/items.go::UpsertItemsRequest".to_string(),
             path: "store/items.go".to_string(),
             name: "UpsertItemsRequest".to_string(),
@@ -500,7 +501,7 @@ fn should_place_file_size_warnings_between_hotspots_and_definitions() {
 - fn HandleFoo (store/items.go) — uses: UpsertItemsRequest
 - fn HandleBar (store/items.go) — uses: UpsertItemsRequest
 
-## Hotspots
+## High fan-in symbols
 
 - struct UpsertItemsRequest (store/items.go) — used by 2: HandleBar, HandleFoo
 
@@ -537,7 +538,7 @@ func HandleBar(req UpsertItemsRequest) error
 
 // ADR 0028: JSON output must always carry `file_size_warnings` as a
 // top-level field, present-and-empty when nothing warns (mirroring how
-// `hotspots` is always present). This pins that shape end-to-end via
+// `fan_ins` is always present). This pins that shape end-to-end via
 // the same `render` entry point the Markdown tests above use.
 #[test]
 fn should_include_file_size_warnings_in_json_output() {
@@ -551,7 +552,7 @@ fn should_include_file_size_warnings_in_json_output() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![
             crate::file_size::FileSizeWarning {
                 path: "b.rs".to_string(),
@@ -577,7 +578,7 @@ fn should_include_file_size_warnings_in_json_output() {
     \"roots\": []
   },
   \"tests\": [],
-  \"hotspots\": [],
+  \"fan_ins\": [],
   \"file_size_warnings\": [
     {
       \"path\": \"b.rs\",

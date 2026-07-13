@@ -33,7 +33,7 @@ fn should_render_container_comment_when_symbol_has_container() {
             roots: vec!["src/lib.rs::bar".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -87,7 +87,7 @@ fn should_render_depends_on_list_when_symbol_has_dependencies() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -149,7 +149,7 @@ fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencie
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -207,7 +207,7 @@ fn should_render_omitted_matches_note_when_dependency_matches_were_capped() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -267,7 +267,7 @@ fn should_widen_fence_when_signature_contains_a_backtick_run() {
             roots: vec!["src/lib.rs::example_macro".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -320,7 +320,7 @@ fn should_widen_fence_when_container_contains_a_backtick_run() {
             roots: vec!["src/lib.rs::bar".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };

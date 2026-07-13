@@ -58,30 +58,41 @@ pub struct SymbolGraph {
     pub roots: Vec<NodeId>,
 }
 
-/// A changed symbol with two or more distinct referrers (ADR 0013): a
-/// "fan-in hotspot" a reviewer should pay extra attention to, since changing
-/// its signature has a wider blast radius than a symbol only one other
-/// changed symbol depends on.
+/// Line-count-style eligibility threshold (ADR 0033, mirroring
+/// `file_size.rs`'s `WARN_LINE_THRESHOLD`/`SPLIT_LINE_THRESHOLD`
+/// convention): a node with `used_by.len() >= HIGH_FAN_IN_THRESHOLD`
+/// qualifies as a [`FanIn`] entry. This is a judgment call, not derived
+/// from data (ADR 0013's Consequences section flagged the same caveat
+/// before this constant existed as a name) — revisit if dogfooding on
+/// real diffs shows fan-in == 1 entries carry useful signal. Changing
+/// this value is an ADR amendment, same as the file-size thresholds.
+pub const HIGH_FAN_IN_THRESHOLD: usize = 2;
+
+/// A changed symbol with two or more distinct referrers (ADR 0013, named
+/// "fan-in" per ADR 0033): a symbol a reviewer should pay extra attention
+/// to, since changing its signature has a wider blast radius than a symbol
+/// only one other changed symbol depends on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Hotspot {
+pub struct FanIn {
     pub id: NodeId,
     pub path: String,
     pub name: String,
     /// Names of every changed symbol referencing this node, sorted
     /// ascending. Deduplication happens per referrer *node*, not per name,
     /// so two distinct referrers sharing a name both appear (see
-    /// [`compute_hotspots`]'s doc comment). Fan-in count is
+    /// [`compute_fan_ins`]'s doc comment). Fan-in count is
     /// `used_by.len()` — no separate count field, since the list already
     /// carries it and a reader who wants the number can just count entries
     /// or check the (short) list itself.
     pub used_by: Vec<String>,
 }
 
-/// Aggregates `graph.edges` by target node into [`Hotspot`]s: nodes
-/// referenced by two or more distinct changed symbols (fan-in >= 2). A
-/// cycle edge (`Edge::is_cycle`) still counts as a real reference — the
-/// referrer really does depend on the target's signature, cycle or not — so
-/// cycle and non-cycle edges are aggregated together without distinction.
+/// Aggregates `graph.edges` by target node into [`FanIn`]s: nodes
+/// referenced by two or more distinct changed symbols (fan-in >=
+/// [`HIGH_FAN_IN_THRESHOLD`]). A cycle edge (`Edge::is_cycle`) still counts
+/// as a real reference — the referrer really does depend on the target's
+/// signature, cycle or not — so cycle and non-cycle edges are aggregated
+/// together without distinction.
 ///
 /// Multiple edges from the same referrer node to the same target
 /// (`collect_edges` cannot currently produce these, since a symbol's
@@ -103,7 +114,7 @@ pub struct Hotspot {
 /// it, `referrers_by_target`'s `HashMap` iteration order (which varies
 /// run to run under Rust's randomized `HashMap` seed) decided the order
 /// between them (see ADR 0013's amendment).
-pub fn compute_hotspots(graph: &SymbolGraph) -> Vec<Hotspot> {
+pub fn compute_fan_ins(graph: &SymbolGraph) -> Vec<FanIn> {
     let node_by_id: HashMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
     // Dedup by (target, referrer id) first, so a target with multiple edges
@@ -116,9 +127,9 @@ pub fn compute_hotspots(graph: &SymbolGraph) -> Vec<Hotspot> {
         }
     }
 
-    let mut hotspots: Vec<Hotspot> = referrers_by_target
+    let mut fan_ins: Vec<FanIn> = referrers_by_target
         .into_iter()
-        .filter(|(_, referrers)| referrers.len() >= 2)
+        .filter(|(_, referrers)| referrers.len() >= HIGH_FAN_IN_THRESHOLD)
         .filter_map(|(target_id, referrer_ids)| {
             let node = node_by_id.get(target_id)?;
             let mut used_by: Vec<String> = referrer_ids
@@ -127,7 +138,7 @@ pub fn compute_hotspots(graph: &SymbolGraph) -> Vec<Hotspot> {
                 .map(|n| n.name.clone())
                 .collect();
             used_by.sort();
-            Some(Hotspot {
+            Some(FanIn {
                 id: node.id.clone(),
                 path: node.path.clone(),
                 name: node.name.clone(),
@@ -136,7 +147,7 @@ pub fn compute_hotspots(graph: &SymbolGraph) -> Vec<Hotspot> {
         })
         .collect();
 
-    hotspots.sort_by(|a, b| {
+    fan_ins.sort_by(|a, b| {
         b.used_by
             .len()
             .cmp(&a.used_by.len())
@@ -145,7 +156,7 @@ pub fn compute_hotspots(graph: &SymbolGraph) -> Vec<Hotspot> {
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    hotspots
+    fan_ins
 }
 
 /// Builds a [`SymbolGraph`] over every symbol in `files`.

@@ -7,8 +7,8 @@
 //!   per-file skip cases (deleted / binary / unsupported-language / pure
 //!   rename), diff-parse and read-file error paths, multi-file mixed
 //!   outcomes, Go interface/receiver nesting end-to-end, resolver
-//!   invocation contract (`Some`/`None`), and hotspot wiring
-//!   (ADR 0013 end-to-end).
+//!   invocation contract (`Some`/`None`), and fan-in wiring
+//!   (ADR 0013, named per ADR 0033, end-to-end).
 //! - [`is_generated_content`] — ADR 0011: the `is_generated_content`
 //!   marker-detection helper's positive and negative cases (rstest).
 //! - [`test_symbol_exclusion`] — ADR 0009: `partition_test_symbols`'s
@@ -29,7 +29,7 @@
 //! - [`analyze_repo`] — ADR 0017: whole-repo `analyze_repo` — empty
 //!   input, extracting every symbol, `classification: None` invariant,
 //!   unsupported-language / read-fail / generated-path / generated-content
-//!   / test-path skips, and hotspot aggregation.
+//!   / test-path skips, and fan-in aggregation.
 //! - [`file_size_warnings`] — ADR 0028 integration: `analyze_diff` and
 //!   `analyze_repo` both thread `(path, line_count)` pairs through to
 //!   `Report::file_size_warnings`, and skipped files never appear there.

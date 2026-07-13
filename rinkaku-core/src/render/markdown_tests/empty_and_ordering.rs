@@ -22,7 +22,7 @@ fn should_render_empty_markdown_when_report_has_no_files_and_no_skips() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -57,7 +57,7 @@ fn should_list_file_with_no_symbols_under_other_changed_files_when_report_has_no
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -104,7 +104,7 @@ fn should_list_file_with_no_symbols_after_definitions_when_report_has_graph_node
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -153,7 +153,7 @@ fn should_render_other_changed_files_before_skipped_files_when_report_has_both()
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -188,7 +188,7 @@ fn should_render_tests_section_with_singular_symbol_noun_when_count_is_one() {
             path: "src/lib.rs".to_string(),
             symbol_count: 1,
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -220,7 +220,7 @@ fn should_render_tests_section_with_plural_symbols_noun_when_count_is_greater_th
             path: "src/lib.rs".to_string(),
             symbol_count: 3,
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -261,7 +261,7 @@ fn should_render_tests_section_between_definitions_and_other_changed_files_when_
             path: "src/lib.rs".to_string(),
             symbol_count: 2,
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -315,7 +315,7 @@ fn should_omit_generated_skip_entry_from_markdown_output() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -350,7 +350,7 @@ fn should_omit_only_generated_entries_when_skipped_has_other_reasons_too() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };

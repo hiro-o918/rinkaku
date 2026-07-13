@@ -49,7 +49,7 @@ pub(super) fn render_mermaid(report: &Report) -> String {
     }
 
     let lookup = SymbolLookup::build(&report.files);
-    let hotspot_ids: HashSet<&str> = report.hotspots.iter().map(|h| h.id.as_str()).collect();
+    let fan_in_ids: HashSet<&str> = report.fan_ins.iter().map(|h| h.id.as_str()).collect();
 
     // Sequential, mermaid-safe node ids (`n0`, `n1`, ...), mapped from the
     // original `NodeId` — a `NodeId` like `src/lib.rs::foo@10` contains
@@ -100,23 +100,23 @@ pub(super) fn render_mermaid(report: &Report) -> String {
     }
 
     // Class assignment: a node that is both classified (`added` or
-    // `changed`) and a hotspot gets `hotspot` styling, checked first —
-    // see this function's doc comment / ADR 0021's Decision on
+    // `changed`) and a high-fan-in symbol gets `fan-in` styling, checked
+    // first — see this function's doc comment / ADR 0021's Decision on
     // precedence. This overlap is real, not just theoretical: fan-in
-    // (`hotspot_ids`, from `compute_hotspots`) counts referrers among
+    // (`fan_in_ids`, from `compute_fan_ins`) counts referrers among
     // *changed* symbols regardless of the target's own classification, so
     // a brand-new (`Added`) symbol referenced by two or more other
-    // changed symbols is a perfectly ordinary hotspot too — e.g. a new
-    // helper function two other new/changed call sites both use in the
-    // same diff. `hotspot` wins because fan-in ("how many other changed
-    // symbols depend on this") is the more decision-relevant signal for a
-    // reviewer skimming the graph than "this particular node is new" —
-    // the node's own classification is still visible in the companion
-    // Markdown/JSON output's Definitions section either way.
+    // changed symbols is a perfectly ordinary high-fan-in symbol too —
+    // e.g. a new helper function two other new/changed call sites both
+    // use in the same diff. `fan-in` wins because fan-in ("how many other
+    // changed symbols depend on this") is the more decision-relevant
+    // signal for a reviewer skimming the graph than "this particular node
+    // is new" — the node's own classification is still visible in the
+    // companion Markdown/JSON output's Definitions section either way.
     for n in &report.graph.nodes {
         let safe_id = &safe_id_by_node[n.id.as_str()];
-        let class = if hotspot_ids.contains(n.id.as_str()) {
-            Some("hotspot")
+        let class = if fan_in_ids.contains(n.id.as_str()) {
+            Some("fan-in")
         } else {
             match lookup.get(&n.id).and_then(|(_, s)| s.classification) {
                 Some(Classification::Added) => Some("added"),
@@ -236,15 +236,15 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// [`render_mermaid_file_level`]. Colors are chosen with explicit
 /// dark-on-light text (rather than relying on mermaid's theme defaults) so
 /// they stay legible under both GitHub's light and dark PR-comment themes
-/// (ADR 0021) — `stroke-width` on `hotspot` gives it a heavier outline on
+/// (ADR 0021) — `stroke-width` on `fan-in` gives it a heavier outline on
 /// top of its own fill, in addition to `changed`'s (SignatureChanged)
-/// styling, since `hotspot` styling takes precedence over `changed` for a
+/// styling, since `fan-in` styling takes precedence over `changed` for a
 /// node that qualifies as both (see `render_mermaid`'s class-assignment
 /// comment).
 const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
     "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
-    "  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;\n",
+    "  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;\n",
 );
 
 /// Escapes text embedded in a quoted mermaid node/subgraph label
@@ -270,14 +270,14 @@ mod tests {
     use super::*;
     use crate::diff::LineRange;
     use crate::extract::{Classification, ExtractedSymbol, SymbolKind};
-    use crate::graph::{Edge, Hotspot, Node, SymbolGraph};
+    use crate::graph::{Edge, FanIn, Node, SymbolGraph};
     use crate::render::report::{FileReport, ReportOrigin};
     use crate::render::{OutputFormat, render};
     use pretty_assertions::assert_eq;
 
     /// Same shape as the sibling `tests::symbol` helper, plus a
     /// `classification` parameter these tests need to exercise
-    /// added/changed/hotspot styling.
+    /// added/changed/fan-in styling.
     fn symbol(
         id: &str,
         name: &str,
@@ -315,7 +315,7 @@ mod tests {
             skipped: vec![],
             graph,
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         }
@@ -411,7 +411,7 @@ flowchart LR
   class n1 changed
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -454,7 +454,7 @@ flowchart LR
   n1 -.-> n0
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -484,7 +484,7 @@ flowchart LR
   end
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -515,7 +515,7 @@ flowchart LR
   end
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -524,10 +524,11 @@ flowchart LR
     }
 
     #[test]
-    fn should_prefer_hotspot_class_over_changed_class_when_node_is_both() {
+    fn should_prefer_fan_in_class_over_changed_class_when_node_is_both() {
         // "shared" is SignatureChanged *and* referenced by two other
-        // symbols (fan-in >= 2, so it's also a hotspot) — precedence goes
-        // to `hotspot` styling per this module's documented choice.
+        // symbols (fan-in >= 2, so it's also a high-fan-in symbol) —
+        // precedence goes to `fan-in` styling per this module's documented
+        // choice.
         let report = Report {
             origin: ReportOrigin::Diff,
             files: vec![FileReport {
@@ -546,7 +547,7 @@ flowchart LR
                 roots: vec!["src/lib.rs::shared".to_string()],
             },
             tests: vec![],
-            hotspots: vec![Hotspot {
+            fan_ins: vec![FanIn {
                 id: "src/lib.rs::shared".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "shared".to_string(),
@@ -561,10 +562,10 @@ flowchart LR
   subgraph sub0[\"src/lib.rs\"]
     n0[\"shared\"]
   end
-  class n0 hotspot
+  class n0 fan-in
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -573,14 +574,15 @@ flowchart LR
     }
 
     #[test]
-    fn should_prefer_hotspot_class_over_added_class_when_a_new_symbol_is_also_a_hotspot() {
-        // Fan-in (`compute_hotspots`) counts referrers among *changed*
+    fn should_prefer_fan_in_class_over_added_class_when_a_new_symbol_has_high_fan_in() {
+        // Fan-in (`compute_fan_ins`) counts referrers among *changed*
         // symbols regardless of the referenced node's own classification —
         // a brand-new ("added") symbol referenced by two or more other
         // changed symbols in the same diff (e.g. a new helper two other
         // new/changed call sites both use) is a perfectly ordinary
-        // hotspot too, not a case that can't occur. Same precedence as
-        // the SignatureChanged sibling test above: `hotspot` wins.
+        // high-fan-in symbol too, not a case that can't occur. Same
+        // precedence as the SignatureChanged sibling test above: `fan-in`
+        // wins.
         let report = Report {
             origin: ReportOrigin::Diff,
             files: vec![FileReport {
@@ -599,7 +601,7 @@ flowchart LR
                 roots: vec!["src/lib.rs::new_helper".to_string()],
             },
             tests: vec![],
-            hotspots: vec![Hotspot {
+            fan_ins: vec![FanIn {
                 id: "src/lib.rs::new_helper".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "new_helper".to_string(),
@@ -614,10 +616,10 @@ flowchart LR
   subgraph sub0[\"src/lib.rs\"]
     n0[\"new_helper\"]
   end
-  class n0 hotspot
+  class n0 fan-in
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
@@ -743,7 +745,7 @@ flowchart LR
   class n0 changed
   classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
   classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
-  classDef hotspot fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
+  classDef fan-in fill:#fed7d7,stroke:#9b2c2c,stroke-width:3px,color:#1a202c;
 "
         .to_string();
         let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");

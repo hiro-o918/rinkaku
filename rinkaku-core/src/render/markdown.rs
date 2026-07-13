@@ -1,17 +1,17 @@
 //! Markdown rendering — the default, human/LLM-oriented output.
 //!
 //! Turns a [`Report`] into the multi-section Markdown document (change
-//! graph, hotspots, definitions, removed symbols, tests, other changed
-//! files, skipped files) that the CLI emits by default and the LLM-review
-//! integration feeds directly to a model. Every function here writes into
-//! a shared `String` buffer; the tests below pin the exact output for
-//! each section shape.
+//! graph, high fan-in symbols, definitions, removed symbols, tests, other
+//! changed files, skipped files) that the CLI emits by default and the
+//! LLM-review integration feeds directly to a model. Every function here
+//! writes into a shared `String` buffer; the tests below pin the exact
+//! output for each section shape.
 
 use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
 use crate::file_size::{
     FileSizeSeverity, FileSizeWarning, SPLIT_LINE_THRESHOLD, WARN_LINE_THRESHOLD,
 };
-use crate::graph::{Hotspot, Node, NodeId, SymbolGraph};
+use crate::graph::{FanIn, Node, NodeId, SymbolGraph};
 use crate::render::RenderError;
 use crate::render::report::{Report, ReportOrigin, SkipReason, SkippedFile, skip_reason_label};
 use crate::render::shared::SymbolLookup;
@@ -90,16 +90,16 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
         render_change_graph(&mut out, &report.graph, &children, &lookup)?;
         writeln!(out)?;
 
-        if !report.hotspots.is_empty() {
-            writeln!(out, "## Hotspots")?;
+        if !report.fan_ins.is_empty() {
+            writeln!(out, "## High fan-in symbols")?;
             writeln!(out)?;
-            for hotspot in &report.hotspots {
+            for fan_in in &report.fan_ins {
                 writeln!(
                     out,
                     "- {} — used by {}: {}",
-                    hotspot_label(hotspot, &lookup),
-                    hotspot.used_by.len(),
-                    hotspot.used_by.join(", ")
+                    fan_in_label(fan_in, &lookup),
+                    fan_in.used_by.len(),
+                    fan_in.used_by.join(", ")
                 )?;
             }
             writeln!(out)?;
@@ -401,8 +401,8 @@ fn render_tree_node(
 
 /// Renders one symbol's "Definitions" entry: a `###` heading using the same
 /// label as the tree (with ADR 0014's contract-impact marker, same as
-/// "Change graph"/"Hotspots"), the signature block, and its unchanged 1-hop
-/// `dependencies` under "Depends on:".
+/// "Change graph"/"High fan-in symbols"), the signature block, and its
+/// unchanged 1-hop `dependencies` under "Depends on:".
 ///
 /// The signature block is a plain fence for every classification except
 /// [`Classification::SignatureChanged`] (or classification not attempted),
@@ -497,9 +497,9 @@ fn tree_label(path: &str, symbol: &ExtractedSymbol) -> String {
 /// appended (`— new` / `— signature changed`), or the bare label unchanged
 /// when [`classification_marker`] has nothing to say for this symbol
 /// (`body_only` or classification not attempted). Shared by
-/// `render_tree_node`'s tree rows and [`hotspot_label`]'s "Hotspots" lines
-/// so the marker reads identically in both sections, same as `tree_label`
-/// itself already does.
+/// `render_tree_node`'s tree rows and [`fan_in_label`]'s "High fan-in
+/// symbols" lines so the marker reads identically in both sections, same as
+/// `tree_label` itself already does.
 fn labeled_with_marker(path: &str, symbol: &ExtractedSymbol) -> String {
     let label = tree_label(path, symbol);
     match classification_marker(symbol.classification) {
@@ -508,23 +508,23 @@ fn labeled_with_marker(path: &str, symbol: &ExtractedSymbol) -> String {
     }
 }
 
-/// Builds the "Hotspots" line label for a [`Hotspot`], reusing
-/// [`labeled_with_marker`] via `lookup` so a hotspot's label (including its
-/// ADR 0014 marker) is identical to how the same symbol is labeled in
+/// Builds the "High fan-in symbols" line label for a [`FanIn`], reusing
+/// [`labeled_with_marker`] via `lookup` so a fan-in entry's label (including
+/// its ADR 0014 marker) is identical to how the same symbol is labeled in
 /// "Change graph"/"Definitions" (ADR 0013's requirement that labels stay
 /// consistent across sections) — including the `:{start_line}`
 /// disambiguation suffix when applicable.
 ///
 /// Falls back to a bare `{name} ({path})` (no kind prefix, no marker) when
-/// `lookup` has no matching `ExtractedSymbol` for `hotspot.id` — defensive,
-/// since `pipeline::analyze_diff` always builds `hotspots` from the same
+/// `lookup` has no matching `ExtractedSymbol` for `fan_in.id` — defensive,
+/// since `pipeline::analyze_diff` always builds `fan_ins` from the same
 /// `graph` whose node ids match `files`' stamped symbol ids (same invariant
 /// `render_tree_node`'s own lookup-miss guards rely on), so this branch is
 /// not expected to trigger in practice.
-fn hotspot_label(hotspot: &Hotspot, lookup: &SymbolLookup) -> String {
-    match lookup.get(&hotspot.id) {
+fn fan_in_label(fan_in: &FanIn, lookup: &SymbolLookup) -> String {
+    match lookup.get(&fan_in.id) {
         Some((path, symbol)) => labeled_with_marker(path, symbol),
-        None => format!("{} ({})", hotspot.name, hotspot.path),
+        None => format!("{} ({})", fan_in.name, fan_in.path),
     }
 }
 
