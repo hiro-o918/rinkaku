@@ -1,4 +1,4 @@
-# 0022. Renaming the TUI's pivot pane to "blast radius"
+# 0023. Renaming the TUI's pivot pane to "blast radius"
 
 - Status: accepted
 - Date: 2026-07-13

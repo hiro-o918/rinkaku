@@ -391,7 +391,7 @@ fn draw_diff_pane(
 }
 
 /// Draws the blast-radius pane (ADR 0019 for the re-rooting algorithm, ADR
-/// 0022 for the "blast radius" naming — [`RightPane::BlastRadius`]): the
+/// 0023 for the "blast radius" naming — [`RightPane::BlastRadius`]): the
 /// entry-tree text rooted at the directory/file row under the cursor,
 /// following the cursor as it moves. `selection` is already computed by
 /// `crate::run_app` (via `App::selected_blast_radius_view`) once per handled

@@ -68,7 +68,7 @@ pub enum InputKey {
     /// `R`: toggle the right-hand pane between [`RightPane::BlastRadius`]
     /// and whichever mode was active before ([`RightPane::Detail`] or
     /// [`RightPane::Diff`]) — ADR 0019's entry-path re-rooting, named "blast
-    /// radius" in the UI per ADR 0022. Pressing `R` again while already in
+    /// radius" in the UI per ADR 0023. Pressing `R` again while already in
     /// `BlastRadius` mode returns to the prior mode (stored in `App`'s
     /// `blast_radius_return_pane` field the moment `BlastRadius` was
     /// entered), mirroring `d`'s own toggle rather than a one-way "enter
@@ -180,7 +180,7 @@ pub enum Screen {
 }
 
 /// Which content the right-hand pane shows on [`Screen::Entry`] (TUI
-/// iteration 2/ADR 0019, named "blast radius" per ADR 0022): the existing
+/// iteration 2/ADR 0019, named "blast radius" per ADR 0023): the existing
 /// signature/used-by/callers detail, the raw diff hunks touching the
 /// selected row, or the dependency tree rooted at the selected directory/
 /// file's path. Independent of [`Screen`] — it is a display mode for the
@@ -240,7 +240,7 @@ pub enum DiffTarget {
 }
 
 /// What [`App::selected_blast_radius_view`] resolved the cursor's row to
-/// (ADR 0019, named "blast radius" per ADR 0022) — see that method's own
+/// (ADR 0019, named "blast radius" per ADR 0023) — see that method's own
 /// doc comment for the three-way split.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlastRadiusSelection {
@@ -597,7 +597,7 @@ impl App {
         }
     }
 
-    /// What the blast-radius pane ([`RightPane::BlastRadius`], ADR 0019/0022)
+    /// What the blast-radius pane ([`RightPane::BlastRadius`], ADR 0019/0023)
     /// should show for the row currently under the cursor:
     /// [`BlastRadiusSelection::View`] when the cursor sits on a directory or
     /// file row and at least one symbol falls under that row's path,
@@ -1420,7 +1420,7 @@ mod tests {
 
     #[test]
     fn should_switch_from_blast_radius_to_diff_when_toggle_diff_is_pressed() {
-        // ADR 0019/0022: "R" re-press or "d" both leave blast-radius mode —
+        // ADR 0019/0023: "R" re-press or "d" both leave blast-radius mode —
         // "d" always lands on Diff regardless of `blast_radius_return_pane`
         // (a deliberate, unconditional gesture — see `handle_key`'s
         // `ToggleDiff` arm). Uses Detail (not the default Diff) as the pane

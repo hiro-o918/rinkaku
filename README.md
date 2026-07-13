@@ -463,7 +463,7 @@ count as entry points), not the direction fan-in itself measures, so
 scoping it to the re-rooted subset would misreport how much the rest of
 the repository actually depends on a symbol (see
 [ADR 0019](docs/adr/0019-entry-path-pivot-view.md)'s Consequences; the TUI
-naming itself is [ADR 0022](docs/adr/0022-tui-blast-radius-naming.md)).
+naming itself is [ADR 0023](docs/adr/0023-tui-blast-radius-naming.md)).
 
 ## Interactive TUI
 
@@ -547,7 +547,7 @@ blast radius, cycle, jumplist).
 - **Blast radius pane (right):** `r`/`R` toggles the right-hand pane to an
   entry-tree view rooted at the directory or file row under the cursor —
   "if this changes, what does it reach" ([ADR 0019](docs/adr/0019-entry-path-pivot-view.md)
-  for the re-rooting algorithm, [ADR 0022](docs/adr/0022-tui-blast-radius-naming.md)
+  for the re-rooting algorithm, [ADR 0023](docs/adr/0023-tui-blast-radius-naming.md)
   for the naming) — the interactive equivalent of `--entry <path>`. The
   tree follows the cursor: move to a different directory/file row while
   the pane is active and it re-renders rooted at the new row's path; a

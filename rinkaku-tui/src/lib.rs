@@ -75,7 +75,7 @@ use std::time::Duration;
 /// `entry_path` is `main.rs`'s `--entry <path>` flag (ADR 0019), passed
 /// through unchanged when the user combines it with `--tui`: `None` when
 /// `--entry` was not given (the ordinary case), `Some(path)` to open
-/// straight into [`app::RightPane::BlastRadius`] (ADR 0022) with the cursor
+/// straight into [`app::RightPane::BlastRadius`] (ADR 0023) with the cursor
 /// already on the matching tree row (`App::with_entry_pivot`) instead of
 /// requiring the reviewer to hunt for the row and press `R` themselves. Note
 /// this crate does *not* itself re-root `report.graph` — `main.rs` already

@@ -1,4 +1,4 @@
-//! Blast-radius view-model (ADR 0019 for the re-rooting algorithm, ADR 0022
+//! Blast-radius view-model (ADR 0019 for the re-rooting algorithm, ADR 0023
 //! for the "blast radius" naming): given a directory or file path, builds
 //! the entry-tree text the right pane shows when the user presses `R` on
 //! that row — the interactive equivalent of `rinkaku --entry <path>`'s
@@ -23,7 +23,7 @@
 //! every idle poll tick, not only on a key press.
 //!
 //! `rinkaku-core`'s graph API (`pivot_graph`/`pivot_roots`) keeps its
-//! existing name deliberately — ADR 0022 scopes the "blast radius" rename
+//! existing name deliberately — ADR 0023 scopes the "blast radius" rename
 //! to this crate's user-facing surface, not to `rinkaku-core` or the CLI's
 //! `--entry` flag.
 
@@ -59,13 +59,13 @@ pub struct BlastRadiusLine {
     /// severity `rinkaku-core::render`'s Markdown `⚠️` warning signals),
     /// and `label` is the *target* node's label the cycle points back to.
     /// The label itself uses a plain `!` marker rather than `⚠️`
-    /// deliberately (ADR 0022): `⚠️` is U+26A0 followed by a U+FE0F
+    /// deliberately (ADR 0023): `⚠️` is U+26A0 followed by a U+FE0F
     /// variation selector, and dynamic verification in a real terminal
     /// (`tmux capture-pane`) showed `unicode-width`'s single-column measurement
     /// of that pair disagreeing with the terminal's actual double-column
     /// rendering, desyncing `crate::ui::wrap_lines`'s column accounting from
     /// what the terminal draws and leaving a stray character on screen —
-    /// exactly the risk ADR 0022 flagged before implementation.
+    /// exactly the risk ADR 0023 flagged before implementation.
     /// `rinkaku-core::render`'s Markdown output keeps `⚠️` unaffected: it
     /// is plain text there, never fed through a terminal-cell width
     /// calculation.

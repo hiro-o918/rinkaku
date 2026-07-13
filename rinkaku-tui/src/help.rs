@@ -1,5 +1,5 @@
 //! The `?` help overlay's content (ADR 0020, glossary wording per ADR
-//! 0022): a static keymap plus a short glossary, assembled as plain data so
+//! 0023): a static keymap plus a short glossary, assembled as plain data so
 //! `crate::ui` only has to lay it out, not decide what belongs in it.
 //!
 //! The keymap itself is fixed (not derived from `crate::app::InputKey` or
