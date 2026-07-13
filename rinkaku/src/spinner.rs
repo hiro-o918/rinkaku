@@ -12,7 +12,13 @@
 //! Kept in the `rinkaku` bin crate, not `rinkaku-core`: this is terminal IO
 //! tied to how *this specific binary* reports progress, not part of the
 //! pure diff-condensation core (CLAUDE.md's "core logic is pure" rule).
+//!
+//! Used only outside `--tui` mode (ADR 0033): `main.rs` shows this spinner
+//! or the TUI splash screen (`rinkaku_tui::splash`), never both in the same
+//! run — see `main.rs`'s own doc comment on why display mode is decided
+//! before analysis starts.
 
+use crate::progress::AnalysisProgress;
 use indicatif::{ProgressBar, ProgressStyle};
 
 /// Wraps an `indicatif::ProgressBar` configured as an indeterminate spinner
@@ -60,6 +66,20 @@ impl Spinner {
     pub fn finish_and_clear(&self) {
         self.bar.finish_and_clear();
     }
+}
+
+impl AnalysisProgress for Spinner {
+    /// Forwards to [`Spinner::set_message`] via [`phase_message`] — the
+    /// same mapping every call site used before `AnalysisProgress` existed.
+    fn set_phase(&self, phase: AnalysisPhase) {
+        self.set_message(phase_message(phase));
+    }
+
+    // `report_file_progress` is left at `AnalysisProgress`'s default no-op:
+    // ADR 0032 chose an indeterminate spinner on purpose (see this module's
+    // own doc comment), so a `(done, total)` count arriving here is
+    // intentionally dropped rather than reformatted into the spinner's
+    // single message line.
 }
 
 // Note: an early `?`-propagated error in `main` (e.g. a failing `git`/`gh`

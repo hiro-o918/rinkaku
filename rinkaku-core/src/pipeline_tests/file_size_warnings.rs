@@ -91,7 +91,7 @@ fn should_include_warn_when_analyze_repo_reads_a_file_over_warn_threshold() {
     )]));
     let paths = vec!["src/big.rs".to_string()];
 
-    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+    let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
     let expected = vec![FileSizeWarning {
         path: "src/big.rs".to_string(),

@@ -14,6 +14,7 @@ fn should_resolve_function_call_when_callee_is_defined_in_repo() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {
@@ -38,6 +39,7 @@ fn should_resolve_type_reference_when_type_is_defined_in_repo() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {
@@ -67,6 +69,7 @@ fn should_return_empty_vec_when_name_has_no_definition_in_repo() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     // Covers both a built-in type (`i32`, never indexed since it has
@@ -99,6 +102,7 @@ fn should_return_all_matches_when_name_is_defined_multiple_times() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let mut expected = vec![

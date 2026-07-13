@@ -15,8 +15,10 @@ use crate::extract::{
 use crate::file_size::compute_file_size_warnings;
 use crate::graph::{build_graph, compute_fan_ins, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
+use crate::progress::{OnProgress, should_report_progress};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile, TestFileSummary};
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use thiserror::Error;
 
 /// A `read_file`-shaped port for fetching a changed file's *base*-side
@@ -367,12 +369,22 @@ pub fn analyze_diff(
 /// them (`build_graph`, `stamp_ids`, `compute_fan_ins`), so every
 /// downstream renderer (Markdown, JSON, TUI) sees the same `Report` shape
 /// regardless of which pipeline entry point produced it.
+///
+/// `on_progress` (ADR 0033), when `Some`, is called with `(files_done,
+/// paths.len())` as files finish being processed by the parallel loop
+/// below — approximately every [`crate::progress::PROGRESS_REPORT_STRIDE`]
+/// files (`crate::progress::should_report_progress`), always including a
+/// final `(paths.len(), paths.len())` call. `None` (every caller except
+/// `--tui` mode's `main.rs`) skips all counting overhead: the atomic
+/// counter is only incremented when a callback is actually present, so
+/// existing callers pay nothing for this parameter.
 pub fn analyze_repo(
     paths: &[String],
     read_file: impl Fn(&str) -> std::io::Result<String> + Sync + Send,
     include_tests: bool,
     generated_paths: &std::collections::HashSet<String>,
     include_generated: bool,
+    on_progress: Option<OnProgress>,
 ) -> Report {
     // ADR 0031: the per-file body below is embarrassingly parallel —
     // `extract_all_symbols` builds a fresh `tree_sitter::Parser` per call
@@ -400,41 +412,64 @@ pub fn analyze_repo(
         sized: (String, usize),
         report: Option<FileReport>,
     }
+    // ADR 0033: counts files as they finish, regardless of which branch
+    // below a given file took (skipped, filtered to empty, or reported) —
+    // "progress" here means "files the loop has looked at", matching what
+    // a reviewer watching a `done/total` bar expects it to track, not just
+    // the subset that ended up producing a `FileReport`. `AtomicUsize`
+    // rather than a per-thread-local counter: rayon's worker threads share
+    // this one counter, and `fetch_add`'s return value (the count *before*
+    // this increment) is turned into a 1-indexed "files done" count with
+    // `+ 1` so `should_report_progress` sees the same 1-indexed convention
+    // `TagsResolver::new`'s sequential loop below also uses.
+    let completed = AtomicUsize::new(0);
+    let total = paths.len();
     let per_file: Vec<Option<PerFileOutcome>> = paths
         .par_iter()
         .map(|path| {
-            let lang = language_for_path(path)?;
-            if !include_tests && lang.is_test_path(path) {
-                return None;
-            }
-            if !include_generated && generated_paths.contains(path) {
-                return None;
-            }
-            // A path `git ls-files` lists can still fail to read (e.g. a
-            // submodule gitlink entry, or a file deleted in the working
-            // tree but not yet staged) — skipped rather than aborting the
-            // whole outline, same best-effort stance `main.rs`'s
-            // `build_resolver` already takes for its own working-tree read
-            // loop.
-            let content = read_file(path).ok()?;
-            if !include_generated && is_generated_content(&content) {
-                return None;
-            }
-            let sized = (path.clone(), content.lines().count());
+            let outcome = (|| {
+                let lang = language_for_path(path)?;
+                if !include_tests && lang.is_test_path(path) {
+                    return None;
+                }
+                if !include_generated && generated_paths.contains(path) {
+                    return None;
+                }
+                // A path `git ls-files` lists can still fail to read (e.g. a
+                // submodule gitlink entry, or a file deleted in the working
+                // tree but not yet staged) — skipped rather than aborting the
+                // whole outline, same best-effort stance `main.rs`'s
+                // `build_resolver` already takes for its own working-tree read
+                // loop.
+                let content = read_file(path).ok()?;
+                if !include_generated && is_generated_content(&content) {
+                    return None;
+                }
+                let sized = (path.clone(), content.lines().count());
 
-            let symbols: Vec<ExtractedSymbol> = extract_all_symbols(&content, lang)
-                .into_iter()
-                .filter(|symbol| include_tests || !symbol.is_test)
-                .collect();
-            let report = if symbols.is_empty() {
-                None
-            } else {
-                Some(FileReport {
-                    path: path.clone(),
-                    symbols,
-                })
-            };
-            Some(PerFileOutcome { sized, report })
+                let symbols: Vec<ExtractedSymbol> = extract_all_symbols(&content, lang)
+                    .into_iter()
+                    .filter(|symbol| include_tests || !symbol.is_test)
+                    .collect();
+                let report = if symbols.is_empty() {
+                    None
+                } else {
+                    Some(FileReport {
+                        path: path.clone(),
+                        symbols,
+                    })
+                };
+                Some(PerFileOutcome { sized, report })
+            })();
+
+            if let Some(on_progress) = on_progress {
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if should_report_progress(done, total) {
+                    on_progress(done, total);
+                }
+            }
+
+            outcome
         })
         .collect();
 

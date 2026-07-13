@@ -39,6 +39,7 @@ pub mod nav;
 pub mod order;
 pub mod row_view;
 pub mod source;
+pub mod splash;
 pub mod tree;
 pub mod ui;
 
@@ -112,40 +113,123 @@ use std::time::Duration;
 /// repository) rather than this crate ever shelling out to `git` itself
 /// (ADR 0016). Without it, the source view would only work when `rinkaku`
 /// happens to be invoked from the repository root.
+///
+/// A thin convenience wrapper around [`TuiSession::init`] +
+/// [`TuiSession::run`] for callers that have no splash screen to draw
+/// in between (ADR 0033) — every terminal-lifecycle detail this doc
+/// comment describes lives on `TuiSession` now, see that type's own doc
+/// comment for the same guarantees.
 pub fn run(
     report: &Report,
     diff_text: &str,
     entry_path: Option<&str>,
     repo_root: &std::path::Path,
 ) -> std::io::Result<()> {
-    // Chained *before* `ratatui::try_init`'s own `set_panic_hook` call
-    // below, so the hook `try_init` installs wraps this one: on panic,
-    // `try_init`'s hook runs `ratatui::restore()` (raw mode/alternate
-    // screen) and then this crate's hook (disable mouse capture), rather
-    // than mouse capture silently staying enabled in the panicking
-    // caller's terminal.
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
-        previous_hook(info);
-    }));
+    TuiSession::init()?.run(report, diff_text, entry_path, repo_root)
+}
 
-    let mut terminal = ratatui::try_init()?;
-    // Restore explicitly on this `?`'s early-return path (rather than
-    // letting `?` skip straight past the `ratatui::restore()` call below):
-    // `try_init` above already left raw mode/the alternate screen active,
-    // and a plain `EnableMouseCapture` IO failure is not a panic, so the
-    // panic-hook layer just installed does not run either — without this,
-    // that combination would strand the caller's terminal in raw mode/
-    // alternate screen with no cleanup at all.
-    if let Err(err) = execute!(std::io::stdout(), event::EnableMouseCapture) {
-        ratatui::restore();
-        return Err(err);
+/// Owns the terminal's raw-mode/alternate-screen/mouse-capture lifecycle
+/// (ADR 0033), split out of what used to be a single [`run`] call so
+/// `main.rs` can draw [`splash::SplashState`] frames on the same terminal
+/// while the pre-render analysis pipeline runs synchronously, *before*
+/// handing off to the full event loop — without tearing down and
+/// re-entering the alternate screen in between, which would flash the
+/// terminal and defeat the splash screen's own purpose.
+///
+/// [`TuiSession::init`] performs exactly the setup [`run`]'s preamble used
+/// to (panic-hook chaining, [`ratatui::try_init`], `EnableMouseCapture`,
+/// with the same error-path terminal restoration). [`TuiSession::draw_splash`]
+/// draws one splash frame on the already-initialized terminal — call it as
+/// many times as the pipeline has phase transitions/progress updates to
+/// report, all from the same thread that called `init` (ADR 0033 decision
+/// 2: no cross-thread terminal access). [`TuiSession::run`] consumes `self`
+/// and performs exactly the postamble `run` used to
+/// (`DisableMouseCapture` + [`ratatui::restore`]) on both its `Ok` and
+/// `Err` paths.
+///
+/// A [`Drop`] impl calls [`ratatui::restore`] as a safety net for a path
+/// that drops a `TuiSession` without ever calling `run` at all (e.g.
+/// `main.rs` returning early with a `?` from inside its own analysis
+/// branch, after `init` but before a `Report` exists to hand to `run`) —
+/// `ratatui::restore` is documented idempotent, so this is safe to run
+/// again even after `run`'s own explicit postamble already restored the
+/// terminal on the ordinary path.
+pub struct TuiSession {
+    terminal: ratatui::DefaultTerminal,
+}
+
+impl TuiSession {
+    /// See the type's own doc comment for the exact setup this performs.
+    pub fn init() -> std::io::Result<Self> {
+        // Chained *before* `ratatui::try_init`'s own `set_panic_hook` call
+        // below, so the hook `try_init` installs wraps this one: on panic,
+        // `try_init`'s hook runs `ratatui::restore()` (raw mode/alternate
+        // screen) and then this crate's hook (disable mouse capture),
+        // rather than mouse capture silently staying enabled in the
+        // panicking caller's terminal.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
+            previous_hook(info);
+        }));
+
+        let terminal = ratatui::try_init()?;
+        // Restore explicitly on this `?`'s early-return path (rather than
+        // letting `?` skip straight past the `ratatui::restore()` call
+        // below): `try_init` above already left raw mode/the alternate
+        // screen active, and a plain `EnableMouseCapture` IO failure is
+        // not a panic, so the panic-hook layer just installed does not
+        // run either — without this, that combination would strand the
+        // caller's terminal in raw mode/alternate screen with no cleanup
+        // at all.
+        if let Err(err) = execute!(std::io::stdout(), event::EnableMouseCapture) {
+            ratatui::restore();
+            return Err(err);
+        }
+        Ok(Self { terminal })
     }
-    let result = run_app(&mut terminal, report, diff_text, entry_path, repo_root);
-    let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
-    ratatui::restore();
-    result
+
+    /// Draws one splash frame (ADR 0033) on the already-initialized
+    /// terminal. Intended to be called repeatedly from `main.rs`'s
+    /// analysis call stack as the pipeline moves between phases/reports
+    /// file-scan progress — each call is a plain, synchronous
+    /// `Terminal::draw`, not a background redraw loop.
+    pub fn draw_splash(&mut self, state: &splash::SplashState) -> std::io::Result<()> {
+        self.terminal
+            .draw(|frame| splash::draw_splash(frame, state))?;
+        Ok(())
+    }
+
+    /// Runs the interactive TUI's main event loop over `report` until the
+    /// user quits, consuming `self` and restoring the terminal
+    /// unconditionally before returning — on both the `Ok` and `Err` path,
+    /// matching the postamble the pre-ADR-0033 [`run`] function always ran.
+    /// See [`run`]'s own doc comment (preserved there) for what `report`,
+    /// `diff_text`, `entry_path`, and `repo_root` mean.
+    pub fn run(
+        mut self,
+        report: &Report,
+        diff_text: &str,
+        entry_path: Option<&str>,
+        repo_root: &std::path::Path,
+    ) -> std::io::Result<()> {
+        let result = run_app(&mut self.terminal, report, diff_text, entry_path, repo_root);
+        let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
+        ratatui::restore();
+        result
+    }
+}
+
+impl Drop for TuiSession {
+    fn drop(&mut self) {
+        // Idempotent per `ratatui::restore`'s own contract: a no-op if
+        // `TuiSession::run` already restored the terminal on the ordinary
+        // path, a real safety net if `self` is dropped without `run` ever
+        // being called (e.g. `main.rs` returning early with `?` from the
+        // analysis phase, after `init` succeeded but before a `Report`
+        // exists).
+        ratatui::restore();
+    }
 }
 
 fn run_app(

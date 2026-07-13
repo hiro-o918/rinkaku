@@ -14,6 +14,7 @@ fn should_exclude_test_path_file_from_index_by_default() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected: Vec<ResolvedSymbol> = Vec::new();
@@ -35,6 +36,7 @@ fn should_include_test_path_file_in_index_when_include_tests_is_true() {
         true,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {
@@ -66,6 +68,7 @@ fn should_add_two_numbers() {}
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected: Vec<ResolvedSymbol> = Vec::new();
@@ -88,6 +91,7 @@ fn should_exclude_file_marked_generated_by_attribute_path_from_index_by_default(
         false,
         &generated_paths,
         false,
+        None,
     );
 
     let expected: Vec<ResolvedSymbol> = Vec::new();
@@ -118,6 +122,7 @@ func Foo() int {
         false,
         &HashSet::new(),
         false,
+        None,
     );
 
     let expected: Vec<ResolvedSymbol> = Vec::new();
@@ -149,6 +154,7 @@ func Foo() int {
         false,
         &generated_paths,
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {
@@ -179,6 +185,7 @@ fn should_still_index_ordinary_files_when_a_generated_file_is_excluded() {
         false,
         &HashSet::new(),
         false,
+        None,
     );
 
     let expected_foo: Vec<ResolvedSymbol> = Vec::new();
@@ -219,6 +226,7 @@ fn should_add_two_numbers() {}
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {
@@ -243,6 +251,7 @@ fn should_skip_file_with_unsupported_language_when_building_index() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected: Vec<ResolvedSymbol> = Vec::new();
@@ -270,6 +279,7 @@ fn should_index_definitions_across_multiple_languages() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {

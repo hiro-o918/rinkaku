@@ -17,6 +17,7 @@ fn should_index_definitions_from_file_containing_a_referenced_name() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {
@@ -48,6 +49,7 @@ fn should_skip_indexing_file_whose_content_contains_no_referenced_name() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected: Vec<ResolvedSymbol> = Vec::new();
@@ -79,6 +81,7 @@ fn should_still_index_file_when_referenced_name_appears_incidentally_in_content(
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected = vec![ResolvedSymbol {
@@ -105,6 +108,7 @@ fn should_index_nothing_when_reference_names_is_empty() {
         false,
         &HashSet::new(),
         true,
+        None,
     );
 
     let expected: Vec<ResolvedSymbol> = Vec::new();

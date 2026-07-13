@@ -39,7 +39,7 @@ fn should_produce_deterministic_output_on_repeated_calls() {
     let read_file = fake_reader(HashMap::from_iter(files.iter().copied()));
     let paths: Vec<String> = files.iter().map(|(p, _)| p.to_string()).collect();
 
-    let first = analyze_repo(&paths, &read_file, true, &HashSet::new(), true);
+    let first = analyze_repo(&paths, &read_file, true, &HashSet::new(), true, None);
     // Repeated calls must produce byte-identical `Report`s: the
     // per-file body is pure (no interior mutability, no
     // wall-clock), rayon's `par_iter().collect()` preserves source
@@ -47,7 +47,7 @@ fn should_produce_deterministic_output_on_repeated_calls() {
     // deterministic — so any inequality here means one of those
     // invariants regressed.
     for _ in 0..4 {
-        let again = analyze_repo(&paths, &read_file, true, &HashSet::new(), true);
+        let again = analyze_repo(&paths, &read_file, true, &HashSet::new(), true, None);
         assert_eq!(first, again);
     }
 
