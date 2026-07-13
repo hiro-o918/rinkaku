@@ -11,7 +11,8 @@ use crate::git::cat_file_batch::read_git_show_files_batch;
 use crate::git::commands::{list_git_files, run_git_diff};
 use crate::git::file_read::{read_git_show_file, read_working_tree_file};
 use crate::notes::garbage_input_note;
-use crate::spinner::{AnalysisPhase, Spinner, phase_message};
+use crate::progress::AnalysisProgress;
+use crate::spinner::AnalysisPhase;
 use rinkaku_core::deps::TagsResolver;
 use rinkaku_core::language::language_for_path;
 use rinkaku_core::pipeline::analyze_diff;
@@ -22,10 +23,10 @@ pub(crate) fn run_base_pipeline(
     base: &str,
     head: &str,
     cwd: Option<&std::path::Path>,
-    spinner: &Spinner,
+    progress: &dyn AnalysisProgress,
 ) -> anyhow::Result<(rinkaku_core::render::Report, String)> {
-    log::info!("diffing {base}...{head}");
-    spinner.set_message(phase_message(AnalysisPhase::Diffing));
+    log::debug!("diffing {base}...{head}");
+    progress.set_phase(AnalysisPhase::Diffing);
     let diff_text = run_git_diff(base, head, cwd)?;
     if diff_text.trim().is_empty() {
         eprintln!("note: diff is empty, nothing to analyze");
@@ -64,11 +65,11 @@ pub(crate) fn run_base_pipeline(
         let base = base.to_string();
         move |path: &str| read_git_show_file(cwd, &base, path)
     };
-    let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd, spinner)?;
+    let resolver = build_resolver(cli, &diff_text, &read_file, Some(head), cwd, progress)?;
     let changed_paths = changed_paths(&diff_text)?;
     let generated_paths = resolve_generated_paths(cli, &changed_paths, cwd);
-    log::info!("analyzing diff");
-    spinner.set_message(phase_message(AnalysisPhase::AnalyzingDiff));
+    log::debug!("analyzing diff");
+    progress.set_phase(AnalysisPhase::AnalyzingDiff);
     let report = analyze_diff(
         &diff_text,
         read_file,
@@ -112,18 +113,18 @@ pub(crate) fn build_resolver(
     diff_read_file: impl Fn(&str) -> std::io::Result<String>,
     head: Option<&str>,
     cwd: Option<&std::path::Path>,
-    spinner: &Spinner,
+    progress: &dyn AnalysisProgress,
 ) -> anyhow::Result<Option<TagsResolver>> {
     if cli.deps == 0 {
         return Ok(None);
     }
-    spinner.set_message(phase_message(AnalysisPhase::BuildingDependencyIndex));
+    progress.set_phase(AnalysisPhase::BuildingDependencyIndex);
 
     let reference_names =
         rinkaku_core::pipeline::collect_referenced_names(diff_text, diff_read_file)?;
 
     let paths = list_git_files(cwd)?;
-    log::info!(
+    log::debug!(
         "building dependency index over {} tracked files",
         paths.len()
     );
@@ -156,6 +157,13 @@ pub(crate) fn build_resolver(
             })
             .collect(),
     };
+    // ADR 0033: reports `(files_done, total)` back through `progress` as
+    // `TagsResolver::new`'s sequential indexing loop works through `files`
+    // — a plain closure over `progress` (a `&dyn AnalysisProgress`, already
+    // object-safe) rather than a new abstraction, since
+    // `rinkaku_core::progress::OnProgress` is exactly the `Fn(usize, usize)
+    // + Sync` shape `TagsResolver::new` expects.
+    let on_file_progress = |done: usize, total: usize| progress.report_file_progress(done, total);
     Ok(Some(TagsResolver::new(
         files,
         language_for_path,
@@ -165,6 +173,7 @@ pub(crate) fn build_resolver(
         !cli.exclude_tests,
         &generated_paths,
         cli.include_generated,
+        Some(&on_file_progress),
     )))
 }
 
@@ -182,6 +191,7 @@ pub(crate) fn read_stdin_diff() -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spinner::Spinner;
     use crate::test_util::{init_repo_with_committed_file, run_git};
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
