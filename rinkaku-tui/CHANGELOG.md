@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.6.0](https://github.com/hiro-o918/rinkaku/compare/v0.5.0...v0.6.0) (2026-07-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* the Markdown "## Hotspots" heading is now "## High fan-in symbols"; the JSON "hotspots" field is now "fan_ins"; the Mermaid "hotspot" class is now "fan-in".
+
+### refactor
+
+* rename hotspot vocabulary to fan-in (ADR 0033) ([#101](https://github.com/hiro-o918/rinkaku/issues/101)) ([d8dcc0f](https://github.com/hiro-o918/rinkaku/commit/d8dcc0f29dba399f933c91cfd3693376c61f3b77))
+
+
+### Features
+
+* surface file-size warnings in rinkaku output (ADR 0028) ([#86](https://github.com/hiro-o918/rinkaku/issues/86)) ([00c7c5a](https://github.com/hiro-o918/rinkaku/commit/00c7c5a7aef57f18eaa30acc0c03775af26b54c2))
+* tighten file size thresholds and always show per-file line counts ([#123](https://github.com/hiro-o918/rinkaku/issues/123)) ([e6ff1d0](https://github.com/hiro-o918/rinkaku/commit/e6ff1d0009b5e03102eaf491ba402e1d2dbd5983))
+* **tui:** add a startup splash screen with real progress (ADR 0033) ([#100](https://github.com/hiro-o918/rinkaku/issues/100)) ([38673bc](https://github.com/hiro-o918/rinkaku/commit/38673bcc42450acc2bca132ae770fdbc6ffb310a))
+* **tui:** diff pane follows symbol selection with auto-scroll ([#80](https://github.com/hiro-o918/rinkaku/issues/80)) ([be8d412](https://github.com/hiro-o918/rinkaku/commit/be8d4126162d6f8a1a23e2db440ee8b401c2894d))
+* **tui:** highlight the focused pane border ([#106](https://github.com/hiro-o918/rinkaku/issues/106)) ([30feaf3](https://github.com/hiro-o918/rinkaku/commit/30feaf3b256413c68725011a4f54aa013081aabe))
+* **tui:** keep tests out of production directory ranking and add a trailing Tests section ([#112](https://github.com/hiro-o918/rinkaku/issues/112)) ([5746679](https://github.com/hiro-o918/rinkaku/commit/5746679e6fc6cfaaf59547d87b675775cd1685c4))
+* **tui:** label the contract-change tree badge as api:N ([#97](https://github.com/hiro-o918/rinkaku/issues/97)) ([f90ef0f](https://github.com/hiro-o918/rinkaku/commit/f90ef0f2be4ccc1fd94322f70ce61d5af0eb7dbf))
+* **tui:** make help overlay scrollable ([#85](https://github.com/hiro-o918/rinkaku/issues/85)) ([b9ac8af](https://github.com/hiro-o918/rinkaku/commit/b9ac8afee5b780cbb36b874f56e2f119eafec863))
+* **tui:** move test badge before the file label in entry tree ([#120](https://github.com/hiro-o918/rinkaku/issues/120)) ([53d18bf](https://github.com/hiro-o918/rinkaku/commit/53d18bf8812e346b8656457b1ef994eca3e045e1))
+* **tui:** support mouse wheel scrolling ([#84](https://github.com/hiro-o918/rinkaku/issues/84)) ([745385c](https://github.com/hiro-o918/rinkaku/commit/745385c2b519d46f507f0938ece7f422433bbd19))
+* **tui:** sync tree cursor to symbol when diff pane is scrolled ([#89](https://github.com/hiro-o918/rinkaku/issues/89)) ([79e8e6f](https://github.com/hiro-o918/rinkaku/commit/79e8e6fd50aae07ee4221a5b213c253caea44e72))
+* **tui:** truncate overflowing entry tree rows with ellipsis ([#121](https://github.com/hiro-o918/rinkaku/issues/121)) ([f3441dc](https://github.com/hiro-o918/rinkaku/commit/f3441dcf0975473639d93d70cf77b436100a39c3))
+
+
+### Bug Fixes
+
+* **tui:** attribute a hunk to every intersecting symbol in the diff pane ([#87](https://github.com/hiro-o918/rinkaku/issues/87)) ([2d2a322](https://github.com/hiro-o918/rinkaku/commit/2d2a32259d4710c679aeac507ff853a2217737d3))
+* **tui:** correct splash logo misspelling "rinkarku" to "rinkaku" ([#118](https://github.com/hiro-o918/rinkaku/issues/118)) ([169f978](https://github.com/hiro-o918/rinkaku/commit/169f978702bc329ed89523ec38b25e664eb4b06c))
+* **tui:** drop DIM modifier from DarkGray-styled text for readability ([#104](https://github.com/hiro-o918/rinkaku/issues/104)) ([2fed439](https://github.com/hiro-o918/rinkaku/commit/2fed4399876a8d1a3fb30bea575f2951900f37f6))
+* **tui:** keep jump popup candidates one row each so the window math holds ([#83](https://github.com/hiro-o918/rinkaku/issues/83)) ([e22a655](https://github.com/hiro-o918/rinkaku/commit/e22a6553c6bb517fa814fc76e81184778d9a5318))
+* **tui:** restore Modifier import broken by concurrent merges ([#108](https://github.com/hiro-o918/rinkaku/issues/108)) ([4ff244b](https://github.com/hiro-o918/rinkaku/commit/4ff244b97d1b2347401a116a9aba147b448b36e5))
+* unify release-please into a single-PR release cycle ([#73](https://github.com/hiro-o918/rinkaku/issues/73)) ([796d249](https://github.com/hiro-o918/rinkaku/commit/796d249ee7067ede9207dcd54a643e028f0e123a))
+
+
+### Documentation
+
+* renumber duplicate ADR 0033 (fan-in rename) to 0034 ([#105](https://github.com/hiro-o918/rinkaku/issues/105)) ([e4d6f70](https://github.com/hiro-o918/rinkaku/commit/e4d6f703f06a6bc8fdd99ac6ddadabd7bd97e114))
+
+
+### Miscellaneous
+
+* release main ([#50](https://github.com/hiro-o918/rinkaku/issues/50)) ([8791d00](https://github.com/hiro-o918/rinkaku/commit/8791d00edeba0f84d7b028ce46a05e7f4ec0c178))
+* release main ([#74](https://github.com/hiro-o918/rinkaku/issues/74)) ([5e0986f](https://github.com/hiro-o918/rinkaku/commit/5e0986f3048457ccee5283a3e7770fc149c7e4c7))
+* release main ([#76](https://github.com/hiro-o918/rinkaku/issues/76)) ([e1b7943](https://github.com/hiro-o918/rinkaku/commit/e1b7943d2df1a12320f1d1fe4c29814a1b635c1f))
+* release main ([#77](https://github.com/hiro-o918/rinkaku/issues/77)) ([b8d0393](https://github.com/hiro-o918/rinkaku/commit/b8d039320ef8e3f0455a4fc2bdadf5ba8e2440e6))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.5.0 to 0.6.0
+
 ## [0.5.0](https://github.com/hiro-o918/rinkaku/compare/v0.4.0...v0.5.0) (2026-07-13)
 
 
