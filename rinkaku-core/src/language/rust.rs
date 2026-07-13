@@ -92,9 +92,11 @@ impl LanguageSupport for RustSupport {
     /// misclassified as production code. Matched by path *segment*
     /// (directory name or file stem), not substring, so `latest_stats.rs`
     /// and `contests/mod.rs` stay production while `nav_tests/mod.rs` and
-    /// `foo_tests.rs` are recognized. Unit tests colocated in an inline
-    /// `#[cfg(test)] mod tests { ... }` block are not caught by path at
-    /// all — see `is_test_definition`.
+    /// `foo_tests.rs` are recognized; the bare `tests` match applies equally
+    /// to a directory segment (`tests/it.rs`) and a file stem
+    /// (`src/tests.rs`, ADR 0028's own split-file example). Unit tests
+    /// colocated in an inline `#[cfg(test)] mod tests { ... }` block are not
+    /// caught by path at all — see `is_test_definition`.
     fn is_test_path(&self, path: &str) -> bool {
         path.split('/').any(|segment| {
             let stem = segment.strip_suffix(".rs").unwrap_or(segment);
@@ -369,6 +371,7 @@ mod tests {
         true
     )]
     #[case::should_return_true_when_underscore_tests_is_the_file_stem("src/foo_tests.rs", true)]
+    #[case::should_return_true_when_tests_is_the_bare_file_stem("src/tests.rs", true)]
     #[case::should_return_false_when_filename_merely_ends_in_tests_substring(
         "src/latest_stats.rs",
         false
