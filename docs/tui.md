@@ -19,8 +19,11 @@ only becomes load-bearing when the output would otherwise not be TUI
 - **Tree pane (left)** — a directory tree of *changed files*, mirroring
   your repository layout. Rows carry badges: `chg:N` changed symbols,
   `api:N` contract changes (added / removed / signature-changed), `ref:N`
-  fan-in (hotspot aggregate); directories in a dependency cycle are
-  marked `(cycle)`. Symbol rows show a kind abbreviation (`fn`, `struct`, ...)
+  fan-in (hotspot aggregate). `chg:`/`ref:` numbers are cyan
+  (informational); `api:` is yellow, the same warning color as the
+  file-size `warn:` badge, flagging it as the one badge worth a second
+  look. Directories in a dependency cycle are marked `(cycle)`. Symbol
+  rows show a kind abbreviation (`fn`, `struct`, ...)
   and a classification marker: `+` added, `~` signature-changed, `x`
   removed. Files rinkaku couldn't analyze appear dimmed as
   `(skipped: <reason>)`; whole-test files as `[test] (N symbols)`.
