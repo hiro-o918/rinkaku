@@ -129,6 +129,23 @@ the mirror image. A recorded location is `(symbol_id, right_pane_scroll)`
 like the order mode or which overlay was open. Both are no-ops (with a
 status message) when their respective stack is empty.
 
+`crate::lib::translate_key` maps *both* a real `Ctrl-i` keypress
+(`KeyCode::Char('i')` + `CONTROL`) and plain `KeyCode::Tab` to
+`InputKey::JumpForward` — confirmed necessary via manual testing against a
+real terminal (tmux), not assumed from documentation: Ctrl-I and Tab share
+the same control code (0x09) at the terminal protocol level, so without
+Kitty's keyboard-enhancement protocol (which this crate does not enable),
+a genuine `Ctrl-i` press arrives as `KeyCode::Tab`, and the modifier-based
+pattern alone silently never matches in practice. `Ctrl-o` needed no such
+fallback (0x0F is not reused by another named key crossterm reports).
+
+**Verification note**: this Tab/Ctrl-I mapping gap was only caught by
+actually running the built binary in a real terminal and pressing the key
+— unit tests alone (which construct `KeyEvent`s directly with the
+modifier already set) could not have caught it, and did not. This is the
+exact class of bug CLAUDE.md's "dynamic verification" review step exists
+to catch.
+
 **5. The popup's view-model is pure, built the same way `crate::help`'s
 content is** — a plain struct (`JumpCandidate { id, name, path }` list)
 computed once when the popup opens, not re-derived on every draw

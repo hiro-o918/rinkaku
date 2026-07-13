@@ -460,6 +460,17 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::Quit),
         KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
         KeyCode::Char('o') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::JumpBack),
+        // Ctrl-I and Tab share the same control code (0x09) at the terminal
+        // protocol level — without Kitty's keyboard-enhancement protocol
+        // (which this crate does not enable), a real Ctrl-I keypress
+        // arrives here as plain `KeyCode::Tab`, not `KeyCode::Char('i')` +
+        // `CONTROL` (confirmed via manual tmux testing against a real
+        // terminal, not just documentation: the `Char('i') + CONTROL` arm
+        // alone never matched a real Ctrl-I press). Both patterns are kept
+        // so this still works correctly in an environment that *does*
+        // report the modifier form (e.g. a test harness constructing the
+        // event directly, as this module's own tests do).
+        KeyCode::Tab => Some(InputKey::JumpForward),
         KeyCode::Char('i') if modifiers.contains(KeyModifiers::CONTROL) => {
             Some(InputKey::JumpForward)
         }
@@ -1005,6 +1016,23 @@ mod tests {
         let app = App::new(&report);
 
         let actual = translate_key(KeyCode::Char('i'), KeyModifiers::CONTROL, &app);
+
+        assert_eq!(Some(InputKey::JumpForward), actual);
+    }
+
+    #[test]
+    fn should_translate_tab_to_jump_forward() {
+        // A real Ctrl-I keypress arrives here as `KeyCode::Tab`, not
+        // `KeyCode::Char('i')` + `CONTROL` — confirmed via manual testing
+        // against a real terminal (tmux), since Ctrl-I and Tab share the
+        // same control code (0x09) without Kitty's keyboard-enhancement
+        // protocol, which this crate does not enable. Without this mapping,
+        // Ctrl-i silently did nothing in practice despite the
+        // `Char('i') + CONTROL` test above passing.
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Tab, KeyModifiers::NONE, &app);
 
         assert_eq!(Some(InputKey::JumpForward), actual);
     }
