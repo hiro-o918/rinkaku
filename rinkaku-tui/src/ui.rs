@@ -1164,7 +1164,7 @@ fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
             Style::default().fg(Color::Magenta),
         ));
         lines.push(Line::raw(
-            "Changed test-code symbols in this file are excluded from the default view (see --include-tests).",
+            "Changed test-code symbols in this file are excluded from the view because --exclude-tests is set (omit it to include them).",
         ));
         if !detail.symbols.is_empty() {
             lines.push(Line::raw(""));

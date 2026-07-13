@@ -115,11 +115,16 @@ struct Cli {
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=1))]
     deps: u8,
 
-    /// Include test symbols in the "Change graph"/"Definitions" output
-    /// instead of excluding them by default and summarizing counts under
-    /// "Tests" (ADR 0009).
+    /// Exclude test symbols from the "Change graph"/"Definitions" output
+    /// and summarize their per-file counts under a "Tests" section
+    /// instead (ADR 0025, superseding the ADR 0009 default). Without
+    /// this flag, test symbols appear in the graph and definitions like
+    /// any other symbol — the default the Markdown/JSON output is
+    /// designed around now that its primary audience is LLM reviewers
+    /// (humans read the TUI, which badges test files rather than
+    /// omitting them).
     #[arg(long, default_value_t = false)]
-    include_tests: bool,
+    exclude_tests: bool,
 
     /// Include files `.gitattributes` marks `-diff` or `linguist-generated`
     /// instead of skipping them by default (ADR 0010).
@@ -280,7 +285,10 @@ fn main() -> anyhow::Result<()> {
         let report = rinkaku_core::pipeline::analyze_repo(
             &paths,
             read_working_tree_file,
-            cli.include_tests,
+            // Core's `include_tests: bool` keeps its original meaning
+            // ("true means include tests"). Only the CLI-side polarity is
+            // flipped by ADR 0025, so translate here.
+            !cli.exclude_tests,
             &generated_paths,
             cli.include_generated,
         );
@@ -308,7 +316,10 @@ fn main() -> anyhow::Result<()> {
             resolver
                 .as_ref()
                 .map(|r| r as &dyn rinkaku_core::deps::Resolver),
-            cli.include_tests,
+            // Same translation as the `analyze_repo` call above: core's
+            // `include_tests` is the semantic name, ADR 0025 flips only
+            // the CLI-facing polarity.
+            !cli.exclude_tests,
             &generated_paths,
             cli.include_generated,
         )?;
@@ -596,7 +607,9 @@ fn run_base_pipeline(
         resolver
             .as_ref()
             .map(|r| r as &dyn rinkaku_core::deps::Resolver),
-        cli.include_tests,
+        // See sibling `analyze_diff` call in `main` for why this negates
+        // `exclude_tests` rather than passing it straight through.
+        !cli.exclude_tests,
         &generated_paths,
         cli.include_generated,
     )?;
@@ -731,12 +744,13 @@ fn repo_outline_empty_note(report: &rinkaku_core::render::Report) -> Option<&'st
 /// a directory with no git repository would make `list_git_files` fail,
 /// so a passing `Ok(None)` there is proof the scan never ran).
 ///
-/// `cli.include_tests` is threaded straight through to `TagsResolver::new`
-/// (ADR 0009), so the repo-wide index excludes test symbols by the same
-/// default `analyze_diff` uses for the diff's own symbols — without this, a
-/// changed production symbol's "Depends on:" could resolve to a same-named
-/// test helper/fixture elsewhere in the repo, which is almost always a
-/// false match rather than a real dependency. `cli.include_generated` is
+/// `!cli.exclude_tests` is threaded through to `TagsResolver::new` (ADR
+/// 0009's exclusion mechanism, retained under ADR 0025's inverted CLI
+/// flag), so the repo-wide index applies the same test-inclusion decision
+/// `analyze_diff` uses for the diff's own symbols. With `--exclude-tests`,
+/// this stops a changed production symbol's "Depends on:" from resolving
+/// to a same-named test helper/fixture elsewhere in the repo (almost
+/// always a false match rather than a real dependency). `cli.include_generated` is
 /// threaded the same way, alongside a `generated_paths` set resolved for
 /// every tracked path via `check_generated_paths_batch` (ADR 0010's
 /// `.gitattributes` check, run once over the whole index rather than the
@@ -801,7 +815,9 @@ fn build_resolver(
         files,
         language_for_path,
         &reference_names,
-        cli.include_tests,
+        // Same CLI→core polarity flip as the `analyze_diff` /
+        // `analyze_repo` calls above (ADR 0025).
+        !cli.exclude_tests,
         &generated_paths,
         cli.include_generated,
     )))
@@ -1912,7 +1928,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -1931,7 +1947,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: true,
@@ -2017,7 +2033,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -2036,7 +2052,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -2055,7 +2071,7 @@ mod tests {
             pr: None,
             format: Some(Format::Json),
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -2081,7 +2097,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 0,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -2099,7 +2115,7 @@ mod tests {
     }
 
     #[test]
-    fn should_set_include_tests_when_include_tests_flag_given() {
+    fn should_set_exclude_tests_when_exclude_tests_flag_given() {
         let expected = Cli {
             command: None,
             base: None,
@@ -2107,14 +2123,40 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: true,
+            exclude_tests: true,
             include_generated: false,
             entry: None,
             tui: false,
         };
-        let actual = Cli::parse_from(["rinkaku", "--include-tests"]);
+        let actual = Cli::parse_from(["rinkaku", "--exclude-tests"]);
 
         assert_eq!(expected, actual);
+    }
+
+    // ADR 0025's flipped default: with no test-related flag given, the
+    // parsed `Cli` must land on `exclude_tests: false` — i.e. tests are
+    // included in Change graph/Definitions by default. The
+    // `should_default_to_markdown_head_and_no_base_when_no_args_given`
+    // above already exercises the whole default `Cli` shape, but this
+    // one pins the ADR 0025 decision specifically so a future default
+    // flip has to update this test on purpose rather than by
+    // consequence.
+    #[test]
+    fn should_default_to_including_tests_when_no_flag_given() {
+        let actual = Cli::parse_from(["rinkaku"]);
+
+        assert_eq!(false, actual.exclude_tests);
+    }
+
+    // Companion to the above: passing the old `--include-tests` flag
+    // must now fail parsing, so a stale script surfaces as an error
+    // instead of silently doing nothing. Pins the CLI break called out
+    // in ADR 0025's Consequences.
+    #[test]
+    fn should_reject_the_removed_include_tests_flag() {
+        let actual = Cli::try_parse_from(["rinkaku", "--include-tests"]);
+
+        assert!(actual.is_err());
     }
 
     #[test]
@@ -2126,7 +2168,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: true,
             entry: None,
             tui: false,
@@ -2145,7 +2187,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: Some("src/api".to_string()),
             tui: false,
@@ -2164,7 +2206,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -2183,7 +2225,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -2202,7 +2244,7 @@ mod tests {
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -2236,7 +2278,7 @@ mod tests {
             pr: Some("76".to_string()),
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -3067,7 +3109,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -3094,7 +3136,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: true,
             entry: None,
             tui: false,
@@ -3558,7 +3600,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             pr: None,
             format: None,
             deps: 0,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -3592,7 +3634,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -3638,7 +3680,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
             pr: None,
             format: None,
             deps: 1,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,
@@ -3685,7 +3727,15 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
     // funnel through analyze_diff, so run_base_pipeline's coverage extends
     // to the stdin route too).
     #[test]
-    fn should_produce_test_only_report_without_garbage_input_shape_when_diff_touches_only_a_test() {
+    fn should_produce_test_only_report_without_garbage_input_shape_when_diff_touches_only_a_test_under_exclude_tests()
+     {
+        // ADR 0025 flipped the default to include tests, so the
+        // "test-only diff produces empty files + non-empty tests
+        // summary" shape this test pins down only occurs under
+        // `--exclude-tests`. The regression this guards is still real:
+        // garbage_input_note must not flag such a legitimate result as
+        // garbage input, and the test-detection wiring must actually
+        // populate `Report.tests` when the flag is set.
         let dir = tempfile::TempDir::new().expect("create tempdir");
         init_repo_with_committed_file(
             dir.path(),
@@ -3716,7 +3766,7 @@ fn should_add_two_numbers() {
             pr: None,
             format: None,
             deps: 0,
-            include_tests: false,
+            exclude_tests: true,
             include_generated: false,
             entry: None,
             tui: false,
@@ -3736,6 +3786,60 @@ fn should_add_two_numbers() {
             None,
             garbage_input_note("dummy non-empty diff text", &actual)
         );
+    }
+
+    // Companion to the above under the new default: a test-only diff
+    // with `exclude_tests: false` (the ADR 0025 default) should now put
+    // the test symbol into `files` like any production symbol, and
+    // leave `tests` empty. Pins that the flag actually flips the
+    // resulting shape — without this, the previous test would only
+    // prove the exclusion branch, and a regression that ignored the
+    // flag entirely could pass.
+    #[test]
+    fn should_include_test_symbol_in_files_when_diff_touches_only_a_test_under_default() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        init_repo_with_committed_file(
+            dir.path(),
+            "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(1, 1 + 0);
+}
+",
+        );
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "\
+#[test]
+fn should_add_two_numbers() {
+    assert_eq!(2, 1 + 1);
+}
+",
+        )
+        .expect("edit src/lib.rs");
+        run_git(dir.path(), &["add", "src/lib.rs"]);
+        run_git(dir.path(), &["commit", "-m", "fix test assertion"]);
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: None,
+            deps: 0,
+            exclude_tests: false,
+            include_generated: false,
+            entry: None,
+            tui: false,
+        };
+        let (actual, _diff_text) = run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()))
+            .expect("run_base_pipeline should succeed for a test-only diff");
+
+        let expected_tests: Vec<rinkaku_core::render::TestFileSummary> = Vec::new();
+        assert_eq!(expected_tests, actual.tests);
+        assert_eq!(1, actual.files.len());
+        assert_eq!(1, actual.files[0].symbols.len());
+        assert_eq!(true, actual.files[0].symbols[0].is_test);
     }
 
     // ADR 0014 end-to-end: `run_base_pipeline` must actually wire a
@@ -3765,7 +3869,7 @@ fn should_add_two_numbers() {
             pr: None,
             format: None,
             deps: 0,
-            include_tests: false,
+            exclude_tests: false,
             include_generated: false,
             entry: None,
             tui: false,

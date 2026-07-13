@@ -77,11 +77,12 @@ pub struct Report {
     /// entry points used to render "Change graph" in Markdown, exposed here
     /// too so JSON consumers get the same structure without recomputing it.
     pub graph: SymbolGraph,
-    /// Per-file counts of changed test symbols excluded from `files` by
-    /// default (ADR 0009) — empty when `--include-tests` is given, since
-    /// test symbols then stay in `files` like any other symbol instead of
-    /// being summarized here. Source order (the order files were first
-    /// encountered in the diff), same as `files`.
+    /// Per-file counts of changed test symbols excluded from `files`
+    /// under `--exclude-tests` (ADR 0009's mechanism; ADR 0025 flipped
+    /// the default so this is now opt-in). Empty in the default run
+    /// (test symbols stay in `files` like any other symbol) and only
+    /// populated when the CLI passes `--exclude-tests`. Source order (the
+    /// order files were first encountered in the diff), same as `files`.
     pub tests: Vec<TestFileSummary>,
     /// Fan-in hotspots (ADR 0013): changed symbols referenced by two or more
     /// other changed symbols, sorted by fan-in descending. Derived from
