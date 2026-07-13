@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.5.0](https://github.com/hiro-o918/rinkaku/compare/v0.4.1...v0.5.0) (2026-07-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* any script or CI invocation of `rinkaku --include-tests` now fails to parse and must switch to omitting the flag (new default) or to `--exclude-tests` (previous default's exclusion). The tool has not shipped a stable CLI yet.
+
+### Features
+
+* add interactive TUI with directory-tree entry view ([#49](https://github.com/hiro-o918/rinkaku/issues/49)) ([29665e5](https://github.com/hiro-o918/rinkaku/commit/29665e5bf9e0395733088babc46bb5eebb56f566))
+* classify changed symbols by contract impact ([#45](https://github.com/hiro-o918/rinkaku/issues/45)) ([b8a8b37](https://github.com/hiro-o918/rinkaku/commit/b8a8b37ab6af44fae5e6bdc2db0891f3d7f545d0))
+* default to including test symbols; rename --include-tests to --exclude-tests ([#69](https://github.com/hiro-o918/rinkaku/issues/69)) ([56a98b9](https://github.com/hiro-o918/rinkaku/commit/56a98b98c365902d8b8c355a1f1ea8ff5660248f))
+* detect generated files by content markers and drop them from output ([#39](https://github.com/hiro-o918/rinkaku/issues/39)) ([506f62e](https://github.com/hiro-o918/rinkaku/commit/506f62ef8565401a56c2c464a9b696e86aed2e0e))
+* entry-path pivot — re-root the graph at a chosen path ([#56](https://github.com/hiro-o918/rinkaku/issues/56)) ([470f85b](https://github.com/hiro-o918/rinkaku/commit/470f85b99b242f93241ce5a27af4976629ad0b2f))
+* exclude test symbols and generated files from output by default ([#38](https://github.com/hiro-o918/rinkaku/issues/38)) ([44d4e3b](https://github.com/hiro-o918/rinkaku/commit/44d4e3bee9e96bd0e366fe7fd75ce41d87e6f898))
+* mermaid output format and PR report GitHub Action ([#59](https://github.com/hiro-o918/rinkaku/issues/59)) ([b706067](https://github.com/hiro-o918/rinkaku/commit/b70606719d1427d8cb69ff007ab2b43251528ad2))
+* render output as entry-point trees over the changed-symbol graph ([#35](https://github.com/hiro-o918/rinkaku/issues/35)) ([1b53bdc](https://github.com/hiro-o918/rinkaku/commit/1b53bdc4e72d99fe45703cfd989aba1b9e021082))
+* surface fan-in hotspots in rendered output ([#43](https://github.com/hiro-o918/rinkaku/issues/43)) ([b38cf86](https://github.com/hiro-o918/rinkaku/commit/b38cf867fd197e897229bd580d31708457368c59))
+* **tui:** add diff pane and directory/file detail views ([#51](https://github.com/hiro-o918/rinkaku/issues/51)) ([23ae23b](https://github.com/hiro-o918/rinkaku/commit/23ae23b620950cb015451367b3012021293a0122))
+* **tui:** rename the pivot pane to blast radius ([#64](https://github.com/hiro-o918/rinkaku/issues/64)) ([f8b188f](https://github.com/hiro-o918/rinkaku/commit/f8b188f67a9db2ece2c552afa8001f7f3eaf0e29))
+* whole-repo outline as the default input mode ([#52](https://github.com/hiro-o918/rinkaku/issues/52)) ([b8f551a](https://github.com/hiro-o918/rinkaku/commit/b8f551a24c02684b880bfe7071f1073cb8509d38))
+
+
+### Bug Fixes
+
+* bump rinkaku-core dep to 0.2.0 in rinkaku and rinkaku-tui ([#72](https://github.com/hiro-o918/rinkaku/issues/72)) ([886cb05](https://github.com/hiro-o918/rinkaku/commit/886cb05a76af602e9fa81166e05a74884fa3e711))
+* surface git stderr when cat-file batch write fails ([#41](https://github.com/hiro-o918/rinkaku/issues/41)) ([2b0bd31](https://github.com/hiro-o918/rinkaku/commit/2b0bd318183c2b1ad666ec442b394792f2a70b10))
+* **tui:** resolve source view paths against the repository root ([#57](https://github.com/hiro-o918/rinkaku/issues/57)) ([0ff7c01](https://github.com/hiro-o918/rinkaku/commit/0ff7c01487844c66230ab3cfb50d1d4dcc4e245a))
+
 ## [0.4.1](https://github.com/hiro-o918/rinkaku/compare/v0.4.0...v0.4.1) (2026-07-12)
 
 
