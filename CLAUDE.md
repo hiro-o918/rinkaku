@@ -149,6 +149,10 @@ one context window.
   `rinkaku-core/src/render/` split Markdown, Mermaid, and JSON
   rendering into sibling modules because each is an independent output
   format, not because the numbers demanded three parts.
+- **The thresholds are ceilings, not licenses.** A module that mixes
+  several responsibilities should be split as soon as the mixture
+  appears, even while the file is comfortably under every threshold.
+  Don't wait for a line count to force the obvious split.
 - **rinkaku's own warning is authoritative.** When
   `rinkaku --base main` (from a trusted `main` build, per the
   dogfooding rule above) prints a `## File size warnings` entry for a
@@ -168,4 +172,12 @@ one context window.
   abstraction, or breaking a public API/output format. Write the ADR in
   `docs/adr/` (MADR-style: Status/Context/Decision/Alternatives/
   Consequences) before implementing the decision.
-- Comments explain *why*, not *what* — avoid restating code in prose.
+- **Write code clean enough that it needs no narration.** Before
+  writing a comment, try to make it unnecessary: extract a well-named
+  function or variable instead of explaining a block in prose. A
+  comment earns its place only when it records something the code
+  cannot express — *why* this approach, *why not* the obvious
+  alternative, or an external constraint/invariant the compiler cannot
+  see. Delete comments that restate the code; a file that needs many
+  comments to be readable is a restructuring smell, not a
+  documentation gap.
