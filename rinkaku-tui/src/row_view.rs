@@ -215,7 +215,7 @@ enum BadgeContext {
 ///   for fan-in) conveyed no semantic hint on their own to a first-time
 ///   reviewer — `!` in particular read as generic "warning" rather than
 ///   pointing at *what* changed. The fan-in badge's label itself was
-///   later relabeled again, from `ref:` to `fan-in:` (ADR 0033): `ref:`
+///   later relabeled again, from `ref:` to `fan-in:` (ADR 0034): `ref:`
 ///   collided visually with the unrelated `gr` ("go to references")
 ///   keybinding despite naming a different concept, and "hotspot" (the
 ///   underlying aggregation's original name) collided with an unrelated

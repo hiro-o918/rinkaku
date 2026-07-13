@@ -1,5 +1,5 @@
 //! The three optional post-graph sections — "## Skipped files",
-//! "## High fan-in symbols" (ADR 0013, named per ADR 0033), and
+//! "## High fan-in symbols" (ADR 0013, named per ADR 0034), and
 //! "## File size warnings" (ADR 0028) — plus the ADR 0028 shape of
 //! `file_size_warnings` in JSON output. Pins that each section is
 //! emitted only when its list is non-empty and that they land in the

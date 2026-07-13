@@ -3,7 +3,7 @@
 //! and read-file error paths, multi-file mixed outcomes, Go
 //! interface/receiver nesting end-to-end (ADR 0012 decision 2), resolver
 //! invocation contract (`Some`/`None`), and fan-in wiring (ADR 0013,
-//! named per ADR 0033, end-to-end).
+//! named per ADR 0034, end-to-end).
 
 use super::{empty_graph, fake_reader};
 use crate::diff::LineRange;

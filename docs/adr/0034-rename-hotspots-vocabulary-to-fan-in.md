@@ -1,4 +1,4 @@
-# 0033. Rename the "hotspot" vocabulary to "fan-in"
+# 0034. Rename the "hotspot" vocabulary to "fan-in"
 
 - Status: accepted
 - Date: 2026-07-13

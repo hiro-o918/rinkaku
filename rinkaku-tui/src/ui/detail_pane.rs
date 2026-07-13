@@ -203,7 +203,7 @@ pub(crate) fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
                     Some(Classification::BodyOnly) | None => " ",
                 }
             };
-            // ADR 0013 amendment (2026-07-13, relabeled by ADR 0033): the
+            // ADR 0013 amendment (2026-07-13, relabeled by ADR 0034): the
             // compact fan-in badge matches `row_view::push_badge_spans`'
             // `fan-in:N` labeling so the two panes agree on the badge
             // legend.
