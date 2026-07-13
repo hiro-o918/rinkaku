@@ -23,6 +23,17 @@ Both share one engine: tree-sitter extraction of changed symbols, 1-hop
 dependency expansion, fan-in / contract-change / entry-point
 summarizers. Rust, Go, Python, and TypeScript out of the box.
 
+The TUI greets you with this on startup, while it scans the diff:
+
+```
+      _       _              _
+     (_)     | |            | |
+ _ __ _ _ __ | | ____ _ _ __| |___   _
+| '__| | '_ \| |/ / _` | '__| / / | | |
+| |  | | | | |   < (_| | |  | . \ |_| |
+|_|  |_|_| |_|_|\_\__,_|_|  |_|\_\__,_|
+```
+
 ## Try it in 30 seconds
 
 ```sh
