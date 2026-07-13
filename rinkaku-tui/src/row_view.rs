@@ -86,28 +86,28 @@ pub fn entry_row_line(
         }
         NodeKind::File => {
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
+            // The `[test] (N symbols)` badge is placed *before* the file
+            // label rather than trailing after the badges below: a long
+            // label plus badges can overflow the pane width, and a
+            // trailing badge is the first thing truncation clips away
+            // (see `crate::ui`'s row-truncation), which would hide the
+            // one signal ("this is a test file") a reviewer most needs
+            // to keep visible at a glance.
+            if let Some(count) = row.node.test_symbol_count {
+                spans.push(test_badge_span(count));
+                spans.push(Span::raw(" "));
+            }
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
             spans.push(Span::raw(" "));
             push_badge_spans(&mut spans, &row.node.badges, BadgeContext::File);
             // `skip_reason` is mutually exclusive with `test_symbol_count`
             // (`crate::tree::TreeNode::skip_reason`'s own doc comment: a
             // skipped file has no `FileReport`/`TestFileSummary` entry of
-            // its own), so this `if`/`else if` only ever needs to choose
-            // between "skipped" and "has a test count" — but `test_symbol_count`
-            // is *not* exclusive with real `symbols`/badges shown above (a
-            // mixed file legitimately has both, `TreeNode::test_symbol_count`'s
-            // own doc comment), so the test badge still renders alongside the
-            // ordinary changed-symbol badges for such a row rather than being
-            // hidden by them. The priority (skip reason first, when present)
-            // matches `crate::ui::file_detail_lines`'s own skip-reason-first
-            // early return, so the two panes never disagree about which
-            // explanation wins.
+            // its own), so a skip reason and the test badge never both
+            // need to render for the same row.
             if let Some(reason) = row.node.skip_reason {
                 spans.push(Span::raw(" "));
                 spans.push(skip_reason_span(reason));
-            } else if let Some(count) = row.node.test_symbol_count {
-                spans.push(Span::raw(" "));
-                spans.push(test_badge_span(count));
             }
         }
         NodeKind::Symbol(symbol_ref) => {
@@ -348,7 +348,7 @@ fn severity_color(severity: FileSizeSeverity) -> Color {
 /// extracted from it, so it reads visually as "less relevant" than an
 /// analyzed file, same intent as `symbol_name_style`'s dimming of a removed
 /// symbol), plain otherwise — including a whole-test-file row, which is
-/// still an ordinarily-styled label with its own `[test]` badge appended
+/// still an ordinarily-styled label with its own `[test]` badge rendered
 /// separately (see `test_badge_span`) rather than dimmed, since a test file
 /// is not "uninteresting", just excluded from the default symbol-level view
 /// (ADR 0009).
