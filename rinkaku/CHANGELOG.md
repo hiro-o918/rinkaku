@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3](https://github.com/hiro-o918/rinkaku/compare/v0.5.2...v0.5.3) (2026-07-13)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.3.0 to 0.4.0
+    * rinkaku-tui bumped from 0.3.0 to 0.4.0
+
 ## [0.5.2](https://github.com/hiro-o918/rinkaku/compare/v0.5.1...v0.5.2) (2026-07-13)
 
 
