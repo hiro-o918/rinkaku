@@ -155,7 +155,7 @@ one context window.
   Don't wait for a line count to force the obvious split.
 - **rinkaku's own warning is authoritative.** When
   `rinkaku --base main` (from a trusted `main` build, per the
-  dogfooding rule above) prints a `## File size warnings` entry for a
+  dogfooding rule above) prints a warn/split entry in `## File sizes` for a
   file this PR touches, treat it as a review-blocker hint: either
   perform the split in the same PR, or justify the continued growth
   in the PR body. Do not merge past the warning silently.
