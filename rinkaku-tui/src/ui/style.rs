@@ -5,7 +5,7 @@
 //! background tint" composition (ADR 0018).
 
 use crate::highlight::{PALETTE, TokenSpan};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 /// Splits `content` into styled spans per `spans` (byte-offset [`TokenSpan`]s
