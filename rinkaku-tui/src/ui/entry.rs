@@ -80,9 +80,7 @@ pub(crate) fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
     let cursor = app.nav().cursor();
     let ranks = app.ranks();
 
-    // 2 rows/columns for the top/bottom and left/right border, matching
-    // `render_scrollable_pane`'s own `saturating_sub(2)` convention for a
-    // bordered pane's inner height/width.
+    // 2 rows/columns reserved for the pane's own border.
     let viewport_height = area.height.saturating_sub(2) as usize;
     let viewport_width = area.width.saturating_sub(2) as usize;
     let (start, end, above, below) =
@@ -111,10 +109,8 @@ pub(crate) fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    // No `.wrap(...)`: `windowed_rows_with_indicators`' one-row-per-item
-    // window math requires each row to stay exactly one rendered row
-    // (`draw_jump_popup`'s doc comment on the same constraint), so an
-    // overflowing row is truncated with `…` rather than wrapped.
+    // No `.wrap(...)`: `windowed_rows_with_indicators` requires one row
+    // per item, so overflow is truncated with `…` instead.
     let lines: Vec<Line<'static>> = lines
         .iter()
         .map(|line| truncate_line_to_width(line, viewport_width))
