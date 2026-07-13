@@ -14,12 +14,18 @@ On each pull request, the action:
 1. **Resolves a rinkaku binary** — downloads a GitHub Release asset by
    default, or uses a caller-provided binary (see [Inputs](#inputs)).
 2. **Runs it against the PR's diff**, producing a Markdown report and
-   (when the resolved binary supports it) a `--format mermaid` graph.
-3. **Composes both into a single comment body** — the mermaid graph up
-   front (rendered natively by GitHub), the full Markdown outline
-   collapsed underneath — and posts or updates a **sticky** comment on
-   the PR: every run on the same PR edits the same comment (matched by
-   an HTML marker) instead of piling up a new one per push.
+   (when the resolved binary supports them) a `--format mermaid` graph
+   and a `--format digest` "API changes" summary.
+3. **Composes the mermaid graph and the digest into a single comment
+   body** — the mermaid graph up front (rendered natively by GitHub,
+   with a one-line color legend underneath), an "API changes" digest
+   collapsed in a `<details>` section below it (added/signature-changed/
+   removed symbols only — ADR 0036) — and posts or updates a **sticky**
+   comment on the PR: every run on the same PR edits the same comment
+   (matched by an HTML marker) instead of piling up a new one per push.
+   The full Markdown report is still generated and exposed via the
+   `markdown-path` output, it just no longer inflates the comment body
+   itself — see [Outputs](#outputs).
 
 On a fork PR the run still succeeds (exit 0) — see
 [Fork PR fallback](#fork-pr-fallback) below.
@@ -100,8 +106,9 @@ by the `binary` input:
 | Output | Description |
 | --- | --- |
 | `mermaid-path` | Path to the generated mermaid report file. Empty when the resolved rinkaku binary predates `--format mermaid` (see `markdown-only`). |
-| `markdown-path` | Path to the generated Markdown report file. |
-| `markdown-only` | `"true"` when the resolved rinkaku binary predates `--format mermaid` and the run fell back to a Markdown-only report. |
+| `digest-path` | Path to the generated "API changes" digest file (ADR 0036). Empty when the resolved rinkaku binary predates `--format digest` (see `markdown-only`). |
+| `markdown-path` | Path to the generated Markdown report file. Always produced, but no longer embedded in the sticky comment body — only the mermaid graph and digest are (see [What it does](#what-it-does)). |
+| `markdown-only` | `"true"` when the resolved rinkaku binary predates `--format mermaid` and/or `--format digest`, and the comment fell back to a plain note in place of whichever section(s) are unavailable. |
 
 ## Trust boundary
 

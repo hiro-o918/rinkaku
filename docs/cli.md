@@ -21,6 +21,7 @@ processors.
 rinkaku --base main --format md        # Markdown (default when stdout is not a TTY)
 rinkaku --base main --format json      # Structured JSON for tooling
 rinkaku --base main --format mermaid   # A flowchart for pasting into a PR comment
+rinkaku --base main --format digest    # API-changes-only list for a PR comment's <details>
 ```
 
 `--tui` replaces the output stage entirely and conflicts with
@@ -102,7 +103,19 @@ Emits the same call/dependency graph as a mermaid flowchart
 ([ADR 0021](adr/0021-mermaid-output-format.md)), designed for pasting
 into a GitHub PR comment or description where mermaid renders
 natively. This is the format the [GitHub Action](action.md) uses for
-the top of its sticky comment.
+the top of its sticky comment. Deleted symbols render as isolated,
+dashed `removed` nodes in the same graph
+([ADR 0035](adr/0035-mermaid-removed-symbols.md)).
+
+## `--format digest`
+
+Emits a slim "API changes" list
+([ADR 0036](adr/0036-pr-comment-api-changes-digest.md)): one line per
+`Added`/`SignatureChanged`/removed symbol, nothing else — no body-only
+changes, no dependency tree, no full signature for an unclassified
+symbol. This is the format the [GitHub Action](action.md) collapses
+into a `<details>` section underneath its mermaid graph, in place of
+the full Markdown report.
 
 ## Flags
 

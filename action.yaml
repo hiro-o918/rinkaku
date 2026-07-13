@@ -1,13 +1,14 @@
 name: "rinkaku PR report"
 description: >-
   Runs rinkaku against a pull request's diff and posts (or updates) a
-  sticky PR comment: a mermaid call/dependency graph up front, with the
-  full Markdown outline collapsed underneath for anyone who wants the
-  signature-level detail. Falls back to $GITHUB_STEP_SUMMARY when posting
-  a comment isn't possible (fork PRs get a read-only token from
-  `pull_request`; see the `comment`/`github-token` inputs below), and to a
-  Markdown-only report when the resolved rinkaku binary predates
-  `--format mermaid`.
+  sticky PR comment: a mermaid call/dependency graph up front, with a
+  slim "API changes" digest (added/signature-changed/removed symbols
+  only — ADR 0036) collapsed underneath. Falls back to
+  $GITHUB_STEP_SUMMARY when posting a comment isn't possible (fork PRs
+  get a read-only token from `pull_request`; see the
+  `comment`/`github-token` inputs below), and to a Markdown-only report
+  when the resolved rinkaku binary predates `--format mermaid`/
+  `--format digest`.
 branding:
   icon: "git-pull-request"
   color: "blue"
@@ -79,13 +80,20 @@ outputs:
       rinkaku binary doesn't support `--format mermaid` (see
       `markdown-only` below).
     value: ${{ steps.run-rinkaku.outputs.mermaid-path }}
+  digest-path:
+    description: >-
+      Path to the generated "API changes" digest file (ADR 0036). Empty
+      when the resolved rinkaku binary doesn't support `--format digest`
+      (see `markdown-only` below).
+    value: ${{ steps.run-rinkaku.outputs.digest-path }}
   markdown-path:
     description: Path to the generated Markdown report file.
     value: ${{ steps.run-rinkaku.outputs.markdown-path }}
   markdown-only:
     description: >-
       "true" when the resolved rinkaku binary predates `--format mermaid`
-      and this run fell back to a Markdown-only report.
+      and/or `--format digest` and this run fell back to a Markdown-only
+      report.
     value: ${{ steps.run-rinkaku.outputs.markdown-only }}
 
 runs:
@@ -152,6 +160,7 @@ runs:
 
         mkdir -p "${RUNNER_TEMP}/rinkaku-report"
         mermaid_path="${RUNNER_TEMP}/rinkaku-report/report.mmd"
+        digest_path="${RUNNER_TEMP}/rinkaku-report/report.digest.md"
         markdown_path="${RUNNER_TEMP}/rinkaku-report/report.md"
 
         run_rinkaku() {
@@ -163,33 +172,62 @@ runs:
 
         # Bootstrap-safety (this repository's own introducing PR is the
         # concrete case): the base ref a caller builds rinkaku from may
-        # predate `--format mermaid` entirely — including on the very PR
-        # that adds the flag, whose base is the pre-flag `main`. `--format`
-        # itself predates this action (md/json already existed), so the
-        # probe must grep for the literal value "mermaid" in clap's long
-        # `--help` output (which lists `--format`'s "Possible values:"),
-        # not just for the flag name — a binary with --format but no
-        # mermaid support is exactly the bootstrap case this guards
-        # against, and `grep -q -- '--format'` alone would never catch it.
-        # Probing `--help` rather than just letting the mermaid invocation
-        # fail also avoids relying on clap's exact unrecognized-value exit
-        # code/message staying stable across versions, and skips a doomed
-        # invocation entirely instead of treating "flag understood but the
-        # run itself failed" the same as "flag not understood at all".
-        if "${RINKAKU_BIN}" --help 2>&1 | grep -q -- 'mermaid'; then
+        # predate `--format mermaid`/`--format digest` entirely —
+        # including on the very PR that adds either flag, whose base is
+        # the pre-flag `main`. `--format` itself predates this action
+        # (md/json already existed), so each probe below greps for its
+        # own literal value ("mermaid"/"digest") in clap's long `--help`
+        # output (which lists `--format`'s "Possible values:"), not just
+        # for the flag name — a binary with `--format` but no
+        # mermaid/digest support is exactly the bootstrap case this
+        # guards against, and `grep -q -- '--format'` alone would never
+        # catch it. Probing `--help` rather than just letting the
+        # invocation fail also avoids relying on clap's exact
+        # unrecognized-value exit code/message staying stable across
+        # versions, and skips a doomed invocation entirely instead of
+        # treating "flag understood but the run itself failed" the same
+        # as "flag not understood at all".
+        #
+        # `markdown_only` accumulates across both probes (mermaid OR
+        # digest missing) rather than each format tracking its own flag,
+        # since a caller-provided binary that predates one of these two
+        # newer formats predates both in every case seen so far (they
+        # land in adjacent releases) — a single flag keeps the action's
+        # output surface simple. Each format still gets its own
+        # independent probe/path/output, so the two are free to diverge
+        # later if that stops being true.
+        help_output=$("${RINKAKU_BIN}" --help 2>&1)
+        markdown_only=false
+
+        if echo "${help_output}" | grep -q -- 'mermaid'; then
           if run_rinkaku --format mermaid > "${mermaid_path}" 2>/dev/null; then
             echo "mermaid-path=${mermaid_path}" >> "$GITHUB_OUTPUT"
-            echo "markdown-only=false" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::rinkaku --format mermaid failed even though --help mentions --format; falling back to a Markdown-only report"
             echo "mermaid-path=" >> "$GITHUB_OUTPUT"
-            echo "markdown-only=true" >> "$GITHUB_OUTPUT"
+            markdown_only=true
           fi
         else
           echo "::warning::resolved rinkaku binary predates --format mermaid; falling back to a Markdown-only report"
           echo "mermaid-path=" >> "$GITHUB_OUTPUT"
-          echo "markdown-only=true" >> "$GITHUB_OUTPUT"
+          markdown_only=true
         fi
+
+        if echo "${help_output}" | grep -q -- 'digest'; then
+          if run_rinkaku --format digest > "${digest_path}" 2>/dev/null; then
+            echo "digest-path=${digest_path}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::rinkaku --format digest failed even though --help mentions --format; falling back to a Markdown-only report"
+            echo "digest-path=" >> "$GITHUB_OUTPUT"
+            markdown_only=true
+          fi
+        else
+          echo "::warning::resolved rinkaku binary predates --format digest; falling back to a Markdown-only report"
+          echo "digest-path=" >> "$GITHUB_OUTPUT"
+          markdown_only=true
+        fi
+
+        echo "markdown-only=${markdown_only}" >> "$GITHUB_OUTPUT"
 
     - name: Compose and post sticky PR comment
       if: inputs.comment == 'true'
@@ -197,6 +235,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         MERMAID_PATH: ${{ steps.run-rinkaku.outputs.mermaid-path }}
+        DIGEST_PATH: ${{ steps.run-rinkaku.outputs.digest-path }}
         MARKDOWN_PATH: ${{ steps.run-rinkaku.outputs.markdown-path }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
