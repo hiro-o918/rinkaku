@@ -148,6 +148,42 @@ pub fn section_start_line_for_symbol(content: &DiffPaneContent, symbol_id: &str)
         .map(|(_, _, section_start, _)| section_start)
 }
 
+/// The mirror image of [`section_start_line_for_symbol`] (ADR 0030): given
+/// `scroll_line` (the same "requested-scroll unit" both that function and
+/// [`hunk_start_lines`] use — [`crate::app::App::right_pane_scroll`]'s own
+/// value), finds which section's rendered span `scroll_line` falls inside
+/// and returns that section's `symbol_id`. A section's span runs from its
+/// own start line (inclusive) up to the next section's start line
+/// (exclusive), or through the end of the content for the last section —
+/// so scrolling anywhere within a symbol's title/contract-header/hunks
+/// resolves to that symbol, not just its exact first line.
+///
+/// Returns `None` in two cases `crate::run_app`'s caller treats
+/// identically (ADR 0030 decision 3 — leave the tree cursor untouched
+/// rather than guess): `scroll_line` falls inside the
+/// `"(module level)"` bucket (`DiffSection::symbol_id: None` by
+/// construction, same as [`section_start_line_for_symbol`]'s own
+/// module-level exclusion), or `scroll_line` is past the end of every
+/// section (an overscroll about to be clamped by `crate::ui::clamp_scroll`
+/// next frame) — also `None` on [`DiffPaneContent::Empty`].
+pub fn symbol_id_for_scroll_line(content: &DiffPaneContent, scroll_line: usize) -> Option<&str> {
+    let sections: Vec<(usize, &DiffSection, usize, Vec<usize>)> = walk_sections(content).collect();
+    let (_, (_, section, _, _)) =
+        sections
+            .iter()
+            .enumerate()
+            .find(|(index, (_, _, start, _))| {
+                let next_start = sections
+                    .get(index + 1)
+                    .map(|(_, _, next_start, _)| *next_start);
+                match next_start {
+                    Some(next_start) => (*start..next_start).contains(&scroll_line),
+                    None => scroll_line >= *start,
+                }
+            })?;
+    section.symbol_id.as_deref()
+}
+
 /// One entry per section for line-counting consumers ([`hunk_start_lines`]
 /// and [`section_start_line_for_symbol`] both need the exact same layout
 /// walk, kept in one place so a change to
@@ -1119,5 +1155,142 @@ mod tests {
         let actual = section_start_line_for_symbol(&content, "lib.rs::nonexistent");
 
         assert_eq!(None, actual);
+    }
+
+    // --- symbol_id_for_scroll_line (ADR 0030) ---
+
+    #[test]
+    fn should_return_none_for_scroll_line_when_content_is_empty() {
+        let actual = symbol_id_for_scroll_line(&DiffPaneContent::Empty, 0);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_the_only_symbol_when_scroll_line_is_its_title_line() {
+        // Only section: title(0), blank(1), header(2), body(3).
+        let content = DiffPaneContent::File(vec![DiffSection {
+            title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+            )],
+        }]);
+
+        let actual = symbol_id_for_scroll_line(&content, 0);
+
+        assert_eq!(Some("lib.rs::foo"), actual);
+    }
+
+    #[test]
+    fn should_return_the_only_symbol_when_scroll_line_is_inside_its_hunk_body_not_just_its_title() {
+        // Same layout as above; scroll_line 3 (the hunk body line, not the
+        // title at 0) must still resolve to the same symbol — a section's
+        // span covers every line inside it, not just its first.
+        let content = DiffPaneContent::File(vec![DiffSection {
+            title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+            )],
+        }]);
+
+        let actual = symbol_id_for_scroll_line(&content, 3);
+
+        assert_eq!(Some("lib.rs::foo"), actual);
+    }
+
+    #[test]
+    fn should_return_the_second_symbol_when_scroll_line_falls_inside_its_section() {
+        // Section 0 (`foo`): title(0), blank(1), header(2), body(3) — 4
+        // lines. Blank separator(4), section 1 (`bar`) title(5), blank(6),
+        // header(7). scroll_line 5 (bar's own title) and 6/7 must all
+        // resolve to `bar`, not `foo`.
+        let content = DiffPaneContent::File(vec![
+            DiffSection {
+                title: "fn foo()".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    0,
+                    hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+                )],
+            },
+            DiffSection {
+                title: "fn bar()".to_string(),
+                symbol_id: Some("lib.rs::bar".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    1,
+                    hunk("@@ -10,1 +10,2 @@", Some((10, 11)), vec!["fn bar() {}"]),
+                )],
+            },
+        ]);
+
+        assert_eq!(Some("lib.rs::bar"), symbol_id_for_scroll_line(&content, 5));
+        assert_eq!(Some("lib.rs::bar"), symbol_id_for_scroll_line(&content, 7));
+        // The boundary immediately before section 1 still belongs to
+        // section 0.
+        assert_eq!(Some("lib.rs::foo"), symbol_id_for_scroll_line(&content, 4));
+    }
+
+    #[test]
+    fn should_return_none_when_scroll_line_falls_inside_the_module_level_bucket() {
+        // ADR 0030 decision 3: the module-level bucket has `symbol_id:
+        // None` by construction, so a scroll line landing there must not
+        // resolve to any symbol — not even the nearest one.
+        let content = DiffPaneContent::File(vec![
+            DiffSection {
+                title: "fn foo()".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    0,
+                    hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+                )],
+            },
+            DiffSection {
+                title: MODULE_LEVEL_TITLE.to_string(),
+                symbol_id: None,
+                contract_header: None,
+                hunks: vec![attributed(
+                    1,
+                    hunk("@@ -20,1 +20,2 @@", Some((20, 21)), vec!["use foo::bar;"]),
+                )],
+            },
+        ]);
+
+        // Module-level section starts at line 5 (same layout math as the
+        // two-symbol test above).
+        let actual = symbol_id_for_scroll_line(&content, 5);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_return_the_last_symbol_when_scroll_line_is_past_every_section_start_but_still_within_it()
+     {
+        let content = DiffPaneContent::File(vec![DiffSection {
+            title: "fn foo()".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
+            contract_header: None,
+            hunks: vec![attributed(
+                0,
+                hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+            )],
+        }]);
+
+        // Line 100 is past the section's actual rendered content (4 lines
+        // total) but there is no *next* section to bound it — the last
+        // section's span is open-ended, matching an overscroll that is
+        // about to be clamped by `crate::ui::clamp_scroll` next frame
+        // rather than a position inside some other symbol.
+        let actual = symbol_id_for_scroll_line(&content, 100);
+
+        assert_eq!(Some("lib.rs::foo"), actual);
     }
 }
