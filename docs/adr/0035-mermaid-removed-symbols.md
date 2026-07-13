@@ -89,16 +89,34 @@ graph.
   large change the budget exists to catch (ADR 0021), and excluding
   removed nodes from the count would let such a diff dodge the
   file-level fallback and render a hairball anyway.
-- **File-level fallback also represents removed-only files.** Before
-  this change, `render_mermaid_file_level` only visits paths reachable
-  through `report.graph.nodes` — a file whose *only* change was
-  deleting every symbol in it (so it contributes zero head-side nodes)
-  would not appear as a node at all. This amendment folds
-  `report.removed`'s paths into the same file/path enumeration so that
-  file still gets a node (classed `removed` if it has no other
-  changed/added node), keeping "every file this diff touched is
-  represented" true at both granularities, matching ADR 0021's
-  file-level design intent.
+- **File-level fallback also represents removed-only files — but only
+  when the file itself survives the diff.** Before this change,
+  `render_mermaid_file_level` only visited paths reachable through
+  `report.graph.nodes` — a file that still exists but had every one of
+  its symbols individually deleted (so it contributes zero head-side
+  nodes, e.g. every function in `allgone.rs` removed by hunks while the
+  file itself is kept, even if only as a comment) would not appear as a
+  node at all. This amendment folds `report.removed`'s paths into the
+  same file/path enumeration so that file still gets a node (classed
+  `removed` if it has no other changed/added node).
+
+  **This does *not* cover a whole-file deletion** (`ChangeKind::Deleted`
+  — the file itself is gone from the head side, not just emptied of
+  symbols). `rinkaku-core/src/pipeline.rs`'s `analyze_diff` classifies
+  `ChangeKind::Deleted` files as `SkippedFile { reason:
+  SkipReason::Deleted }` and `break`s out of that file's processing
+  *before* `classify_against_base` (ADR 0014's removed-symbol
+  classification) ever runs — so a wholesale file deletion never adds
+  anything to `report.removed` at all, and is therefore invisible to
+  both `render_mermaid_file_level` and `render_markdown`'s "## Removed
+  symbols" section. This is a **pre-existing gap dating back to ADR
+  0014**, not a regression introduced here or by ADR 0036: it was
+  confirmed by dynamic verification of this PR (deleting a file
+  wholesale produces `"skipped": [{"reason": "deleted"}]` and an empty
+  `"removed"`, versus a partial deletion — file survives, one symbol
+  inside it removed — which populates `report.removed` correctly
+  today). Tracked as a follow-up:
+  [#115](https://github.com/hiro-o918/rinkaku/issues/115).
 - **Determinism**: removed nodes are appended in `report.removed`'s
   existing order (already diff-derived, see `RemovedSymbol`'s
   producer, `extract::classify_symbols`) after a file's head-side
@@ -148,3 +166,11 @@ graph.
 - Reconstructing base-side edges (see Alternatives) remains open for a
   future ADR if a concrete workflow need for it emerges; this ADR does
   not foreclose it, only scopes it out for now.
+- **Whole-file deletions are skipped before classification and stay
+  invisible to this format** (pre-existing, ADR 0014 —
+  [#115](https://github.com/hiro-o918/rinkaku/issues/115)): only a file
+  that *survives* the diff but loses some or all of its individual
+  symbols appears via `report.removed`. A PR that deletes a file
+  outright shows nothing for that file in `--format mermaid` — not
+  even a `removed`-classed node — which this ADR does not fix, only
+  documents and tracks.

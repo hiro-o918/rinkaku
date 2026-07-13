@@ -191,3 +191,12 @@ it (see Consequences).
   digest` flag, not a retrofit onto this one — kept out of scope until
   a concrete request shows up, per this repository's
   don't-introduce-shared-abstractions-speculatively convention.
+- **Inherits ADR 0035's whole-file-deletion gap**: `render_digest`
+  reads `report.removed`, the same source ADR 0035 documents as never
+  populated for a `ChangeKind::Deleted` file (pre-existing, ADR 0014 —
+  [#115](https://github.com/hiro-o918/rinkaku/issues/115)). A PR that
+  deletes a file outright produces no `~~name~~ — removed` line for
+  any symbol that file used to contain; only a file that survives the
+  diff with some or all of its symbols individually removed is
+  represented. Not a regression introduced by this ADR — tracked at
+  the same issue.
