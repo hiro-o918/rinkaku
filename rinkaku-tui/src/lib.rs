@@ -1124,5 +1124,5 @@ fn translate_mouse_event(kind: event::MouseEventKind) -> Option<InputKey> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
+#[path = "lib_tests/mod.rs"]
 mod tests;
