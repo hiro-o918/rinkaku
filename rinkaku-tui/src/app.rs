@@ -10,7 +10,8 @@
 //! into `ratatui` to draw.
 
 use crate::detail::{
-    DetailView, DirDetail, FileDetail, build_detail, build_dir_detail, build_file_detail,
+    DetailView, DirDetail, FileDetail, SymbolMention, build_detail, build_dir_detail,
+    build_file_detail,
 };
 use crate::nav::{Action, Nav};
 use crate::order::{DirRank, OrderMode, rank_directories};
@@ -98,6 +99,53 @@ pub enum InputKey {
     /// physical key to this one variant either way, and `App::handle_key`
     /// treats it as a toggle.
     ToggleHelp,
+    /// `g`, when no `g`-prefixed sequence is already pending (ADR 0022):
+    /// records that `g` was just pressed so the very next key can resolve
+    /// `gd`/`gr` (`crate::lib::translate_key` consults
+    /// `App::pending_prefix` to do that resolution). Every key clears any
+    /// previously pending prefix (`App::handle_key`'s own doc comment) —
+    /// this variant is what *sets* it in the first place.
+    PendingGoto,
+    /// `gd` (a two-key sequence, ADR 0022): jump toward a callee of the
+    /// symbol under the cursor. Candidate resolution needs `report`
+    /// (`report.graph.edges`, via `crate::detail::symbol_mentions`), which
+    /// `App::handle_key` does not have access to — mirroring
+    /// `InputKey::NextHunk`/`PrevHunk`'s own precedent (that jump target
+    /// needs the shaped diff content `App` also lacks), `crate::run_app`
+    /// resolves candidates and applies the outcome itself, via
+    /// `App::jump_to_symbol`/`App::open_jump_popup`/`App::set_status`. It
+    /// still calls `App::handle_key(input_key)` first, same as every other
+    /// key (`App::handle_key`'s own match arm for this variant is a no-op
+    /// stub, but the unconditional `pending_prefix` clear at the top of that
+    /// function is not — skipping the call entirely, an earlier version of
+    /// this feature did, left `pending_prefix` stuck after every `gd`/`gr`
+    /// press). Kept as its own `InputKey` variant (rather than folding the
+    /// two `g`-prefixed keys into `PendingGoto`'s own resolution) so
+    /// `crate::lib::translate_key`'s key-to-intent mapping stays legible
+    /// independent of where the intent is actually processed.
+    GotoDefinition,
+    /// `gr`: the caller-direction mirror of [`Self::GotoDefinition`].
+    GotoReferences,
+    /// Ctrl-o: moves backward through the jumplist (ADR 0022) — the
+    /// mirror-image of vim's own `Ctrl-o`. A no-op (with a status message)
+    /// when the back-stack is empty.
+    JumpBack,
+    /// Ctrl-i: moves forward through the jumplist (ADR 0022), the reverse of
+    /// [`Self::JumpBack`]. A no-op (with a status message) when the
+    /// forward-stack is empty.
+    JumpForward,
+    /// Enter, while the jump-target popup (ADR 0022) is open: jumps to the
+    /// popup's currently highlighted candidate and closes it. Reuses
+    /// [`Self::Open`]'s physical key (`crate::lib::translate_key` maps Enter
+    /// to `Open` regardless of context, mirroring how `?` already maps to
+    /// the same [`Self::ToggleHelp`] variant whether the help overlay is
+    /// open or not) rather than adding a dedicated variant only the popup
+    /// would ever produce.
+    PopupConfirm,
+    /// Esc, while the jump-target popup is open: closes it without jumping.
+    /// Reuses [`Self::Back`]'s physical key for the same reason
+    /// `PopupConfirm` reuses `Open`'s.
+    PopupCancel,
 }
 
 /// Which pane currently receives motion keys (ADR 0020): [`Focus::Tree`]
@@ -197,6 +245,67 @@ pub enum PivotSelection {
     View(crate::pivot::PivotView),
 }
 
+/// A `g`-prefixed two-key sequence awaiting its second key (ADR 0022's
+/// minimal prefix state machine — not a general chord engine, see that
+/// ADR's own Alternatives). Today's only prefix is `g`; the variant exists
+/// so `App`'s `pending_prefix` field reads as "which prefix, if any" rather
+/// than a bare `bool` that would only ever mean "g was just pressed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPrefix {
+    G,
+}
+
+/// One candidate in the jump-target popup (ADR 0022) — the same identity
+/// [`SymbolMention`] already carries, kept as a separate type rather than
+/// reusing `SymbolMention` directly so the popup's own view-model is not
+/// coupled to the Detail pane's type if the two ever need to diverge (e.g.
+/// the popup later gaining a fan-in count `SymbolMention` doesn't carry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JumpCandidate {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+
+impl From<&SymbolMention> for JumpCandidate {
+    fn from(mention: &SymbolMention) -> Self {
+        Self {
+            id: mention.id.clone(),
+            name: mention.name.clone(),
+            path: mention.path.clone(),
+        }
+    }
+}
+
+/// The jump-target popup's state (ADR 0022) while it is open: every
+/// candidate found for the pending `gd`/`gr` press, plus which one the
+/// popup's own `j`/`k` cursor currently highlights. Mirrors `help_open`'s
+/// flag-not-`Screen` design (`App::help_open`'s own doc comment) for the
+/// same reason: the popup sits on top of whatever was already showing and
+/// closing it (via `PopupConfirm` or `PopupCancel`) must not disturb that
+/// underlying state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JumpPopup {
+    pub candidates: Vec<JumpCandidate>,
+    pub cursor: usize,
+}
+
+/// One jumplist entry (ADR 0022): just enough state to restore "what the
+/// reviewer was looking at" — the symbol and the right pane's scroll offset
+/// into it — deliberately not a full `App` snapshot (see the ADR's own
+/// Alternatives on why a full snapshot was rejected).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct JumplistEntry {
+    symbol_id: String,
+    right_pane_scroll: usize,
+}
+
+/// The jumplist's cap (ADR 0022 decision 4): oldest entries are dropped
+/// once the back-stack would exceed this, since a reviewing session
+/// realistically never needs more and an unbounded stack is an unnecessary
+/// unbounded-growth risk for a long-running TUI session.
+const JUMPLIST_CAP: usize = 100;
+
 /// The whole interactive application's state: the stage-A view-models
 /// composed together, plus which screen is active and a status-line
 /// message for the caller to render. Rebuilt once per `Report` (in
@@ -251,6 +360,25 @@ pub struct App {
     /// free by construction: nothing else about `App`'s state changes while
     /// the overlay is open.
     help_open: bool,
+    /// A `g`-prefixed sequence's first key, awaiting its second (ADR 0022) —
+    /// `None` outside that one-key window. Set by `g` and cleared by
+    /// *every* subsequent key regardless of what it is (`crate::lib::
+    /// translate_key` owns the actual resolution into `GotoDefinition`/
+    /// `GotoReferences`/fall-through, this field only remembers that `g` was
+    /// the previous key so `translate_key` has something to consult).
+    pending_prefix: Option<PendingPrefix>,
+    /// The jump-target popup's state while open (ADR 0022), `None`
+    /// otherwise — see [`JumpPopup`]'s own doc comment.
+    jump_popup: Option<JumpPopup>,
+    /// The jumplist's back-stack (ADR 0022): locations to return to via
+    /// `Ctrl-o`, most-recently-visited last. Capped at [`JUMPLIST_CAP`].
+    jump_back: Vec<JumplistEntry>,
+    /// The jumplist's forward-stack: locations to return to via `Ctrl-i`
+    /// after at least one `Ctrl-o`. Cleared whenever a new jump
+    /// (`GotoDefinition`/`GotoReferences`) is made from the middle of
+    /// history, mirroring vim's own jumplist (a new jump abandons the
+    /// forward history rather than preserving it).
+    jump_forward: Vec<JumplistEntry>,
     /// A transient message for the status line (e.g. a source-read
     /// failure) — cleared on the next action that doesn't re-set it, so a
     /// stale error doesn't linger forever once the user has moved on.
@@ -283,6 +411,10 @@ impl App {
             right_pane_scroll: 0,
             focus: Focus::default(),
             help_open: false,
+            pending_prefix: None,
+            jump_popup: None,
+            jump_back: Vec::new(),
+            jump_forward: Vec::new(),
             status: None,
             should_quit: false,
         }
@@ -362,6 +494,20 @@ impl App {
     /// Whether the `?` help overlay (ADR 0020) is currently open.
     pub fn help_open(&self) -> bool {
         self.help_open
+    }
+
+    /// Whether a `g`-prefixed sequence (ADR 0022) is awaiting its second key
+    /// — consulted by `crate::lib::translate_key` to decide whether the next
+    /// key press should resolve `gd`/`gr` rather than its own ordinary
+    /// meaning.
+    pub fn pending_prefix(&self) -> Option<PendingPrefix> {
+        self.pending_prefix
+    }
+
+    /// The jump-target popup's state (ADR 0022) while it is open, `None`
+    /// otherwise.
+    pub fn jump_popup(&self) -> Option<&JumpPopup> {
+        self.jump_popup.as_ref()
     }
 
     /// The user's requested scroll offset into the right-hand pane — see
@@ -486,6 +632,101 @@ impl App {
         }
     }
 
+    /// The id of the *present* (non-removed) symbol under the cursor, or
+    /// `None` when the cursor is not on a symbol row at all, sits on a
+    /// removed symbol (no graph presence to jump from — same reasoning as
+    /// `selected_diff_target`'s own removed-symbol handling), or there are
+    /// no rows at all. Used by `crate::run_app` to resolve `gd`/`gr`
+    /// candidates (`crate::detail::symbol_mentions`) before calling back
+    /// into `App` — see [`InputKey::GotoDefinition`]'s own doc comment on
+    /// why that resolution cannot happen inside `App::handle_key` itself.
+    pub fn selected_symbol_id(&self) -> Option<&str> {
+        let rows = self.nav.rows(&self.tree);
+        let row = rows.get(self.nav.cursor())?;
+        match &row.node.kind {
+            NodeKind::Symbol(symbol_ref) if !symbol_ref.removed => Some(symbol_ref.id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Jumps the cursor to `symbol_id` (ADR 0022): pushes the *current*
+    /// location onto the jumplist's back-stack (capped at
+    /// [`JUMPLIST_CAP`], oldest dropped) and clears the forward-stack (a new
+    /// jump abandons any history the reviewer had already jumped back past
+    /// — vim's own jumplist does the same), then moves the tree cursor via
+    /// [`Nav::move_cursor_to_symbol`] (expanding collapsed ancestors) and
+    /// resets the scroll offset to 0 so the jumped-to symbol's content
+    /// starts from its top. Focus is deliberately left untouched (ADR
+    /// 0022's own "keep reading" rationale).
+    ///
+    /// The jumplist push only happens when the cursor was already on a
+    /// present symbol row (`Self::selected_symbol_id`) — every real caller
+    /// (`crate::run_app`'s `resolve_goto`/`GotoOutcome` handling, and this
+    /// method's own popup-confirm caller in `Self::handle_key_with_popup_open`)
+    /// only reaches this method after confirming that already, per ADR
+    /// 0022's "only a symbol row is a valid jump source" rule, so this is a
+    /// defensive fallback (silently skip recording jumplist history) rather
+    /// than a precondition that blocks the jump itself — the cursor still
+    /// moves either way, since refusing to jump at all over a bookkeeping
+    /// detail would be a worse failure mode than an incomplete jumplist.
+    ///
+    /// A no-op (with a status message), without touching the jumplist, when
+    /// no row's symbol id matches `symbol_id` (defensive: callers are
+    /// expected to have already confirmed the id exists via
+    /// `crate::detail::symbol_mentions`, but `App` does not trust that
+    /// blindly).
+    pub fn jump_to_symbol(mut self, symbol_id: &str) -> Self {
+        let current_id = self.selected_symbol_id().map(str::to_string);
+
+        let mut nav = self.nav.clone();
+        if !nav.move_cursor_to_symbol(&self.tree, symbol_id) {
+            self.status = Some(format!("note: symbol {symbol_id} is no longer present"));
+            return self;
+        }
+
+        if let Some(current_id) = current_id {
+            self.push_jumplist_entry(JumplistEntry {
+                symbol_id: current_id,
+                right_pane_scroll: self.right_pane_scroll,
+            });
+            self.jump_forward.clear();
+        }
+        self.nav = nav;
+        self.right_pane_scroll = 0;
+        self
+    }
+
+    /// Opens the jump-target popup (ADR 0022) over `candidates` — called by
+    /// `crate::run_app` once it has resolved more than one candidate for a
+    /// pending `gd`/`gr` (`InputKey::GotoDefinition`/`GotoReferences`'s own
+    /// doc comment on why resolution happens there, not in `App`).
+    pub fn open_jump_popup(mut self, candidates: Vec<JumpCandidate>) -> Self {
+        self.jump_popup = Some(JumpPopup {
+            candidates,
+            cursor: 0,
+        });
+        self
+    }
+
+    /// Pushes `entry` onto the jumplist's back-stack, dropping the oldest
+    /// entry first if this would exceed [`JUMPLIST_CAP`].
+    fn push_jumplist_entry(&mut self, entry: JumplistEntry) {
+        if self.jump_back.len() >= JUMPLIST_CAP {
+            // `Vec::remove(0)` is O(n) (shifts every remaining element down
+            // one slot) rather than O(1) — a `VecDeque` would make this
+            // O(1), but at `JUMPLIST_CAP` = 100 small (`String` + `usize`)
+            // entries, shifting is at most ~100 pointer-sized moves, only
+            // once per jump and only once the cap is already full (every
+            // jump before that is a plain `push`, already O(1)) — not a
+            // measurable cost against a single keypress in an interactive
+            // TUI. `Vec` also keeps this consistent with `jump_forward`
+            // (`Vec<JumplistEntry>` too) without introducing a second
+            // container type for one already-negligible operation.
+            self.jump_back.remove(0);
+        }
+        self.jump_back.push(entry);
+    }
+
     /// Applies one [`InputKey`] and returns the next `App`. `report` is
     /// needed only for [`InputKey::Source`] (to confirm the row under the
     /// cursor is a present symbol before switching screens — the actual
@@ -514,8 +755,41 @@ impl App {
     /// (`ToggleOrder`) can do the same simply by changing which row now
     /// sits at the same cursor index — both used to leave a stale nonzero
     /// scroll offset pointing into the *new* row's unrelated content.
+    ///
+    /// The jump-target popup (ADR 0022) is handled next, mirroring the help
+    /// overlay's own "takes over the whole key space while open" structure:
+    /// `Up`/`Down` move the popup's own selection, `PopupConfirm` jumps to
+    /// the highlighted candidate and closes it, `PopupCancel` closes it
+    /// without jumping, and every other key is swallowed. This runs before
+    /// the `g`-prefix bookkeeping and the screen/focus dispatch below for
+    /// the same "no future variant can accidentally bypass it" reason the
+    /// help overlay's own check does.
+    ///
+    /// `pending_prefix` (ADR 0022's minimal `g`-prefix state machine) is
+    /// cleared by every key except [`InputKey::PendingGoto`] itself, which
+    /// sets it — a blanket rule applied *unconditionally at the very top of
+    /// this function*, before the `help_open`/`jump_popup` early returns
+    /// below, rather than alongside the scroll-reset rule further down
+    /// (post-review finding: clearing it after those early returns let a
+    /// pending prefix survive both of them — the help overlay's own early
+    /// return, and more importantly the jump-popup one, since opening the
+    /// popup is itself the direct result of a `gd`/`gr` press that
+    /// `crate::run_app` resolves *without ever calling this method at all*,
+    /// see that resolution's own doc comment — so the clear could not
+    /// safely live only "later in the normal path" the way scroll-reset
+    /// does; it has to run before anything can return early). Every key
+    /// this method is ever called with, from every call site, hits this one
+    /// line before doing anything else, so a `g` press followed by anything
+    /// other than `d`/`r` (already resolved by `crate::lib::translate_key`
+    /// before this function ever sees the key) cannot leave a stale pending
+    /// prefix behind regardless of which branch handles the key afterward.
     pub fn handle_key(mut self, key: InputKey) -> Self {
         self.status = None;
+        self.pending_prefix = if key == InputKey::PendingGoto {
+            Some(PendingPrefix::G)
+        } else {
+            None
+        };
 
         if self.help_open {
             if key == InputKey::ToggleHelp {
@@ -528,11 +802,24 @@ impl App {
             return self;
         }
 
+        if self.jump_popup.is_some() {
+            return self.handle_key_with_popup_open(key);
+        }
+
         let preserve_scroll = matches!(
             (&self.screen, self.focus, key),
             (Screen::Entry, Focus::Right, InputKey::Up)
                 | (Screen::Entry, Focus::Right, InputKey::Down)
         );
+        // Set by the `JumpBack`/`JumpForward` arms below when they actually
+        // restore a jumplist entry's own scroll offset — that restored
+        // value must survive the blanket "reset scroll to 0" rule at the
+        // bottom of this function the same way `preserve_scroll` above lets
+        // right-focused `Up`/`Down` survive it, just via a second, separate
+        // flag rather than folding jump-restoration into `preserve_scroll`'s
+        // own `matches!` (which is keyed on `(screen, focus, key)` alone and
+        // has no way to express "only when the jump actually succeeded").
+        let mut preserve_scroll_after_jump = false;
 
         match (&self.screen, self.focus, key) {
             (Screen::Source { .. }, _, InputKey::Back) => {
@@ -695,10 +982,125 @@ impl App {
                 // Unreachable: handled above before this match, kept only
                 // so the match stays exhaustive against future refactors.
             }
+            (Screen::Entry, _, InputKey::PendingGoto) => {
+                // No other state to change here: `pending_prefix` was
+                // already set above, before this match, by the blanket rule
+                // this function's own doc comment describes.
+            }
+            // `gd`/`gr` candidate resolution needs `report`, which this
+            // function does not have — `crate::run_app` reads
+            // `report.graph.edges` itself (`resolve_goto`) and applies the
+            // outcome via `Self::jump_to_symbol`/`Self::open_jump_popup`/
+            // `Self::set_status`. This arm is still reached, though: `run_app`
+            // calls `handle_key(input_key)` for these two variants same as
+            // every other key (post-review fix), specifically so the
+            // unconditional `pending_prefix` clear at the top of this
+            // function runs on this path too — before this fix, `run_app`
+            // skipped `handle_key` entirely for `gd`/`gr`, leaving
+            // `pending_prefix` stuck at `Some(G)` after every jump. The arm
+            // itself stays a no-op: `resolve_goto`/the actual jump/popup/
+            // status mutation happen in `run_app`, not here.
+            (Screen::Entry, _, InputKey::GotoDefinition | InputKey::GotoReferences) => {}
+            (Screen::Entry, _, InputKey::JumpBack) => {
+                if let Some(entry) = self.jump_back.pop() {
+                    let current_id = self.selected_symbol_id().map(str::to_string);
+                    let mut nav = self.nav.clone();
+                    if nav.move_cursor_to_symbol(&self.tree, &entry.symbol_id) {
+                        if let Some(current_id) = current_id {
+                            self.jump_forward.push(JumplistEntry {
+                                symbol_id: current_id,
+                                right_pane_scroll: self.right_pane_scroll,
+                            });
+                        }
+                        self.nav = nav;
+                        self.right_pane_scroll = entry.right_pane_scroll;
+                        preserve_scroll_after_jump = true;
+                    } else {
+                        self.status = Some(format!(
+                            "note: symbol {} is no longer present",
+                            entry.symbol_id
+                        ));
+                    }
+                } else {
+                    self.status = Some("note: jumplist has no earlier location".to_string());
+                }
+            }
+            (Screen::Entry, _, InputKey::JumpForward) => {
+                if let Some(entry) = self.jump_forward.pop() {
+                    let current_id = self.selected_symbol_id().map(str::to_string);
+                    let mut nav = self.nav.clone();
+                    if nav.move_cursor_to_symbol(&self.tree, &entry.symbol_id) {
+                        if let Some(current_id) = current_id {
+                            self.push_jumplist_entry(JumplistEntry {
+                                symbol_id: current_id,
+                                right_pane_scroll: self.right_pane_scroll,
+                            });
+                        }
+                        self.nav = nav;
+                        self.right_pane_scroll = entry.right_pane_scroll;
+                        preserve_scroll_after_jump = true;
+                    } else {
+                        self.status = Some(format!(
+                            "note: symbol {} is no longer present",
+                            entry.symbol_id
+                        ));
+                    }
+                } else {
+                    self.status = Some("note: jumplist has no later location".to_string());
+                }
+            }
+            // Unreachable while `handle_key` is entered directly (the popup
+            // interception above returns before this match whenever
+            // `jump_popup.is_some()`), kept only so the match stays
+            // exhaustive against future refactors — same reasoning as the
+            // `ToggleHelp` arm just above.
+            (Screen::Entry, _, InputKey::PopupConfirm | InputKey::PopupCancel) => {}
         }
 
-        if !preserve_scroll {
+        if !preserve_scroll && !preserve_scroll_after_jump {
             self.right_pane_scroll = 0;
+        }
+
+        self
+    }
+
+    /// Handles one [`InputKey`] while the jump-target popup (ADR 0022) is
+    /// open — mirrors the help overlay's own "takes over the whole key
+    /// space" structure (`Self::handle_key`'s own doc comment): `Up`/`Down`
+    /// move the popup's own selection cursor (clamped, not wrapping, same
+    /// convention `Nav::handle`'s `CursorUp`/`CursorDown` already use),
+    /// `PopupConfirm` jumps to the highlighted candidate and closes the
+    /// popup, `PopupCancel` closes it without jumping, and every other key
+    /// is swallowed as a no-op.
+    fn handle_key_with_popup_open(mut self, key: InputKey) -> Self {
+        let Some(popup) = self.jump_popup.clone() else {
+            // Unreachable: this method is only called from `Self::handle_key`
+            // when `self.jump_popup.is_some()`.
+            return self;
+        };
+
+        match key {
+            InputKey::Up => {
+                if let Some(popup) = &mut self.jump_popup {
+                    popup.cursor = popup.cursor.saturating_sub(1);
+                }
+            }
+            InputKey::Down => {
+                if let Some(popup) = &mut self.jump_popup {
+                    popup.cursor = (popup.cursor + 1).min(popup.candidates.len().saturating_sub(1));
+                }
+            }
+            InputKey::PopupConfirm => {
+                let target = popup.candidates.get(popup.cursor).map(|c| c.id.clone());
+                self.jump_popup = None;
+                if let Some(target) = target {
+                    self = self.jump_to_symbol(&target);
+                }
+            }
+            InputKey::PopupCancel => {
+                self.jump_popup = None;
+            }
+            _ => {}
         }
 
         self
@@ -1837,5 +2239,379 @@ mod tests {
         let app = app.handle_key(InputKey::ToggleOrder);
 
         assert_eq!(0, app.right_pane_scroll());
+    }
+
+    // Jump navigation tests (ADR 0022): `selected_symbol_id`,
+    // `jump_to_symbol`, `open_jump_popup`, the popup's own key handling,
+    // `pending_prefix` bookkeeping, and the jumplist (`JumpBack`/
+    // `JumpForward`).
+
+    /// Two symbols in two files, "a::foo" calling "b::bar" — enough for a
+    /// jump to have a real target to land on and expand a collapsed
+    /// ancestor. Expanded row order: a(0), a/one.rs(1), foo(2), b(3),
+    /// b/two.rs(4), bar(5) — same shape as `report_with_two_directories`,
+    /// with a populated `graph` so `symbol_mentions`-driven callers can
+    /// exercise it directly (this module's own tests call `Nav`/`App`
+    /// methods directly rather than through `crate::lib::resolve_goto`,
+    /// which lives in a different module and is tested there instead).
+    fn report_with_caller_and_callee() -> Report {
+        let mut report = report_with_two_directories();
+        report.files[0].symbols[0].id = "a/one.rs::foo".to_string();
+        report.files[1].symbols[0].id = "b/two.rs::bar".to_string();
+        report.graph = rinkaku_core::graph::SymbolGraph {
+            nodes: vec![
+                rinkaku_core::graph::Node {
+                    id: "a/one.rs::foo".to_string(),
+                    path: "a/one.rs".to_string(),
+                    name: "foo".to_string(),
+                },
+                rinkaku_core::graph::Node {
+                    id: "b/two.rs::bar".to_string(),
+                    path: "b/two.rs".to_string(),
+                    name: "bar".to_string(),
+                },
+            ],
+            edges: vec![rinkaku_core::graph::Edge {
+                from: "a/one.rs::foo".to_string(),
+                to: "b/two.rs::bar".to_string(),
+                is_cycle: false,
+            }],
+            roots: vec!["a/one.rs::foo".to_string()],
+        };
+        report
+    }
+
+    #[test]
+    fn should_return_selected_symbol_id_when_cursor_is_on_a_present_symbol_row() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
+    }
+
+    #[test]
+    fn should_return_none_selected_symbol_id_when_cursor_is_on_a_file_row() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+
+        assert_eq!(None, app.selected_symbol_id());
+    }
+
+    #[test]
+    fn should_return_none_selected_symbol_id_when_cursor_is_on_a_removed_symbol() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            removed: vec![rinkaku_core::extract::RemovedSymbol {
+                name: "gone".to_string(),
+                kind: SymbolKind::Function,
+                path: "lib.rs".to_string(),
+                signature: "fn gone()".to_string(),
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        assert_eq!(None, app.selected_symbol_id());
+    }
+
+    #[test]
+    fn should_move_cursor_to_target_symbol_when_jump_to_symbol_is_called() {
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report);
+
+        let app = app.jump_to_symbol("b/two.rs::bar");
+
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b/two.rs", rows[app.nav().cursor()].node.path);
+    }
+
+    #[test]
+    fn should_reset_scroll_when_jump_to_symbol_succeeds() {
+        let report = report_with_caller_and_callee();
+        let app = focused_right_and_scrolled_one_line(App::new(&report)); // cursor on "a/one.rs", scroll -> 1
+        assert_eq!(1, app.right_pane_scroll());
+
+        let app = app.jump_to_symbol("b/two.rs::bar");
+
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_keep_focus_unchanged_when_jump_to_symbol_succeeds() {
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Open); // focus -> Right, cursor on "foo"
+        assert_eq!(Focus::Right, app.focus());
+
+        let app = app.jump_to_symbol("b/two.rs::bar");
+
+        assert_eq!(Focus::Right, app.focus());
+    }
+
+    #[test]
+    fn should_push_current_symbol_onto_jumplist_when_jump_to_symbol_succeeds() {
+        let report = report_with_caller_and_callee();
+        // Cursor on "foo" (row 2).
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down);
+        assert_eq!(
+            "a/one.rs",
+            app.nav().rows(app.tree())[app.nav().cursor()].node.path
+        );
+
+        let app = app.jump_to_symbol("b/two.rs::bar");
+        let app = app.handle_key(InputKey::JumpBack);
+
+        // Ctrl-o after the jump must land back on "foo" — proof the
+        // pre-jump location was actually pushed.
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("a/one.rs", rows[app.nav().cursor()].node.path);
+    }
+
+    #[test]
+    fn should_expand_collapsed_ancestor_when_jump_to_symbol_targets_a_hidden_row() {
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report).handle_key(InputKey::CollapseAll);
+        assert_eq!(vec!["a", "b"], row_paths_of(&app));
+
+        let app = app.jump_to_symbol("b/two.rs::bar");
+
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b/two.rs", rows[app.nav().cursor()].node.path);
+    }
+
+    #[test]
+    fn should_set_status_and_leave_cursor_unmoved_when_jump_to_symbol_target_does_not_exist() {
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report).handle_key(InputKey::Down);
+        let cursor_before = app.nav().cursor();
+
+        let app = app.jump_to_symbol("no/such::id");
+
+        assert_eq!(cursor_before, app.nav().cursor());
+        assert_eq!(
+            Some("note: symbol no/such::id is no longer present"),
+            app.status()
+        );
+    }
+
+    fn row_paths_of(app: &App) -> Vec<&str> {
+        app.nav()
+            .rows(app.tree())
+            .iter()
+            .map(|r| r.node.path.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn should_open_jump_popup_with_given_candidates() {
+        let report = empty_report();
+        let app = App::new(&report);
+        let candidates = vec![
+            JumpCandidate {
+                id: "a".to_string(),
+                name: "a".to_string(),
+                path: "a.rs".to_string(),
+            },
+            JumpCandidate {
+                id: "b".to_string(),
+                name: "b".to_string(),
+                path: "b.rs".to_string(),
+            },
+        ];
+
+        let app = app.open_jump_popup(candidates.clone());
+
+        assert_eq!(
+            Some(&JumpPopup {
+                candidates,
+                cursor: 0
+            }),
+            app.jump_popup()
+        );
+    }
+
+    fn two_candidates() -> Vec<JumpCandidate> {
+        vec![
+            JumpCandidate {
+                id: "a/one.rs::foo".to_string(),
+                name: "foo".to_string(),
+                path: "a/one.rs".to_string(),
+            },
+            JumpCandidate {
+                id: "b/two.rs::bar".to_string(),
+                name: "bar".to_string(),
+                path: "b/two.rs".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn should_move_popup_cursor_down_when_down_is_pressed_while_popup_open() {
+        let report = empty_report();
+        let app = App::new(&report).open_jump_popup(two_candidates());
+
+        let app = app.handle_key(InputKey::Down);
+
+        assert_eq!(1, app.jump_popup().expect("popup open").cursor);
+    }
+
+    #[test]
+    fn should_clamp_popup_cursor_at_last_candidate_when_down_is_pressed_past_the_end() {
+        let report = empty_report();
+        let app = App::new(&report)
+            .open_jump_popup(two_candidates())
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down);
+
+        assert_eq!(1, app.jump_popup().expect("popup open").cursor);
+    }
+
+    #[test]
+    fn should_clamp_popup_cursor_at_zero_when_up_is_pressed_past_the_top() {
+        let report = empty_report();
+        let app = App::new(&report).open_jump_popup(two_candidates());
+
+        let app = app.handle_key(InputKey::Up);
+
+        assert_eq!(0, app.jump_popup().expect("popup open").cursor);
+    }
+
+    #[test]
+    fn should_close_popup_without_jumping_when_popup_cancel_is_pressed() {
+        let report = report_with_caller_and_callee();
+        let cursor_before = App::new(&report).nav().cursor();
+        let app = App::new(&report).open_jump_popup(two_candidates());
+
+        let app = app.handle_key(InputKey::PopupCancel);
+
+        assert_eq!(None, app.jump_popup());
+        assert_eq!(cursor_before, app.nav().cursor());
+    }
+
+    #[test]
+    fn should_jump_to_highlighted_candidate_and_close_popup_when_popup_confirm_is_pressed() {
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report)
+            .open_jump_popup(two_candidates())
+            .handle_key(InputKey::Down); // highlight "bar"
+
+        let app = app.handle_key(InputKey::PopupConfirm);
+
+        assert_eq!(None, app.jump_popup());
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b/two.rs", rows[app.nav().cursor()].node.path);
+    }
+
+    #[test]
+    fn should_ignore_navigation_keys_while_jump_popup_is_open() {
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report).open_jump_popup(two_candidates());
+        let cursor_before = app.nav().cursor();
+
+        let app = app.handle_key(InputKey::ExpandAll);
+
+        assert_eq!(cursor_before, app.nav().cursor());
+        assert!(app.jump_popup().is_some());
+    }
+
+    #[test]
+    fn should_set_pending_prefix_when_pending_goto_is_pressed() {
+        let report = empty_report();
+        let app = App::new(&report);
+        assert_eq!(None, app.pending_prefix());
+
+        let app = app.handle_key(InputKey::PendingGoto);
+
+        assert_eq!(Some(PendingPrefix::G), app.pending_prefix());
+    }
+
+    #[test]
+    fn should_clear_pending_prefix_when_any_other_key_follows_pending_goto() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::PendingGoto);
+        assert_eq!(Some(PendingPrefix::G), app.pending_prefix());
+
+        let app = app.handle_key(InputKey::Down);
+
+        assert_eq!(None, app.pending_prefix());
+    }
+
+    #[test]
+    fn should_set_status_when_jump_back_is_pressed_with_an_empty_back_stack() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let app = app.handle_key(InputKey::JumpBack);
+
+        assert_eq!(Some("note: jumplist has no earlier location"), app.status());
+    }
+
+    #[test]
+    fn should_set_status_when_jump_forward_is_pressed_with_an_empty_forward_stack() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let app = app.handle_key(InputKey::JumpForward);
+
+        assert_eq!(Some("note: jumplist has no later location"), app.status());
+    }
+
+    #[test]
+    fn should_return_to_pre_jump_symbol_when_jump_back_is_pressed_after_a_jump() {
+        let report = report_with_caller_and_callee();
+        // Cursor on "foo" (row 2) before jumping.
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down)
+            .jump_to_symbol("b/two.rs::bar");
+        assert_eq!(
+            "b/two.rs",
+            app.nav().rows(app.tree())[app.nav().cursor()].node.path
+        );
+
+        let app = app.handle_key(InputKey::JumpBack);
+
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("a/one.rs", rows[app.nav().cursor()].node.path);
+    }
+
+    #[test]
+    fn should_return_to_post_jump_symbol_when_jump_forward_is_pressed_after_jump_back() {
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down)
+            .jump_to_symbol("b/two.rs::bar")
+            .handle_key(InputKey::JumpBack);
+        assert_eq!(
+            "a/one.rs",
+            app.nav().rows(app.tree())[app.nav().cursor()].node.path
+        );
+
+        let app = app.handle_key(InputKey::JumpForward);
+
+        let rows = app.nav().rows(app.tree());
+        assert_eq!("b/two.rs", rows[app.nav().cursor()].node.path);
+    }
+
+    #[test]
+    fn should_clear_forward_stack_when_a_new_jump_is_made_from_the_middle_of_history() {
+        // vim's own jumplist semantics: jumping to a new location abandons
+        // whatever forward history existed, rather than preserving it.
+        let report = report_with_caller_and_callee();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down)
+            .jump_to_symbol("b/two.rs::bar")
+            .handle_key(InputKey::JumpBack); // back on "foo", forward-stack has "bar"
+
+        let app = app.jump_to_symbol("b/two.rs::bar"); // a fresh jump from "foo"
+
+        let app = app.handle_key(InputKey::JumpForward);
+        assert_eq!(Some("note: jumplist has no later location"), app.status());
     }
 }

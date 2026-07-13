@@ -490,9 +490,13 @@ The interface follows a **focus** model ([ADR 0020](docs/adr/0020-tui-interactio
 similar to neovim's window/pane idioms: at any moment, either the tree
 (left pane) or the right-hand pane has focus, and `j`/`k` act on whichever
 one does. `enter` on a file/symbol row moves focus to the right pane;
-`h`/`esc` moves it back to the tree. Press `?` any time for an in-app
-overlay listing every key and a short glossary (order modes, pivot,
-cycle).
+`h`/`esc` moves it back to the tree. `gd`/`gr` jump to a callee/caller of
+the selected symbol and `ctrl-o`/`ctrl-i` move back/forward through a
+jumplist of those jumps, both borrowed from neovim too
+([ADR 0022](docs/adr/0022-jump-navigation-and-jumplist.md), see
+[Jump navigation](#jump-navigation-gd--gr) below). Press `?` any time for
+an in-app overlay listing every key and a short glossary (order modes,
+pivot, cycle, jumplist).
 
 ### What it shows
 
@@ -600,6 +604,10 @@ grouped by focus.
 | `d` / `D` | Toggle the right-hand pane between diff and detail |
 | `p` / `P` | Toggle the right-hand pane to the pivot tree rooted at the selected directory/file |
 | `s` / `S` | Open the source view for the symbol under the cursor |
+| `gd` | Jump to a callee of the symbol under the cursor ([ADR 0022](docs/adr/0022-jump-navigation-and-jumplist.md)) |
+| `gr` | Jump to a caller of the symbol under the cursor |
+| `ctrl-o` | Jump back to the previous jumplist location |
+| `ctrl-i` | Jump forward to the next jumplist location |
 | `?` | Toggle the help overlay (keymap + glossary) |
 | `esc` / `q` | Return to the entry view (from the source view) |
 | `q` / `ctrl-c` | Quit (from the entry view) |
@@ -607,6 +615,27 @@ grouped by focus.
 Glyphs are plain ASCII (`~`/`!`/`^`/`+`/`x`, `v`/`>` for expand state)
 rather than Unicode/emoji, for compatibility with plainer terminal
 configurations.
+
+### Jump navigation (`gd` / `gr`)
+
+While reading a diff or its detail, `gd` jumps toward a callee of the
+symbol under the cursor and `gr` jumps toward a caller — a two-key
+sequence (press `g` then `d`/`r`), mirroring neovim's own "go to
+definition"/"go to references" idiom
+([ADR 0022](docs/adr/0022-jump-navigation-and-jumplist.md)). Works
+regardless of focus, but only when the cursor sits on a symbol row: zero
+candidates shows a status-line note, one candidate jumps immediately, and
+more than one opens a popup (`j`/`k` to choose, `enter` to jump, `esc` to
+cancel). A jump moves the tree cursor to the target symbol — expanding any
+collapsed ancestor directories along the way — and shows its Diff, without
+moving focus off the right pane, so you keep reading rather than switching
+back to tree browsing.
+
+Every jump is recorded in a jumplist: `ctrl-o` returns to where you jumped
+from, and `ctrl-i` moves forward again after a `ctrl-o` — the same
+back/forward history neovim's own jumplist keeps. Jumping to a new
+location from the middle of that history discards whatever forward
+entries existed, the same way neovim's does.
 
 ## Using rinkaku with LLM reviewers
 

@@ -109,55 +109,8 @@ pub fn build_detail(report: &Report, id: &str) -> Option<DetailView> {
         _ => SignatureView::Current(symbol.signature.clone()),
     };
 
-    let mentions_by_id = |target_id: &str| -> Option<SymbolMention> {
-        report.files.iter().find_map(|file| {
-            file.symbols
-                .iter()
-                .find(|s| s.id == target_id)
-                .map(|s| SymbolMention {
-                    id: s.id.clone(),
-                    name: s.name.clone(),
-                    path: file.path.clone(),
-                })
-        })
-    };
-
-    // Edge uniqueness within `graph.edges` is not a contractual guarantee —
-    // `compute_hotspots`'s own doc comment in `rinkaku-core::graph` notes
-    // that a repeated edge between the same pair of nodes is not something
-    // `build_graph` can currently produce, but nothing in this function's
-    // contract depends on that staying true either. Deduping by the other
-    // endpoint's id before collecting mentions keeps a duplicate edge from
-    // making the same caller/callee show up twice in the detail pane's
-    // pivots, mirroring `compute_hotspots`'s own dedup-by-referrer-id.
-    //
-    // Self-edges (`from == to == id`) are filtered the same defensive way:
-    // `collect_edges` in `rinkaku-core::graph` explicitly excludes them
-    // (`if target.id != from.id`), so they cannot occur through the normal
-    // pipeline today, but — same reasoning as the dedup above — this
-    // function's own contract does not want to depend on that staying true
-    // forever. Without this filter, a hypothetical self-edge would make a
-    // symbol list itself as its own caller/callee/used-by, which is never
-    // a meaningful pivot to show a reviewer.
-    let mut seen_callees = HashSet::new();
-    let callees: Vec<SymbolMention> = report
-        .graph
-        .edges
-        .iter()
-        .filter(|edge| edge.from == id && edge.to != id)
-        .filter(|edge| seen_callees.insert(edge.to.as_str()))
-        .filter_map(|edge| mentions_by_id(&edge.to))
-        .collect();
-
-    let mut seen_callers = HashSet::new();
-    let callers: Vec<SymbolMention> = report
-        .graph
-        .edges
-        .iter()
-        .filter(|edge| edge.to == id && edge.from != id)
-        .filter(|edge| seen_callers.insert(edge.from.as_str()))
-        .filter_map(|edge| mentions_by_id(&edge.from))
-        .collect();
+    let callees = symbol_mentions(report, id, MentionDirection::Callees);
+    let callers = symbol_mentions(report, id, MentionDirection::Callers);
 
     // `used_by` is every incoming edge, same set `callers` already
     // computed above — `report.hotspots` is not consulted here because it
@@ -182,6 +135,78 @@ pub fn build_detail(report: &Report, id: &str) -> Option<DetailView> {
         callees,
         callers,
     })
+}
+
+/// Which side of `report.graph.edges` [`symbol_mentions`] should walk: the
+/// symbols `id` references ([`Self::Callees`], outgoing edges) or the
+/// symbols referencing `id` ([`Self::Callers`], incoming edges).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MentionDirection {
+    Callees,
+    Callers,
+}
+
+/// Every present symbol directly connected to `id` in `report.graph.edges`,
+/// in the direction `direction` selects — the callee/caller pivot both
+/// [`build_detail`] (the Detail pane) and jump navigation (ADR 0022's
+/// `gd`/`gr`) need, extracted here rather than duplicated so both callers
+/// share one dedup/self-edge-filter contract instead of two independently
+/// maintained copies of it.
+///
+/// Edge uniqueness within `graph.edges` is not a contractual guarantee —
+/// `compute_hotspots`'s own doc comment in `rinkaku-core::graph` notes that
+/// a repeated edge between the same pair of nodes is not something
+/// `build_graph` can currently produce, but nothing in this function's
+/// contract depends on that staying true either. Deduping by the other
+/// endpoint's id before collecting mentions keeps a duplicate edge from
+/// making the same caller/callee show up twice, mirroring
+/// `compute_hotspots`'s own dedup-by-referrer-id.
+///
+/// Self-edges (`from == to == id`) are filtered the same defensive way:
+/// `collect_edges` in `rinkaku-core::graph` explicitly excludes them (`if
+/// target.id != from.id`), so they cannot occur through the normal pipeline
+/// today, but — same reasoning as the dedup above — this function's own
+/// contract does not want to depend on that staying true forever. Without
+/// this filter, a hypothetical self-edge would make a symbol list itself as
+/// its own caller/callee, which is never a meaningful pivot to show a
+/// reviewer.
+pub fn symbol_mentions(
+    report: &Report,
+    id: &str,
+    direction: MentionDirection,
+) -> Vec<SymbolMention> {
+    let mentions_by_id = |target_id: &str| -> Option<SymbolMention> {
+        report.files.iter().find_map(|file| {
+            file.symbols
+                .iter()
+                .find(|s| s.id == target_id)
+                .map(|s| SymbolMention {
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    path: file.path.clone(),
+                })
+        })
+    };
+
+    let mut seen = HashSet::new();
+    match direction {
+        MentionDirection::Callees => report
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.from == id && edge.to != id)
+            .filter(|edge| seen.insert(edge.to.as_str()))
+            .filter_map(|edge| mentions_by_id(&edge.to))
+            .collect(),
+        MentionDirection::Callers => report
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.to == id && edge.from != id)
+            .filter(|edge| seen.insert(edge.from.as_str()))
+            .filter_map(|edge| mentions_by_id(&edge.from))
+            .collect(),
+    }
 }
 
 /// A cross-directory edge forming part of a directory cycle, as displayed
@@ -784,6 +809,104 @@ mod tests {
         assert_eq!(Vec::<SymbolMention>::new(), actual.callees);
         assert_eq!(Vec::<SymbolMention>::new(), actual.callers);
         assert_eq!(Vec::<SymbolMention>::new(), actual.used_by);
+    }
+
+    // symbol_mentions tests (ADR 0022): direct coverage of the function
+    // extracted out of `build_detail`'s own callee/caller computation, so
+    // jump navigation's use of it is pinned independently of the Detail
+    // pane's own tests above.
+
+    #[test]
+    fn should_return_outgoing_edges_as_callees_via_symbol_mentions() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::a", "a"), symbol("lib.rs::b", "b")],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("lib.rs::a", "lib.rs", "a"),
+                    node("lib.rs::b", "lib.rs", "b"),
+                ],
+                edges: vec![Edge {
+                    from: "lib.rs::a".to_string(),
+                    to: "lib.rs::b".to_string(),
+                    is_cycle: false,
+                }],
+                roots: vec!["lib.rs::a".to_string()],
+            },
+            ..empty_report()
+        };
+
+        let actual = symbol_mentions(&report, "lib.rs::a", MentionDirection::Callees);
+
+        assert_eq!(
+            vec![SymbolMention {
+                id: "lib.rs::b".to_string(),
+                name: "b".to_string(),
+                path: "lib.rs".to_string(),
+            }],
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_incoming_edges_as_callers_via_symbol_mentions() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::a", "a"), symbol("lib.rs::b", "b")],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![
+                    node("lib.rs::a", "lib.rs", "a"),
+                    node("lib.rs::b", "lib.rs", "b"),
+                ],
+                edges: vec![Edge {
+                    from: "lib.rs::a".to_string(),
+                    to: "lib.rs::b".to_string(),
+                    is_cycle: false,
+                }],
+                roots: vec!["lib.rs::a".to_string()],
+            },
+            ..empty_report()
+        };
+
+        let actual = symbol_mentions(&report, "lib.rs::b", MentionDirection::Callers);
+
+        assert_eq!(
+            vec![SymbolMention {
+                id: "lib.rs::a".to_string(),
+                name: "a".to_string(),
+                path: "lib.rs".to_string(),
+            }],
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_empty_mentions_when_symbol_has_no_edges() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![symbol("lib.rs::solo", "solo")],
+            }],
+            graph: SymbolGraph {
+                nodes: vec![node("lib.rs::solo", "lib.rs", "solo")],
+                edges: vec![],
+                roots: vec!["lib.rs::solo".to_string()],
+            },
+            ..empty_report()
+        };
+
+        let callees = symbol_mentions(&report, "lib.rs::solo", MentionDirection::Callees);
+        let callers = symbol_mentions(&report, "lib.rs::solo", MentionDirection::Callers);
+
+        assert_eq!(Vec::<SymbolMention>::new(), callees);
+        assert_eq!(Vec::<SymbolMention>::new(), callers);
     }
 
     // build_dir_detail / build_file_detail tests (TUI iteration 2).

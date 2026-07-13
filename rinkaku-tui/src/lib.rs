@@ -210,23 +210,12 @@ fn run_app(
                         Err(message) => app.set_status(message),
                     }
                 }
-            } else if let InputKey::NextHunk | InputKey::PrevHunk = input_key
-                && should_apply_hunk_jump(&app)
-            {
-                // Hunk jumping needs the shaped diff content already
-                // cached above (`diff_pane_content`) to know where each
-                // hunk starts — `App::handle_key` itself has no notion of
-                // that content, so the jump target is computed here, at
-                // the one place both `app` and `diff_pane_content` are in
-                // scope, rather than threading the whole shaped content
-                // into `App` just for this.
-                let scroll = diff_shape::hunk_start_lines(&diff_pane_content);
-                let next = jump_scroll_target(&scroll, app.right_pane_scroll(), input_key);
-                if let Some(target) = next {
-                    app = app.handle_key(input_key).with_right_pane_scroll(target);
-                }
             } else {
-                app = app.handle_key(input_key);
+                // Every non-`Source` key's dispatch is pure (no IO), so it
+                // lives in its own function rather than inline here — see
+                // `dispatch_non_source_key`'s own doc comment for why this
+                // split exists (ADR 0022's `pending_prefix` regression).
+                app = dispatch_non_source_key(app, report, &diff_pane_content, input_key);
             }
 
             if should_recompute_pivot_selection(&app) {
@@ -241,6 +230,90 @@ fn run_app(
             }
         }
     }
+}
+
+/// Dispatches one [`InputKey`] that is not [`InputKey::Source`] (the one
+/// key `crate::run_app`'s loop handles inline instead, since it needs a
+/// real file read — ADR 0016's "IO isolated to one function" discipline
+/// keeps that read out of this otherwise-pure function) against `app`,
+/// given `report` and the already-cached `diff_pane_content` both
+/// `NextHunk`/`PrevHunk` and `GotoDefinition`/`GotoReferences` need but
+/// `App::handle_key` itself has no access to (`InputKey::NextHunk`'s own
+/// doc comment). Returns the next `App`.
+///
+/// Extracted out of `run_app`'s loop body specifically to make this
+/// dispatch sequence unit-testable without a live `ratatui::DefaultTerminal`
+/// — `run_app` itself cannot be driven directly in a test, so a bug in the
+/// *sequencing* of this dispatch (as opposed to a bug in one arm's own
+/// logic, which the arm's own unit tests already cover) had no regression
+/// coverage before this function existed. That gap is exactly how ADR
+/// 0022's `pending_prefix` bug survived review: every existing test called
+/// `App::handle_key` directly, which always runs its own unconditional
+/// `pending_prefix` clear — the bug was specifically that `run_app`'s old
+/// inline `GotoDefinition`/`GotoReferences` branch *skipped* that call
+/// entirely, a defect only visible by testing this exact dispatch sequence,
+/// not `handle_key` in isolation.
+fn dispatch_non_source_key(
+    mut app: App,
+    report: &Report,
+    diff_pane_content: &diff_shape::DiffPaneContent,
+    input_key: InputKey,
+) -> App {
+    if let InputKey::NextHunk | InputKey::PrevHunk = input_key
+        && should_apply_hunk_jump(&app)
+    {
+        // Hunk jumping needs the shaped diff content already cached by the
+        // caller (to know where each hunk starts — `App::handle_key` itself
+        // has no notion of that content), so the jump target is computed
+        // here rather than inside `App`.
+        let scroll = diff_shape::hunk_start_lines(diff_pane_content);
+        let next = jump_scroll_target(&scroll, app.right_pane_scroll(), input_key);
+        if let Some(target) = next {
+            return app.handle_key(input_key).with_right_pane_scroll(target);
+        }
+        return app;
+    }
+
+    if let InputKey::GotoDefinition | InputKey::GotoReferences = input_key {
+        // `gd`/`gr` candidate resolution needs `report.graph.edges`
+        // (`crate::detail::symbol_mentions`), which `App::handle_key` has no
+        // access to (ADR 0022, mirroring `NextHunk`/`PrevHunk`'s own
+        // precedent just above) — resolved here, then applied via
+        // `App::jump_to_symbol`/`App::open_jump_popup`/`App::set_status`
+        // depending on the candidate count (`resolve_goto`'s own doc
+        // comment on the three-way split).
+        //
+        // `app.handle_key(input_key)` is called first (post-review finding),
+        // even though its own match arm for these two variants is a no-op
+        // stub — what matters is not that arm, it is `handle_key`'s own
+        // unconditional `pending_prefix` clear at the top of the function.
+        // Skipping this call, an earlier version of this dispatch did,
+        // meant `gd`/`gr` was the one key in this whole function that never
+        // reached `App::handle_key` at all, so a `gd`/`gr` press left
+        // `pending_prefix` stuck at `Some(G)` and the *next* `d`/`r` the
+        // reviewer typed for its own ordinary reason (`ToggleDiff`, or
+        // nothing at all) silently re-resolved as another `GotoDefinition`/
+        // `GotoReferences` instead of its own meaning — violating ADR
+        // 0022's own "any other key discards the pending prefix" guarantee.
+        // Reading `app.selected_symbol_id()`/cursor state via `resolve_goto`
+        // *after* this call is safe: the no-op stub touches nothing but
+        // `pending_prefix` for these two variants.
+        app = app.handle_key(input_key);
+        return match resolve_goto(&app, report, input_key) {
+            GotoOutcome::NoSymbolSelected => {
+                app.set_status("note: no symbol selected");
+                app
+            }
+            GotoOutcome::NoCandidates(direction) => {
+                app.set_status(format!("note: no {direction}"));
+                app
+            }
+            GotoOutcome::One(candidate) => app.jump_to_symbol(&candidate.id),
+            GotoOutcome::Many(candidates) => app.open_jump_popup(candidates),
+        };
+    }
+
+    app.handle_key(input_key)
 }
 
 /// Whether `crate::run_app`'s event loop should recompute the diff pane's
@@ -300,6 +373,65 @@ fn jump_scroll_target(
     }
 }
 
+/// What `crate::run_app` should do next for a pending `gd`/`gr` press (ADR
+/// 0022's "0/1/many" branching): no symbol was selected at all, the
+/// selected symbol has no candidates in the requested direction (carrying a
+/// human-readable direction label, `"callees"`/`"callers"`, for the status
+/// message — plain data, not formatted text, matching this crate's own
+/// "view-model, not string-building, outside `ui.rs`" convention), exactly
+/// one candidate (jump immediately), or more than one (open the popup).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GotoOutcome {
+    NoSymbolSelected,
+    NoCandidates(&'static str),
+    One(app::JumpCandidate),
+    Many(Vec<app::JumpCandidate>),
+}
+
+/// Resolves a pending [`InputKey::GotoDefinition`]/[`InputKey::GotoReferences`]
+/// press into a [`GotoOutcome`], given `app`'s current cursor selection and
+/// `report`'s graph — the computation `App::handle_key` cannot do itself
+/// (ADR 0022's own rationale on `InputKey::GotoDefinition`), extracted as
+/// its own pure function (rather than inlined in `run_app`, which takes a
+/// live terminal and so cannot be driven directly in a test) so the 0/1/many
+/// branching is unit-testable without one, mirroring `jump_scroll_target`'s
+/// own precedent just above.
+fn resolve_goto(app: &App, report: &Report, direction: InputKey) -> GotoOutcome {
+    let Some(symbol_id) = app.selected_symbol_id() else {
+        return GotoOutcome::NoSymbolSelected;
+    };
+
+    let (mention_direction, label) = match direction {
+        InputKey::GotoDefinition => (crate::detail::MentionDirection::Callees, "callees"),
+        InputKey::GotoReferences => (crate::detail::MentionDirection::Callers, "callers"),
+        // Unreachable: this function's only call site (`dispatch_non_source_key`)
+        // already guards on `matches!(input_key, InputKey::GotoDefinition |
+        // InputKey::GotoReferences)` before calling here, so `direction` is
+        // never anything else in practice. `GotoOutcome::NoSymbolSelected`
+        // is a misleading label for this branch specifically (this has
+        // nothing to do with whether a symbol is selected — it is a
+        // different caller-contract violation entirely), but is reused
+        // rather than adding a dedicated `GotoOutcome` variant purely for an
+        // unreachable defensive fallback; the important part is that this
+        // never panics on a future caller mistake, not that its exact label
+        // is semantically precise for a branch that cannot be reached today.
+        _ => return GotoOutcome::NoSymbolSelected,
+    };
+
+    let mentions = crate::detail::symbol_mentions(report, symbol_id, mention_direction);
+    let mut candidates = mentions.iter().map(app::JumpCandidate::from);
+
+    match (candidates.next(), candidates.next()) {
+        (None, _) => GotoOutcome::NoCandidates(label),
+        (Some(only), None) => GotoOutcome::One(only),
+        (Some(first), Some(second)) => {
+            let mut all = vec![first, second];
+            all.extend(candidates);
+            GotoOutcome::Many(all)
+        }
+    }
+}
+
 /// Whether `crate::run_app`'s event loop should recompute the pivot
 /// selection this key, rather than keep showing the previously cached one
 /// (this function's own extraction is what makes that decision
@@ -330,6 +462,19 @@ fn should_recompute_pivot_selection(app: &App) -> bool {
 /// (swallowing every non-`ToggleHelp` key while open) — belt and braces,
 /// since "the overlay is a safe action that can never accidentally quit
 /// the app" is exactly the property ADR 0020 asks this feature to hold.
+///
+/// `app.jump_popup()` (ADR 0022) is the next short-circuit, mirroring the
+/// help overlay's own structure: while the jump-target popup is open,
+/// `j`/`k`/Up/Down move its own selection, Enter confirms (`PopupConfirm`),
+/// Esc cancels (`PopupCancel`), and every other key is swallowed.
+///
+/// `app.pending_prefix()` (ADR 0022) is consulted only for `d`/`r`: when a
+/// `g` press is still pending, `d` resolves to `GotoDefinition` and `r` to
+/// `GotoReferences` instead of their own ordinary meanings (`ToggleDiff`/
+/// unbound) — every other key falls through to its normal translation
+/// unconditionally, which is what lets the pending prefix's own state
+/// (`App::handle_key`'s blanket clear-unless-`PendingGoto` rule) correctly
+/// unwind on any key that is not `d`/`r`.
 fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
     if app.help_open() {
         return match code {
@@ -338,8 +483,26 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         };
     }
 
+    if app.jump_popup().is_some() {
+        return match code {
+            KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
+            KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
+            KeyCode::Enter => Some(InputKey::PopupConfirm),
+            KeyCode::Esc => Some(InputKey::PopupCancel),
+            _ => None,
+        };
+    }
+
     let on_source_screen = matches!(app.screen(), Screen::Source { .. });
     let right_focused = app.focus() == app::Focus::Right;
+
+    if app.pending_prefix() == Some(app::PendingPrefix::G) {
+        match code {
+            KeyCode::Char('d') | KeyCode::Char('D') => return Some(InputKey::GotoDefinition),
+            KeyCode::Char('r') | KeyCode::Char('R') => return Some(InputKey::GotoReferences),
+            _ => {}
+        }
+    }
 
     match code {
         KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
@@ -358,6 +521,21 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char('e') | KeyCode::Char('E') => Some(InputKey::ExpandAll),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::Quit),
         KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
+        KeyCode::Char('o') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::JumpBack),
+        // Ctrl-I and Tab share the same control code (0x09) at the terminal
+        // protocol level — without Kitty's keyboard-enhancement protocol
+        // (which this crate does not enable), a real Ctrl-I keypress
+        // arrives here as plain `KeyCode::Tab`, not `KeyCode::Char('i')` +
+        // `CONTROL` (confirmed via manual tmux testing against a real
+        // terminal, not just documentation: the `Char('i') + CONTROL` arm
+        // alone never matched a real Ctrl-I press). Both patterns are kept
+        // so this still works correctly in an environment that *does*
+        // report the modifier form (e.g. a test harness constructing the
+        // event directly, as this module's own tests do).
+        KeyCode::Tab => Some(InputKey::JumpForward),
+        KeyCode::Char('i') if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(InputKey::JumpForward)
+        }
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
         KeyCode::Char('p') | KeyCode::Char('P') => Some(InputKey::TogglePivot),
@@ -378,6 +556,12 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char(']') => Some(InputKey::NextHunk),
         KeyCode::Char('[') => Some(InputKey::PrevHunk),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
+        // `g` (ADR 0022): the first half of the `gd`/`gr` two-key sequence.
+        // Checked after the `pending_prefix` resolution above so a second
+        // `g` press (`gg`, not a bound sequence today) simply restarts the
+        // pending state rather than doing anything else — `App::handle_key`
+        // sets `pending_prefix` from this variant unconditionally.
+        KeyCode::Char('g') => Some(InputKey::PendingGoto),
         KeyCode::Char('?') => Some(InputKey::ToggleHelp),
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
@@ -819,5 +1003,404 @@ mod tests {
         let actual = jump_scroll_target(&hunk_starts, 3, InputKey::NextHunk);
 
         assert_eq!(Some(10), actual);
+    }
+
+    // g-prefix and jump-popup translate_key tests (ADR 0022).
+
+    #[test]
+    fn should_translate_g_to_pending_goto() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('g'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::PendingGoto), actual);
+    }
+
+    #[test]
+    fn should_translate_d_to_goto_definition_when_g_is_pending() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+        let actual = translate_key(KeyCode::Char('d'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::GotoDefinition), actual);
+    }
+
+    #[test]
+    fn should_translate_r_to_goto_references_when_g_is_pending() {
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+        let actual = translate_key(KeyCode::Char('r'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::GotoReferences), actual);
+    }
+
+    #[test]
+    fn should_translate_d_to_toggle_diff_when_no_prefix_is_pending() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('d'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleDiff), actual);
+    }
+
+    #[test]
+    fn should_fall_through_to_ordinary_meaning_when_a_non_dr_key_follows_pending_goto() {
+        // `gj` is not a bound sequence — `j` must still translate to its own
+        // ordinary `Down` meaning, not be swallowed just because a prefix
+        // was pending (`App::handle_key`'s blanket clear-unless-`PendingGoto`
+        // rule is what actually unwinds `pending_prefix` on the next key;
+        // this test only pins `translate_key`'s own half of that contract).
+        let report = empty_report();
+        let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+        let actual = translate_key(KeyCode::Char('j'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::Down), actual);
+    }
+
+    #[test]
+    fn should_translate_ctrl_o_to_jump_back() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('o'), KeyModifiers::CONTROL, &app);
+
+        assert_eq!(Some(InputKey::JumpBack), actual);
+    }
+
+    #[test]
+    fn should_translate_ctrl_i_to_jump_forward() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('i'), KeyModifiers::CONTROL, &app);
+
+        assert_eq!(Some(InputKey::JumpForward), actual);
+    }
+
+    #[test]
+    fn should_translate_tab_to_jump_forward() {
+        // A real Ctrl-I keypress arrives here as `KeyCode::Tab`, not
+        // `KeyCode::Char('i')` + `CONTROL` — confirmed via manual testing
+        // against a real terminal (tmux), since Ctrl-I and Tab share the
+        // same control code (0x09) without Kitty's keyboard-enhancement
+        // protocol, which this crate does not enable. Without this mapping,
+        // Ctrl-i silently did nothing in practice despite the
+        // `Char('i') + CONTROL` test above passing.
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Tab, KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::JumpForward), actual);
+    }
+
+    #[test]
+    fn should_translate_plain_o_to_toggle_order_without_control_modifier() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('o'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleOrder), actual);
+    }
+
+    fn candidate(id: &str, name: &str, path: &str) -> app::JumpCandidate {
+        app::JumpCandidate {
+            id: id.to_string(),
+            name: name.to_string(),
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn should_translate_j_and_k_to_popup_motion_while_jump_popup_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).open_jump_popup(vec![candidate("a", "a", "a.rs")]);
+
+        assert_eq!(
+            Some(InputKey::Down),
+            translate_key(KeyCode::Char('j'), KeyModifiers::NONE, &app)
+        );
+        assert_eq!(
+            Some(InputKey::Up),
+            translate_key(KeyCode::Char('k'), KeyModifiers::NONE, &app)
+        );
+    }
+
+    #[test]
+    fn should_translate_enter_to_popup_confirm_while_jump_popup_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).open_jump_popup(vec![candidate("a", "a", "a.rs")]);
+
+        let actual = translate_key(KeyCode::Enter, KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::PopupConfirm), actual);
+    }
+
+    #[test]
+    fn should_translate_esc_to_popup_cancel_while_jump_popup_is_open() {
+        let report = empty_report();
+        let app = App::new(&report).open_jump_popup(vec![candidate("a", "a", "a.rs")]);
+
+        let actual = translate_key(KeyCode::Esc, KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::PopupCancel), actual);
+    }
+
+    #[test]
+    fn should_translate_q_to_none_while_jump_popup_is_open() {
+        // `q` must not fall through to `Quit` while the popup is open —
+        // mirrors the help overlay's own "swallow everything but the
+        // close/confirm/cancel keys" contract.
+        let report = empty_report();
+        let app = App::new(&report).open_jump_popup(vec![candidate("a", "a", "a.rs")]);
+
+        let actual = translate_key(KeyCode::Char('q'), KeyModifiers::NONE, &app);
+
+        assert_eq!(None, actual);
+    }
+
+    // resolve_goto tests (ADR 0022): the 0/1/many candidate resolution that
+    // needs `report`, extracted so it is unit-testable without a live
+    // terminal (this function's own doc comment).
+
+    fn report_with_symbols_and_edges(
+        symbols_by_file: Vec<(&str, Vec<&str>)>,
+        edges: Vec<(&str, &str)>,
+    ) -> Report {
+        use rinkaku_core::diff::LineRange;
+        use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
+        use rinkaku_core::graph::{Edge, Node, SymbolGraph};
+        use rinkaku_core::render::FileReport;
+
+        let files: Vec<FileReport> = symbols_by_file
+            .iter()
+            .map(|(path, names)| FileReport {
+                path: path.to_string(),
+                symbols: names
+                    .iter()
+                    .map(|name| ExtractedSymbol {
+                        id: format!("{path}::{name}"),
+                        name: name.to_string(),
+                        kind: SymbolKind::Function,
+                        signature: format!("fn {name}()"),
+                        range: LineRange { start: 1, end: 1 },
+                        container: None,
+                        referenced_names: vec![],
+                        dependencies: vec![],
+                        omitted_dependency_matches: 0,
+                        is_test: false,
+                        classification: None,
+                        previous_signature: None,
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        let nodes: Vec<Node> = symbols_by_file
+            .iter()
+            .flat_map(|(path, names)| {
+                names.iter().map(move |name| Node {
+                    id: format!("{path}::{name}"),
+                    path: path.to_string(),
+                    name: name.to_string(),
+                })
+            })
+            .collect();
+
+        let graph_edges: Vec<Edge> = edges
+            .into_iter()
+            .map(|(from, to)| Edge {
+                from: from.to_string(),
+                to: to.to_string(),
+                is_cycle: false,
+            })
+            .collect();
+
+        Report {
+            files,
+            graph: SymbolGraph {
+                nodes,
+                edges: graph_edges,
+                roots: vec![],
+            },
+            ..empty_report()
+        }
+    }
+
+    #[test]
+    fn should_return_no_symbol_selected_when_cursor_is_not_on_a_symbol_row() {
+        let report = report_with_symbols_and_edges(vec![("lib.rs", vec!["foo"])], vec![]);
+        let app = App::new(&report); // cursor on "lib.rs" (a File row)
+
+        let actual = resolve_goto(&app, &report, InputKey::GotoDefinition);
+
+        assert_eq!(GotoOutcome::NoSymbolSelected, actual);
+    }
+
+    #[test]
+    fn should_return_no_candidates_when_selected_symbol_has_no_callees() {
+        let report = report_with_symbols_and_edges(vec![("lib.rs", vec!["foo"])], vec![]);
+        let app = App::new(&report).handle_key(InputKey::Down); // cursor on "foo"
+
+        let actual = resolve_goto(&app, &report, InputKey::GotoDefinition);
+
+        assert_eq!(GotoOutcome::NoCandidates("callees"), actual);
+    }
+
+    #[test]
+    fn should_return_one_candidate_when_selected_symbol_has_exactly_one_callee() {
+        let report = report_with_symbols_and_edges(
+            vec![("lib.rs", vec!["foo", "bar"])],
+            vec![("lib.rs::foo", "lib.rs::bar")],
+        );
+        let app = App::new(&report).handle_key(InputKey::Down); // cursor on "foo"
+
+        let actual = resolve_goto(&app, &report, InputKey::GotoDefinition);
+
+        assert_eq!(
+            GotoOutcome::One(candidate("lib.rs::bar", "bar", "lib.rs")),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_many_candidates_when_selected_symbol_has_multiple_callees() {
+        let report = report_with_symbols_and_edges(
+            vec![("lib.rs", vec!["foo", "bar", "baz"])],
+            vec![
+                ("lib.rs::foo", "lib.rs::bar"),
+                ("lib.rs::foo", "lib.rs::baz"),
+            ],
+        );
+        let app = App::new(&report).handle_key(InputKey::Down); // cursor on "foo"
+
+        let actual = resolve_goto(&app, &report, InputKey::GotoDefinition);
+
+        assert_eq!(
+            GotoOutcome::Many(vec![
+                candidate("lib.rs::bar", "bar", "lib.rs"),
+                candidate("lib.rs::baz", "baz", "lib.rs"),
+            ]),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_resolve_callers_direction_when_goto_references_is_requested() {
+        let report = report_with_symbols_and_edges(
+            vec![("lib.rs", vec!["foo", "bar"])],
+            vec![("lib.rs::foo", "lib.rs::bar")],
+        );
+        // Cursor on "bar" (row 2): "foo" is its one caller.
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down);
+
+        let actual = resolve_goto(&app, &report, InputKey::GotoReferences);
+
+        assert_eq!(
+            GotoOutcome::One(candidate("lib.rs::foo", "foo", "lib.rs")),
+            actual
+        );
+    }
+
+    // dispatch_non_source_key regression tests: the `run_app`-equivalent
+    // dispatch sequence (as opposed to calling `App::handle_key` directly,
+    // which every test above this point does and which was exactly why the
+    // `pending_prefix` bug survived until manual/review testing caught it —
+    // `App::handle_key`'s own unconditional prefix-clear ran fine in every
+    // one of those tests, but `run_app`'s old inline `GotoDefinition`/
+    // `GotoReferences` branch skipped calling it in the first place).
+
+    #[test]
+    fn should_clear_pending_prefix_so_next_d_toggles_diff_after_a_one_candidate_gd_jump() {
+        let report = report_with_symbols_and_edges(
+            vec![("lib.rs", vec!["foo", "bar"])],
+            vec![("lib.rs::foo", "lib.rs::bar")],
+        );
+        // Cursor on "foo" (row 1): "bar" is its one callee, so `gd` jumps
+        // immediately rather than opening the popup.
+        let app = App::new(&report).handle_key(InputKey::Down);
+        let diff_content = diff_shape::DiffPaneContent::Empty;
+
+        // Simulates the real `g` then `d` key sequence: `translate_key`
+        // emits `PendingGoto` for `g`, then (because `pending_prefix` is
+        // now set) `GotoDefinition` for the following `d` — both routed
+        // through `dispatch_non_source_key`, the same function `run_app`
+        // itself calls, rather than `App::handle_key` directly.
+        let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PendingGoto);
+        assert_eq!(Some(app::PendingPrefix::G), app.pending_prefix());
+        let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::GotoDefinition);
+        assert_eq!(None, app.pending_prefix(), "gd must clear pending_prefix");
+
+        // The regression itself: a *plain* `d` right after the jump must
+        // toggle the right pane (`ToggleDiff`'s own ordinary meaning), not
+        // silently re-resolve as another `gd` because `pending_prefix` was
+        // still `Some(G)` — `crate::lib::translate_key` only produces
+        // `GotoDefinition` for a `d` when `pending_prefix() == Some(G)`, so
+        // this assertion on `right_pane()` is an indirect but faithful proxy
+        // for "the next `d` meant ToggleDiff, not gd".
+        let right_pane_before = app.right_pane();
+        let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::ToggleDiff);
+        assert_ne!(
+            right_pane_before,
+            app.right_pane(),
+            "d after gd must toggle the right pane like an ordinary ToggleDiff press"
+        );
+    }
+
+    #[test]
+    fn should_clear_pending_prefix_so_next_d_toggles_diff_after_a_multi_candidate_gr_popup_is_cancelled()
+     {
+        let report = report_with_symbols_and_edges(
+            vec![("lib.rs", vec!["foo", "bar", "baz"])],
+            vec![
+                ("lib.rs::foo", "lib.rs::bar"),
+                ("lib.rs::baz", "lib.rs::bar"),
+            ],
+        );
+        // Cursor on "bar" (row 2): both "foo" and "baz" call it, so `gr`
+        // opens the popup rather than jumping immediately.
+        let app = App::new(&report)
+            .handle_key(InputKey::Down)
+            .handle_key(InputKey::Down);
+        let diff_content = diff_shape::DiffPaneContent::Empty;
+
+        let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PendingGoto);
+        let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::GotoReferences);
+        assert!(
+            app.jump_popup().is_some(),
+            "gr with 2 candidates must open the popup"
+        );
+        assert_eq!(
+            None,
+            app.pending_prefix(),
+            "gr must clear pending_prefix even though it opened a popup instead of jumping"
+        );
+
+        // Cancel the popup (Esc) — `App::handle_key`'s own popup-open early
+        // return is the second path the #61-review finding flagged: it used
+        // to return before the (then-later-positioned) `pending_prefix`
+        // clear, so a stale prefix could survive an entire popup session.
+        let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PopupCancel);
+        assert_eq!(None, app.jump_popup());
+        assert_eq!(None, app.pending_prefix());
+
+        // Same regression check as the single-candidate test above: a plain
+        // `d` after the cancelled popup must toggle the right pane, not
+        // silently re-resolve as another `gr`.
+        let right_pane_before = app.right_pane();
+        let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::ToggleDiff);
+        assert_ne!(
+            right_pane_before,
+            app.right_pane(),
+            "d after a cancelled gr popup must toggle the right pane like an ordinary ToggleDiff press"
+        );
     }
 }

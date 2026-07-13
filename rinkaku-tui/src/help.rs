@@ -102,6 +102,22 @@ const GLOBAL_BINDINGS: &[KeyBinding] = &[
         description: "Open the source view for the symbol under the cursor",
     },
     KeyBinding {
+        keys: "gd",
+        description: "Jump to a callee of the symbol under the cursor",
+    },
+    KeyBinding {
+        keys: "gr",
+        description: "Jump to a caller of the symbol under the cursor",
+    },
+    KeyBinding {
+        keys: "ctrl-o",
+        description: "Jump back to the previous location in the jumplist",
+    },
+    KeyBinding {
+        keys: "ctrl-i",
+        description: "Jump forward to the next location in the jumplist",
+    },
+    KeyBinding {
         keys: "?",
         description: "Toggle this help overlay",
     },
@@ -142,6 +158,10 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "cycle",
         explanation: "A closing back-edge in the dependency graph — two or more directories depend on each other",
+    },
+    GlossaryEntry {
+        term: "jumplist",
+        explanation: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it",
     },
 ];
 
@@ -188,6 +208,33 @@ mod tests {
 
         assert!(terms.contains(&"pivot"));
         assert!(terms.contains(&"cycle"));
+    }
+
+    #[test]
+    fn should_include_a_glossary_entry_for_jumplist() {
+        let terms: Vec<&str> = HELP_CONTENT
+            .glossary
+            .iter()
+            .map(|entry| entry.term)
+            .collect();
+
+        assert!(terms.contains(&"jumplist"));
+    }
+
+    #[test]
+    fn should_document_gd_gr_and_jumplist_bindings_in_the_global_group() {
+        let global = HELP_CONTENT
+            .keymap_groups
+            .iter()
+            .find(|group| group.title == "Global")
+            .expect("Global group present");
+
+        let keys: Vec<&str> = global.bindings.iter().map(|binding| binding.keys).collect();
+
+        assert!(keys.contains(&"gd"));
+        assert!(keys.contains(&"gr"));
+        assert!(keys.contains(&"ctrl-o"));
+        assert!(keys.contains(&"ctrl-i"));
     }
 
     #[test]

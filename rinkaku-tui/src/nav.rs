@@ -125,6 +125,53 @@ impl Nav {
         true
     }
 
+    /// Moves the cursor to the [`NodeKind::Symbol`] row whose
+    /// [`crate::tree::SymbolRef::id`] equals `symbol_id`, expanding every
+    /// collapsed ancestor directory/file on the path to it, or leaves the
+    /// cursor untouched (returning `false`) when no row's symbol id matches
+    /// at all. Exists for jump navigation (ADR 0022's `gd`/`gr`), a sibling
+    /// to [`Self::move_cursor_to_path`] rather than a generalization of it —
+    /// that method deliberately excludes `Symbol` rows (its own doc comment)
+    /// because pivoting has no single-symbol-scoped meaning, and this method
+    /// is symbol-only for the mirror-image reason: a jump target is always a
+    /// specific symbol, never a directory/file.
+    ///
+    /// Unlike `move_cursor_to_path`'s "no-op if hidden under a collapsed
+    /// ancestor" contract (appropriate for `--entry`'s startup-time pivot,
+    /// where a fresh `App` is always fully expanded and a miss is genuinely
+    /// a wrong path), a mid-session jump target is very likely to be folded
+    /// away by the time the reviewer presses `gd`/`gr` — silently failing to
+    /// jump because of unrelated fold state would defeat the feature's own
+    /// purpose, so this method expands whatever stands in the way instead of
+    /// giving up.
+    pub fn move_cursor_to_symbol(&mut self, tree: &Tree, symbol_id: &str) -> bool {
+        let Some(path_chain) = find_symbol_ancestor_chain(tree, symbol_id) else {
+            return false;
+        };
+        // Expand every ancestor directory/file on the path to the target
+        // (all but the last entry, which is the symbol's own file — files
+        // have no `collapsed` entry of their own to expand, only their
+        // directory ancestors do, but removing a path that was never
+        // collapsed is a harmless no-op).
+        for ancestor_path in &path_chain {
+            self.collapsed.remove(ancestor_path);
+        }
+
+        let rows = self.rows(tree);
+        let Some(index) = rows.iter().position(|row| {
+            matches!(&row.node.kind, NodeKind::Symbol(symbol_ref) if symbol_ref.id == symbol_id)
+        }) else {
+            // Defensive: `find_symbol_ancestor_chain` already found this
+            // node in `tree`, and every ancestor was just expanded above, so
+            // the row must now be visible — this branch only guards against
+            // a future bug in the expansion logic rather than a reachable
+            // runtime condition.
+            return false;
+        };
+        self.cursor = index;
+        true
+    }
+
     fn push_rows<'a>(&self, node: &'a TreeNode, depth: usize, rows: &mut Vec<Row<'a>>) {
         let has_children = !node.children.is_empty();
         let expanded = has_children && !self.collapsed.contains(&node.path);
@@ -295,6 +342,39 @@ fn collect_collapsible(node: &TreeNode, paths: &mut HashSet<String>) {
     }
 }
 
+/// Every ancestor directory/file path (nearest first, i.e. the symbol's own
+/// containing file first, then that file's directory, out to the root) on
+/// the way to the [`NodeKind::Symbol`] row whose id equals `symbol_id`, or
+/// `None` when no such symbol exists anywhere in `tree` — a plain tree walk
+/// independent of any [`Nav`]'s collapse state (unlike
+/// [`Nav::push_rows`]/[`Nav::rows`], which skip collapsed subtrees), since
+/// [`Nav::move_cursor_to_symbol`] needs to find the target and its ancestors
+/// *regardless* of what is currently folded, precisely so it can expand
+/// them.
+fn find_symbol_ancestor_chain(tree: &Tree, symbol_id: &str) -> Option<Vec<String>> {
+    for root in &tree.roots {
+        if let Some(chain) = collect_symbol_ancestor_chain(root, symbol_id) {
+            return Some(chain);
+        }
+    }
+    None
+}
+
+fn collect_symbol_ancestor_chain(node: &TreeNode, symbol_id: &str) -> Option<Vec<String>> {
+    if let NodeKind::Symbol(symbol_ref) = &node.kind
+        && symbol_ref.id == symbol_id
+    {
+        return Some(Vec::new());
+    }
+    for child in &node.children {
+        if let Some(mut chain) = collect_symbol_ancestor_chain(child, symbol_id) {
+            chain.push(node.path.clone());
+            return Some(chain);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +486,73 @@ mod tests {
 
         assert!(!actual);
         assert_eq!(0, nav.cursor());
+    }
+
+    #[test]
+    fn should_move_cursor_to_matching_symbol_row_when_symbol_id_matches() {
+        let tree = sample_tree();
+        let mut nav = Nav::new();
+
+        let actual = nav.move_cursor_to_symbol(&tree, "src/lib.rs::bar");
+
+        assert!(actual);
+        // Row 3 is "bar" (src(0), src/lib.rs(1), foo(2), bar(3)).
+        assert_eq!(3, nav.cursor());
+    }
+
+    #[test]
+    fn should_not_move_cursor_when_no_symbol_id_matches() {
+        let tree = sample_tree();
+        let mut nav = Nav::new().handle(Action::CursorDown, &tree);
+        assert_eq!(1, nav.cursor());
+
+        let actual = nav.move_cursor_to_symbol(&tree, "no/such/id");
+
+        assert!(!actual);
+        assert_eq!(1, nav.cursor());
+    }
+
+    #[test]
+    fn should_expand_collapsed_ancestor_when_jumping_to_a_hidden_symbol() {
+        let tree = sample_tree();
+        let mut nav = Nav::new().handle(Action::ToggleExpand, &tree); // collapse "src"
+        assert_eq!(vec!["src"], row_paths(&nav.rows(&tree)));
+
+        let actual = nav.move_cursor_to_symbol(&tree, "src/lib.rs::foo");
+
+        assert!(actual);
+        let rows = nav.rows(&tree);
+        assert_eq!(
+            vec!["src", "src/lib.rs", "src/lib.rs", "src/lib.rs"],
+            row_paths(&rows)
+        );
+        assert_eq!("foo", symbol_name(&rows[nav.cursor()]));
+    }
+
+    #[test]
+    fn should_expand_multiple_collapsed_ancestors_when_jumping_to_a_deeply_hidden_symbol() {
+        let tree = deep_tree();
+        let mut nav = Nav::new();
+        // Collapse both "src" and "src/pkg" so the target symbol is hidden
+        // two levels deep.
+        nav = nav.handle(Action::ToggleExpand, &tree); // collapse "src" (cursor was on it)
+        assert_eq!(vec!["src"], row_paths(&nav.rows(&tree)));
+
+        let actual = nav.move_cursor_to_symbol(&tree, "src/pkg/lib.rs::bar");
+
+        assert!(actual);
+        let rows = nav.rows(&tree);
+        assert_eq!(
+            vec![
+                "src",
+                "src/pkg",
+                "src/pkg/lib.rs",
+                "src/pkg/lib.rs",
+                "src/pkg/lib.rs"
+            ],
+            row_paths(&rows)
+        );
+        assert_eq!("bar", symbol_name(&rows[nav.cursor()]));
     }
 
     #[test]
@@ -566,6 +713,16 @@ mod tests {
 
     fn row_paths<'a>(rows: &'a [Row<'a>]) -> Vec<&'a str> {
         rows.iter().map(|r| r.node.path.as_str()).collect()
+    }
+
+    /// The `name` of a [`NodeKind::Symbol`] row — panics on any other row
+    /// kind, since every call site above already knows (from its own
+    /// fixture) that the cursor should have landed on a symbol row.
+    fn symbol_name<'a>(row: &Row<'a>) -> &'a str {
+        match &row.node.kind {
+            NodeKind::Symbol(symbol_ref) => symbol_ref.name.as_str(),
+            other => panic!("expected NodeKind::Symbol, got {other:?}"),
+        }
     }
 
     // CRITICAL 2 regression: `cursor()`'s doc comment invites

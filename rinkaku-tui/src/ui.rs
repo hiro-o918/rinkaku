@@ -80,6 +80,9 @@ pub fn draw(
     if app.help_open() {
         draw_help_overlay(frame, area);
     }
+    if let Some(popup) = app.jump_popup() {
+        draw_jump_popup(frame, popup, area);
+    }
 }
 
 /// Draws the `?` help overlay (ADR 0020) centered over `full_area`: a
@@ -152,6 +155,69 @@ fn centered_rect(area: Rect, percent_width: u16, percent_height: u16) -> Rect {
     center
 }
 
+/// Draws the jump-target popup (ADR 0022) centered over `full_area`,
+/// listing every candidate as `name (path)` with the currently highlighted
+/// one shown reversed — the same `Clear`-first, centered-bordered-box
+/// compositing `draw_help_overlay` already uses, just a narrower and
+/// shorter box (60% x 40%, vs. the help overlay's 80% x 90%) since a
+/// candidate list is typically much shorter than the whole keymap.
+///
+/// Windowed around `popup.cursor` via [`windowed_rows_with_indicators`]
+/// (post-#61 review finding: this used to hand every candidate to
+/// `Paragraph` unscrolled, so a popup with more candidates than the box's
+/// height could select an off-screen candidate with no visual feedback at
+/// all) — the same cursor-follow scroll `draw_tree_pane` uses, plus dim
+/// "… N more above/below" lines inside the box when the window does not
+/// reach an edge of the candidate list.
+fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, full_area: Rect) {
+    let overlay_area = centered_rect(full_area, 60, 40);
+    frame.render_widget(Clear, overlay_area);
+
+    // 2 rows for the top/bottom border, matching `render_scrollable_pane`'s
+    // own `saturating_sub(2)` convention for a bordered pane's inner height.
+    let viewport_height = overlay_area.height.saturating_sub(2) as usize;
+    let (start, end, above, below) =
+        windowed_rows_with_indicators(popup.candidates.len(), popup.cursor, viewport_height);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if let Some(above) = above {
+        lines.push(Line::styled(
+            above,
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    lines.extend(
+        popup.candidates[start..end]
+            .iter()
+            .enumerate()
+            .map(|(offset, candidate)| {
+                let text = format!("{} ({})", candidate.name, candidate.path);
+                if start + offset == popup.cursor {
+                    Line::styled(
+                        text,
+                        Style::default()
+                            .add_modifier(Modifier::REVERSED)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    Line::raw(text)
+                }
+            }),
+    );
+    if let Some(below) = below {
+        lines.push(Line::styled(
+            below,
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+
+    let block = Block::bordered().title(" Jump to (enter: go, esc: cancel) ");
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(paragraph, overlay_area);
+}
+
 /// Left entry pane (directory tree) + right pane, split 60/40 — this
 /// implementation's own choice (ADR 0015/0016 left the exact ratio open):
 /// the tree is the primary navigation surface and typically has more rows
@@ -185,20 +251,64 @@ fn draw_entry_screen(
     }
 }
 
+/// Draws the entry tree, windowed around the cursor
+/// ([`windowed_rows_with_indicators`]) so the cursor row is always inside
+/// the viewport — post-#61 review finding: this used to hand `Nav::rows`'
+/// entire row list to `Paragraph` unscrolled, so moving the cursor past the
+/// bottom of the initial viewport (via repeated `j`, or a `gd`/`gr` jump
+/// landing far from the current scroll position) looked like the keypress
+/// had no effect at all, since the screen kept showing exactly the same
+/// rows. A `(first-last/total)` title suffix mirrors `render_scrollable_pane`'s
+/// own `scroll_indicator` convention, and the windowing also grows a dim
+/// "… N more above/below" line inside the pane itself when the window does
+/// not start/end at the list's own edge — belt and braces with the title
+/// suffix, since the title is easy to miss but the in-pane line sits right
+/// where the reviewer's eye already is.
 fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
     let rows = app.nav().rows(app.tree());
     let labels = relative_labels(&rows);
     let cursor = app.nav().cursor();
-
     let ranks = app.ranks();
-    let lines: Vec<Line<'static>> = rows
-        .iter()
-        .zip(labels.iter())
-        .enumerate()
-        .map(|(index, (row, label))| entry_row_line(row, label, ranks, index == cursor))
-        .collect();
 
-    let block = Block::bordered().title(" Entry ");
+    // 2 rows for the top/bottom border, matching `render_scrollable_pane`'s
+    // own `saturating_sub(2)` convention for a bordered pane's inner height.
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let (start, end, above, below) =
+        windowed_rows_with_indicators(rows.len(), cursor, viewport_height);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if let Some(above) = above {
+        lines.push(Line::styled(
+            above,
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    lines.extend(
+        rows[start..end]
+            .iter()
+            .zip(labels[start..end].iter())
+            .enumerate()
+            .map(|(offset, (row, label))| {
+                entry_row_line(row, label, ranks, start + offset == cursor)
+            }),
+    );
+    if let Some(below) = below {
+        lines.push(Line::styled(
+            below,
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+
+    // `end - start`, not the raw `viewport_height`, is the title
+    // indicator's own "how many rows are actually visible" — the two can
+    // differ once `windowed_rows_with_indicators` has reserved rows for the
+    // in-pane "… N more" lines, and `scroll_indicator` reporting the
+    // unreserved `viewport_height` would overstate the last visible row.
+    let title = match scroll_indicator(rows.len(), end - start, start) {
+        Some(indicator) => format!("{}{indicator} ", " Entry".trim_end()),
+        None => " Entry ".to_string(),
+    };
+    let block = Block::bordered().title(title);
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -500,6 +610,114 @@ fn wrap_one_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
 fn clamp_scroll(content_len: usize, viewport_height: usize, requested_scroll: usize) -> usize {
     let max_scroll = content_len.saturating_sub(viewport_height);
     requested_scroll.min(max_scroll)
+}
+
+/// Computes the `[start, end)` window of `total_items` rows to display in a
+/// viewport `viewport_height` rows tall so that `cursor_index` is always
+/// inside `[start, end)` — the tree pane's own cursor-follow scroll
+/// (post-#61 review finding: `draw_tree_pane` used to hand `Nav::rows`'
+/// *entire* row list to `Paragraph` unscrolled, so jumping the cursor to a
+/// row outside the initial viewport — via `j`/`k` repeated past the bottom,
+/// or a `gd`/`gr` jump — left the screen showing exactly the same rows as
+/// before, looking like the keypress had no effect) and the jump-target
+/// popup's own candidate-list scroll (same underlying gap: `draw_jump_popup`
+/// used to hand every candidate to `Paragraph` unscrolled).
+///
+/// Mirrors `crate::source::visible_window`'s centering approach (keep the
+/// point of interest mid-viewport rather than pinned to an edge, so a few
+/// rows of context are visible on both sides) but for a single index rather
+/// than a highlighted range, and 0-based indices/half-open `[start, end)`
+/// throughout — matching this module's own row-index convention
+/// (`draw_tree_pane`'s `index == cursor` check) rather than `visible_window`'s
+/// 1-based line-number convention, so callers here never need to convert.
+///
+/// `total_items == 0` or `viewport_height == 0` returns `(0, 0)` — an empty
+/// window, nothing to show either way.
+fn visible_index_window(
+    total_items: usize,
+    cursor_index: usize,
+    viewport_height: usize,
+) -> (usize, usize) {
+    if total_items == 0 || viewport_height == 0 {
+        return (0, 0);
+    }
+
+    let half = viewport_height / 2;
+    let ideal_start = cursor_index.saturating_sub(half);
+
+    // Clamp so the window never runs past the end of the list, then clamp
+    // again at zero so a short list (fewer items than `viewport_height`)
+    // still yields a valid, in-bounds window rather than a negative start —
+    // same two-step clamp `visible_window` itself uses.
+    let max_start = total_items.saturating_sub(viewport_height);
+    let start = ideal_start.min(max_start);
+    let end = (start + viewport_height).min(total_items);
+
+    (start, end)
+}
+
+/// Builds a `"…N more above"`/`"…N more below"` pair of indicator lines for
+/// content windowed by [`visible_index_window`] — `above`/`below` are the
+/// counts of items hidden on each side (`start`/`total_items - end`
+/// respectively), formatted only when nonzero so a window that already
+/// shows everything (or sits at an edge) does not grow a spurious "…0 more"
+/// line. Returned as `(above, below)`, each `Option<String>`, for the caller
+/// to place immediately before/after the windowed content — kept as plain
+/// `String`s rather than `ratatui::text::Line` so this stays unit-testable
+/// without a `ratatui` type, matching [`scroll_indicator`]'s own precedent.
+fn window_overflow_indicators(
+    total_items: usize,
+    window_start: usize,
+    window_end: usize,
+) -> (Option<String>, Option<String>) {
+    let above = window_start;
+    let below = total_items.saturating_sub(window_end);
+    (
+        (above > 0).then(|| format!("… {above} more above")),
+        (below > 0).then(|| format!("… {below} more below")),
+    )
+}
+
+/// Ties [`visible_index_window`] and [`window_overflow_indicators`]
+/// together correctly for a caller that renders the indicator lines
+/// *inside* the same fixed-height viewport as the windowed content itself
+/// (`draw_tree_pane`/`draw_jump_popup`'s own layout): naively computing the
+/// content window against the *full* `viewport_height` and then
+/// unconditionally prepending/appending indicator lines on top overflows
+/// the viewport by up to 2 rows, silently clipping the last row or two of
+/// real content off the bottom of the pane (including, in the worst case,
+/// the cursor row itself — the exact bug this windowing feature exists to
+/// fix, reintroduced one layer up). This function reserves a row for each
+/// indicator *before* sizing the content window, so the total row count
+/// (indicators + content) never exceeds `viewport_height`.
+///
+/// Reserving is a small fixed-point search rather than a single
+/// calculation: whether the "above"/"below" indicator is needed at all
+/// depends on where the content window ends up, which itself depends on
+/// how many rows are reserved for indicators — so this recomputes the
+/// window with 0, then up to 2, reserved rows until the reservation and the
+/// window it produces agree. This always converges in at most 3 iterations
+/// (each iteration can only add a reservation, never remove one, and there
+/// are only two indicators to add), so a small bounded loop is used rather
+/// than proving a closed-form formula.
+///
+/// Returns `(content_start, content_end, above_indicator, below_indicator)`.
+fn windowed_rows_with_indicators(
+    total_items: usize,
+    cursor_index: usize,
+    viewport_height: usize,
+) -> (usize, usize, Option<String>, Option<String>) {
+    let mut reserved = 0;
+    loop {
+        let content_height = viewport_height.saturating_sub(reserved);
+        let (start, end) = visible_index_window(total_items, cursor_index, content_height);
+        let (above, below) = window_overflow_indicators(total_items, start, end);
+        let needed = above.is_some() as usize + below.is_some() as usize;
+        if needed <= reserved {
+            return (start, end, above, below);
+        }
+        reserved = needed;
+    }
 }
 
 /// Builds the `(first-last/total)` title suffix for a pane whose content
@@ -1092,13 +1310,13 @@ fn status_line_text(app: &App) -> String {
             };
             let keys = match app.focus() {
                 crate::app::Focus::Tree => {
-                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
-                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right => {
-                    "j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
+                    "j/k: scroll  h/esc: back  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 }
             };
             format!("order: {order}  |  {keys}")
@@ -1165,6 +1383,32 @@ mod tests {
     /// parameter, but nothing under this path is ever read.
     fn test_repo_root() -> std::path::PathBuf {
         std::path::PathBuf::from("/repo")
+    }
+
+    /// `count` files (`f0.rs`..`f{count-1}.rs`), each with one symbol named
+    /// after the file — a tree tall enough to exceed any reasonably sized
+    /// terminal's viewport, for the tree pane's cursor-follow scroll tests
+    /// (#61-review finding: the tree pane used to hand every row to
+    /// `Paragraph` unscrolled).
+    fn report_with_many_files(count: usize) -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: (0..count)
+                .map(|i| FileReport {
+                    path: format!("f{i}.rs"),
+                    symbols: vec![symbol(&format!("f{i}.rs::sym{i}"), &format!("sym{i}"))],
+                })
+                .collect(),
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            hotspots: vec![],
+            removed: vec![],
+        }
     }
 
     /// Builds the [`crate::diff_shape::DiffPaneContent`] `crate::run_app`
@@ -1238,6 +1482,99 @@ mod tests {
     }
 
     #[test]
+    fn should_follow_cursor_downward_in_tree_pane_when_scrolling_past_the_bottom_of_the_viewport() {
+        // #61-review finding: the tree pane used to hand `Nav::rows`' entire
+        // row list to `Paragraph` unscrolled, so moving the cursor past the
+        // bottom of the initial viewport looked like the keypress had no
+        // effect (the screen kept showing exactly the same rows). A 60-file
+        // tree (each file has a symbol row too, so ~120 rows) in a 20-row
+        // terminal (18-row inner viewport after the border) is far taller
+        // than any single viewport.
+        let report = report_with_many_files(60);
+        let mut app = App::new(&report);
+        for _ in 0..100 {
+            app = app.handle_key(crate::app::InputKey::Down);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        // The cursor's own row label must appear in the rendered pane — read
+        // back from `App` rather than hardcoding a guess, since which row
+        // 100 `Down` presses lands on is not a fixed, predictable filename
+        // in the first place (sibling files can be reordered by the default
+        // topological order, ADR 0016). A file row's own label is its path
+        // (`row_view::entry_row_line`'s `NodeKind::File` arm); a symbol
+        // row's is just its name, not the containing file's path.
+        let cursor_row = &app.nav().rows(app.tree())[app.nav().cursor()];
+        let cursor_label = match &cursor_row.node.kind {
+            crate::tree::NodeKind::Symbol(symbol_ref) => symbol_ref.name.clone(),
+            crate::tree::NodeKind::File | crate::tree::NodeKind::Dir => {
+                cursor_row.node.path.clone()
+            }
+        };
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains(&cursor_label),
+            "cursor row {cursor_label} not visible in:\n{text}"
+        );
+        // The very first file must have scrolled off given how far down the
+        // cursor moved, and an overflow indicator must say so.
+        assert!(!text.contains("f0.rs"), "f0.rs should have scrolled off");
+        assert!(text.contains("more above"));
+    }
+
+    #[test]
+    fn should_show_jump_target_row_in_tree_pane_when_it_lands_far_from_the_current_scroll_position()
+    {
+        // The exact user-facing scenario the #61-review finding describes:
+        // a gd/gr jump landing far down a long tree must actually scroll
+        // the tree pane there, not just move the cursor in state while the
+        // screen keeps showing the old scroll position.
+        let report = report_with_many_files(60);
+        let app = App::new(&report).jump_to_symbol("f55.rs::sym55");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        // The jump must have actually landed on "sym55" (defensive: proves
+        // the rest of this assertion is exercising the intended row, not
+        // silently passing because the jump itself failed).
+        let cursor_row = &app.nav().rows(app.tree())[app.nav().cursor()];
+        match &cursor_row.node.kind {
+            crate::tree::NodeKind::Symbol(symbol_ref) => assert_eq!("sym55", symbol_ref.name),
+            other => panic!("expected jump to land on a Symbol row, got {other:?}"),
+        }
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("sym55"), "jump target row not visible");
+    }
+
+    #[test]
     fn should_draw_help_overlay_with_keymap_and_glossary_when_help_is_open() {
         let report = report_with_one_symbol();
         let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
@@ -1288,6 +1625,113 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(!text.contains("Glossary"));
+    }
+
+    #[test]
+    fn should_draw_jump_popup_with_every_candidate_when_jump_popup_is_open() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).open_jump_popup(vec![
+            crate::app::JumpCandidate {
+                id: "lib.rs::alpha".to_string(),
+                name: "alpha".to_string(),
+                path: "lib.rs".to_string(),
+            },
+            crate::app::JumpCandidate {
+                id: "lib.rs::beta".to_string(),
+                name: "beta".to_string(),
+                path: "lib.rs".to_string(),
+            },
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Jump to"));
+        assert!(text.contains("alpha"));
+        assert!(text.contains("beta"));
+    }
+
+    #[test]
+    fn should_window_candidates_around_cursor_when_popup_has_more_candidates_than_fit() {
+        // #61-review finding: the popup used to hand every candidate to
+        // `Paragraph` unscrolled, so a popup with more candidates than the
+        // box's own height could highlight an off-screen candidate with no
+        // visual feedback at all. 25 candidates, cursor moved to the last
+        // one (index 24) via repeated Down, is more than any reasonably
+        // sized popup box can show at once.
+        let report = report_with_one_symbol();
+        let candidates: Vec<crate::app::JumpCandidate> = (0..25)
+            .map(|i| crate::app::JumpCandidate {
+                id: format!("lib.rs::sym{i}"),
+                name: format!("sym{i}"),
+                path: "lib.rs".to_string(),
+            })
+            .collect();
+        let mut app = App::new(&report).open_jump_popup(candidates);
+        for _ in 0..24 {
+            app = app.handle_key(crate::app::InputKey::Down);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        // The highlighted candidate (the last one, cursor at index 24) must
+        // always be visible — the whole point of the windowing fix.
+        assert!(text.contains("sym24"), "cursor candidate sym24 not visible");
+        // The first candidate is far outside the window around index 24, so
+        // it must not be rendered, and an overflow indicator must say so.
+        assert!(!text.contains("sym0 ("), "sym0 should have scrolled off");
+        assert!(text.contains("more above"));
+    }
+
+    #[test]
+    fn should_not_draw_jump_popup_when_no_jump_is_pending() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &PivotSelection::NotApplicable,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("Jump to"));
     }
 
     #[test]
@@ -2286,10 +2730,10 @@ index e69de29..4b825dc 100644
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
         // module: the full help text (order mode + Tree-focus key hints,
-        // ADR 0020) is ~140 columns and would otherwise be truncated (the
-        // status line intentionally does not wrap), hiding the "quit"
+        // ADR 0020/0022) is ~155 columns and would otherwise be truncated
+        // (the status line intentionally does not wrap), hiding the "quit"
         // fragment this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(150, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(170, 20)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -2455,6 +2899,172 @@ index e69de29..4b825dc 100644
         assert_eq!(Some(" (11-20/20)".to_string()), actual);
     }
 
+    // --- visible_index_window / window_overflow_indicators (pure helpers,
+    // #61-review fix: cursor-follow scroll for the tree pane and jump popup)
+
+    #[test]
+    fn should_return_empty_window_when_total_items_is_zero() {
+        let actual = visible_index_window(0, 0, 10);
+
+        assert_eq!((0, 0), actual);
+    }
+
+    #[test]
+    fn should_return_empty_window_when_viewport_height_is_zero() {
+        let actual = visible_index_window(20, 5, 0);
+
+        assert_eq!((0, 0), actual);
+    }
+
+    #[test]
+    fn should_show_whole_list_when_it_fits_entirely_within_viewport() {
+        let actual = visible_index_window(5, 2, 10);
+
+        assert_eq!((0, 5), actual);
+    }
+
+    #[test]
+    fn should_center_window_around_cursor_when_list_exceeds_viewport() {
+        // 100 items, cursor at index 49, viewport 10 -> half=5,
+        // ideal_start=44, max_start=90 (not clamped) -> (44, 54).
+        let actual = visible_index_window(100, 49, 10);
+
+        assert_eq!((44, 54), actual);
+    }
+
+    #[test]
+    fn should_clamp_window_to_start_of_list_when_cursor_is_near_the_top() {
+        let actual = visible_index_window(100, 1, 10);
+
+        assert_eq!((0, 10), actual);
+    }
+
+    #[test]
+    fn should_clamp_window_to_end_of_list_when_cursor_is_near_the_bottom() {
+        let actual = visible_index_window(100, 98, 10);
+
+        assert_eq!((90, 100), actual);
+    }
+
+    #[test]
+    fn should_keep_cursor_row_inside_the_window_when_jumping_far_from_the_current_position() {
+        // The exact scenario the #61-review finding describes: a cursor
+        // that jumps from near the top of a long list straight to near the
+        // bottom (e.g. a gd/gr jump) must land inside the returned window,
+        // not leave it showing the same rows as before the jump.
+        let (start, end) = visible_index_window(200, 180, 20);
+
+        assert!(
+            start <= 180 && 180 < end,
+            "cursor 180 not in [{start}, {end})"
+        );
+    }
+
+    #[test]
+    fn should_return_no_indicators_when_window_covers_the_whole_list() {
+        let actual = window_overflow_indicators(5, 0, 5);
+
+        assert_eq!((None, None), actual);
+    }
+
+    #[test]
+    fn should_return_above_indicator_only_when_window_starts_past_the_top() {
+        let actual = window_overflow_indicators(100, 10, 20);
+
+        assert_eq!(
+            (
+                Some("… 10 more above".to_string()),
+                Some("… 80 more below".to_string())
+            ),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_no_above_indicator_when_window_starts_at_the_top() {
+        let actual = window_overflow_indicators(100, 0, 20);
+
+        assert_eq!((None, Some("… 80 more below".to_string())), actual);
+    }
+
+    #[test]
+    fn should_return_no_below_indicator_when_window_reaches_the_end() {
+        let actual = window_overflow_indicators(100, 80, 100);
+
+        assert_eq!((Some("… 80 more above".to_string()), None), actual);
+    }
+
+    // --- windowed_rows_with_indicators (pure helper) ---
+    //
+    // Regression coverage for the reserved-row bug found while writing
+    // `should_window_candidates_around_cursor_when_popup_has_more_candidates_than_fit`:
+    // naively computing the content window against the full viewport height
+    // and then unconditionally prepending/appending indicator lines
+    // overflows the viewport by up to 2 rows, clipping the cursor row
+    // itself off the bottom in the worst case.
+
+    #[test]
+    fn should_return_whole_list_with_no_indicators_when_it_fits_the_viewport() {
+        let actual = windowed_rows_with_indicators(5, 2, 10);
+
+        assert_eq!((0, 5, None, None), actual);
+    }
+
+    #[test]
+    fn should_reserve_a_row_for_the_below_indicator_when_cursor_is_near_the_top() {
+        // 100 items, cursor at 0, viewport 10: without reservation the
+        // content window alone would be (0, 10), needing a "below"
+        // indicator — reserving 1 row for it must shrink the content
+        // window to (0, 9) so the indicator line has room without pushing
+        // total rows past the viewport.
+        let (start, end, above, below) = windowed_rows_with_indicators(100, 0, 10);
+
+        assert_eq!((0, 9), (start, end));
+        assert_eq!(None, above);
+        assert_eq!(Some("… 91 more below".to_string()), below);
+        // The rendered row count (indicator + content) must never exceed
+        // the viewport.
+        let below_rows = below.is_some() as usize;
+        assert!(end - start + below_rows <= 10);
+    }
+
+    #[test]
+    fn should_reserve_a_row_for_the_above_indicator_when_cursor_is_near_the_bottom() {
+        let (start, end, above, below) = windowed_rows_with_indicators(100, 99, 10);
+
+        assert_eq!((91, 100), (start, end));
+        assert_eq!(Some("… 91 more above".to_string()), above);
+        assert_eq!(None, below);
+        let above_rows = above.is_some() as usize;
+        assert!(end - start + above_rows <= 10);
+    }
+
+    #[test]
+    fn should_reserve_rows_for_both_indicators_when_cursor_is_in_the_middle() {
+        let (start, end, above, below) = windowed_rows_with_indicators(100, 50, 10);
+
+        assert!(above.is_some());
+        assert!(below.is_some());
+        // The cursor must still be inside the (possibly shrunk) content
+        // window — the entire point of this function.
+        assert!(start <= 50 && 50 < end, "cursor 50 not in [{start}, {end})");
+        // Total rendered rows (2 indicators + content) must never exceed
+        // the viewport.
+        assert!(end - start + 2 <= 10);
+    }
+
+    #[test]
+    fn should_keep_cursor_visible_after_reserving_indicator_rows_at_a_small_viewport() {
+        // A tight viewport (3 rows) where reserving rows for indicators
+        // could plausibly starve the content window down to nothing —
+        // pins that the cursor row itself is never sacrificed.
+        let (start, end, _above, below) = windowed_rows_with_indicators(50, 49, 3);
+
+        assert!(start <= 49 && 49 < end, "cursor 49 not in [{start}, {end})");
+        let below_rows = below.is_some() as usize;
+        assert!(end - start + below_rows <= 3);
+    }
+
     // --- status_line_text (pure helper) ---
 
     #[test]
@@ -2465,7 +3075,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  ?: help  q: quit"
+            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -2493,7 +3103,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -2514,7 +3124,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  d: diff  p: pivot  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  h/esc: back  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
