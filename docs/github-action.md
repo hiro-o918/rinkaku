@@ -1,12 +1,13 @@
-# Using the PR report GitHub Action from another repository
+# Using the GitHub Action from another repository
 
-This repository ships a composite action, [`action.yaml`](../action.yaml),
-that runs rinkaku against a pull request's diff and posts (or updates) a
-sticky PR comment. This page is a setup guide for using that action from a
-**different** repository. For what the action's output looks like and the
-`--format mermaid`/`--format md` flags it wraps, see the
-[README's Usage section](../README.md#usage) and
-[ADR 0021](adr/0021-mermaid-output-format.md).
+This repository ships a
+[composite action definition](../action.yaml) that runs rinkaku against a
+pull request's diff and posts (or updates) a sticky PR comment. This page
+is a setup guide for using that action from a **different** repository.
+For what the action's output looks like and the `--format mermaid`/
+`--format md` flags it wraps, see
+[CLI usage and output format](cli-usage.md) and
+[ADR 0021: mermaid output format](adr/0021-mermaid-output-format.md).
 
 ## What it does
 
@@ -83,7 +84,7 @@ the `binary` input:
   rinkaku binary, and the download step is skipped entirely. This exists
   for callers building rinkaku themselves — most notably to preserve the
   trust boundary described below — and is what this repository's own
-  [`.github/workflows/rinkaku-report.yaml`](../.github/workflows/rinkaku-report.yaml)
+  [dogfooding workflow](../.github/workflows/rinkaku-report.yaml)
   does (`cargo build --release -p rinkaku` from a trusted checkout, then
   `binary: ${{ github.workspace }}/target/release/rinkaku`).
 
@@ -113,8 +114,8 @@ with `pull-requests: write` before anyone has reviewed the PR. The
 **binary** that inspects the diff must not itself come from the diff it is
 inspecting.
 
-This repository's own dogfooding workflow
-([`.github/workflows/rinkaku-report.yaml`](../.github/workflows/rinkaku-report.yaml))
+This repository's own
+[dogfooding workflow](../.github/workflows/rinkaku-report.yaml)
 enforces a stronger version of this rule than most external callers need,
 because it also has to protect the **orchestration code** (`action.yaml`
 and `compose_and_post_comment.sh` at `uses: ./`): it checks out the PR's
