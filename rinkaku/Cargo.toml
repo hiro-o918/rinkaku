@@ -17,7 +17,7 @@ name = "rinkaku"
 path = "src/main.rs"
 
 [dependencies]
-rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
+rinkaku-core = { path = "../rinkaku-core", version = "0.2.0" }
 rinkaku-tui = { path = "../rinkaku-tui", version = "0.1.0" }
 clap = { workspace = true }
 anyhow = { workspace = true }

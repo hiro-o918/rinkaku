@@ -17,7 +17,7 @@ name = "rinkaku_tui"
 path = "src/lib.rs"
 
 [dependencies]
-rinkaku-core = { path = "../rinkaku-core", version = "0.1.0" }
+rinkaku-core = { path = "../rinkaku-core", version = "0.2.0" }
 ratatui = { workspace = true }
 # Declared directly (unlike most crossterm usage, which goes through
 # ratatui's own `ratatui::crossterm` re-export — see that re-export's use
