@@ -9,7 +9,9 @@
 //!   exclude intra-dir
 //! - `order_tree` — `order_tree` behavior over a `Tree`: directories
 //!   before files, alphabetical mode, topological mode, unranked fallback,
-//!   recursion, and the branching-intermediate integration test
+//!   recursion, the branching-intermediate integration test, and (ADR
+//!   0035) a trailing `Section` root sorting after every `Dir`/`File`
+//!   with its own children left untouched
 //! - `scc_helpers` — direct unit coverage of `tarjan_sccs` and
 //!   `topological_scc_order` at their raw `usize`-adjacency contract
 
@@ -122,6 +124,21 @@ pub(super) fn file_node_with_children(
     crate::tree::TreeNode {
         kind: crate::tree::NodeKind::File,
         path: path.to_string(),
+        badges: crate::tree::Badges::default(),
+        children,
+        skip_reason: None,
+        test_symbol_count: None,
+    }
+}
+
+/// A `NodeKind::Section(SectionKind::Tests)` root (ADR 0035 Phase B) —
+/// always keyed by [`crate::tree::TESTS_SECTION_PATH`], matching
+/// `build_tree`'s own construction, so `order_tree`'s sort sees the same
+/// path a real `Tree` would carry.
+pub(super) fn section_node(children: Vec<crate::tree::TreeNode>) -> crate::tree::TreeNode {
+    crate::tree::TreeNode {
+        kind: crate::tree::NodeKind::Section(crate::tree::SectionKind::Tests),
+        path: crate::tree::TESTS_SECTION_PATH.to_string(),
         badges: crate::tree::Badges::default(),
         children,
         skip_reason: None,

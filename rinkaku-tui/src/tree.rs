@@ -60,6 +60,58 @@ pub enum NodeKind {
     File,
     /// A leaf: one changed or removed symbol.
     Symbol(SymbolRef),
+    /// A synthetic grouping node, not derived from any single file/symbol
+    /// (ADR 0035 Phase B): currently only [`SectionKind::Tests`], a
+    /// trailing node appended to [`Tree::roots`] holding every *whole*
+    /// test file, keeping their directory nesting but sorted A-Z
+    /// unconditionally rather than participating in
+    /// `crate::order`'s topological/alphabetical toggle — there is no
+    /// production dependency story left to tell once everything under a
+    /// section is test code (see [`rank_directories`](crate::order::rank_directories)'s
+    /// own test-exclusion, which is a separate, complementary mechanism
+    /// for symbols that stay in the *production* tree). Deliberately a
+    /// distinct variant rather than reusing `Dir` with a synthetic path:
+    /// a `Dir` node is looked up by path in `crate::order`'s per-path
+    /// `DirRank` map, and giving a `Section` a fake path there would risk
+    /// an accidental rank/collision bug via a "this magic path never
+    /// gets a rank" convention a future edit could silently violate — see
+    /// ADR 0035's Alternatives for the full comparison.
+    Section(SectionKind),
+}
+
+/// Which kind of synthetic grouping a [`NodeKind::Section`] is. A
+/// one-member enum today (ADR 0035 only introduces the Tests section),
+/// kept as an enum rather than a unit variant so a second section kind
+/// (if one is ever needed) does not require another `NodeKind` variant
+/// and therefore another wave of exhaustive-match updates across
+/// `nav.rs`/`order.rs`/`row_view.rs`/`detail.rs`/`app`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionKind {
+    Tests,
+}
+
+/// The synthetic path a [`NodeKind::Section`] node carries on its
+/// [`TreeNode::path`] — used as the collapse-state key (`crate::nav::Nav`
+/// tracks collapse state generically by `TreeNode::path`, with no
+/// `NodeKind`-specific branch, so a section needs *some* stable path to
+/// participate) and the row label. Chosen to never collide with a real
+/// slash-joined file/directory path: no file path can contain two
+/// consecutive underscores by itself, but this is intentionally also
+/// distinctive rather than merely legal — a reader grepping the source
+/// for this literal should immediately see it is synthetic, not a path
+/// that happens to exist in some repository.
+pub const TESTS_SECTION_PATH: &str = "__tests__";
+
+impl SectionKind {
+    /// The row label for this section kind — currently just `"Tests"`
+    /// for the one variant, but kept as a method (rather than inlining
+    /// the string at each `row_view`/`ui` call site) so a second section
+    /// kind's label lives in one place.
+    pub fn label(self) -> &'static str {
+        match self {
+            SectionKind::Tests => "Tests",
+        }
+    }
 }
 
 /// Badges aggregated bottom-up for a [`TreeNode`] (ADR 0015/0016): every
@@ -256,24 +308,104 @@ pub fn build_tree(report: &Report) -> Tree {
         })
         .collect();
 
-    let mut builder = TreeBuilder::new(fan_in_by_id, file_size_by_path);
+    let mut production = TreeBuilder::new(fan_in_by_id.clone(), file_size_by_path.clone());
+    let mut tests = TreeBuilder::new(fan_in_by_id, file_size_by_path);
 
+    // ADR 0035 Phase B: a *whole* test file (every symbol test code, or
+    // matched by `LanguageSupport::is_test_path`) routes into `tests`
+    // instead of `production` — a *mixed* file (some non-test symbols
+    // alongside some test symbols) always stays in `production`
+    // untouched, symbols and all, so this only ever affects whole
+    // `FileReport`s, never splits one.
     for file in &report.files {
-        builder.insert_file(&file.path, &file.symbols);
+        if is_whole_test_file(&file.path, &file.symbols) {
+            tests.insert_file(&file.path, &file.symbols);
+        } else {
+            production.insert_file(&file.path, &file.symbols);
+        }
     }
+    // `RemovedSymbol` carries no `is_test` flag (ADR 0035's Consequences:
+    // no head-side AST context to classify it by) and a removed symbol's
+    // file is never itself checked against `is_test_path` here — a
+    // removed symbol therefore always stays in the production tree,
+    // regardless of what the rest of its file's fate was.
     for removed in &report.removed {
-        builder.insert_removed(&removed.path, removed);
+        production.insert_removed(&removed.path, removed);
     }
     for test_file in &report.tests {
-        builder.insert_test_file(&test_file.path, test_file.symbol_count);
+        production.insert_test_file(&test_file.path, test_file.symbol_count);
     }
     for skipped in &report.skipped {
         if !matches!(skipped.reason, SkipReason::Generated) {
-            builder.insert_skipped(&skipped.path, skipped.reason);
+            production.insert_skipped(&skipped.path, skipped.reason);
         }
     }
 
-    builder.finish()
+    let mut roots = production.finish().roots;
+
+    let mut section_roots = tests.finish().roots;
+    if !section_roots.is_empty() {
+        sort_alphabetically(&mut section_roots);
+        let mut badges = Badges::default();
+        for child in &section_roots {
+            badges.merge(child.badges);
+        }
+        roots.push(TreeNode {
+            kind: NodeKind::Section(SectionKind::Tests),
+            path: TESTS_SECTION_PATH.to_string(),
+            badges,
+            children: section_roots,
+            skip_reason: None,
+            test_symbol_count: None,
+        });
+    }
+
+    Tree { roots }
+}
+
+/// Whether `path`'s `FileReport` counts as a *whole* test file (ADR 0035
+/// Phase B) rather than ordinary production code or a *mixed* file:
+/// either `LanguageSupport::is_test_path` says the whole file is a test
+/// file by convention (Go's `*_test.go`, etc.), or every symbol in
+/// `symbols` has `is_test == true` — mirroring
+/// `pipeline::partition_test_symbols`'s own "is this symbol excluded
+/// under `--exclude-tests`" rule exactly, so Phase B's notion of "whole
+/// test file" agrees with `rinkaku-core`'s. A file with an empty
+/// `symbols` list (a pure rename with no path-convention match) is never
+/// whole-test — same as `partition_test_symbols`'s own `had_symbols`
+/// guard — since there is nothing to classify as test-only, and treating
+/// an empty file as "whole test" would misfile a plain rename into the
+/// Tests section for no reason.
+fn is_whole_test_file(path: &str, symbols: &[rinkaku_core::extract::ExtractedSymbol]) -> bool {
+    let is_test_path =
+        rinkaku_core::language::language_for_path(path).is_some_and(|lang| lang.is_test_path(path));
+    is_test_path || (!symbols.is_empty() && symbols.iter().all(|symbol| symbol.is_test))
+}
+
+/// Recursively re-sorts `nodes` (and every directory's children,
+/// depth-first) A-Z by path, directories before files at each level —
+/// same top-level ordering convention `crate::order::order_siblings`
+/// uses for its own alphabetical mode, kept independent here rather than
+/// calling into `crate::order` since the Tests section's ordering is
+/// unconditional (ADR 0035 Phase B: never subject to the topological/
+/// alphabetical toggle, so there is no `OrderMode`/`DirRank` to consult
+/// at all — this is strictly simpler than `order_siblings`, not a
+/// restricted call into it). `NodeKind::Symbol` children are left in
+/// their original (extraction) order, matching `order_siblings`' own
+/// "symbols are never reordered" rule — this function is only ever
+/// called on section roots and directory children, never a file's own
+/// symbol list.
+fn sort_alphabetically(nodes: &mut [TreeNode]) {
+    for node in nodes.iter_mut() {
+        if matches!(node.kind, NodeKind::Dir) {
+            sort_alphabetically(&mut node.children);
+        }
+    }
+    nodes.sort_by(|a, b| {
+        let a_is_dir = matches!(a.kind, NodeKind::Dir);
+        let b_is_dir = matches!(b.kind, NodeKind::Dir);
+        b_is_dir.cmp(&a_is_dir).then_with(|| a.path.cmp(&b.path))
+    });
 }
 
 /// Intermediate mutable tree used only during construction — a

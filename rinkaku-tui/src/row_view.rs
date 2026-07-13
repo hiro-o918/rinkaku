@@ -69,6 +69,26 @@ pub fn entry_row_line(
                 ));
             }
         }
+        NodeKind::Section(section_kind) => {
+            // ADR 0035 Phase B: renders like a `Dir` row (expand marker,
+            // bold label, aggregated badges) but with the section's own
+            // fixed label instead of `label` (a section's `TreeNode::path`
+            // is a synthetic constant, not a real file-tree path, so there
+            // is nothing meaningful for `crate::ui`'s ancestor-prefix
+            // stripping to compute for it — `label` is simply unused
+            // here) — and deliberately never checks `ranks`/`(cycle)`: a
+            // section's synthetic path never has a `DirRank` entry
+            // (`crate::order::rank_directories` only ranks real file-tree
+            // directories), so cycle detection has nothing to say about
+            // it either way.
+            spans.push(Span::raw(format!("{} ", expand_marker(row))));
+            spans.push(Span::styled(
+                section_kind.label(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+            push_badge_spans(&mut spans, &row.node.badges, BadgeContext::Dir);
+        }
         NodeKind::File => {
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));

@@ -223,6 +223,23 @@ fn should_return_empty_blast_radius_selection_when_file_row_path_matches_no_grap
 }
 
 #[test]
+fn should_return_not_applicable_blast_radius_selection_when_cursor_is_on_the_tests_section_row() {
+    // ADR 0035 Phase B: a section's synthetic path is not a real
+    // file-tree prefix, so it has no blast radius to pivot from — same
+    // treatment as a symbol row (`NotApplicable`), not `Empty` (which
+    // would misleadingly read as "valid selection, nothing under it").
+    let report = super::report_with_a_whole_test_file();
+    // Row order: lib.rs(0), foo(1), Tests(2), lib_test.go(3).
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Down);
+
+    let actual = app.selected_blast_radius_view(&report);
+
+    assert_eq!(BlastRadiusSelection::NotApplicable, actual);
+}
+
+#[test]
 fn should_follow_cursor_when_moving_between_directory_rows_while_blast_radius_pane_is_active() {
     let report = report_with_two_directories_and_graph();
     let app = App::new(&report).handle_key(InputKey::ToggleBlastRadius);
@@ -315,6 +332,21 @@ fn should_return_none_diff_target_when_cursor_is_on_a_directory_row() {
         ..empty_report()
     };
     let app = App::new(&report);
+
+    let actual = app.selected_diff_target(&report);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_return_none_diff_target_when_cursor_is_on_the_tests_section_row() {
+    // ADR 0035 Phase B: a section spans multiple files, same reasoning
+    // as a directory row above — no single diff to show.
+    let report = super::report_with_a_whole_test_file();
+    // Row order: lib.rs(0), foo(1), Tests(2), lib_test.go(3).
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Down);
 
     let actual = app.selected_diff_target(&report);
 

@@ -12,7 +12,7 @@
 //!   split-span coloring for `chg:N` / `api:N` / `fan-in:N` badges
 
 use super::*;
-use crate::tree::{NodeKind, TreeNode};
+use crate::tree::{NodeKind, SectionKind, TreeNode};
 
 mod entry_row_line;
 mod file_size_badges;
@@ -60,6 +60,17 @@ pub(super) fn test_file_node(path: &str, symbol_count: usize) -> TreeNode {
         children: vec![],
         skip_reason: None,
         test_symbol_count: Some(symbol_count),
+    }
+}
+
+pub(super) fn section_node(kind: SectionKind, badges: Badges, children: Vec<TreeNode>) -> TreeNode {
+    TreeNode {
+        kind: NodeKind::Section(kind),
+        path: crate::tree::TESTS_SECTION_PATH.to_string(),
+        badges,
+        children,
+        skip_reason: None,
+        test_symbol_count: None,
     }
 }
 

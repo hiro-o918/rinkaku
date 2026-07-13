@@ -659,14 +659,27 @@ fn order_siblings(
         if matches!(node.kind, crate::tree::NodeKind::Dir) {
             order_siblings(&mut node.children, effective_ranks, mode);
         }
+        // A `Section`'s children (ADR 0035 Phase B) are deliberately
+        // *not* recursed into here — they stay in whatever order
+        // `crate::tree::build_tree` already gave them (always
+        // alphabetical, via `sort_alphabetically`), independent of
+        // `mode`. A section has no production dependency story to rank
+        // (Phase A already excludes its symbols/edges from
+        // `rank_directories` entirely), so there is nothing for the
+        // topological/alphabetical toggle to act on inside it.
     }
 
     nodes.sort_by(|a, b| {
-        let a_is_dir = matches!(a.kind, crate::tree::NodeKind::Dir);
-        let b_is_dir = matches!(b.kind, crate::tree::NodeKind::Dir);
-        // Directories before files, regardless of mode.
-        b_is_dir.cmp(&a_is_dir).then_with(|| match mode {
-            OrderMode::Topological if a_is_dir && b_is_dir => {
+        // Three tiers, in this order, regardless of `mode`: directories,
+        // then files, then a trailing `Section` last of all — a
+        // `Section` node is neither `Dir` nor `File`, so without an
+        // explicit third tier it would fall into the same "not a dir"
+        // bucket as `File` and could sort by path *among* the files
+        // instead of unconditionally after every one of them.
+        tier(a).cmp(&tier(b)).then_with(|| match mode {
+            OrderMode::Topological
+                if tier(a) == SiblingTier::Dir && tier(b) == SiblingTier::Dir =>
+            {
                 // `None` (unranked: no ranked directory anywhere in this
                 // subtree) must sort after every `Some` rank — the
                 // opposite of `Option<usize>`'s derived `Ord`, which puts
@@ -683,6 +696,27 @@ fn order_siblings(
             _ => a.path.cmp(&b.path),
         })
     });
+}
+
+/// Which of the three sibling tiers a node belongs to, for
+/// [`order_siblings`]' primary sort key — directories first, files
+/// second, a `Section` always last regardless of `OrderMode` (ADR 0035
+/// Phase B). `#[derive(Ord)]`'s field-declaration-order-is-sort-order
+/// behavior is exactly what this needs: `Dir` (0) < `File` (1) <
+/// `Section` (2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SiblingTier {
+    Dir,
+    File,
+    Section,
+}
+
+fn tier(node: &crate::tree::TreeNode) -> SiblingTier {
+    match node.kind {
+        crate::tree::NodeKind::Dir => SiblingTier::Dir,
+        crate::tree::NodeKind::Section(_) => SiblingTier::Section,
+        crate::tree::NodeKind::File | crate::tree::NodeKind::Symbol(_) => SiblingTier::File,
+    }
 }
 
 #[cfg(test)]

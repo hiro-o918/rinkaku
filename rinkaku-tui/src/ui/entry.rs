@@ -359,6 +359,12 @@ mod tests {
             crate::tree::NodeKind::File | crate::tree::NodeKind::Dir => {
                 cursor_row.node.path.clone()
             }
+            // ADR 0035 Phase B: a Section row's label is its fixed
+            // `SectionKind::label()`, not a path-derived one (see
+            // `row_view::entry_row_line`'s `NodeKind::Section` arm) — this
+            // fixture has no test files, so this arm is unreachable in
+            // practice here, but must still be covered to stay exhaustive.
+            crate::tree::NodeKind::Section(section_kind) => section_kind.label().to_string(),
         };
         let text = buffer_text(&terminal);
         assert!(

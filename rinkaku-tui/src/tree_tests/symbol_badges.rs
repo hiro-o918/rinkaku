@@ -244,22 +244,33 @@ fn should_leave_fan_in_at_zero_when_symbol_has_no_matching_fan_in_entry() {
 // back into the `Report`.
 
 #[test]
-fn should_carry_is_test_true_onto_symbol_ref_for_a_test_symbol() {
+fn should_carry_is_test_true_onto_symbol_ref_for_a_test_symbol_in_a_mixed_file() {
+    // A lone test symbol with no non-test sibling in the same file would
+    // make the whole file "whole test" (ADR 0035 Phase B's
+    // `is_whole_test_file`) and move it into the Tests section instead of
+    // staying under `tree.roots` — this test is about `is_test`
+    // propagation onto `SymbolRef`, a concern orthogonal to Phase B's
+    // section routing, so it pairs the test symbol with an ordinary one
+    // in the same file (a genuinely mixed file) to keep both symbols in
+    // the production tree this assertion reads from.
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
         files: vec![FileReport {
             path: "lib.rs".to_string(),
-            symbols: vec![ExtractedSymbol {
-                is_test: true,
-                ..symbol("lib.rs::test_it", "test_it", SymbolKind::Function)
-            }],
+            symbols: vec![
+                symbol("lib.rs::real_fn", "real_fn", SymbolKind::Function),
+                ExtractedSymbol {
+                    is_test: true,
+                    ..symbol("lib.rs::test_it", "test_it", SymbolKind::Function)
+                },
+            ],
         }],
         ..empty_report()
     };
 
     let tree = build_tree(&report);
 
-    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[0].kind else {
+    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[1].kind else {
         panic!("expected a Symbol child");
     };
     assert!(symbol_ref.is_test);

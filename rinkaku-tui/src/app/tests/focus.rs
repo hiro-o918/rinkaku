@@ -167,6 +167,30 @@ fn should_expand_collapse_and_keep_tree_focus_when_open_is_pressed_on_a_director
 }
 
 #[test]
+fn should_expand_collapse_and_keep_tree_focus_when_open_is_pressed_on_the_tests_section_row() {
+    // ADR 0035 Phase B: a section row behaves exactly like a directory
+    // row on Enter — expand/collapse only, no focus change and no
+    // "drill in" the way a file/symbol row's Enter does.
+    let report = super::report_with_a_whole_test_file();
+    // Row order: lib.rs(0), foo(1), Tests(2), lib_test.go(3).
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Down);
+    assert_eq!(2, app.nav().cursor());
+
+    let app = app.handle_key(InputKey::Open);
+
+    assert_eq!(Focus::Tree, app.focus());
+    let rows = app.nav().rows(app.tree());
+    let paths: Vec<&str> = rows.iter().map(|r| r.node.path.as_str()).collect();
+    assert_eq!(
+        vec!["lib.rs", "lib.rs", crate::tree::TESTS_SECTION_PATH],
+        paths,
+        "the Tests section should have collapsed"
+    );
+}
+
+#[test]
 fn should_not_move_focus_when_select_is_pressed_on_a_file_row() {
     // Space (`InputKey::Select`) must never move focus, even on a
     // file/symbol row — only Enter (`InputKey::Open`) does (ADR 0020).

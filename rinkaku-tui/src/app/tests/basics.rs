@@ -131,3 +131,20 @@ fn should_return_dir_detail_when_cursor_is_on_a_directory_row() {
     });
     assert_eq!(Some(expected), actual);
 }
+
+#[test]
+fn should_return_none_detail_when_cursor_is_on_the_tests_section_row() {
+    // ADR 0035 Phase B: the "Tests" section header has no badge-
+    // breakdown-plus-cycle-explanation detail the way a real directory
+    // does (its synthetic path never appears in `report.graph`) — falls
+    // back to the generic placeholder, same as a removed symbol row.
+    let report = super::report_with_a_whole_test_file();
+    // Row order: lib.rs(0), foo(1), Tests(2), lib_test.go(3).
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Down);
+
+    let actual = app.selected_detail(&report);
+
+    assert_eq!(None, actual);
+}

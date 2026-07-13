@@ -1,6 +1,70 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+// ADR 0035 Phase B: a `NodeKind::Section` root always sorts after every
+// `Dir`/`File` root, in both order modes, and its own children are never
+// touched by `order_tree` (they stay in whatever order `build_tree`
+// already gave them — alphabetical, per `sort_alphabetically` in
+// `crate::tree`).
+
+#[test]
+fn should_sort_section_after_every_dir_and_file_in_topological_mode() {
+    let mut tree = crate::tree::Tree {
+        roots: vec![
+            section_node(vec![]),
+            file_node("z.rs"),
+            dir_node("a", vec![]),
+        ],
+    };
+
+    order_tree(&mut tree, &HashMap::new(), OrderMode::Topological);
+
+    let paths: Vec<&str> = tree.roots.iter().map(|n| n.path.as_str()).collect();
+    assert_eq!(vec!["a", "z.rs", crate::tree::TESTS_SECTION_PATH], paths);
+}
+
+#[test]
+fn should_sort_section_after_every_dir_and_file_in_alpha_numeric_mode() {
+    let mut tree = crate::tree::Tree {
+        roots: vec![
+            section_node(vec![]),
+            file_node("z.rs"),
+            dir_node("a", vec![]),
+        ],
+    };
+
+    order_tree(&mut tree, &HashMap::new(), OrderMode::AlphaNumeric);
+
+    let paths: Vec<&str> = tree.roots.iter().map(|n| n.path.as_str()).collect();
+    assert_eq!(vec!["a", "z.rs", crate::tree::TESTS_SECTION_PATH], paths);
+}
+
+#[test]
+fn should_leave_section_children_untouched_by_order_tree() {
+    // The section's children arrive pre-sorted Z-then-A on purpose (as
+    // if `build_tree` had somehow produced that order) to prove
+    // `order_tree` does not re-sort them — a real `Tree` always has them
+    // A-Z already (`crate::tree::sort_alphabetically`), but this test's
+    // job is specifically to show `order_tree` leaves them alone
+    // regardless of their incoming order, not to re-verify `build_tree`'s
+    // own sorting.
+    let mut tree = crate::tree::Tree {
+        roots: vec![section_node(vec![
+            file_node("z_test.go"),
+            file_node("a_test.go"),
+        ])],
+    };
+
+    order_tree(&mut tree, &HashMap::new(), OrderMode::Topological);
+
+    let paths: Vec<&str> = tree.roots[0]
+        .children
+        .iter()
+        .map(|n| n.path.as_str())
+        .collect();
+    assert_eq!(vec!["z_test.go", "a_test.go"], paths);
+}
+
 #[test]
 fn should_order_directories_before_files_at_the_same_level() {
     let mut tree = crate::tree::Tree {

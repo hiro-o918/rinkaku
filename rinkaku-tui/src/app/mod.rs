@@ -491,6 +491,17 @@ impl App {
             NodeKind::File => {
                 build_file_detail(&self.tree, report, &row.node.path).map(SelectedDetail::File)
             }
+            // ADR 0035 Phase B: the "Tests" section header itself has no
+            // badge-breakdown-plus-cycle-explanation detail the way a real
+            // directory does (its synthetic path never appears in
+            // `report.graph`, so `build_dir_detail`'s cycle/fan-in lookups
+            // would find nothing meaningful) — falls back to the same
+            // generic "(select a row to see its detail)" placeholder a
+            // removed symbol row already uses. Its *children* (real
+            // Dir/File/Symbol rows nested inside the section) still get
+            // full detail via the arms above once the cursor moves onto
+            // them.
+            NodeKind::Section(_) => None,
         }
     }
 
@@ -523,7 +534,9 @@ impl App {
             NodeKind::File => Some(DiffTarget::File {
                 path: row.node.path.clone(),
             }),
-            NodeKind::Dir => None,
+            // A section spans multiple files, same reasoning as `Dir`
+            // above — no single diff to show (ADR 0035 Phase B).
+            NodeKind::Dir | NodeKind::Section(_) => None,
         }
     }
 
@@ -595,7 +608,14 @@ impl App {
             return BlastRadiusSelection::NotApplicable;
         };
         match &row.node.kind {
-            NodeKind::Symbol(_) => BlastRadiusSelection::NotApplicable,
+            // A section's synthetic path is not a real file-tree prefix
+            // (ADR 0035 Phase B), so it has no blast radius to pivot from
+            // — treated the same as a symbol row rather than falling
+            // through to `build_blast_radius_view` (which would find no
+            // matching graph nodes and report `Empty`, a misleading
+            // "valid selection, nothing under it" reading for what is
+            // really "not applicable to this row kind at all").
+            NodeKind::Symbol(_) | NodeKind::Section(_) => BlastRadiusSelection::NotApplicable,
             NodeKind::Dir | NodeKind::File => {
                 match crate::blast_radius::build_blast_radius_view(report, &row.node.path) {
                     Some(view) => BlastRadiusSelection::View(view),
@@ -1045,8 +1065,11 @@ impl App {
                     // A directory row's Enter behaves exactly like Space
                     // (`InputKey::Select`) — expand/collapse, no focus
                     // change (ADR 0020: only a file/symbol row's Enter also
-                    // drills in).
-                    Some(NodeKind::Dir) => {
+                    // drills in). A section row (ADR 0035 Phase B) behaves
+                    // the same way — it is a pure grouping node, nothing to
+                    // "drill into" beyond expand/collapse, same as a
+                    // directory.
+                    Some(NodeKind::Dir) | Some(NodeKind::Section(_)) => {
                         self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
                     }
                     // File and symbol rows behave identically (dogfooding
