@@ -29,6 +29,7 @@
 //! carries hunk text once extraction has run).
 
 pub mod app;
+pub mod blast_radius;
 pub mod detail;
 pub mod diff_shape;
 pub mod diff_view;
@@ -36,13 +37,12 @@ pub mod help;
 pub mod highlight;
 pub mod nav;
 pub mod order;
-pub mod pivot;
 pub mod row_view;
 pub mod source;
 pub mod tree;
 pub mod ui;
 
-use app::{App, InputKey, PivotSelection, Screen};
+use app::{App, BlastRadiusSelection, InputKey, Screen};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use rinkaku_core::render::Report;
 use std::time::Duration;
@@ -75,14 +75,14 @@ use std::time::Duration;
 /// `entry_path` is `main.rs`'s `--entry <path>` flag (ADR 0019), passed
 /// through unchanged when the user combines it with `--tui`: `None` when
 /// `--entry` was not given (the ordinary case), `Some(path)` to open
-/// straight into [`app::RightPane::Pivot`] with the cursor already on the
-/// matching tree row (`App::with_entry_pivot`) instead of requiring the
-/// reviewer to hunt for the row and press `p` themselves. Note this crate
-/// does *not* itself re-root `report.graph` — `main.rs` already applied
-/// `--entry`'s `pivot_graph` re-rooting to `report` before calling here (the
-/// same `Report` both the TUI and Markdown/JSON render from), so this
-/// parameter only drives where the TUI *starts*, not what the underlying
-/// graph looks like.
+/// straight into [`app::RightPane::BlastRadius`] (ADR 0023) with the cursor
+/// already on the matching tree row (`App::with_entry_pivot`) instead of
+/// requiring the reviewer to hunt for the row and press `R` themselves. Note
+/// this crate does *not* itself re-root `report.graph` — `main.rs` already
+/// applied `--entry`'s `pivot_graph` re-rooting to `report` before calling
+/// here (the same `Report` both the TUI and Markdown/JSON render from), so
+/// this parameter only drives where the TUI *starts*, not what the
+/// underlying graph looks like.
 ///
 /// `repo_root` anchors `Report` paths (always repository-root-relative) for
 /// the source drill-down's file reads (`crate::source::load_symbol_source`)
@@ -127,33 +127,34 @@ fn run_app(
     // the render loop either.
     let diff_highlights = highlight::highlight_diff_files(&diff_hunks);
     // Computed once up front (then on demand below, once per handled key —
-    // unlike `diff_hunks`/`diff_highlights` above, the pivot view depends on
-    // `app`'s cursor position and right-pane mode, both of which change as
-    // keys are handled) and cached here across idle poll ticks for the same
-    // reason those two are computed outside the draw loop at all: `ui::draw`
-    // itself runs on every ~100ms idle poll timeout, not just on an actual
-    // key press, and `crate::pivot::build_pivot_view` is an O(V+E) graph
-    // walk — recomputing it on every one of those idle ticks while the
-    // pivot pane merely sits on screen was the per-frame recompute bug this
-    // cache exists to fix (`App::selected_pivot_view`'s own doc comment).
-    // The up-front computation (rather than starting at `NotApplicable`
-    // unconditionally) matters specifically for `--entry --tui`: when
-    // `entry_path` above already opened `RightPane::Pivot`, the very first
-    // frame must show the pivot tree immediately, not an empty placeholder
-    // until the first key press recomputes it.
-    let mut pivot_selection = if should_recompute_pivot_selection(&app) {
-        app.selected_pivot_view(report)
+    // unlike `diff_hunks`/`diff_highlights` above, the blast-radius view
+    // depends on `app`'s cursor position and right-pane mode, both of which
+    // change as keys are handled) and cached here across idle poll ticks for
+    // the same reason those two are computed outside the draw loop at all:
+    // `ui::draw` itself runs on every ~100ms idle poll timeout, not just on
+    // an actual key press, and `crate::blast_radius::build_blast_radius_view`
+    // is an O(V+E) graph walk — recomputing it on every one of those idle
+    // ticks while the blast-radius pane merely sits on screen was the
+    // per-frame recompute bug this cache exists to fix
+    // (`App::selected_blast_radius_view`'s own doc comment). The up-front
+    // computation (rather than starting at `NotApplicable` unconditionally)
+    // matters specifically for `--entry --tui`: when `entry_path` above
+    // already opened `RightPane::BlastRadius`, the very first frame must
+    // show the blast-radius tree immediately, not an empty placeholder until
+    // the first key press recomputes it.
+    let mut blast_radius_selection = if should_recompute_blast_radius_selection(&app) {
+        app.selected_blast_radius_view(report)
     } else {
-        PivotSelection::NotApplicable
+        BlastRadiusSelection::NotApplicable
     };
     // Computed once up front then on demand below, once per handled key —
     // same reasoning and cache-on-selection-change discipline as
-    // `pivot_selection` above (ADR 0020: `crate::diff_shape`'s own doc
+    // `blast_radius_selection` above (ADR 0020: `crate::diff_shape`'s own doc
     // comment on why this must not be recomputed inside `ui::draw`, after
-    // the pivot pane's own past per-frame recompute bug). The up-front
-    // computation matters for the ordinary (non-`--entry`) startup path
-    // too now, since ADR 0020 also made Diff the default right pane: the
-    // very first frame must already show shaped diff content, not an
+    // the blast-radius pane's own past per-frame recompute bug). The
+    // up-front computation matters for the ordinary (non-`--entry`) startup
+    // path too now, since ADR 0020 also made Diff the default right pane:
+    // the very first frame must already show shaped diff content, not an
     // empty placeholder until the first key press recomputes it.
     let mut diff_pane_content = if should_recompute_diff_pane_content(&app) {
         diff_shape::build_diff_pane_content(
@@ -173,7 +174,7 @@ fn run_app(
                 report,
                 &diff_pane_content,
                 &diff_highlights,
-                &pivot_selection,
+                &blast_radius_selection,
                 repo_root,
             )
         })?;
@@ -218,8 +219,8 @@ fn run_app(
                 app = dispatch_non_source_key(app, report, &diff_pane_content, input_key);
             }
 
-            if should_recompute_pivot_selection(&app) {
-                pivot_selection = app.selected_pivot_view(report);
+            if should_recompute_blast_radius_selection(&app) {
+                blast_radius_selection = app.selected_blast_radius_view(report);
             }
             if should_recompute_diff_pane_content(&app) {
                 diff_pane_content = diff_shape::build_diff_pane_content(
@@ -318,8 +319,8 @@ fn dispatch_non_source_key(
 
 /// Whether `crate::run_app`'s event loop should recompute the diff pane's
 /// shaped content this key, rather than keep showing the previously cached
-/// one — mirrors `should_recompute_pivot_selection`'s own contract and
-/// reasoning, just for [`RightPane::Diff`] instead of `RightPane::Pivot`.
+/// one — mirrors `should_recompute_blast_radius_selection`'s own contract and
+/// reasoning, just for [`RightPane::Diff`] instead of `RightPane::BlastRadius`.
 fn should_recompute_diff_pane_content(app: &App) -> bool {
     matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Diff
 }
@@ -328,14 +329,14 @@ fn should_recompute_diff_pane_content(app: &App) -> bool {
 /// [`InputKey::NextHunk`]/[`InputKey::PrevHunk`] press by jumping
 /// `diff_pane_content`'s scroll offset, rather than treating the key as a
 /// no-op. `true` only while [`app::Focus::Right`] *and* [`app::RightPane::Diff`]
-/// is showing — gating on focus alone let `]`/`[` scroll the Detail/Pivot
+/// is showing — gating on focus alone let `]`/`[` scroll the Detail/BlastRadius
 /// pane using `diff_pane_content`'s hunk-start table, which is only ever
 /// recomputed for the Diff pane (`should_recompute_diff_pane_content` above),
 /// so it goes stale (pinned to whichever file/symbol was selected the last
 /// time Diff was shown) the moment the user switches away from Diff. That
 /// produced a jump with no relation to what is actually on screen.
 ///
-/// Extracted as its own pure function, mirroring `should_recompute_pivot_selection`'s
+/// Extracted as its own pure function, mirroring `should_recompute_blast_radius_selection`'s
 /// own reasoning, so this exact gate is unit-testable without a live
 /// `ratatui::DefaultTerminal`.
 fn should_apply_hunk_jump(app: &App) -> bool {
@@ -432,18 +433,18 @@ fn resolve_goto(app: &App, report: &Report, direction: InputKey) -> GotoOutcome 
     }
 }
 
-/// Whether `crate::run_app`'s event loop should recompute the pivot
+/// Whether `crate::run_app`'s event loop should recompute the blast-radius
 /// selection this key, rather than keep showing the previously cached one
 /// (this function's own extraction is what makes that decision
 /// unit-testable without a live `ratatui::DefaultTerminal` — `run_app`
 /// itself takes one and so cannot be driven directly in a test). `true`
-/// only when the pivot pane is actually the active right pane on the entry
-/// screen; every other key/screen combination leaves the cached value
+/// only when the blast-radius pane is actually the active right pane on the
+/// entry screen; every other key/screen combination leaves the cached value
 /// untouched rather than resetting it to `NotApplicable`, so switching away
-/// from and back to the pivot pane (e.g. `p` -> `d` -> `p`) does not need a
-/// wasted recompute on the `d` press that briefly leaves it.
-fn should_recompute_pivot_selection(app: &App) -> bool {
-    matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::Pivot
+/// from and back to the blast-radius pane (e.g. `R` -> `d` -> `R`) does not
+/// need a wasted recompute on the `d` press that briefly leaves it.
+fn should_recompute_blast_radius_selection(app: &App) -> bool {
+    matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::BlastRadius
 }
 
 /// Translates a raw `crossterm` key press into this crate's
@@ -538,7 +539,7 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         }
         KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
-        KeyCode::Char('p') | KeyCode::Char('P') => Some(InputKey::TogglePivot),
+        KeyCode::Char('r') | KeyCode::Char('R') => Some(InputKey::ToggleBlastRadius),
         // `h`, or Esc while the right pane has focus: return focus to the
         // tree (ADR 0020's neovim-style "move left/back"). Checked before
         // the source-screen Esc arm below so `h`/Esc while Right-focused
@@ -684,6 +685,26 @@ mod tests {
     }
 
     #[test]
+    fn should_translate_lowercase_r_to_toggle_blast_radius() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('r'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleBlastRadius), actual);
+    }
+
+    #[test]
+    fn should_translate_uppercase_r_to_toggle_blast_radius() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = translate_key(KeyCode::Char('R'), KeyModifiers::NONE, &app);
+
+        assert_eq!(Some(InputKey::ToggleBlastRadius), actual);
+    }
+
+    #[test]
     fn should_translate_right_bracket_to_next_hunk() {
         let report = empty_report();
         let app = App::new(&report);
@@ -759,53 +780,53 @@ mod tests {
         assert_eq!(Some(InputKey::Down), actual);
     }
 
-    // Regression guard for the per-frame pivot recompute bug: `run_app`
-    // used to call `App::selected_pivot_view` from inside `ui::draw`, which
-    // runs on every ~100ms idle poll tick, not only on a key press. Pinning
-    // `should_recompute_pivot_selection`'s contract (recompute exactly when
-    // the pivot pane is the active right pane on the entry screen, and
-    // nowhere else) is the closest unit-testable proxy for that fix, since
-    // `run_app` itself takes a live `ratatui::DefaultTerminal` and cannot be
-    // driven directly in a test.
+    // Regression guard for the per-frame blast-radius recompute bug:
+    // `run_app` used to call `App::selected_blast_radius_view` from inside
+    // `ui::draw`, which runs on every ~100ms idle poll tick, not only on a
+    // key press. Pinning `should_recompute_blast_radius_selection`'s
+    // contract (recompute exactly when the blast-radius pane is the active
+    // right pane on the entry screen, and nowhere else) is the closest
+    // unit-testable proxy for that fix, since `run_app` itself takes a live
+    // `ratatui::DefaultTerminal` and cannot be driven directly in a test.
     #[test]
-    fn should_recompute_pivot_selection_when_pivot_pane_is_active_on_entry_screen() {
+    fn should_recompute_blast_radius_selection_when_blast_radius_pane_is_active_on_entry_screen() {
         let report = empty_report();
-        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+        let app = App::new(&report).handle_key(InputKey::ToggleBlastRadius);
 
-        let actual = should_recompute_pivot_selection(&app);
+        let actual = should_recompute_blast_radius_selection(&app);
 
         assert!(actual);
     }
 
     #[test]
-    fn should_not_recompute_pivot_selection_when_right_pane_is_detail() {
+    fn should_not_recompute_blast_radius_selection_when_right_pane_is_detail() {
         let report = empty_report();
         let app = App::new(&report);
 
-        let actual = should_recompute_pivot_selection(&app);
+        let actual = should_recompute_blast_radius_selection(&app);
 
         assert!(!actual);
     }
 
     #[test]
-    fn should_not_recompute_pivot_selection_when_right_pane_is_diff() {
+    fn should_not_recompute_blast_radius_selection_when_right_pane_is_diff() {
         let report = empty_report();
         let app = App::new(&report).handle_key(InputKey::ToggleDiff);
 
-        let actual = should_recompute_pivot_selection(&app);
+        let actual = should_recompute_blast_radius_selection(&app);
 
         assert!(!actual);
     }
 
     #[test]
-    fn should_not_recompute_pivot_selection_while_source_screen_is_open() {
+    fn should_not_recompute_blast_radius_selection_while_source_screen_is_open() {
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(InputKey::Down)
-            .handle_key(InputKey::TogglePivot)
+            .handle_key(InputKey::ToggleBlastRadius)
             .handle_key(InputKey::Source);
 
-        let actual = should_recompute_pivot_selection(&app);
+        let actual = should_recompute_blast_radius_selection(&app);
 
         assert!(!actual);
     }
@@ -859,9 +880,9 @@ mod tests {
     }
 
     #[test]
-    fn should_not_recompute_diff_pane_content_when_right_pane_is_pivot() {
+    fn should_not_recompute_diff_pane_content_when_right_pane_is_blast_radius() {
         let report = empty_report();
-        let app = App::new(&report).handle_key(InputKey::TogglePivot);
+        let app = App::new(&report).handle_key(InputKey::ToggleBlastRadius);
 
         let actual = should_recompute_diff_pane_content(&app);
 
@@ -888,8 +909,8 @@ mod tests {
     // right pane was actually showing — so opening a file (Focus::Right,
     // RightPane::Diff by default), pressing `d` to switch to Detail, then
     // pressing `]`, silently jumped the Detail pane's scroll to a Diff-pane
-    // offset that has no meaning there. `should_recompute_pivot_selection`'s
-    // own existing tests only pin cache-staleness for the pivot pane's
+    // offset that has no meaning there. `should_recompute_blast_radius_selection`'s
+    // own existing tests only pin cache-staleness for the blast-radius pane's
     // *recompute* trigger; none of them cover this key's *application* gate,
     // which is a separate condition (`run_app` applies the jump only when
     // this returns true, independent of whether anything gets recomputed).
@@ -924,13 +945,13 @@ mod tests {
     }
 
     #[test]
-    fn should_not_apply_hunk_jump_when_right_focused_on_pivot_pane() {
+    fn should_not_apply_hunk_jump_when_right_focused_on_blast_radius_pane() {
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(InputKey::Open)
-            .handle_key(InputKey::TogglePivot);
+            .handle_key(InputKey::ToggleBlastRadius);
         assert_eq!(app::Focus::Right, app.focus());
-        assert_eq!(app::RightPane::Pivot, app.right_pane());
+        assert_eq!(app::RightPane::BlastRadius, app.right_pane());
 
         let actual = should_apply_hunk_jump(&app);
 

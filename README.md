@@ -448,21 +448,22 @@ rinkaku --base main --entry src/api
 
 Works with every input mode (stdin / `--base` / `--pr` / whole-repo) and
 combines with `--tui`: the TUI opens with the cursor already on the tree
-row matching `path` and the right-hand pane already in Pivot mode (the `p`
-pivot below) — the interactive session starts exactly where `--entry`
-would have rooted the Markdown/JSON tree, rather than requiring you to
-locate the row and press `p` yourself. If no tree row's path matches `path`
-exactly, the TUI opens normally (cursor on the first row, Detail pane) with
-a status-line note instead.
+row matching `path` and the right-hand pane already showing its Blast
+radius (the `R` binding below) — the interactive session starts exactly
+where `--entry` would have rooted the Markdown/JSON tree, rather than
+requiring you to locate the row and press `R` yourself. If no tree row's
+path matches `path` exactly, the TUI opens normally (cursor on the first
+row, Detail pane) with a status-line note instead.
 
 Prints `note: no symbols under <path>` to stderr and renders an empty tree
 when no symbol's path falls under `path`. Fan-in counts (Hotspots, and the
-TUI tree's `^N` badge) stay whole-analysis under `--entry`/the TUI pivot —
-a pivot changes the vantage point (which symbols count as entry points),
-not the direction fan-in itself measures, so scoping it to the pivoted
-subset would misreport how much the rest of the repository actually
-depends on a symbol (see [ADR 0019](docs/adr/0019-entry-path-pivot-view.md)'s
-Consequences).
+TUI tree's `^N` badge) stay whole-analysis under `--entry`/the TUI blast-
+radius pane — re-rooting the tree changes the vantage point (which symbols
+count as entry points), not the direction fan-in itself measures, so
+scoping it to the re-rooted subset would misreport how much the rest of
+the repository actually depends on a symbol (see
+[ADR 0019](docs/adr/0019-entry-path-pivot-view.md)'s Consequences; the TUI
+naming itself is [ADR 0023](docs/adr/0023-tui-blast-radius-naming.md)).
 
 ## Interactive TUI
 
@@ -496,7 +497,7 @@ jumplist of those jumps, both borrowed from neovim too
 ([ADR 0022](docs/adr/0022-jump-navigation-and-jumplist.md), see
 [Jump navigation](#jump-navigation-gd--gr) below). Press `?` any time for
 an in-app overlay listing every key and a short glossary (order modes,
-pivot, cycle, jumplist).
+blast radius, cycle, jumplist).
 
 ### What it shows
 
@@ -543,26 +544,32 @@ pivot, cycle, jumplist).
   its badge breakdown and top fan-in symbols, plus — when it participates
   in a dependency cycle — exactly which other directories it cycles with
   and the concrete symbol-to-symbol edges forming that cycle.
-- **Pivot pane (right):** `p`/`P` toggles the right-hand pane to an
-  entry-tree view rooted at the directory or file row under the cursor
-  ([ADR 0019](docs/adr/0019-entry-path-pivot-view.md)) — the interactive
-  equivalent of `--entry <path>`. The tree follows the cursor: move to a
-  different directory/file row while pivoted and it re-renders rooted at
-  the new row's path; a symbol row shows a placeholder instead, since
-  pivoting only makes sense on a directory/file scope. Nodes reached only
-  by expanding a dependency edge outward past the pivoted path are dimmed
-  so you can tell "the layer I pivoted on" from "what it reaches into".
-  Press `p` again, or `d`, to leave pivot mode.
+- **Blast radius pane (right):** `r`/`R` toggles the right-hand pane to an
+  entry-tree view rooted at the directory or file row under the cursor —
+  "if this changes, what does it reach" ([ADR 0019](docs/adr/0019-entry-path-pivot-view.md)
+  for the re-rooting algorithm, [ADR 0023](docs/adr/0023-tui-blast-radius-naming.md)
+  for the naming) — the interactive equivalent of `--entry <path>`. The
+  tree follows the cursor: move to a different directory/file row while
+  the pane is active and it re-renders rooted at the new row's path; a
+  symbol row shows a placeholder instead, since measuring blast radius
+  only makes sense on a directory/file scope. Nodes reached only by
+  expanding a dependency edge outward past the selected path are dimmed
+  so you can tell "the layer I'm measuring from" from "what it reaches
+  into". A repeated node is marked `(see above)` rather than expanded
+  again, and a dependency loop back to an ancestor already on screen is
+  marked `(cycle)` — you've seen it, no need to expand further. Press `r`
+  again, or `d`, to leave the blast-radius pane.
 - **Scrolling the right-hand pane:** move focus to the right pane
   (`enter` on a file/symbol row) and use `j`/`k` to scroll the
-  Detail/Diff/Pivot pane down/up by one line when its content is too long
-  to fit — the pane's title grows a `(first-last/total)` suffix (e.g.
-  `Detail (1-17/43)`) whenever there's more to see, so a long cycle-edge
-  list or a large file's diff doesn't quietly get cut off. While viewing
-  the Diff pane specifically, `]`/`[` jump straight to the next/previous
-  hunk. The scroll position resets to the top whenever the underlying
-  content could have changed: moving the cursor, toggling between the
-  detail/diff/pivot views, or returning from the source view.
+  Detail/Diff/Blast-radius pane down/up by one line when its content is
+  too long to fit — the pane's title grows a `(first-last/total)` suffix
+  (e.g. `Detail (1-17/43)`) whenever there's more to see, so a long
+  cycle-edge list or a large file's diff doesn't quietly get cut off.
+  While viewing the Diff pane specifically, `]`/`[` jump straight to the
+  next/previous hunk. The scroll position resets to the top whenever the
+  underlying content could have changed: moving the cursor, toggling
+  between the detail/diff/blast-radius views, or returning from the
+  source view.
 - **Source view:** `s` on a symbol row opens that file, scrolled to and
   highlighting the symbol's line range; `esc`/`q` returns to the entry
   view. Reads the working tree directly (not the historical commit a
@@ -587,7 +594,7 @@ grouped by focus.
 | `e` / `E` | Expand every row |
 | `c` / `C` | Collapse every row |
 
-**Right focus (Detail/Diff/Pivot pane):**
+**Right focus (Detail/Diff/Blast-radius pane):**
 
 | Key(s) | Action |
 | --- | --- |
@@ -602,7 +609,7 @@ grouped by focus.
 | --- | --- |
 | `o` / `O` | Toggle topological / alphabetical ordering |
 | `d` / `D` | Toggle the right-hand pane between diff and detail |
-| `p` / `P` | Toggle the right-hand pane to the pivot tree rooted at the selected directory/file |
+| `r` / `R` | Toggle the right-hand pane to the blast radius of the selected directory/file |
 | `s` / `S` | Open the source view for the symbol under the cursor |
 | `gd` | Jump to a callee of the symbol under the cursor ([ADR 0022](docs/adr/0022-jump-navigation-and-jumplist.md)) |
 | `gr` | Jump to a caller of the symbol under the cursor |

@@ -9,7 +9,7 @@
 //! is covered separately... kept few and coarse — enough to catch a broken
 //! layout, not to pin every pixel").
 
-use crate::app::{App, DiffTarget, PivotSelection, RightPane, Screen, SelectedDetail};
+use crate::app::{App, BlastRadiusSelection, DiffTarget, RightPane, Screen, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
 use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
@@ -32,9 +32,9 @@ use unicode_width::UnicodeWidthChar;
 /// re-parsed/re-highlighted here on every frame — see that function's doc
 /// comment on why that work lives outside the draw loop), consulted only
 /// when the right pane is in [`RightPane::Diff`] mode. `diff_content` and
-/// `pivot_selection` are likewise computed once per handled key by
-/// `crate::run_app` (not here), for [`RightPane::Diff`]/[`RightPane::Pivot`]
-/// respectively — see `App::selected_pivot_view`'s own doc comment on why
+/// `blast_radius_selection` are likewise computed once per handled key by
+/// `crate::run_app` (not here), for [`RightPane::Diff`]/[`RightPane::BlastRadius`]
+/// respectively — see `App::selected_blast_radius_view`'s own doc comment on why
 /// this function must not call either computation itself. `repo_root` is
 /// only consulted on [`Screen::Source`] (forwarded to
 /// [`load_symbol_source`], see that function's doc comment for why
@@ -53,7 +53,7 @@ pub fn draw(
     report: &Report,
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
-    pivot_selection: &PivotSelection,
+    blast_radius_selection: &BlastRadiusSelection,
     repo_root: &std::path::Path,
 ) {
     let area = frame.area();
@@ -67,7 +67,7 @@ pub fn draw(
             report,
             diff_content,
             diff_highlights,
-            pivot_selection,
+            blast_radius_selection,
             body,
         ),
         Screen::Source { symbol_id } => {
@@ -230,7 +230,7 @@ fn draw_entry_screen(
     report: &Report,
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
-    pivot_selection: &PivotSelection,
+    blast_radius_selection: &BlastRadiusSelection,
     area: Rect,
 ) {
     let [tree_area, right_area] =
@@ -247,7 +247,9 @@ fn draw_entry_screen(
             diff_highlights,
             right_area,
         ),
-        RightPane::Pivot => draw_pivot_pane(frame, app, pivot_selection, right_area),
+        RightPane::BlastRadius => {
+            draw_blast_radius_pane(frame, app, blast_radius_selection, right_area)
+        }
     }
 }
 
@@ -338,7 +340,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, report: &Report, area: Rect) {
 /// section) for a file row — `diff_content` is already shaped by
 /// `crate::diff_shape::build_diff_pane_content`, computed once per handled
 /// key by `crate::run_app` (this function must not call it itself, mirroring
-/// `App::selected_pivot_view`'s own "must not call from `ui::draw`"
+/// `App::selected_blast_radius_view`'s own "must not call from `ui::draw`"
 /// constraint and the reason it exists — see that method's doc comment).
 /// A directory row, or a row with nothing to show (no hunks found, e.g. a
 /// mismatch between `report` and the diff), falls back to a placeholder
@@ -388,44 +390,58 @@ fn draw_diff_pane(
     render_scrollable_pane(frame, " Diff ", &lines, app.right_pane_scroll(), area);
 }
 
-/// Draws the pivot pane (ADR 0019, [`RightPane::Pivot`]): the entry-tree
-/// text rooted at the directory/file row under the cursor, following the
-/// cursor as it moves. `selection` is already computed by `crate::run_app`
-/// (via `App::selected_pivot_view`) once per handled key, not here — this
-/// function only lays it out, since `terminal.draw` itself runs on every
-/// ~100ms idle poll tick as well as on an actual key press, and re-deriving
-/// the pivot tree (an O(V+E) graph walk) on every one of those idle ticks
-/// was exactly the per-frame recompute this split avoids. A symbol row
-/// shows a placeholder asking for a directory/file row instead — pivoting
-/// on a single symbol has no directory-scoped meaning (ADR 0019's
-/// `path_prefix` is meant to carve out a layer, not re-derive what a single
-/// symbol's own detail pane already shows). A directory/file row whose path
-/// matches no symbol shows its own "no symbols under `<path>`" message,
-/// mirroring `main.rs`'s `--entry` CLI note.
-fn draw_pivot_pane(frame: &mut Frame, app: &App, selection: &PivotSelection, area: Rect) {
+/// Draws the blast-radius pane (ADR 0019 for the re-rooting algorithm, ADR
+/// 0023 for the "blast radius" naming — [`RightPane::BlastRadius`]): the
+/// entry-tree text rooted at the directory/file row under the cursor,
+/// following the cursor as it moves. `selection` is already computed by
+/// `crate::run_app` (via `App::selected_blast_radius_view`) once per handled
+/// key, not here — this function only lays it out, since `terminal.draw`
+/// itself runs on every ~100ms idle poll tick as well as on an actual key
+/// press, and re-deriving the blast-radius tree (an O(V+E) graph walk) on
+/// every one of those idle ticks was exactly the per-frame recompute this
+/// split avoids. A symbol row shows a placeholder asking for a directory/
+/// file row instead — measuring blast radius from a single symbol has no
+/// directory-scoped meaning (ADR 0019's `path_prefix` is meant to carve out
+/// a layer, not re-derive what a single symbol's own detail pane already
+/// shows). A directory/file row whose path matches no symbol shows its own
+/// "nothing under `<path>` is reachable" message, mirroring `main.rs`'s
+/// `--entry` CLI note.
+///
+/// The pane's title states the question the tree answers ("Blast radius of
+/// `<path>`") rather than the re-rooting mechanism, per ADR 0023's own
+/// rationale for the rename — a reviewer opening the pane for the first
+/// time should not need `?`'s glossary to understand what it shows.
+fn draw_blast_radius_pane(
+    frame: &mut Frame,
+    app: &App,
+    selection: &BlastRadiusSelection,
+    area: Rect,
+) {
     match selection {
-        PivotSelection::NotApplicable => {
-            let block = Block::bordered().title(" Pivot ");
-            let paragraph = Paragraph::new("(select a directory or file row to pivot)")
+        BlastRadiusSelection::NotApplicable => {
+            let block = Block::bordered().title(" Blast radius ");
+            let paragraph =
+                Paragraph::new("(select a directory or file row to see its blast radius)")
+                    .block(block)
+                    .wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+        }
+        BlastRadiusSelection::Empty { path } => {
+            let block = Block::bordered().title(format!(" Blast radius of {path} "));
+            let paragraph = Paragraph::new(format!("(nothing under {path} is reachable)"))
                 .block(block)
                 .wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(paragraph, area);
         }
-        PivotSelection::Empty { path } => {
-            let block = Block::bordered().title(" Pivot ");
-            let paragraph = Paragraph::new(format!("(no symbols under {path})"))
-                .block(block)
-                .wrap(ratatui::widgets::Wrap { trim: false });
-            frame.render_widget(paragraph, area);
-        }
-        PivotSelection::View(view) => {
-            let lines = pivot_pane_lines(view);
-            render_scrollable_pane(frame, " Pivot ", &lines, app.right_pane_scroll(), area);
+        BlastRadiusSelection::View(view) => {
+            let lines = blast_radius_pane_lines(view);
+            let title = format!(" Blast radius of {} ", view.path);
+            render_scrollable_pane(frame, &title, &lines, app.right_pane_scroll(), area);
         }
     }
 }
 
-/// Formats a [`crate::pivot::PivotView`]'s flattened [`crate::pivot::PivotLine`]s
+/// Formats a [`crate::blast_radius::BlastRadiusView`]'s flattened [`crate::blast_radius::BlastRadiusLine`]s
 /// into styled [`Line`]s: indentation by depth (same `INDENT_WIDTH`-per-level
 /// convention as `crate::row_view::entry_row_line`), a dimmed style for
 /// `outside_prefix` lines (reached only by expanding a dependency edge past
@@ -433,7 +449,7 @@ fn draw_pivot_pane(frame: &mut Frame, app: &App, selection: &PivotSelection, are
 /// (matching `rinkaku-core::render`'s Markdown tree), and yellow/bold for a
 /// cycle-warning line (matching `entry_row_line`'s existing `(cycle)`
 /// marker styling).
-fn pivot_pane_lines(view: &crate::pivot::PivotView) -> Vec<Line<'static>> {
+fn blast_radius_pane_lines(view: &crate::blast_radius::BlastRadiusView) -> Vec<Line<'static>> {
     const INDENT_WIDTH: usize = 2;
     view.lines
         .iter()
@@ -1293,9 +1309,9 @@ fn draw_status_line(frame: &mut Frame, app: &App, area: Rect) {
 /// The `]/[: next/prev hunk` hint only appears while Right-focused *and*
 /// [`RightPane::Diff`] is showing — `crate::run_app` only wires up the
 /// `]`/`[` jump for that pane/focus combination (it needs the Diff pane's
-/// shaped hunk-offset table, which Detail/Pivot have no equivalent of), so
-/// advertising the key while Detail/Pivot is showing would describe a
-/// binding that does nothing there.
+/// shaped hunk-offset table, which Detail/BlastRadius have no equivalent
+/// of), so advertising the key while Detail/BlastRadius is showing would
+/// describe a binding that does nothing there.
 ///
 /// Extracted as its own pure function (no `ratatui` types) so the text
 /// itself — not just that *something* renders — is unit-testable, mirroring
@@ -1310,13 +1326,13 @@ fn status_line_text(app: &App) -> String {
             };
             let keys = match app.focus() {
                 crate::app::Focus::Tree => {
-                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  gd/gr: jump  ?: help  q: quit"
+                    "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
-                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
+                    "j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right => {
-                    "j/k: scroll  h/esc: back  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
+                    "j/k: scroll  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 }
             };
             format!("order: {order}  |  {keys}")
@@ -1414,9 +1430,9 @@ mod tests {
     /// Builds the [`crate::diff_shape::DiffPaneContent`] `crate::run_app`
     /// would have cached for `app`'s current selection against `report`/
     /// `diff_files` — this module's tests recreate that one-shot
-    /// computation by hand (mirroring how `should_draw_pivot_pane_...`
-    /// already recreates `App::selected_pivot_view`'s own one-shot
-    /// computation for `pivot_selection`), since `draw` itself must not
+    /// computation by hand (mirroring how `should_draw_blast_radius_pane_...`
+    /// already recreates `App::selected_blast_radius_view`'s own one-shot
+    /// computation for `blast_radius_selection`), since `draw` itself must not
     /// compute it (`draw_diff_pane`'s own doc comment).
     fn diff_content_for(
         report: &Report,
@@ -1463,7 +1479,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1505,7 +1521,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1555,7 +1571,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1588,7 +1604,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1600,7 +1616,7 @@ mod tests {
         assert!(text.contains("Right focus"));
         assert!(text.contains("Global"));
         assert!(text.contains("Glossary"));
-        assert!(text.contains("pivot"));
+        assert!(text.contains("blast radius"));
     }
 
     #[test]
@@ -1617,7 +1633,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1652,7 +1668,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1694,7 +1710,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1724,7 +1740,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1763,7 +1779,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1807,7 +1823,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1856,7 +1872,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1911,7 +1927,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -1963,7 +1979,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2020,7 +2036,7 @@ mod tests {
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2061,7 +2077,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2122,7 +2138,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2189,7 +2205,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2254,7 +2270,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2314,7 +2330,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2330,11 +2346,12 @@ index e69de29..4b825dc 100644
     }
 
     #[test]
-    fn should_draw_pivot_pane_with_tree_lines_when_toggled_on_a_file_row() {
+    fn should_draw_blast_radius_pane_with_tree_lines_when_toggled_on_a_file_row() {
         // Same fixture shape as `report_with_one_symbol`, but with a graph
         // actually populated (that fixture leaves `graph` empty since most
-        // of this module's tests don't need one) so pivoting on "lib.rs"
-        // yields a real `PivotSelection::View` instead of `Empty`.
+        // of this module's tests don't need one) so opening the blast-radius
+        // pane on "lib.rs" yields a real `BlastRadiusSelection::View` instead
+        // of `Empty`.
         let report = Report {
             graph: SymbolGraph {
                 nodes: vec![rinkaku_core::graph::Node {
@@ -2348,12 +2365,12 @@ index e69de29..4b825dc 100644
             ..report_with_one_symbol()
         };
         // Row 0 is the "lib.rs" file row itself (cursor starts there).
-        let app = App::new(&report).handle_key(crate::app::InputKey::TogglePivot);
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleBlastRadius);
         // `crate::run_app` computes this once per handled key and hands it
         // into `draw` (see `draw`'s own doc comment on why `draw` itself
-        // must not call `App::selected_pivot_view`) — this test recreates
+        // must not call `App::selected_blast_radius_view`) — this test recreates
         // that same one-shot computation rather than a per-frame one.
-        let pivot_selection = app.selected_pivot_view(&report);
+        let blast_radius_selection = app.selected_blast_radius_view(&report);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2364,24 +2381,24 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &pivot_selection,
+                    &blast_radius_selection,
                     &test_repo_root(),
                 )
             })
             .expect("draw");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("Pivot"));
+        assert!(text.contains("Blast radius of lib.rs"));
         assert!(text.contains("fn foo (lib.rs)"));
     }
 
     #[test]
-    fn should_draw_pivot_placeholder_when_cursor_is_on_a_symbol_row() {
+    fn should_draw_blast_radius_placeholder_when_cursor_is_on_a_symbol_row() {
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(crate::app::InputKey::Down)
-            .handle_key(crate::app::InputKey::TogglePivot);
-        let pivot_selection = app.selected_pivot_view(&report);
+            .handle_key(crate::app::InputKey::ToggleBlastRadius);
+        let blast_radius_selection = app.selected_blast_radius_view(&report);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
@@ -2392,14 +2409,14 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &pivot_selection,
+                    &blast_radius_selection,
                     &test_repo_root(),
                 )
             })
             .expect("draw");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("Pivot"));
+        assert!(text.contains("Blast radius"));
         // Not the full placeholder sentence: the pane is narrow enough
         // (40% of an 80-column terminal) that `Paragraph`'s word-wrapping
         // splits it across rows, and `buffer_text` joins rows with `\n` —
@@ -2409,6 +2426,52 @@ index e69de29..4b825dc 100644
         // fragment checks (e.g. `should_draw_entry_and_detail_panes_...`'s
         // "Symbols" check).
         assert!(text.contains("directory"));
+    }
+
+    #[test]
+    fn should_draw_blast_radius_empty_message_when_file_row_path_matches_no_graph_node() {
+        // `report_with_one_symbol`'s `graph.nodes` is empty (that fixture
+        // exists for Detail/Diff pane tests that don't need a populated
+        // graph), so the cursor's default position on the "lib.rs" file row
+        // matches no graph node — the real-world trigger for
+        // `BlastRadiusSelection::Empty` (`App`'s own
+        // `should_return_empty_blast_radius_selection_when_file_row_path_matches_no_graph_node`
+        // test pins the same fixture shape at the `App` layer; this test
+        // pins the rendered pane text ADR 0023 promises, which nothing
+        // previously asserted).
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleBlastRadius);
+        let blast_radius_selection = app.selected_blast_radius_view(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &blast_radius_selection,
+                    &test_repo_root(),
+                )
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Blast radius of lib.rs"));
+        // NOTE: asserting a substring, not the full parenthesized sentence —
+        // the pane is narrow enough (40% of an 80-column terminal) that
+        // `Paragraph`'s word-wrapping can split the sentence across rows,
+        // and `buffer_text` joins rows with `\n`, so a wrapped multi-row
+        // substring would never match a single-line `contains` check
+        // (mirroring `should_draw_blast_radius_placeholder_when_cursor_is_on_a_symbol_row`'s
+        // own "directory" fragment check just above, for the same reason).
+        // Still pins the exact wording ADR 0023 specifies ("is reachable",
+        // not the earlier "depends on anything" this test was added to
+        // catch a future drift away from).
+        assert!(text.contains("nothing under lib.rs is"));
+        assert!(text.contains("reachable"));
     }
 
     /// Finds the buffer cell for `token`'s first character within the row
@@ -2486,7 +2549,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2532,7 +2595,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2571,7 +2634,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2617,7 +2680,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2676,7 +2739,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &diff_content,
                     &diff_highlights,
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2713,7 +2776,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2743,7 +2806,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2770,7 +2833,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -2810,7 +2873,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -3075,7 +3138,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  p: pivot  s: source  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -3103,7 +3166,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -3124,7 +3187,7 @@ index e69de29..4b825dc 100644
         let actual = status_line_text(&app);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  h/esc: back  d: diff  p: pivot  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -3219,7 +3282,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -3250,7 +3313,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -3283,7 +3346,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -3322,7 +3385,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -3359,7 +3422,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -3525,7 +3588,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })
@@ -3575,7 +3638,7 @@ index e69de29..4b825dc 100644
                     &report,
                     &crate::diff_shape::DiffPaneContent::Empty,
                     &[],
-                    &PivotSelection::NotApplicable,
+                    &BlastRadiusSelection::NotApplicable,
                     &test_repo_root(),
                 )
             })

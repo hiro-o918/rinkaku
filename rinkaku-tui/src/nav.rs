@@ -108,11 +108,11 @@ impl Nav {
     /// [`NodeKind::Symbol`] rows even though a symbol row's own `node.path`
     /// equals its containing file's path (`TreeNode::path`'s own doc
     /// comment) — this method exists for `--entry`-style directory/file
-    /// pivoting (`crate::app::App`'s own entry-path wiring), which has no
+    /// re-rooting (`crate::app::App`'s own entry-path wiring), which has no
     /// single-symbol-scoped meaning (ADR 0019, mirroring
-    /// `App::selected_pivot_view`'s symbol-row `NotApplicable` case), so
-    /// landing on a same-path symbol row instead of the file/dir row itself
-    /// would silently change what the pivot pane shows.
+    /// `App::selected_blast_radius_view`'s symbol-row `NotApplicable` case),
+    /// so landing on a same-path symbol row instead of the file/dir row
+    /// itself would silently change what the blast-radius pane shows.
     pub fn move_cursor_to_path(&mut self, tree: &Tree, path: &str) -> bool {
         let rows = self.rows(tree);
         let Some(index) = rows
