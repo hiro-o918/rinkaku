@@ -14,7 +14,7 @@
 //! "Repository graph" for a whole-repo outline (names only, rooted at the
 //! graph's auto-detected entry points) giving the reader a call-hierarchy
 //! reading order, with an optional "High fan-in symbols" sub-section
-//! (ADR 0013, named per ADR 0033) right after it; "Definitions" — the full
+//! (ADR 0013, named per ADR 0034) right after it; "Definitions" — the full
 //! signature of every symbol, in the
 //! same tree order, each shown exactly once (ADR 0008's decision to avoid
 //! duplicating a symbol reachable from multiple roots); "Removed symbols" —

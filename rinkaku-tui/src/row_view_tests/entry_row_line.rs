@@ -19,7 +19,7 @@ fn should_include_badge_labels_for_nonzero_badges_on_a_dir_row() {
     // ADR 0013 amendments (2026-07-13): all three badges use text labels
     // (`chg:` / `api:` / `fan-in:`) instead of glyphs — the first
     // amendment relabeled changed-symbol/fan-in (as `ref:`, later
-    // relabeled `fan-in:` per ADR 0033), the second (feat/label-contract-
+    // relabeled `fan-in:` per ADR 0034), the second (feat/label-contract-
     // changes-badge) relabeled contract-change from a bare `!` after
     // user testing showed it read as generic "warning" with no hint of
     // what changed.

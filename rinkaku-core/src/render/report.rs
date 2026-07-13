@@ -42,7 +42,7 @@ pub struct Report {
     /// populated when the CLI passes `--exclude-tests`. Source order (the
     /// order files were first encountered in the diff), same as `files`.
     pub tests: Vec<TestFileSummary>,
-    /// Fan-in symbols (ADR 0013, named "fan-in" per ADR 0033): changed
+    /// Fan-in symbols (ADR 0013, named "fan-in" per ADR 0034): changed
     /// symbols referenced by two or more other changed symbols, sorted by
     /// fan-in descending. Derived from `graph` via
     /// [`crate::graph::compute_fan_ins`] and kept as its own `Report` field

@@ -8,7 +8,7 @@
 //!   rename), diff-parse and read-file error paths, multi-file mixed
 //!   outcomes, Go interface/receiver nesting end-to-end, resolver
 //!   invocation contract (`Some`/`None`), and fan-in wiring
-//!   (ADR 0013, named per ADR 0033, end-to-end).
+//!   (ADR 0013, named per ADR 0034, end-to-end).
 //! - [`is_generated_content`] — ADR 0011: the `is_generated_content`
 //!   marker-detection helper's positive and negative cases (rstest).
 //! - [`test_symbol_exclusion`] — ADR 0009: `partition_test_symbols`'s

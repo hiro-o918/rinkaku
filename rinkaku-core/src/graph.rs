@@ -58,7 +58,7 @@ pub struct SymbolGraph {
     pub roots: Vec<NodeId>,
 }
 
-/// Line-count-style eligibility threshold (ADR 0033, mirroring
+/// Line-count-style eligibility threshold (ADR 0034, mirroring
 /// `file_size.rs`'s `WARN_LINE_THRESHOLD`/`SPLIT_LINE_THRESHOLD`
 /// convention): a node with `used_by.len() >= HIGH_FAN_IN_THRESHOLD`
 /// qualifies as a [`FanIn`] entry. This is a judgment call, not derived
@@ -69,7 +69,7 @@ pub struct SymbolGraph {
 pub const HIGH_FAN_IN_THRESHOLD: usize = 2;
 
 /// A changed symbol with two or more distinct referrers (ADR 0013, named
-/// "fan-in" per ADR 0033): a symbol a reviewer should pay extra attention
+/// "fan-in" per ADR 0034): a symbol a reviewer should pay extra attention
 /// to, since changing its signature has a wider blast radius than a symbol
 /// only one other changed symbol depends on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

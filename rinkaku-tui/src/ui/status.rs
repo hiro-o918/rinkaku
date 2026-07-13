@@ -55,7 +55,7 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, ar
 /// emoji rendering width is inconsistent enough that a status-line
 /// glyph can push the help hints past the frame edge. The whole suffix
 /// is dropped when the vec is empty (mirrors ADR 0013's "High fan-in
-/// symbols is skipped when empty" rule, named per ADR 0033).
+/// symbols is skipped when empty" rule, named per ADR 0034).
 pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
     let help = match app.screen() {
         Screen::Entry => {
