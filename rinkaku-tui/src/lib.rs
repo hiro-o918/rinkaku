@@ -44,6 +44,7 @@ pub mod ui;
 
 use app::{App, BlastRadiusSelection, InputKey, Screen};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::execute;
 use rinkaku_core::render::Report;
 use std::time::Duration;
 
@@ -59,6 +60,26 @@ use std::time::Duration;
 /// `anyhow` path to print cleanly and exit 1, instead of `ratatui::init`'s
 /// own `.expect(...)` panicking with a raw Rust panic message and exit
 /// code 101.
+///
+/// Also enables mouse capture (`EnableMouseCapture`) so the wheel/trackpad
+/// scroll support below can receive `Event::Mouse` at all — without it, a
+/// scroll gesture is intercepted by the terminal emulator itself (moving
+/// its own scrollback) and never reaches this process. `ratatui::try_init`/
+/// `restore` do not touch mouse capture (mouse support is opt-in, unlike
+/// raw mode/alternate screen which every TUI needs), so this function
+/// enables and disables it itself, and installs its own panic-hook layer
+/// (chained *before* calling `try_init`, so `try_init`'s own hook wraps
+/// this one and both run on panic — see `try_init`'s own doc comment: "set
+/// a panic hook that restores the terminal") to disable mouse capture on
+/// panic too, mirroring the guarantee `try_init` already gives raw mode/
+/// alternate screen. `EnableMouseCapture` failing outright (as opposed to
+/// panicking) is handled the same way: `try_init` has already put the
+/// terminal into raw mode/the alternate screen by that point, so this
+/// function calls `ratatui::restore()` itself on that path before
+/// propagating the error, rather than relying on `?` to skip straight to
+/// the caller (which would strand the terminal mid-setup, since that
+/// particular failure is a plain `Err`, not a panic the installed hook
+/// would catch).
 ///
 /// This is the only function in the crate that touches a real terminal or
 /// blocks on input; everything it calls into (`App`, `row_view`, `ui`,
@@ -97,8 +118,32 @@ pub fn run(
     entry_path: Option<&str>,
     repo_root: &std::path::Path,
 ) -> std::io::Result<()> {
+    // Chained *before* `ratatui::try_init`'s own `set_panic_hook` call
+    // below, so the hook `try_init` installs wraps this one: on panic,
+    // `try_init`'s hook runs `ratatui::restore()` (raw mode/alternate
+    // screen) and then this crate's hook (disable mouse capture), rather
+    // than mouse capture silently staying enabled in the panicking
+    // caller's terminal.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
+        previous_hook(info);
+    }));
+
     let mut terminal = ratatui::try_init()?;
+    // Restore explicitly on this `?`'s early-return path (rather than
+    // letting `?` skip straight past the `ratatui::restore()` call below):
+    // `try_init` above already left raw mode/the alternate screen active,
+    // and a plain `EnableMouseCapture` IO failure is not a panic, so the
+    // panic-hook layer just installed does not run either — without this,
+    // that combination would strand the caller's terminal in raw mode/
+    // alternate screen with no cleanup at all.
+    if let Err(err) = execute!(std::io::stdout(), event::EnableMouseCapture) {
+        ratatui::restore();
+        return Err(err);
+    }
     let result = run_app(&mut terminal, report, diff_text, entry_path, repo_root);
+    let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -249,11 +294,28 @@ fn run_app(
         // this loop might grow to check in the future (kept short as a
         // resize/redraw responsiveness margin, not a correctness
         // requirement of the key-handling itself).
-        if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key_event) = event::read()?
-            && key_event.kind == KeyEventKind::Press
-            && let Some(input_key) = translate_key(key_event.code, key_event.modifiers, &app)
-        {
+        //
+        // Both a keyboard press and a mouse wheel tick resolve to the same
+        // `Option<InputKey>` here (`translate_key`/`translate_mouse_event`
+        // respectively) and share every downstream dispatch branch below —
+        // a wheel scroll is just another way to produce `InputKey::Up`/
+        // `Down`, not a second, parallel handling path. Every other
+        // `Event` variant (`FocusGained`/`FocusLost`/`Paste`/`Resize`, and
+        // click/drag/move mouse events `translate_mouse_event` maps to
+        // `None`) falls through to `None` and the loop simply redraws.
+        let translated_input_key = if event::poll(Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                    translate_key(key_event.code, key_event.modifiers, &app)
+                }
+                Event::Mouse(mouse_event) => translate_mouse_event(mouse_event.kind),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(input_key) = translated_input_key {
             if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id, .. } = app.screen().clone()
@@ -899,6 +961,37 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') => Some(InputKey::Quit),
+        _ => None,
+    }
+}
+
+/// Translates a raw `crossterm` mouse event into an [`InputKey`], the same
+/// boundary role [`translate_key`] plays for keyboard input — a pure
+/// function so the mapping is unit-testable without a live terminal.
+///
+/// Only `ScrollUp`/`ScrollDown` (wheel/trackpad) are mapped, and they are
+/// mapped onto the *existing* [`InputKey::Up`]/[`InputKey::Down`] variants
+/// rather than a dedicated pair of scroll variants: `App::handle_key`
+/// already gives `Up`/`Down` the right contextual meaning everywhere a
+/// wheel scroll should act — the tree cursor while [`app::Focus::Tree`],
+/// [`app::App::right_pane_scroll`] by one line while [`app::Focus::Right`]
+/// (ADR 0020), and [`app::Screen::Source`]'s `scroll_top` on the source
+/// screen (ADR 0026) — so reusing them is a strict simplification (no new
+/// state-machine surface) rather than introducing a second, parallel
+/// motion concept the app would have to keep in sync with the first.
+///
+/// `MouseEventKind::ScrollLeft`/`ScrollRight` (horizontal wheel/trackpad)
+/// and every click/drag/move variant are deliberately unmapped (`None`):
+/// this crate has no horizontally-scrollable pane, and no pane targeting by
+/// click position — the row/column the event occurred at is intentionally
+/// not consulted here. Wheel input always acts on whichever pane already
+/// has focus, exactly like a keyboard `j`/`k` press would; teaching the
+/// wheel to also *change* focus by clicking a pane is future scope, not
+/// attempted by this function.
+fn translate_mouse_event(kind: event::MouseEventKind) -> Option<InputKey> {
+    match kind {
+        event::MouseEventKind::ScrollUp => Some(InputKey::Up),
+        event::MouseEventKind::ScrollDown => Some(InputKey::Down),
         _ => None,
     }
 }
@@ -2107,5 +2200,60 @@ mod tests {
             app.right_pane_scroll(),
             "jumping back must restore the scroll offset recorded when gd was pressed, not 0"
         );
+    }
+
+    // translate_mouse_event tests (mouse wheel scroll support).
+
+    #[test]
+    fn should_translate_scroll_up_to_input_key_up() {
+        let actual = translate_mouse_event(event::MouseEventKind::ScrollUp);
+
+        assert_eq!(Some(InputKey::Up), actual);
+    }
+
+    #[test]
+    fn should_translate_scroll_down_to_input_key_down() {
+        let actual = translate_mouse_event(event::MouseEventKind::ScrollDown);
+
+        assert_eq!(Some(InputKey::Down), actual);
+    }
+
+    #[test]
+    fn should_translate_scroll_left_to_none() {
+        // Horizontal wheel/trackpad input has no mapping — this crate has
+        // no horizontally-scrollable pane (this function's own doc comment).
+        let actual = translate_mouse_event(event::MouseEventKind::ScrollLeft);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_scroll_right_to_none() {
+        let actual = translate_mouse_event(event::MouseEventKind::ScrollRight);
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_click_to_none() {
+        // Clicks/drags/moves are deliberately out of scope (no pane
+        // targeting by click position) — this function's own doc comment.
+        let actual = translate_mouse_event(event::MouseEventKind::Down(event::MouseButton::Left));
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_drag_to_none() {
+        let actual = translate_mouse_event(event::MouseEventKind::Drag(event::MouseButton::Left));
+
+        assert_eq!(None, actual);
+    }
+
+    #[test]
+    fn should_translate_mouse_moved_to_none() {
+        let actual = translate_mouse_event(event::MouseEventKind::Moved);
+
+        assert_eq!(None, actual);
     }
 }
