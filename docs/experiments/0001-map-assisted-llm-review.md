@@ -634,6 +634,130 @@ follow-up addressing review feedback).
   the point is that someone actually drove the binary, not that doing
   so must always turn up a bug.
 
+## Results (round 10)
+
+Same two-pass method, tenth subject: this PR's own diff (dogfooding) —
+the `--format mermaid` renderer plus the composite GitHub Action/
+dogfooding workflow that posts it as a PR comment. Unlike every prior
+subject, most of the surface under review is YAML/shell, not Rust; the
+map has zero visibility into it beyond listing it as skipped
+(unsupported language). One protocol note: **dynamic verification was
+assigned to arm B only** this round (per the current CLAUDE.md split),
+so the arm-to-arm finding counts below are not a pure map/no-map
+comparison the way rounds 3–9's mandatory-both-arms protocol gave —
+recorded as a caveat, not folded silently into the numbers. Metrics are
+the orchestrating session's harness-reported usage accounting for the
+two review subagent runs (output tokens, tool calls, wall clock), the
+same provenance every prior round's numbers share.
+
+| Metric               | A (map, no execution) | B (control + mandatory execution) |
+| --------------------- | ---------------------- | ---------------------------------- |
+| Output tokens         | 134.5k                  | 128.4k                              |
+| Tool calls            | 21                      | 71                                  |
+| Wall clock            | ~120s                   | ~499s                               |
+| Major findings        | 1                       | 2                                   |
+| Minor findings        | 1                       | 3                                   |
+| Nit findings          | 1                       | 2                                   |
+
+- **A's most useful signal from the map was what it *couldn't* cover**:
+  the "Skipped files (unsupported language)" list flagged that the
+  entire `action.yaml`/workflow/shell surface had zero map coverage,
+  telling A up front that this portion needed full manual reading
+  rather than hotspot-guided sampling — the map redirecting attention
+  by naming its own blind spot, not by pointing into it. For the Rust
+  portion it did cover, the hotspot list (5 of 7 changed symbols
+  concentrated in `render.rs`) let A verify the core renderer quickly
+  and spend the saved budget on the Action files instead.
+- **A's major finding** (trust boundary: the dogfooding workflow ran
+  `action.yaml`/`compose_and_post_comment.sh` from the PR *head*
+  checkout with `pull-requests: write`, so on a non-fork PR a
+  malicious change could rewrite its own comment-posting logic and
+  have it execute with a write token before any review) was reasoned
+  out from reading the workflow's checkout/`uses:` structure, not
+  executed — the class of defect a careful static read of trust
+  boundaries can catch without running anything.
+- **B's two majors were both found by running things**, not reading
+  them: (1) the fork-PR 403 (`pull_request`'s read-only token on fork
+  PRs, verified by checking `github.event.pull_request.head.repo.fork`
+  semantics against how the token scoping actually works) and (2) the
+  oversized-mermaid cap violation, reproduced concretely with a 70,220-
+  byte synthetic mermaid fixture that pushed the composed comment body
+  past GitHub's 65,536-byte limit — a violation the code path could not
+  have been shown broken any other way than constructing the input and
+  running the compose script against it.
+- **B's minor findings were also proven, not asserted**: the
+  `added`-can't-overlap-`hotspot` comment was shown factually wrong by
+  building a live repro (a new symbol referenced by two other changed
+  symbols, confirming `compute_hotspots` counts fan-in independent of
+  classification); the "binary at archive root" comment was shown stale
+  by reproducing the actual release-packaging layout (nested
+  `rinkaku-<target>/rinkaku`, not flat). B additionally validated the
+  mermaid output itself via real `mmdc` SVG rendering, including
+  escaping edge cases, rather than eyeballing the fenced text.
+- **Neither arm caught the bootstrap bug**: on this very PR, the
+  workflow builds rinkaku from base = `main`, which does not yet have
+  `--format mermaid` — the run would fail on its own introducing PR.
+  The orchestrator caught it, not either review arm. Worth recording
+  as a conclusion in its own right: a first-PR-for-a-feature is a
+  structural blind spot for *both* review strategies, since the defect
+  only exists in the relationship between "what this PR adds" and
+  "what the base ref the workflow builds from lacks" — a relationship
+  neither the map (which describes the diff) nor a control read
+  focused on the diff's own content has a reason to check without
+  being told to look for it specifically.
+- Fixes shipped in response to all findings: the workflow restructured
+  so the PR base (not head) provides both the built binary *and* the
+  orchestration code (`uses: ./` resolves from the base checkout; the
+  head checkout is data-only, referenced via a new `repo-path` input);
+  fork-PR and generic-403 detection with a `$GITHUB_STEP_SUMMARY`
+  fallback so a fork PR's run still exits 0; a `--help`-probe fallback
+  to a Markdown-only report when the resolved binary predates
+  `--format mermaid` (fixing the bootstrap bug the orchestrator found);
+  a mermaid-specific size budget in the compose script, replacing an
+  oversized graph with a short note rather than letting it blow the
+  total comment cap; byte-safe (`LC_ALL=C`) truncation with a
+  UTF-8-boundary backoff loop, verified against a fixture with the
+  cycle-warning glyph (⚠️) straddling the cut point; the wrong
+  hotspot/added-precedence rationale rewritten to the true one, with a
+  new test proving an `Added` symbol can be a hotspot; the stale
+  archive-layout comment corrected; embedded newlines in mermaid labels
+  now normalized to spaces; an exact-budget (30-node) boundary test
+  added alongside the existing over-budget one; unrouted `${{ }}`
+  interpolation in the workflow moved into `env:`; and a
+  `permissions:`/trusted-base/fork-behavior paragraph added to the
+  README's Action example.
+
+## Conclusions (after 10 rounds)
+
+- This round's subject shape — mostly non-Rust orchestration code —
+  produced a new instance of round 8/9's "the map shows what exists,
+  not whether it's correct/safe" lesson, from the opposite direction:
+  here the map couldn't even show *what exists*, and its most useful
+  contribution was making that gap visible (the skipped-files list) so
+  attention routed to full manual reading instead of false confidence
+  from partial coverage. A map's blind spots are worth surfacing
+  explicitly, not just silently narrowing what it can vouch for.
+- The asymmetry caveat matters this round more than most: with dynamic
+  execution assigned only to B, B's finding-count lead is expected by
+  construction, not evidence that unassisted review is stronger in
+  general — rounds 3–9's mandatory-both-arms protocol remains the
+  fairer comparison for that question. What this round *does* add
+  cleanly: A's static trust-boundary reasoning and B's dynamic
+  reproductions were different in kind (a structural read vs. a built
+  fixture), not just different in count, and both were real, useful,
+  non-overlapping findings.
+- **New failure mode identified**: neither review arm caught a defect
+  that only exists in the relationship between the PR's own diff and
+  the state of its own base ref (the bootstrap flag-availability gap).
+  Both review strategies in this experiment are framed around "read/
+  execute the diff" — neither is set up to ask "does this diff's own
+  premise hold against the ref it will actually run against on its own
+  introducing PR," which is a first-PR-only question by definition.
+  This is a genuinely new category, distinct from rounds 1–9's
+  recurring "map draws no edge to unchanged code" gap: it is not about
+  what the map can see, but about a question neither arm's prompt
+  currently asks at all.
+
 ## Next
 
 - Consider a map feature flagging cross-crate duplicate-domain
@@ -656,3 +780,19 @@ follow-up addressing review feedback).
   downstream construction function, since that shape recurs whenever
   a `Report` consumer merges several "list of things about a path"
   fields back into one per-path structure.
+- Round 10's new failure mode (neither arm checks whether a PR's own
+  premise holds against its own base ref) suggests adding an explicit
+  "bootstrap consistency" check to the review-prompt template for any
+  PR introducing a CLI flag/feature that a CI/Action step in the same
+  PR builds-and-uses from a base checkout: does the base ref actually
+  have the capability the new workflow step assumes? Neither the map
+  nor a diff-focused control read is positioned to ask this
+  unprompted, so it likely needs to be an explicit instruction rather
+  than something either strategy discovers on its own.
+- Round 10 also flags an experiment-design gap worth fixing before the
+  next non-Rust-heavy subject: consider giving arm A a lightweight
+  non-map "what does the map NOT cover" summary (e.g. the skipped-
+  files list alone, without the rest of the report) as a control, to
+  isolate whether the attention-routing benefit this round attributes
+  to the map specifically requires the full report or would come from
+  just knowing the coverage boundary.

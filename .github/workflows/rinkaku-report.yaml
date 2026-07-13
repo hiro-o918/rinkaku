@@ -1,0 +1,121 @@
+name: rinkaku PR report
+
+# Dogfoods this repository's own action (ADR 0021): posts a mermaid
+# call/dependency graph plus a collapsed Markdown outline as a sticky PR
+# comment.
+#
+# Trust boundary — TWO rules, not one: a PR is exactly the input an
+# attacker controls, so nothing that inspects it may itself come from it.
+# That applies to BOTH:
+#   1. the rinkaku BINARY (built from the PR's base ref, never the head
+#      or a downloaded release binary), and
+#   2. the ORCHESTRATION CODE running that binary — action.yaml and
+#      compose_and_post_comment.sh. This job runs with `pull-requests:
+#      write`, so if that code were the version committed on the PR
+#      branch, a malicious PR could rewrite its own comment-posting logic
+#      (or anything else in the composite steps) and have it execute with
+#      a write token before any human reviews it — on a same-repo (non-
+#      fork) PR, `pull_request` grants the real repo token, not a
+#      restricted one, so this is not merely theoretical.
+# Same rule this repository's own README documents for the "map-assisted
+# LLM review" recipe (docs/experiments/0001-map-assisted-llm-review.md):
+# "built from a trusted `main` checkout, never from the branch under
+# review" — extended here to cover the script that runs the tool, not
+# just the tool itself.
+#
+# Concretely: the PR's BASE ref is checked out at the job's default
+# workspace root (no `path:`), so `uses: ./` below resolves action.yaml
+# (and, transitively, compose_and_post_comment.sh via
+# $GITHUB_ACTION_PATH) from that trusted checkout. The PR HEAD is
+# checked out into a subdirectory instead and treated purely as DATA —
+# rinkaku's `repo-path` input points at it so `--base`'s `git diff`/
+# `git show` resolve the actual PR diff, but no code from that checkout
+# is ever `source`d, `uses:`d, or executed directly.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+concurrency:
+  group: rinkaku-report-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Explicit `ref:` on BOTH checkouts below, not the trigger's default —
+      # `actions/checkout` on a `pull_request` event defaults to
+      # `refs/remotes/pull/<N>/merge`, GitHub's ephemeral merge-of-head-
+      # into-base commit, whichever `ref:` is omitted. Omitting it here
+      # would silently defeat the whole trust-boundary point of this
+      # workflow: a "base" checkout with no explicit `ref:` still contains
+      # every change from the PR head (merged in), so the "trusted" binary
+      # and orchestration code would actually be built from a tree that
+      # includes the PR's own — unreviewed — changes. This was found by
+      # actually running this workflow (see PR #59's dogfooding comment,
+      # which posted a full mermaid section despite `main` not having
+      # `--format mermaid` yet — proof the base checkout was not really
+      # base).
+      - name: Checkout PR base (trusted build source and orchestration code)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      # Bootstrap guard: the very PR that *introduces* this workflow (and
+      # action.yaml) is, by definition, the one case where the trusted
+      # base checkout above cannot contain either — they don't exist on
+      # `main` yet. Trying to run them anyway would mean falling back to
+      # the PR-head copy, exactly the trust-boundary violation this
+      # workflow exists to prevent. Skip cleanly instead: every step from
+      # here on is gated on this check, and the job still succeeds (the
+      # skip is expected and self-explanatory via the notice), rather
+      # than failing with a confusing "can't find action.yaml" error the
+      # way an unguarded `uses: ./` does.
+      - name: Check whether the trusted base checkout has this action
+        id: check-action
+        run: |
+          if [ -f action.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::action.yaml does not exist on the PR base ref yet (this is expected on the PR that introduces it) — skipping the report step rather than running untrusted PR-head code"
+          fi
+
+      - name: Checkout PR head into a subdirectory (data only)
+        if: steps.check-action.outputs.present == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: rinkaku-pr-head
+          fetch-depth: 0
+
+      - name: Fetch base branch into the head checkout
+        if: steps.check-action.outputs.present == 'true'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        working-directory: rinkaku-pr-head
+        run: git fetch origin "${BASE_REF}"
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        if: steps.check-action.outputs.present == 'true'
+        with:
+          key: rinkaku-report-build
+
+      - name: Build rinkaku from the base ref
+        if: steps.check-action.outputs.present == 'true'
+        run: cargo build --release -p rinkaku
+
+      - name: Run rinkaku report action
+        if: steps.check-action.outputs.present == 'true'
+        uses: ./
+        with:
+          binary: ${{ github.workspace }}/target/release/rinkaku
+          repo-path: ${{ github.workspace }}/rinkaku-pr-head
+          base: ${{ github.event.pull_request.base.ref }}
+          github-token: ${{ github.token }}
