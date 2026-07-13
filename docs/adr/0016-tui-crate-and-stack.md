@@ -143,25 +143,43 @@ free):**
 Bare `rinkaku` (stdin attached to a terminal) worked from the start, but
 `gh pr diff 123 | rinkaku` — the README's own primary usage example, and
 ADR 0017's stdin input mode — could not open the TUI at all: it consumes
-stdin to read the diff, and `crossterm`'s default event source (the `mio`
-backend) tries to poll stdin itself for keyboard input rather than
-falling back to the controlling terminal, so as soon as stdin is a pipe
-rather than a TTY it fails outright with "Failed to initialize input
-reader" (verified with a minimal `crossterm::event::read()` reproduction,
-independent of any `rinkaku-tui` code). `--tui` explicitly requested
-alongside a piped diff hit the same failure.
+stdin to read the diff, and as soon as stdin is a pipe rather than a TTY,
+`crossterm`'s default event source fails outright with "Failed to
+initialize input reader" (verified with a minimal `crossterm::event::
+read()` reproduction, independent of any `rinkaku-tui` code). `--tui`
+explicitly requested alongside a piped diff hit the same failure.
+
+The failure is *not* where an earlier draft of this addendum placed it.
+Reading `crossterm` 0.29.0's own source shows both the default (`mio`)
+backend and the `use-dev-tty` (`tty`) backend call the same shared
+`tty_fd()` helper, which already falls back to opening `/dev/tty`
+whenever stdin isn't a TTY — so `/dev/tty` itself opens successfully
+either way, even without this fix. The default backend instead fails one
+step later, inside `mio`'s `Poll`/`SourceFd` registration for that file
+descriptor (`UnixInternalEventSource::from_file_descriptor` in
+`crossterm`'s `mio.rs`) — confirmed by two independent minimal
+`crossterm::event::read()` probes on a pseudo-terminal, one built against
+each backend, where only the `mio` build failed and the `tty` build
+blocked correctly on real key input.
 
 Fix: `rinkaku-tui/Cargo.toml` now depends on `crossterm` directly (in
 addition to the `ratatui::crossterm` re-export used everywhere else in
-the crate) solely to enable its `use-dev-tty` feature. Cargo's feature
-unification applies that feature to the single shared `crossterm`
-instance ratatui also depends on — there is no second copy of the crate.
-With `use-dev-tty`, `crossterm`'s Unix event source opens `/dev/tty`
-directly for keyboard input whenever stdin is not a TTY, independent of
-what stdin is being used for, which is exactly the piped-diff case.
-Verified interactively (`tmux`): a piped diff plus a raw `crossterm`
-probe blocks correctly on `/dev/tty` and reports real key presses once
-this feature is enabled, versus erroring immediately without it.
+the crate) solely to enable its `use-dev-tty` feature, which switches to
+the `tty` backend above. Cargo's feature unification applies that feature
+to the single shared `crossterm` instance ratatui also depends on — there
+is no second copy of the crate. Verified interactively (`tmux`): a piped
+diff plus a raw `crossterm` probe blocks correctly on `/dev/tty` and
+reports real key presses once this feature is enabled, versus erroring
+immediately without it.
+
+On an environment with no controlling terminal at all (no TTY reachable
+via `/dev/tty` — e.g. fully detached from any terminal), `use-dev-tty`
+fails the same way the pre-fix code did: `tty_fd()`'s own `/dev/tty` open
+returns an error in both backends, so this is unchanged behavior, not a
+regression introduced by this fix. Verified with a Python pty/`os.setsid`
+harness (macOS has no `setsid(1)` binary) reproducing that specific
+environment against both a pre-fix and post-fix build and diffing the
+resulting error output byte-for-byte.
 
 `use-dev-tty` is Unix-only (it is not defined for the Windows backend);
 accepted because CI (`.github/workflows/*.yaml`) only runs `ubuntu-latest`
