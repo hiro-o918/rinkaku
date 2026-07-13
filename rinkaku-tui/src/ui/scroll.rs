@@ -9,6 +9,7 @@
 use super::style::pane_border_style;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthChar;
@@ -222,6 +223,70 @@ pub(crate) fn truncate_to_width(text: &str, width: usize) -> String {
     result
 }
 
+/// [`Line`]/[`Span`] counterpart of [`truncate_to_width`] — kept separate
+/// because a tree-pane row is built from several differently-styled spans,
+/// so truncating flattened text would lose which style belonged to which
+/// surviving character. Stops at the first overflow and appends one `…`
+/// span rather than wrapping, preserving the "one logical row stays one
+/// rendered row" invariant [`windowed_rows_with_indicators`] depends on.
+pub(crate) fn truncate_line_to_width(line: &Line<'static>, width: usize) -> Line<'static> {
+    if width == 0 {
+        return Line::default().style(line.style);
+    }
+    let line_width: usize = line
+        .spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .map(|ch| ch.width().unwrap_or(1))
+        .sum();
+    if line_width <= width {
+        return line.clone();
+    }
+
+    let mut result_spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let mut last_style = Style::default();
+    // 1 column reserved for the trailing `…`.
+    let budget = width.saturating_sub(1);
+
+    'spans: for span in &line.spans {
+        let style = span.style;
+        let mut fragment = String::new();
+        let mut fragment_width = 0usize;
+
+        for ch in span.content.chars() {
+            let char_width = ch.width().unwrap_or(1);
+            if used + fragment_width + char_width > budget {
+                if !fragment.is_empty() {
+                    result_spans.push(Span::styled(fragment, style));
+                }
+                last_style = style;
+                break 'spans;
+            }
+            fragment.push(ch);
+            fragment_width += char_width;
+        }
+
+        if !fragment.is_empty() {
+            result_spans.push(Span::styled(fragment, style));
+            used += fragment_width;
+        }
+        last_style = style;
+    }
+
+    // Merge into the last span when styles match, else a single-style
+    // line would fail `PartialEq` against an equivalent single-span value.
+    match result_spans.last_mut() {
+        Some(last) if last.style == last_style => {
+            let mut content = last.content.to_string();
+            content.push('…');
+            last.content = content.into();
+        }
+        _ => result_spans.push(Span::styled("…", last_style)),
+    }
+    Line::from(result_spans).style(line.style)
+}
+
 /// Clamps a requested scroll offset (lines) to `[0, content_len -
 /// viewport_height]` — the largest offset that still leaves the viewport
 /// full of content rather than trailing off into blank space below the
@@ -372,7 +437,7 @@ pub(crate) fn scroll_indicator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::{Color, Modifier, Style};
 
     // --- clamp_scroll / scroll_indicator (pure helpers) ---
 
@@ -778,5 +843,88 @@ mod tests {
         let actual = truncate_to_width("あいう", 1);
 
         assert_eq!("…".to_string(), actual);
+    }
+
+    // --- truncate_line_to_width (styled, multi-span counterpart) ---
+
+    #[test]
+    fn should_return_line_unchanged_when_it_fits_within_width() {
+        let line = Line::from(vec![Span::raw("ab"), Span::styled("cde", Style::default())]);
+
+        let actual = truncate_line_to_width(&line, 5);
+
+        assert_eq!(line, actual);
+    }
+
+    #[test]
+    fn should_truncate_single_span_line_with_trailing_marker_when_it_overflows_width() {
+        let line = Line::raw("abcdefgh");
+
+        let actual = truncate_line_to_width(&line, 5);
+
+        assert_eq!(Line::raw("abcd…"), actual);
+    }
+
+    #[test]
+    fn should_preserve_each_surviving_spans_own_style_when_truncating_a_multi_span_line() {
+        let red = Style::default().fg(Color::Red);
+        let line = Line::from(vec![Span::raw("ab"), Span::styled("cdef", red)]);
+
+        let actual = truncate_line_to_width(&line, 4);
+
+        assert_eq!(
+            Line::from(vec![Span::raw("ab"), Span::styled("c…", red)]),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_preserve_line_level_selected_style_when_truncating_an_overflowing_line() {
+        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+        let line = Line::from(vec![Span::raw("abcdefgh")]).style(selected_style);
+
+        let actual = truncate_line_to_width(&line, 5);
+
+        assert_eq!(
+            Line::from(vec![Span::raw("abcd…")]).style(selected_style),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_not_split_a_double_width_character_when_truncating_a_line() {
+        let line = Line::raw("aああb");
+
+        let actual = truncate_line_to_width(&line, 4);
+
+        assert_eq!(Line::raw("aあ…"), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_line_when_width_is_one() {
+        let line = Line::raw("abcdef");
+
+        let actual = truncate_line_to_width(&line, 1);
+
+        assert_eq!(Line::raw("…"), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_line_when_width_is_one_and_first_char_is_double_width() {
+        let line = Line::raw("あいう");
+
+        let actual = truncate_line_to_width(&line, 1);
+
+        assert_eq!(Line::raw("…"), actual);
+    }
+
+    #[test]
+    fn should_return_empty_line_when_width_is_zero() {
+        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+        let line = Line::from(vec![Span::raw("abcdef")]).style(selected_style);
+
+        let actual = truncate_line_to_width(&line, 0);
+
+        assert_eq!(Line::default().style(selected_style), actual);
     }
 }
