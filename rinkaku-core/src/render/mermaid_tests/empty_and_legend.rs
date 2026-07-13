@@ -43,6 +43,7 @@ fn should_render_class_defs_with_no_legend_subgraph_when_graph_has_symbols() {
         "  subgraph sub0[\"src/lib.rs\"]\n",
         "    n0[\"foo\"]\n",
         "  end\n",
+        "  class n0 referenced\n",
     )
     .to_string()
         + CLASS_DEFS;

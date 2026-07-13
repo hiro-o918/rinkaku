@@ -84,15 +84,17 @@ fn removed_symbol(name: &str, path: &str) -> RemovedSymbol {
     }
 }
 
-/// The exact `classDef` trailer every render path appends (ADR 0040) —
-/// every test's `expected` string ends with this, shared here so a future
-/// style change is a one-line update instead of a find/replace across
-/// every test file. `concat!`, not a `"\`-continued literal: the latter
-/// strips leading whitespace from the continued line, which would
-/// silently swallow this block's leading indentation.
+/// The exact `classDef` trailer every render path appends (ADR 0040,
+/// `referenced` added by ADR 0041) — every test's `expected` string ends
+/// with this, shared here so a future style change is a one-line update
+/// instead of a find/replace across every test file. `concat!`, not a
+/// `"\`-continued literal: the latter strips leading whitespace from the
+/// continued line, which would silently swallow this block's leading
+/// indentation.
 const CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
     "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
     "  classDef fan-in fill:#e9d8fd,stroke:#553c9a,stroke-width:3px,color:#1a202c;\n",
     "  classDef removed fill:#fed7d7,stroke:#9b2c2c,color:#1a202c,stroke-dasharray: 5 5;\n",
+    "  classDef referenced fill:#e2e8f0,stroke:#4a5568,color:#1a202c;\n",
 );

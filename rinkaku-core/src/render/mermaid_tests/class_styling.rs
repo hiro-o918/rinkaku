@@ -1,5 +1,7 @@
-//! `added`/`changed`/`fan-in` class assignment, fan-in's `(in:N)` label
-//! suffix (ADR 0039), and the fan-in-vs-changed/added precedence rule.
+//! `added`/`changed`/`fan-in`/`referenced` class assignment, the
+//! `+`/`~`/`-` diff-marker label prefixes (ADR 0041), fan-in's `(in:N)`
+//! label suffix (ADR 0039), and the fan-in-vs-changed/added precedence
+//! rule.
 
 use super::*;
 use pretty_assertions::assert_eq;
@@ -8,9 +10,9 @@ use pretty_assertions::assert_eq;
 fn should_render_subgraph_per_file_with_class_assignments_when_report_has_classified_symbols() {
     // "foo" is Added, "bar" is SignatureChanged, both in src/lib.rs; "baz"
     // (unclassified/body-only) lives in src/other.rs and depends on "foo"
-    // — pins subgraph grouping, node labels (name only, no kind prefix),
-    // the edge, and the `added`/`changed` class assignments together in
-    // one full-string comparison.
+    // — pins subgraph grouping, the `+`/`~` marker prefixes, the edge, and
+    // the `added`/`changed`/`referenced` class assignments together in one
+    // full-string comparison.
     let report = empty_report(
         SymbolGraph {
             nodes: vec![
@@ -62,8 +64,8 @@ fn should_render_subgraph_per_file_with_class_assignments_when_report_has_classi
     let expected = concat!(
         "flowchart LR\n",
         "  subgraph sub0[\"src/lib.rs\"]\n",
-        "    n0[\"foo\"]\n",
-        "    n1[\"bar\"]\n",
+        "    n0[\"+ foo\"]\n",
+        "    n1[\"~ bar\"]\n",
         "  end\n",
         "  subgraph sub1[\"src/other.rs\"]\n",
         "    n2[\"baz\"]\n",
@@ -71,6 +73,7 @@ fn should_render_subgraph_per_file_with_class_assignments_when_report_has_classi
         "  n2 --> n0\n",
         "  class n0 added\n",
         "  class n1 changed\n",
+        "  class n2 referenced\n",
     )
     .to_string()
         + CLASS_DEFS;
@@ -112,6 +115,8 @@ fn should_render_dashed_arrow_when_edge_is_a_cycle() {
         "  end\n",
         "  n0 --> n1\n",
         "  n1 -.-> n0\n",
+        "  class n0 referenced\n",
+        "  class n1 referenced\n",
     )
     .to_string()
         + CLASS_DEFS;
@@ -302,7 +307,7 @@ fn should_render_removed_and_fan_in_nodes_distinctly_when_both_present_in_one_re
         "flowchart LR\n",
         "  subgraph sub0[\"src/lib.rs\"]\n",
         "    n0[\"hot (in:2)\"]\n",
-        "    n1[\"gone\"]\n",
+        "    n1[\"- gone\"]\n",
         "  end\n",
         "  class n0 fan-in\n",
         "  class n1 removed\n",

@@ -1,5 +1,5 @@
 //! Mermaid `flowchart` rendering (ADR 0021, amended by ADR 0037, ADR 0039,
-//! ADR 0040).
+//! ADR 0040, ADR 0041).
 //!
 //! The `--format mermaid` output path: a human-oriented call/dependency
 //! graph aimed at GitHub's native mermaid rendering in PR comments/
@@ -29,6 +29,46 @@ use std::fmt::Write as _;
 /// can't dodge the fallback merely because a deleted symbol has no
 /// head-side node.
 const MERMAID_NODE_BUDGET: usize = 30;
+
+/// A node's visual class (ADR 0021/0037/0039, `Referenced` added by ADR
+/// 0041): drives both its `classDef` name and its label's marker prefix,
+/// computed once per node so the two can't drift apart. `FanIn` wins over
+/// `Added`/`Changed` when both apply (ADR 0021: blast radius is more
+/// decision-relevant at a glance than contract status, which is still
+/// visible in the Markdown/JSON Definitions section). `Referenced` is the
+/// catch-all: an unchanged symbol pulled in only as a dependency.
+#[derive(Clone, Copy)]
+enum NodeClass {
+    Added,
+    Changed,
+    Removed,
+    FanIn,
+    Referenced,
+}
+
+impl NodeClass {
+    fn classdef_name(self) -> &'static str {
+        match self {
+            NodeClass::Added => "added",
+            NodeClass::Changed => "changed",
+            NodeClass::Removed => "removed",
+            NodeClass::FanIn => "fan-in",
+            NodeClass::Referenced => "referenced",
+        }
+    }
+
+    /// Diff-style label prefix (ADR 0041) — none for `FanIn`/`Referenced`
+    /// (see this enum's doc comment for why fan-in doesn't also carry an
+    /// added/changed marker).
+    fn marker(self) -> &'static str {
+        match self {
+            NodeClass::Added => "+ ",
+            NodeClass::Changed => "~ ",
+            NodeClass::Removed => "- ",
+            NodeClass::FanIn | NodeClass::Referenced => "",
+        }
+    }
+}
 
 /// Renders a [`Report`] as a mermaid `flowchart LR` document (ADR 0021): a
 /// human-oriented call/dependency graph, opt-in via `--format mermaid`,
@@ -68,6 +108,25 @@ pub(super) fn render_mermaid(report: &Report) -> String {
         .fan_ins
         .iter()
         .map(|h| (h.id.as_str(), h.used_by.len()))
+        .collect();
+    // Computed once, reused for both the label marker below and the
+    // `class` assignment line further down (see `NodeClass`).
+    let class_by_node: HashMap<&str, NodeClass> = report
+        .graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let class = if fan_in_counts.contains_key(n.id.as_str()) {
+                NodeClass::FanIn
+            } else {
+                match lookup.get(&n.id).and_then(|(_, s)| s.classification) {
+                    Some(Classification::Added) => NodeClass::Added,
+                    Some(Classification::SignatureChanged) => NodeClass::Changed,
+                    _ => NodeClass::Referenced,
+                }
+            };
+            (n.id.as_str(), class)
+        })
         .collect();
 
     // Sequential, mermaid-safe node ids (`n0`, `n1`, ...), mapped from the
@@ -119,9 +178,10 @@ pub(super) fn render_mermaid(report: &Report) -> String {
         if let Some(nodes) = nodes_by_path.get(path) {
             for n in nodes {
                 let safe_id = &safe_id_by_node[n.id.as_str()];
+                let class = class_by_node[n.id.as_str()];
                 let label = match fan_in_counts.get(n.id.as_str()) {
-                    Some(count) => format!("{} (in:{count})", n.name),
-                    None => n.name.clone(),
+                    Some(count) => format!("{}{} (in:{count})", class.marker(), n.name),
+                    None => format!("{}{}", class.marker(), n.name),
                 };
                 writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(&label))
                     .expect("writing to a String cannot fail");
@@ -131,7 +191,8 @@ pub(super) fn render_mermaid(report: &Report) -> String {
             for &i in indices {
                 let safe_id = &safe_id_by_removed[i];
                 let name = &report.removed[i].name;
-                writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(name))
+                let label = format!("{}{name}", NodeClass::Removed.marker());
+                writeln!(out, "    {safe_id}[\"{}\"]", escape_mermaid_label(&label))
                     .expect("writing to a String cannot fail");
             }
         }
@@ -149,34 +210,12 @@ pub(super) fn render_mermaid(report: &Report) -> String {
         writeln!(out, "  {from} {arrow} {to}").expect("writing to a String cannot fail");
     }
 
-    // Class assignment: a node that is both classified (`added` or
-    // `changed`) and a high-fan-in symbol gets `fan-in` styling, checked
-    // first — see this function's doc comment / ADR 0021's Decision on
-    // precedence. This overlap is real, not just theoretical: fan-in
-    // (`fan_in_counts`, from `compute_fan_ins`) counts referrers among
-    // *changed* symbols regardless of the target's own classification, so
-    // a brand-new (`Added`) symbol referenced by two or more other
-    // changed symbols is a perfectly ordinary high-fan-in symbol too —
-    // e.g. a new helper function two other new/changed call sites both
-    // use in the same diff. `fan-in` wins because fan-in ("how many other
-    // changed symbols depend on this") is the more decision-relevant
-    // signal for a reviewer skimming the graph than "this particular node
-    // is new" — the node's own classification is still visible in the
-    // companion Markdown/JSON output's Definitions section either way.
+    // Reuses `class_by_node` (see its doc comment for precedence rules).
     for n in &report.graph.nodes {
         let safe_id = &safe_id_by_node[n.id.as_str()];
-        let class = if fan_in_counts.contains_key(n.id.as_str()) {
-            Some("fan-in")
-        } else {
-            match lookup.get(&n.id).and_then(|(_, s)| s.classification) {
-                Some(Classification::Added) => Some("added"),
-                Some(Classification::SignatureChanged) => Some("changed"),
-                _ => None,
-            }
-        };
-        if let Some(class) = class {
-            writeln!(out, "  class {safe_id} {class}").expect("writing to a String cannot fail");
-        }
+        let class = class_by_node[n.id.as_str()];
+        writeln!(out, "  class {safe_id} {}", class.classdef_name())
+            .expect("writing to a String cannot fail");
     }
     // No precedence conflict with the loop above: a `RemovedSymbol` never
     // has a `graph.nodes` entry, so `removed` is unconditional here.
@@ -294,13 +333,18 @@ fn render_mermaid_file_level(report: &Report) -> String {
         writeln!(out, "  {from} -- {count} --> {to}").expect("writing to a String cannot fail");
     }
 
+    // `referenced` is the file-level catch-all (ADR 0041), matching
+    // `render_mermaid`'s `NodeClass::Referenced`.
     for path in &path_order {
         let safe_id = &safe_id_by_path[path];
-        if changed_paths.contains(path) {
-            writeln!(out, "  class {safe_id} changed").expect("writing to a String cannot fail");
+        let class = if changed_paths.contains(path) {
+            "changed"
         } else if removed_only_paths.contains(path) {
-            writeln!(out, "  class {safe_id} removed").expect("writing to a String cannot fail");
-        }
+            "removed"
+        } else {
+            "referenced"
+        };
+        writeln!(out, "  class {safe_id} {class}").expect("writing to a String cannot fail");
     }
 
     write_class_defs(&mut out);
@@ -322,11 +366,15 @@ fn render_mermaid_file_level(report: &Report) -> String {
 /// so the signal survives even without color (ADR 0039). Also the source
 /// of truth `compose_and_post_comment.sh` parses for the Markdown legend
 /// (ADR 0040) — a hex value changed here needs no separate update there.
+/// `referenced` (ADR 0041) is a neutral gray for a node/path with none of
+/// the other four classes, so no node is left with the theme's default,
+/// unexplained color.
 const MERMAID_CLASS_DEFS: &str = concat!(
     "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
     "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
     "  classDef fan-in fill:#e9d8fd,stroke:#553c9a,stroke-width:3px,color:#1a202c;\n",
     "  classDef removed fill:#fed7d7,stroke:#9b2c2c,color:#1a202c,stroke-dasharray: 5 5;\n",
+    "  classDef referenced fill:#e2e8f0,stroke:#4a5568,color:#1a202c;\n",
 );
 
 /// Appends [`MERMAID_CLASS_DEFS`] — every [`render_mermaid`]/
