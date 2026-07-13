@@ -743,4 +743,28 @@ mod tests {
 
         assert_eq!("シンボル…".to_string(), actual);
     }
+
+    #[test]
+    fn should_return_only_the_marker_when_width_is_one() {
+        // width=1 leaves a budget of 0 after reserving 1 column for "…", so
+        // every character of the input is dropped and only the marker
+        // itself remains — the narrowest width at which truncation still
+        // produces non-empty output (width=0 is the separate empty-string
+        // case covered above).
+        let actual = truncate_to_width("abcdef", 1);
+
+        assert_eq!("…".to_string(), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_when_width_is_one_and_first_char_is_double_width() {
+        // Same width=1 boundary, but the first character of the input is a
+        // 2-column CJK character that would not fit in the 0-column budget
+        // either — makes sure the double-width guard and the width=1
+        // budget-exhaustion guard compose correctly instead of one
+        // masking a bug in the other.
+        let actual = truncate_to_width("あいう", 1);
+
+        assert_eq!("…".to_string(), actual);
+    }
 }
