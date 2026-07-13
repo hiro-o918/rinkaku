@@ -85,17 +85,27 @@ main.rs` keep their existing names. Rationale:
   rename without rippling into the CLI or core.
 
 **3. Cycle marker gets a plain-language rewrite, not just a rename.**
-The line `⚠️ <label> — dependency cycle, see above` becomes `⚠️ <label>
+The line `⚠️ <label> — dependency cycle, see above` becomes `! <label>
 — already shown above (cycle)`: leads with the actionable fact ("you've
 seen this, stop expanding") and demotes "cycle" to a parenthetical for
-readers who want the graph-theory term. The help overlay's glossary
-entry for "cycle" is rewritten the same way: from "A closing back-edge
-in the dependency graph — two or more directories depend on each
-other" to "A dependency loop: two or more symbols depend on each
-other, so the tree stops and points back to where it first appeared."
-The glossary's "pivot" entry is replaced by a "blast radius" entry:
-"The dependency tree rooted at a selected directory or file, showing
-what would be affected if it changed."
+readers who want the graph-theory term. The marker itself is a plain
+`!`, not `⚠️` — dynamic verification (`tmux capture-pane` against a real
+build, per this project's mandatory review step) caught `⚠️` (U+26A0 +
+a U+FE0F variation selector) desyncing `unicode-width`'s column count
+from the terminal's actual double-column rendering of the pair, which
+left a stray character on screen in the blast-radius pane; this was the
+exact risk flagged in this ADR's own Alternatives before implementation,
+confirmed rather than assumed. `rinkaku-core::render`'s Markdown output
+keeps `⚠️` unchanged — it is plain text there, never fed through a
+terminal-cell width calculation, so the bug is specific to the TUI's
+`ratatui`-rendered pane. The help overlay's glossary entry for "cycle"
+is rewritten the same way: from "A closing back-edge in the dependency
+graph — two or more directories depend on each other" to "A dependency
+loop: two or more symbols depend on each other, so the tree stops and
+points back to where it first appeared." The glossary's "pivot" entry
+is replaced by a "blast radius" entry: "The dependency tree rooted at a
+selected directory or file, showing what would be affected if it
+changed."
 
 **4. ADR 0019 and ADR 0020 are not edited.** They are historical
 records of the decisions made at the time, including the "pivot" name
@@ -132,10 +142,10 @@ current UI vocabulary.
   every call site that constructs the line, this ADR takes the
   opportunity to confirm (rather than assume) the marker renders
   correctly in the terminal during implementation, per CLAUDE.md's
-  "Dynamic verification" review requirement — if `⚠️` proves to have
-  width/rendering issues in practice, the implementation substitutes an
-  ASCII marker and this ADR's Consequences section is amended to note
-  it, rather than the choice being made speculatively here.
+  "Dynamic verification" review requirement. It does not: `tmux
+  capture-pane` against a real build showed a stray character next to
+  the marker (decision 3's own explanation). Rejected in favor of a
+  plain `!`, confirmed rather than assumed.
 
 ## Consequences
 
@@ -161,3 +171,13 @@ current UI vocabulary.
   first and reserve mechanism-derived names (like the original
   "pivot") for internal/doc-comment use only — this ADR is the
   concrete precedent to point to next time a pane's UI name is chosen.
+- `rinkaku-tui` should treat multi-codepoint emoji (base glyph +
+  variation selector, e.g. `⚠️` = U+26A0 + U+FE0F) as suspect for any
+  string that passes through `crate::ui::wrap_lines`'s column
+  accounting, not just visually — `unicode-width`'s per-`char` model
+  does not necessarily agree with a real terminal's rendered column
+  width for such pairs. This ADR's own dynamic-verification step is the
+  concrete instance; future additions of emoji markers to TUI-rendered
+  (not Markdown) text should verify in a real terminal before landing,
+  not just in a `TestBackend` snapshot (which does not model this
+  particular class of desync).

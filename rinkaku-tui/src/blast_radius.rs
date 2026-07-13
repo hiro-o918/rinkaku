@@ -55,9 +55,20 @@ pub struct BlastRadiusLine {
     /// convention as `rinkaku-core::render`'s Markdown tree.
     pub already_printed: bool,
     /// `true` when this line is a cycle marker rather than a node line —
-    /// `crate::ui` styles it distinctly (matching the `⚠️` Markdown
-    /// warning), and `label` is the *target* node's label the cycle points
-    /// back to.
+    /// `crate::ui` styles it distinctly (yellow/bold, mirroring the
+    /// severity `rinkaku-core::render`'s Markdown `⚠️` warning signals),
+    /// and `label` is the *target* node's label the cycle points back to.
+    /// The label itself uses a plain `!` marker rather than `⚠️`
+    /// deliberately (ADR 0022): `⚠️` is U+26A0 followed by a U+FE0F
+    /// variation selector, and dynamic verification in a real terminal
+    /// (`tmux capture-pane`) showed `unicode-width`'s single-column measurement
+    /// of that pair disagreeing with the terminal's actual double-column
+    /// rendering, desyncing `crate::ui::wrap_lines`'s column accounting from
+    /// what the terminal draws and leaving a stray character on screen —
+    /// exactly the risk ADR 0022 flagged before implementation.
+    /// `rinkaku-core::render`'s Markdown output keeps `⚠️` unaffected: it
+    /// is plain text there, never fed through a terminal-cell width
+    /// calculation.
     pub is_cycle_warning: bool,
 }
 
@@ -219,7 +230,7 @@ fn walk(
             if let Some(child_label) = lookup.label(child_id) {
                 lines.push(BlastRadiusLine {
                     depth: depth + 1,
-                    label: format!("⚠️ {child_label} — already shown above (cycle)"),
+                    label: format!("! {child_label} — already shown above (cycle)"),
                     outside_prefix: false,
                     already_printed: false,
                     is_cycle_warning: true,
@@ -457,7 +468,7 @@ mod tests {
             },
             BlastRadiusLine {
                 depth: 2,
-                label: "⚠️ fn foo (src/api/handler.rs) — already shown above (cycle)".to_string(),
+                label: "! fn foo (src/api/handler.rs) — already shown above (cycle)".to_string(),
                 outside_prefix: false,
                 already_printed: false,
                 is_cycle_warning: true,
