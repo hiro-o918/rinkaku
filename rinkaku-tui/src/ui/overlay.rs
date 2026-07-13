@@ -2,7 +2,7 @@
 //! composited on top of whatever screen was already rendered underneath,
 //! after the pane split has drawn everything else.
 
-use super::scroll::windowed_rows_with_indicators;
+use super::scroll::{truncate_to_width, windowed_rows_with_indicators};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -93,13 +93,27 @@ pub(crate) fn centered_rect(area: Rect, percent_width: u16, percent_height: u16)
 /// all) — the same cursor-follow scroll `draw_tree_pane` uses, plus dim
 /// "… N more above/below" lines inside the box when the window does not
 /// reach an edge of the candidate list.
+///
+/// Candidate labels are [`truncate_to_width`]-ed to the popup's own inner
+/// width rather than wrapped (a second bug found while fixing the first:
+/// `windowed_rows_with_indicators`'s window math assumes one candidate is
+/// one rendered row, but this used to render with `Paragraph::wrap`
+/// enabled — a `"{name} ({path})"` label longer than the box's inner width
+/// wrapped onto 2-3 physical rows, so the window's row-count budget
+/// silently undercounted and pushed later candidates, including the
+/// cursor row, off the bottom of the popup with no visual feedback,
+/// exactly the failure mode the windowing fix above exists to prevent).
+/// Truncating instead of wrapping restores the "one candidate, one row"
+/// invariant the window math relies on.
 pub(crate) fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, full_area: Rect) {
     let overlay_area = centered_rect(full_area, 60, 40);
     frame.render_widget(Clear, overlay_area);
 
-    // 2 rows for the top/bottom border, matching `render_scrollable_pane`'s
-    // own `saturating_sub(2)` convention for a bordered pane's inner height.
+    // 2 rows/columns for the top/bottom and left/right border, matching
+    // `render_scrollable_pane`'s own `saturating_sub(2)` convention for a
+    // bordered pane's inner height/width.
     let viewport_height = overlay_area.height.saturating_sub(2) as usize;
+    let viewport_width = overlay_area.width.saturating_sub(2) as usize;
     let (start, end, above, below) =
         windowed_rows_with_indicators(popup.candidates.len(), popup.cursor, viewport_height);
 
@@ -115,7 +129,10 @@ pub(crate) fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, 
             .iter()
             .enumerate()
             .map(|(offset, candidate)| {
-                let text = format!("{} ({})", candidate.name, candidate.path);
+                let text = truncate_to_width(
+                    &format!("{} ({})", candidate.name, candidate.path),
+                    viewport_width,
+                );
                 if start + offset == popup.cursor {
                     Line::styled(
                         text,
@@ -136,9 +153,7 @@ pub(crate) fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, 
     }
 
     let block = Block::bordered().title(" Jump to (enter: go, esc: cancel) ");
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(ratatui::widgets::Wrap { trim: false });
+    let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, overlay_area);
 }
 
@@ -347,6 +362,64 @@ mod tests {
         // it must not be rendered, and an overflow indicator must say so.
         assert!(!text.contains("sym0 ("), "sym0 should have scrolled off");
         assert!(text.contains("more above"));
+    }
+
+    #[test]
+    fn should_keep_highlighted_candidate_visible_when_labels_wrap_across_multiple_rows() {
+        // Regression test for the bug this change fixes:
+        // `windowed_rows_with_indicators` computes its window assuming one
+        // candidate = one rendered row, but `draw_jump_popup` used to hand
+        // its lines to `Paragraph` with `Wrap { trim: false }` enabled — a
+        // candidate label (`"{name} ({path})"`) longer than the popup's
+        // inner width wrapped onto 2-3 physical rows, so the window's
+        // row-count math silently undercounted and pushed later
+        // candidates, including the cursor row, off the bottom of the
+        // popup with no visual feedback at all. An 80x24 terminal (a
+        // common real-world size, smaller than every other test in this
+        // file's 100-wide terminals) with 40-90 character paths reproduces
+        // it: the popup's 60%-width box is nowhere near wide enough to fit
+        // "name (path)" on one row unwrapped.
+        let report = report_with_one_symbol();
+        let candidates: Vec<crate::app::JumpCandidate> = (0..20)
+            .map(|i| crate::app::JumpCandidate {
+                id: format!("lib.rs::sym{i}"),
+                name: format!("very_long_symbol_name_number_{i}"),
+                path: format!(
+                    "src/very/deeply/nested/module/path/number_{i}/that/is/quite/long/file.rs"
+                ),
+            })
+            .collect();
+        let mut app = App::new(&report).open_jump_popup(candidates);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+
+        // Move the cursor one step at a time, checking after *every* step
+        // (not just at the end) that the highlighted candidate is visible —
+        // the bug manifested at intermediate cursor positions too, not only
+        // at the very last candidate.
+        for step in 0..19 {
+            app = app.handle_key(crate::app::InputKey::Down);
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &app,
+                        &report,
+                        &crate::diff_shape::DiffPaneContent::Empty,
+                        &[],
+                        &BlastRadiusSelection::NotApplicable,
+                        None,
+                    );
+                })
+                .expect("draw");
+
+            let text = buffer_text(&terminal);
+            let expected_marker = format!("very_long_symbol_name_number_{}", step + 1);
+            assert!(
+                text.contains(&expected_marker),
+                "cursor candidate {expected_marker} not visible after {} Down presses:\n{text}",
+                step + 1
+            );
+        }
     }
 
     #[test]
