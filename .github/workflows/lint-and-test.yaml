@@ -3,6 +3,13 @@ name: Lint and Test
 on:
   pull_request:
     branches: [main]
+  # Catches semantic merge conflicts that individually-green PRs can
+  # introduce once merged (e.g. #104 and #106 each passed CI alone but
+  # together broke main's build, undetected until #108). `branches:
+  # [main]` only matches branch pushes, not tag pushes, so this does not
+  # overlap with build-and-publish.yaml's `push: tags: - "v*"` trigger.
+  push:
+    branches: [main]
 
 jobs:
   rust-test:
