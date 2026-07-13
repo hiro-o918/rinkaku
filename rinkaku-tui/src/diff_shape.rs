@@ -243,21 +243,35 @@ fn build_file_content(report: &Report, diff_files: &[FileHunks], path: &str) -> 
     let mut module_level_hunks: Vec<AttributedHunk> = Vec::new();
 
     for (source_index, hunk) in file_hunks.hunks.iter().enumerate() {
-        // First (source-order) symbol whose range intersects this hunk —
-        // ADR 0020's "Alternatives" section rejected attributing a hunk to
-        // every overlapping symbol (would misreport total change size for
-        // exactly the summary view meant to convey it); first-match keeps
-        // every hunk under exactly one section.
-        let owner = symbols.iter().position(|symbol| {
-            crate::diff_view::hunk_intersects(hunk, symbol.range.start, symbol.range.end)
-        });
-        let attributed = AttributedHunk {
-            source_index,
-            hunk: hunk.clone(),
-        };
-        match owner {
-            Some(index) => sections[index].hunks.push(attributed),
-            None => module_level_hunks.push(attributed),
+        // Every symbol (source order) whose range intersects this hunk —
+        // ADR 0029 amends ADR 0020's original first-match-only rule: a
+        // brand-new file's diff is always exactly one hunk spanning the
+        // whole file, so first-match silently dropped every symbol but the
+        // first from the diff pane and from auto-scroll (ADR 0027 decision
+        // 2). The hunk is cloned once per matching section — see ADR 0029
+        // for why the TUI departs from ADR 0020's "duplication misleads
+        // about total change size" reasoning (the TUI has no change-size
+        // total to mislead).
+        let owners: Vec<usize> = symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| {
+                crate::diff_view::hunk_intersects(hunk, symbol.range.start, symbol.range.end)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if owners.is_empty() {
+            module_level_hunks.push(AttributedHunk {
+                source_index,
+                hunk: hunk.clone(),
+            });
+        } else {
+            for index in owners {
+                sections[index].hunks.push(AttributedHunk {
+                    source_index,
+                    hunk: hunk.clone(),
+                });
+            }
         }
     }
 
@@ -548,13 +562,18 @@ mod tests {
     }
 
     #[test]
-    fn should_attribute_overlapping_hunk_to_first_symbol_in_source_order() {
+    fn should_attribute_overlapping_hunk_to_every_symbol_it_intersects() {
         // Two symbols with adjacent, overlapping ranges (a pathological
         // input a real extractor would not normally produce, but the
-        // shaping function's contract must still resolve deterministically
-        // rather than duplicate the hunk into both sections — ADR 0020's
-        // "Alternatives" section rejected duplication as misleading about
-        // total change size).
+        // shaping function's contract must still resolve deterministically).
+        // ADR 0029 amends ADR 0020's original first-match-only rule: a hunk
+        // intersecting more than one symbol's range is now attributed to
+        // every one of them, not just the first in source order — see ADR
+        // 0029 for why the TUI diff pane departs from ADR 0020's
+        // summary-view "duplication misleads about total change size"
+        // reasoning (the TUI has no change-size total to mislead, and a
+        // dropped section silently breaks that symbol's auto-scroll — ADR
+        // 0027 decision 2 — which is the worse failure mode here).
         let report = Report {
             files: vec![FileReport {
                 path: "lib.rs".to_string(),
@@ -575,16 +594,97 @@ mod tests {
 
         let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
 
-        let expected = DiffPaneContent::File(vec![DiffSection {
-            title: "fn foo()".to_string(),
-            symbol_id: Some("lib.rs::foo".to_string()),
-            contract_header: None,
-            hunks: vec![attributed(
-                0,
-                hunk("@@ -1,1 +1,5 @@", Some((3, 4)), vec!["shared line"]),
-            )],
-        }]);
+        let expected = DiffPaneContent::File(vec![
+            DiffSection {
+                title: "fn foo()".to_string(),
+                symbol_id: Some("lib.rs::foo".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    0,
+                    hunk("@@ -1,1 +1,5 @@", Some((3, 4)), vec!["shared line"]),
+                )],
+            },
+            DiffSection {
+                title: "fn bar()".to_string(),
+                symbol_id: Some("lib.rs::bar".to_string()),
+                contract_header: None,
+                hunks: vec![attributed(
+                    0,
+                    hunk("@@ -1,1 +1,5 @@", Some((3, 4)), vec!["shared line"]),
+                )],
+            },
+        ]);
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
+        // Regression test (PR #86 dogfooding, ADR 0029): a brand-new file's
+        // diff is always exactly one hunk spanning the whole file
+        // (`@@ -0,0 +1,N @@`), so every symbol the file defines has a
+        // range inside that one hunk. Before ADR 0029, only the first
+        // symbol in source order (`foo`) ever got a section; `bar` and
+        // `baz` were silently dropped, breaking their diff-pane auto-scroll
+        // (ADR 0027 decision 2) with no error or indicator.
+        let report = Report {
+            files: vec![FileReport {
+                path: "file_size.rs".to_string(),
+                symbols: vec![
+                    symbol("file_size.rs::foo", "foo", LineRange { start: 1, end: 3 }),
+                    symbol("file_size.rs::bar", "bar", LineRange { start: 5, end: 7 }),
+                    symbol("file_size.rs::baz", "baz", LineRange { start: 9, end: 11 }),
+                ],
+            }],
+            ..empty_report()
+        };
+        let diff_files = vec![FileHunks {
+            path: "file_size.rs".to_string(),
+            hunks: vec![hunk(
+                "@@ -0,0 +1,11 @@",
+                Some((1, 11)),
+                vec!["whole new file"],
+            )],
+        }];
+        let target = DiffTarget::File {
+            path: "file_size.rs".to_string(),
+        };
+
+        let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+        let expected_hunk = attributed(
+            0,
+            hunk("@@ -0,0 +1,11 @@", Some((1, 11)), vec!["whole new file"]),
+        );
+        let expected = DiffPaneContent::File(vec![
+            DiffSection {
+                title: "fn foo()".to_string(),
+                symbol_id: Some("file_size.rs::foo".to_string()),
+                contract_header: None,
+                hunks: vec![expected_hunk.clone()],
+            },
+            DiffSection {
+                title: "fn bar()".to_string(),
+                symbol_id: Some("file_size.rs::bar".to_string()),
+                contract_header: None,
+                hunks: vec![expected_hunk.clone()],
+            },
+            DiffSection {
+                title: "fn baz()".to_string(),
+                symbol_id: Some("file_size.rs::baz".to_string()),
+                contract_header: None,
+                hunks: vec![expected_hunk],
+            },
+        ]);
+        assert_eq!(expected, actual);
+
+        // Every symbol now resolves an auto-scroll target (ADR 0027
+        // decision 2 / decision 4) — not just the first.
+        assert_eq!(
+            Some(0),
+            section_start_line_for_symbol(&actual, "file_size.rs::foo")
+        );
+        assert!(section_start_line_for_symbol(&actual, "file_size.rs::bar").is_some());
+        assert!(section_start_line_for_symbol(&actual, "file_size.rs::baz").is_some());
     }
 
     #[test]
@@ -846,6 +946,44 @@ mod tests {
 
         let actual = hunk_start_lines(&content);
 
+        assert_eq!(vec![2, 7], actual);
+    }
+
+    #[test]
+    fn should_emit_one_hunk_jump_stop_per_section_when_a_hunk_is_shared_by_two_symbols() {
+        // ADR 0029 consequence: a hunk attributed to more than one symbol
+        // (an overlapping-range case) is rendered once per owning section,
+        // so `]c`/`[c` (backed by this table) must stop once per rendered
+        // occurrence — matching what is actually on screen — rather than
+        // deduplicating by the shared `source_index` down to one stop.
+        // Built straight from `build_diff_pane_content`'s real output
+        // (not a hand-built `DiffPaneContent`) so this test exercises the
+        // same shape the overlapping-hunk attribution test above produces.
+        let report = Report {
+            files: vec![FileReport {
+                path: "lib.rs".to_string(),
+                symbols: vec![
+                    symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 5 }),
+                    symbol("lib.rs::bar", "bar", LineRange { start: 3, end: 8 }),
+                ],
+            }],
+            ..empty_report()
+        };
+        let diff_files = vec![FileHunks {
+            path: "lib.rs".to_string(),
+            hunks: vec![hunk("@@ -1,1 +1,5 @@", Some((3, 4)), vec!["shared line"])],
+        }];
+        let target = DiffTarget::File {
+            path: "lib.rs".to_string(),
+        };
+        let content = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+        let actual = hunk_start_lines(&content);
+
+        // Section 0 (`foo`): title(0), blank(1), hunk header(2), 1 body
+        // line(3) — 4 lines. Blank separator(4), section 1 (`bar`)
+        // title(5), blank(6), hunk header(7) — stop at 7. Two stops for
+        // the one underlying hunk, one per section it was duplicated into.
         assert_eq!(vec![2, 7], actual);
     }
 
