@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/hiro-o918/rinkaku/compare/rinkaku-core-v0.2.0...rinkaku-core-v0.2.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* unify release-please into a single-PR release cycle ([#73](https://github.com/hiro-o918/rinkaku/issues/73)) ([796d249](https://github.com/hiro-o918/rinkaku/commit/796d249ee7067ede9207dcd54a643e028f0e123a))
+
 ## [0.2.0](https://github.com/hiro-o918/rinkaku/compare/rinkaku-core-v0.1.0...rinkaku-core-v0.2.0) (2026-07-13)
 
 

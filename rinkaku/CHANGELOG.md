@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.1](https://github.com/hiro-o918/rinkaku/compare/v0.5.0...v0.5.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* unify release-please into a single-PR release cycle ([#73](https://github.com/hiro-o918/rinkaku/issues/73)) ([796d249](https://github.com/hiro-o918/rinkaku/commit/796d249ee7067ede9207dcd54a643e028f0e123a))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.2.0 to 0.2.1
+    * rinkaku-tui bumped from 0.1.0 to 0.2.0
+
 ## [0.5.0](https://github.com/hiro-o918/rinkaku/compare/v0.4.1...v0.5.0) (2026-07-13)
 
 
