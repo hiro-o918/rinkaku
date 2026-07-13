@@ -18,15 +18,16 @@ only becomes load-bearing when the output would otherwise not be TUI
 
 - **Tree pane (left)** — a directory tree of *changed files*, mirroring
   your repository layout. Rows carry badges: `chg:N` changed symbols,
-  `api:N` contract changes (added / removed / signature-changed), `ref:N`
-  fan-in (hotspot aggregate). `chg:`/`ref:` numbers are cyan
-  (informational); `api:` is yellow, the same warning color as the
-  file-size `warn:` badge, flagging it as the one badge worth a second
-  look. Directories in a dependency cycle are marked `(cycle)`. Symbol
-  rows show a kind abbreviation (`fn`, `struct`, ...)
-  and a classification marker: `+` added, `~` signature-changed, `x`
-  removed. Files rinkaku couldn't analyze appear dimmed as
-  `(skipped: <reason>)`; whole-test files as `[test] (N symbols)`.
+  `api:N` contract changes (added / removed / signature-changed),
+  `fan-in:N` symbols referenced by 2+ other changed symbols. `chg:`/
+  `fan-in:` numbers are cyan (informational); `api:` is yellow, the same
+  warning color as the file-size `warn:` badge, flagging it as the one
+  badge worth a second look. Directories in a dependency cycle are
+  marked `(cycle)`. Symbol rows show a kind abbreviation (`fn`,
+  `struct`, ...) and a classification marker: `+` added, `~`
+  signature-changed, `x` removed. Files rinkaku couldn't analyze appear
+  dimmed as `(skipped: <reason>)`; whole-test files as
+  `[test] (N symbols)`.
 - **Diff pane (right, default)** — the raw unified-diff hunks touching
   the selected row, syntax-highlighted for the four built-in languages
   ([ADR 0018](adr/0018-syntax-highlight-diff-pane-via-tree-sitter.md)).

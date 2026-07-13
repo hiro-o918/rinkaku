@@ -73,8 +73,8 @@ for why:
 
 1. **Map-assisted pass**: generate rinkaku's own output for the diff
    (`rinkaku --base main`, built from a **trusted `main` checkout**,
-   never from the branch under review) and use its hotspots, contract
-   markers, and entry-point trees to pick deep-reading targets —
+   never from the branch under review) and use its high fan-in symbols,
+   contract markers, and entry-point trees to pick deep-reading targets —
    this pass is best at integration seams and architecture-level
    defects.
 2. **Independent pass**: a plain review without the map, covering
