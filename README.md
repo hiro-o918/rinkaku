@@ -485,6 +485,13 @@ the diff pane (the default right-hand pane, [ADR 0020](docs/adr/0020-tui-interac
 has nothing to show in that case and renders a placeholder — press `d` to
 switch to the detail pane instead.
 
+The TUI also opens correctly when the diff itself comes from a pipe (e.g.
+`gh pr diff 123 | rinkaku` on a terminal, or the same with `--tui`
+explicit): keyboard input is read from the controlling terminal
+independently of whatever stdin is being used for ([ADR 0016](docs/adr/0016-tui-crate-and-stack.md)'s
+addendum), so a piped diff and interactive navigation are not mutually
+exclusive.
+
 ### Interaction model
 
 The interface follows a **focus** model ([ADR 0020](docs/adr/0020-tui-interaction-model-v2.md)),
