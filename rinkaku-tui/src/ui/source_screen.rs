@@ -195,7 +195,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         }
@@ -354,7 +354,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };
@@ -423,7 +423,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };

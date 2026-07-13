@@ -207,22 +207,28 @@ enum BadgeContext {
 /// quiet).
 ///
 /// Badge encoding rationale:
-/// - All three badges use text labels (`chg:` / `api:` / `ref:`)
+/// - All three badges use text labels (`chg:` / `api:` / `fan-in:`)
 ///   matching the file-size badges' `lines:` / `warn:` / `split:`
 ///   convention (see ADR 0013 amendments 2026-07-13 and
 ///   feat/label-contract-changes-badge). The single-glyph prefixes they
-///   replaced (`~` for changed, `!` for contract change, `^` for
-///   fan-in) conveyed no semantic hint on their own to a first-time
+///   originally replaced (`~` for changed, `!` for contract change, `^`
+///   for fan-in) conveyed no semantic hint on their own to a first-time
 ///   reviewer — `!` in particular read as generic "warning" rather than
-///   pointing at *what* changed. The label stays default color so the
-///   eye lands on the number, matching the file-size badges' split-span
-///   pattern.
-/// - `chg:`/`ref:` numbers are cyan (informational counts), but `api:`
-///   is yellow — the same warning color as the file-size `warn:` badge
-///   below — because a contract change (signature-changed or removed
-///   symbol) is the one badge that flags something a caller should
-///   double-check, restoring in color the "pay attention" signal the
-///   original `!` glyph carried on its own.
+///   pointing at *what* changed. The fan-in badge's label itself was
+///   later relabeled again, from `ref:` to `fan-in:` (ADR 0033): `ref:`
+///   collided visually with the unrelated `gr` ("go to references")
+///   keybinding despite naming a different concept, and "hotspot" (the
+///   underlying aggregation's original name) collided with an unrelated
+///   well-known term (CodeScene's change-frequency metric) — "fan-in"
+///   has neither problem and matches the detail pane's own `fan-in: N`
+///   wording. The label stays default color so the eye lands on the
+///   number, matching the file-size badges' split-span pattern.
+/// - `chg:`/`fan-in:` numbers are cyan (informational counts), but
+///   `api:` is yellow — the same warning color as the file-size `warn:`
+///   badge below — because a contract change (signature-changed or
+///   removed symbol) is the one badge that flags something a caller
+///   should double-check, restoring in color the "pay attention" signal
+///   the original `!` glyph carried on its own.
 /// - The file-size warnings (ADR 0028) deliberately use **text labels
 ///   plus color** rather than an emoji glyph (`⚠` / `🚨`): terminal
 ///   emoji rendering width is inconsistent enough to distort the tree
@@ -253,7 +259,7 @@ fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: Ba
         if wrote_any_ascii_badge {
             spans.push(Span::raw(" "));
         }
-        spans.push(Span::raw("ref:"));
+        spans.push(Span::raw("fan-in:"));
         spans.push(Span::styled(badges.fan_in.to_string(), cyan));
         wrote_any_ascii_badge = true;
     }

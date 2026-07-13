@@ -195,8 +195,8 @@ const GLOSSARY: &[GlossaryEntry] = &[
         explanation: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it",
     },
     GlossaryEntry {
-        term: "chg: / api: / ref:",
-        explanation: "Tree row badges: changed symbols, contract changes (signature-changed or deleted, shown in yellow), and fan-in references",
+        term: "chg: / api: / fan-in:",
+        explanation: "Tree row badges: changed symbols, contract changes (signature-changed or deleted, shown in yellow), and fan-in (symbols referenced by 2+ other changed symbols, shown as the fan-in badge's count)",
     },
 ];
 
@@ -292,7 +292,7 @@ mod tests {
             .map(|entry| entry.term)
             .collect();
 
-        assert!(terms.contains(&"chg: / api: / ref:"));
+        assert!(terms.contains(&"chg: / api: / fan-in:"));
     }
 
     #[test]

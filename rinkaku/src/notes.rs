@@ -2,7 +2,7 @@
 
 /// Applies `--entry <path>` (ADR 0019) to an already-built `Report`: swaps
 /// `report.graph` for `graph::pivot_graph`'s re-rooted clone, leaving every
-/// other field (`files`, `hotspots`, `removed`, ...) untouched — the pivot
+/// other field (`files`, `fan_ins`, `removed`, ...) untouched — the pivot
 /// only changes which nodes `render`/`rinkaku-tui` treat as entry points,
 /// not what was analyzed.
 pub(crate) fn apply_entry_pivot(
@@ -113,7 +113,7 @@ mod tests {
                 skipped: vec![],
                 graph: empty_graph(),
                 tests: vec![],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             }
@@ -129,7 +129,7 @@ mod tests {
                 skipped: vec![],
                 graph: empty_graph(),
                 tests: vec![],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             }
@@ -177,7 +177,7 @@ mod tests {
                 }],
                 graph: empty_graph(),
                 tests: vec![],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             };
@@ -204,7 +204,7 @@ mod tests {
                     path: "src/lib.rs".to_string(),
                     symbol_count: 1,
                 }],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             };
@@ -243,7 +243,7 @@ mod tests {
                 ],
                 graph: empty_graph(),
                 tests: vec![],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             };
@@ -302,7 +302,7 @@ mod tests {
                 skipped: vec![],
                 graph,
                 tests: vec![],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             }
@@ -361,7 +361,7 @@ mod tests {
                     roots: vec![],
                 },
                 tests: vec![],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             };
@@ -391,7 +391,7 @@ mod tests {
                 skipped: vec![],
                 graph: empty_graph(),
                 tests: vec![],
-                hotspots: vec![],
+                fan_ins: vec![],
                 file_size_warnings: vec![],
                 removed: vec![],
             }

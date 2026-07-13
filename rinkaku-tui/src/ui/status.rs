@@ -54,8 +54,8 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, ar
 /// gains a stray `split:0`. Text labels (no emoji glyphs) — terminal
 /// emoji rendering width is inconsistent enough that a status-line
 /// glyph can push the help hints past the frame edge. The whole suffix
-/// is dropped when the vec is empty (mirrors ADR 0013's "Hotspots is
-/// skipped when empty" rule).
+/// is dropped when the vec is empty (mirrors ADR 0013's "High fan-in
+/// symbols is skipped when empty" rule, named per ADR 0033).
 pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
     let help = match app.screen() {
         Screen::Entry => {
@@ -162,7 +162,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         }
@@ -192,7 +192,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         }
@@ -382,8 +382,8 @@ mod tests {
     }
 
     // Companion to the test above: an empty `file_size_warnings` vec
-    // leaves the help text untouched — mirrors ADR 0013's "Hotspots is
-    // skipped when empty" rule for the Markdown surface.
+    // leaves the help text untouched — mirrors ADR 0013's "High fan-in
+    // symbols is skipped when empty" rule for the Markdown surface.
     #[test]
     fn should_not_append_when_report_has_no_warnings() {
         let report = empty_report_for_status_line();

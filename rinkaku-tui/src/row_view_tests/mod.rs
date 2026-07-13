@@ -8,8 +8,8 @@
 //! - `file_size_badges` — ADR 0028 file-size warning badges on file and
 //!   dir rows (`lines:N`, `warn:N split:N`)
 //! - `label_badges` — ADR 0013 amendments (2026-07-13,
-//!   feat/label-contract-changes-badge) split-span coloring for
-//!   `chg:N` / `api:N` / `ref:N` badges
+//!   feat/label-contract-changes-badge; feat/rename-hotspots-to-fan-in)
+//!   split-span coloring for `chg:N` / `api:N` / `fan-in:N` badges
 
 use super::*;
 use crate::tree::{NodeKind, TreeNode};

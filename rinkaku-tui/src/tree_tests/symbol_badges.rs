@@ -187,14 +187,14 @@ fn should_merge_removed_symbol_into_existing_file_with_present_symbols() {
 }
 
 #[test]
-fn should_set_fan_in_badge_from_matching_hotspot_and_aggregate_upward() {
+fn should_set_fan_in_badge_from_matching_fan_in_and_aggregate_upward() {
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
         files: vec![FileReport {
             path: "src/lib.rs".to_string(),
             symbols: vec![symbol("src/lib.rs::shared", "shared", SymbolKind::Function)],
         }],
-        hotspots: vec![Hotspot {
+        fan_ins: vec![FanIn {
             id: "src/lib.rs::shared".to_string(),
             path: "src/lib.rs".to_string(),
             name: "shared".to_string(),
@@ -217,14 +217,14 @@ fn should_set_fan_in_badge_from_matching_hotspot_and_aggregate_upward() {
 }
 
 #[test]
-fn should_leave_fan_in_at_zero_when_symbol_has_no_matching_hotspot() {
+fn should_leave_fan_in_at_zero_when_symbol_has_no_matching_fan_in_entry() {
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
         files: vec![FileReport {
             path: "lib.rs".to_string(),
             symbols: vec![symbol("lib.rs::solo", "solo", SymbolKind::Function)],
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         ..empty_report()
     };
 

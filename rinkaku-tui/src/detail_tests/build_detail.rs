@@ -94,8 +94,8 @@ fn should_fall_back_to_current_signature_when_previous_signature_is_missing() {
 
 #[test]
 fn should_list_single_caller_as_used_by_when_fan_in_is_one() {
-    // fan-in of exactly 1 is below Hotspot's >= 2 threshold, so
-    // `report.hotspots` has nothing for "callee" — used_by must still
+    // fan-in of exactly 1 is below FanIn's >= 2 threshold, so
+    // `report.fan_ins` has nothing for "callee" — used_by must still
     // show the one caller by reading `graph.edges` directly.
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
@@ -118,7 +118,7 @@ fn should_list_single_caller_as_used_by_when_fan_in_is_one() {
             }],
             roots: vec!["lib.rs::caller".to_string()],
         },
-        hotspots: vec![],
+        fan_ins: vec![],
         ..empty_report()
     };
 
@@ -133,7 +133,7 @@ fn should_list_single_caller_as_used_by_when_fan_in_is_one() {
 }
 
 #[test]
-fn should_list_every_referrer_as_used_by_when_symbol_is_a_hotspot() {
+fn should_list_every_referrer_as_used_by_when_symbol_has_high_fan_in() {
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
         files: vec![FileReport {
@@ -164,7 +164,7 @@ fn should_list_every_referrer_as_used_by_when_symbol_is_a_hotspot() {
             ],
             roots: vec!["lib.rs::a".to_string(), "lib.rs::b".to_string()],
         },
-        hotspots: vec![Hotspot {
+        fan_ins: vec![FanIn {
             id: "lib.rs::shared".to_string(),
             path: "lib.rs".to_string(),
             name: "shared".to_string(),
@@ -238,7 +238,7 @@ fn should_have_empty_callers_and_callees_when_symbol_has_no_edges() {
 }
 
 // SHOULD-FIX 5: `graph.edges` uniqueness is not a contractual guarantee
-// (`compute_hotspots`'s own doc comment in rinkaku-core::graph notes
+// (`compute_fan_ins`'s own doc comment in rinkaku-core::graph notes
 // this, and defends against it by deduping referrers per target) —
 // `build_detail` must apply the same defensive dedup to `callees`,
 // `callers`, and `used_by` rather than assume `graph.edges` never
@@ -263,7 +263,7 @@ fn should_dedup_duplicate_edges_between_the_same_pair_of_symbols() {
             // Same caller -> callee edge listed twice — a hand-built
             // graph standing in for whatever upstream circumstance
             // (not currently reachable through `build_graph`, per
-            // `compute_hotspots`'s own doc comment) might one day
+            // `compute_fan_ins`'s own doc comment) might one day
             // produce a repeated edge.
             edges: vec![
                 Edge {

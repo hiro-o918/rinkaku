@@ -68,22 +68,23 @@ pub enum NodeKind {
 ///   Removal is unambiguously a contract change — the API surface the
 ///   removed symbol represented is gone — so it counts here even though it
 ///   is excluded from `changed_symbols` above.
-/// - `fan_in`: **sum** (not max) of `used_by.len()` for every hotspot
+/// - `fan_in`: **sum** (not max) of `used_by.len()` for every high-fan-in
 ///   symbol contained in this node's subtree. Sum was chosen over max
-///   because a directory containing several independently risky hotspots
-///   should read as riskier than one containing a single hotspot with the
-///   same peak fan-in — max would hide that difference.
+///   because a directory containing several independently risky high-
+///   fan-in symbols should read as riskier than one containing a single
+///   such symbol with the same peak fan-in — max would hide that
+///   difference.
 ///
 ///   This badge's `fan_in` is deliberately **not** the same computation
 ///   `crate::detail::build_detail` uses for a single symbol's `used_by`:
-///   this badge only counts a symbol at all once it clears `Hotspot`'s own
+///   this badge only counts a symbol at all once it clears `FanIn`'s own
 ///   fan-in >= 2 threshold (see `symbol_badges`'s doc comment), while the
 ///   detail pane's `used_by` reads `report.graph.edges` directly and so
 ///   also surfaces a fan-in of 0 or 1. A symbol with exactly one referrer
 ///   therefore shows up in its own detail view's `used_by` but contributes
 ///   nothing to any ancestor directory's `fan_in` badge here — expected,
-///   not a bug, since the badge's whole purpose is to flag hotspots
-///   specifically, not fan-in in general.
+///   not a bug, since the badge's whole purpose is to flag high-fan-in
+///   symbols specifically, not fan-in in general.
 /// - `own_file_size_severity`: the severity of this file node's own
 ///   [`FileSizeWarning`] (ADR 0028), or `None` when the file is under
 ///   the watch threshold and for every non-file node. Paired with
@@ -229,9 +230,9 @@ pub struct Tree {
 /// child, or has files/symbols of its own alongside a subdirectory.
 pub fn build_tree(report: &Report) -> Tree {
     let fan_in_by_id: HashMap<&str, usize> = report
-        .hotspots
+        .fan_ins
         .iter()
-        .map(|hotspot| (hotspot.id.as_str(), hotspot.used_by.len()))
+        .map(|fan_in| (fan_in.id.as_str(), fan_in.used_by.len()))
         .collect();
 
     let file_size_by_path: HashMap<&str, (FileSizeSeverity, usize)> = report
@@ -273,10 +274,10 @@ pub fn build_tree(report: &Report) -> Tree {
 /// by [`TreeBuilder::finish`].
 struct TreeBuilder<'a> {
     root: DirBuilder,
-    /// `report.hotspots`, keyed by [`rinkaku_core::graph::NodeId`], so a
+    /// `report.fan_ins`, keyed by [`rinkaku_core::graph::NodeId`], so a
     /// symbol's fan-in badge can be looked up by id while walking
     /// `report.files` — built once in `build_tree` rather than per-symbol,
-    /// since `report.hotspots` doesn't change during one `build_tree` call.
+    /// since `report.fan_ins` doesn't change during one `build_tree` call.
     fan_in_by_id: HashMap<&'a str, usize>,
     /// `report.file_size_warnings`, keyed by path — the value is
     /// `(severity, line_count)` so a file node can populate both
@@ -605,9 +606,9 @@ fn build_file_node(
 }
 
 /// A single symbol's own (non-aggregated) badge contribution.
-/// `fan_in_by_id` is `report.hotspots` keyed by id (see `build_tree`): a
+/// `fan_in_by_id` is `report.fan_ins` keyed by id (see `build_tree`): a
 /// symbol not present there (fan-in < 2, or a removed symbol — never a
-/// graph node) contributes zero fan-in, same as `Hotspot`'s own >= 2
+/// graph node) contributes zero fan-in, same as `FanIn`'s own >= 2
 /// threshold.
 fn symbol_badges(symbol_ref: &SymbolRef, fan_in_by_id: &HashMap<&str, usize>) -> Badges {
     Badges {
