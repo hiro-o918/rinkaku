@@ -159,6 +159,18 @@ impl<'a> DirCondensation<'a> {
 /// string by the time a `Report` exists, so matching on `id` here needs
 /// no re-derivation of `graph::collect_nodes`'s own id-uniqueness
 /// algorithm.
+///
+/// WHY this is safe to depend on, not just convenient: this is a
+/// cross-crate invariant `rinkaku-tui` has no compile-time way to
+/// enforce — `rinkaku-core`'s `stamp_ids`/`collect_nodes` could change
+/// their id-assignment order, or start skipping some symbols, without
+/// any type in either crate's public API changing to reflect it. If
+/// that ever happens, this function silently starts filtering the
+/// wrong nodes/edges (or none at all) rather than failing to compile,
+/// since `HashSet::contains` on a mismatched id is just a `false`, not
+/// an error. A change to `rinkaku-core::graph::stamp_ids`'s id
+/// derivation must re-check this function (and `rank_directories`'
+/// tests, `order_tests/rank_directories.rs`) by hand.
 fn test_node_ids(report: &Report) -> HashSet<&str> {
     report
         .files

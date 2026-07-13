@@ -204,16 +204,39 @@ no emoji. Concretely:
   TUI's view-model). Every existing `SymbolRef { .. }` test fixture
   across `tree_tests/`, `row_view_tests/`, `order_tests/`, and
   `ui/detail_pane_tests/` needs the new field added.
-- `order::rank_directories`/`DirCondensation::build` need `report`'s
-  per-symbol test flags to filter the graph, which means threading
-  either `report.files`/`report.removed`'s symbol-level `is_test`/
-  test-path information into `DirCondensation::build` (it currently only
-  reads `report.graph`, which has no test/non-test distinction on its
-  `Node`/`Edge` types) or extending `graph::Node`/`Edge` with that
-  information at the point they are built. This ADR does not mandate
-  which; that is an implementation-level call for whichever approach
-  avoids widening `rinkaku-core::graph`'s public shape for a TUI-only
-  concern, made when the code is written.
+- **Resolved** (was an open implementation question, now closed by
+  Phase A): `order::DirCondensation::build` filters `report.graph`
+  itself rather than widening `rinkaku-core::graph`'s public shape.
+  It builds a `HashSet` of every id in `report.files[..].symbols[..]`
+  whose `ExtractedSymbol::is_test` is `true`, and drops any
+  `graph::Node`/`graph::Edge` whose id appears in that set before
+  condensing to directories. This works only because
+  `graph::stamp_ids` writes `graph::Node::id` back onto
+  `ExtractedSymbol::id`, in the same source order, before a `Report` is
+  ever constructed (`pipeline::analyze_diff`/`analyze_repo` both call
+  `build_graph` then `stamp_ids` before assembling their `Report`) — so
+  `ExtractedSymbol::id` and `graph::Node::id` are guaranteed to be the
+  *same* string by the time `order.rs` reads them, with no need to
+  re-derive `graph::collect_nodes`'s own id-uniqueness algorithm inside
+  `rinkaku-tui`. This is a cross-crate invariant `order.rs` depends on
+  but cannot enforce at compile time: a future change to `stamp_ids`'
+  id-assignment order (or to skip stamping for some symbols) would
+  silently break the exclusion filter without any type error, so the
+  dependency is called out as a `WHY` comment at the filter's call site
+  in `order.rs`, not left only in this ADR.
+- **Known limitation, accepted**: a [`RemovedSymbol`] carries no
+  `is_test` flag of its own (there is no head-side AST context left to
+  classify a removed symbol's test-ness by, since it only exists on the
+  base side of a diff), so `tree::SymbolRef::is_test` is hardcoded
+  `false` for every removed symbol regardless of whether the symbol it
+  used to be was test code. In practice this only means a removed test
+  symbol never picks up the per-symbol `test` badge (change 3) — it is
+  already visually marked as removed (crossed-out, dimmed) and, per
+  change 1, never influences production directory ranking anyway (a
+  removed symbol is never a `graph::Node` in the first place), so the
+  missing badge has no ranking or section-placement consequence, only
+  a minor loss of the "this was test code" label on an already-distinct
+  row kind.
 - Navigating into "Tests" and back must not disturb the collapse state
   or cursor stability of the production tree above it — `Nav`'s existing
   path-keyed `collapsed` set and index-based cursor already generalize to
