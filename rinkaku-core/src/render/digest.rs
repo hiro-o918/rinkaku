@@ -12,6 +12,15 @@ use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol};
 use crate::render::report::Report;
 use std::fmt::Write as _;
 
+/// `name (path)` — the same disambiguation `render_markdown`'s
+/// `removed_symbol_label`/`tree_label` already append, needed here for the
+/// identical reason: two distinct files can each define a symbol sharing a
+/// name (`new`, `run`, ...), and a bare name alone cannot tell a reader
+/// which file's `new` changed.
+fn located_name(name: &str, path: &str) -> String {
+    format!("{name} ({path})")
+}
+
 /// Renders a [`Report`]'s contract-affecting symbols (ADR 0014's
 /// classifications) as a flat Markdown list under an `### API changes`
 /// heading. Walks `report.files` in source order (not the DFS order
@@ -33,7 +42,7 @@ pub(super) fn render_digest(report: &Report) -> String {
 
     for file in &report.files {
         for symbol in &file.symbols {
-            if let Some(line) = digest_line(symbol) {
+            if let Some(line) = digest_line(&file.path, symbol) {
                 lines.push(line);
             }
         }
@@ -57,27 +66,29 @@ pub(super) fn render_digest(report: &Report) -> String {
 /// Builds one digest entry for `symbol`, or `None` when its
 /// classification isn't a contract change (`BodyOnly`, or classification
 /// not attempted at all — always the case for a whole-repo outline, which
-/// has no base side to classify against).
-fn digest_line(symbol: &ExtractedSymbol) -> Option<String> {
+/// has no base side to classify against). `path` disambiguates two
+/// same-named symbols defined in different files (see [`located_name`]).
+fn digest_line(path: &str, symbol: &ExtractedSymbol) -> Option<String> {
     match symbol.classification {
-        Some(Classification::Added) => Some(added_line(symbol)),
-        Some(Classification::SignatureChanged) => Some(signature_changed_line(symbol)),
+        Some(Classification::Added) => Some(added_line(path, symbol)),
+        Some(Classification::SignatureChanged) => Some(signature_changed_line(path, symbol)),
         Some(Classification::BodyOnly) | None => None,
     }
 }
 
-/// `+ name` header followed by the signature in a fenced code span — the
-/// `+` mirrors the diff convention `signature_changed_line` uses below,
-/// read as "added" without a "previous" side to diff against.
-fn added_line(symbol: &ExtractedSymbol) -> String {
+/// `+ name (path)` header followed by the signature in a fenced code span
+/// — the `+` mirrors the diff convention `signature_changed_line` uses
+/// below, read as "added" without a "previous" side to diff against.
+fn added_line(path: &str, symbol: &ExtractedSymbol) -> String {
     let fence = fence_for(&symbol.signature);
     let mut out = String::new();
-    writeln!(out, "- **+ {}**", symbol.name).expect("writing to a String cannot fail");
+    writeln!(out, "- **+ {}**", located_name(&symbol.name, path))
+        .expect("writing to a String cannot fail");
     writeln!(out, "  {fence}{}{fence}", symbol.signature).expect("writing to a String cannot fail");
     out
 }
 
-/// Symbol name header followed by a ` ```diff ` block (`-` previous
+/// `name (path)` header followed by a ` ```diff ` block (`-` previous
 /// signature, `+` current signature) — the exact convention
 /// `render_markdown`'s "Definitions" section already uses for
 /// `SignatureChanged`, reused here so a reader who has seen either output
@@ -87,9 +98,10 @@ fn added_line(symbol: &ExtractedSymbol) -> String {
 /// is `SignatureChanged` (`extract::classify_symbols`' invariant); falls
 /// back to the plain fenced signature with no diff if not, rather than
 /// panicking on a malformed report.
-fn signature_changed_line(symbol: &ExtractedSymbol) -> String {
+fn signature_changed_line(path: &str, symbol: &ExtractedSymbol) -> String {
     let mut out = String::new();
-    writeln!(out, "- **{}**", symbol.name).expect("writing to a String cannot fail");
+    writeln!(out, "- **{}**", located_name(&symbol.name, path))
+        .expect("writing to a String cannot fail");
     match &symbol.previous_signature {
         Some(previous_signature) => {
             let fence = fence_for_diff(previous_signature, &symbol.signature);
@@ -107,11 +119,17 @@ fn signature_changed_line(symbol: &ExtractedSymbol) -> String {
     out
 }
 
-/// `~~name~~ — removed` — GitHub-native Markdown strikethrough, since a
-/// removed symbol has no signature left to show at all (same data gap ADR
-/// 0035 hit for the mermaid case).
+/// `~~name (path)~~ — removed` — GitHub-native Markdown strikethrough,
+/// since a removed symbol has no signature left to show at all (same data
+/// gap ADR 0035 hit for the mermaid case). `removed.path` plays the same
+/// disambiguating role as every other line's `path` parameter, sourced
+/// directly from `RemovedSymbol` instead of a `FileReport` since removed
+/// symbols aren't grouped by file the way `report.files` is.
 fn removed_line(removed: &RemovedSymbol) -> String {
-    format!("- ~~{}~~ — removed\n", removed.name)
+    format!(
+        "- ~~{}~~ — removed\n",
+        located_name(&removed.name, &removed.path)
+    )
 }
 
 /// Backtick fence wide enough to safely wrap `signature` inline (an inline
@@ -236,7 +254,7 @@ mod tests {
         let expected = "\
 ### API changes
 
-- **+ new_helper**
+- **+ new_helper (src/lib.rs)**
   `fn new_helper()`
 "
         .to_string();
@@ -263,7 +281,7 @@ mod tests {
         let expected = "\
 ### API changes
 
-- **foo**
+- **foo (src/lib.rs)**
   ```diff
   -fn foo(a: i32) -> i32
   +fn foo(a: i32, b: i32) -> i32
@@ -290,7 +308,7 @@ mod tests {
         let expected = "\
 ### API changes
 
-- ~~old_helper~~ — removed
+- ~~old_helper (src/lib.rs)~~ — removed
 "
         .to_string();
         let actual = render(&report, OutputFormat::Digest).expect("digest render succeeds");
@@ -336,14 +354,57 @@ mod tests {
         let expected = "\
 ### API changes
 
-- **+ new_in_a**
+- **+ new_in_a (src/a.rs)**
   `fn new_in_a()`
-- **changed_in_b**
+- **changed_in_b (src/b.rs)**
   ```diff
   -fn changed_in_b()
   +fn changed_in_b(x: i32)
   ```
-- ~~removed_from_a~~ — removed
+- ~~removed_from_a (src/a.rs)~~ — removed
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Digest).expect("digest render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_disambiguate_same_named_symbols_defined_in_different_files() {
+        // Both files define a symbol named "new" (a plausible, generic
+        // helper name) — without the "(path)" suffix these two entries
+        // would render as identical, indistinguishable lines.
+        let report = empty_report(
+            vec![
+                FileReport {
+                    path: "src/a.rs".to_string(),
+                    symbols: vec![symbol(
+                        "new",
+                        "fn new() -> A",
+                        Some(Classification::Added),
+                        None,
+                    )],
+                },
+                FileReport {
+                    path: "src/b.rs".to_string(),
+                    symbols: vec![symbol(
+                        "new",
+                        "fn new() -> B",
+                        Some(Classification::Added),
+                        None,
+                    )],
+                },
+            ],
+            vec![],
+        );
+
+        let expected = "\
+### API changes
+
+- **+ new (src/a.rs)**
+  `fn new() -> A`
+- **+ new (src/b.rs)**
+  `fn new() -> B`
 "
         .to_string();
         let actual = render(&report, OutputFormat::Digest).expect("digest render succeeds");
@@ -371,7 +432,7 @@ mod tests {
         let expected = "\
 ### API changes
 
-- **weird**
+- **weird (src/lib.rs)**
   ````diff
   -fn weird()
   +fn weird(s: &str) // ```embedded```

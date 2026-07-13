@@ -54,21 +54,47 @@ it (see Consequences).
   exactly the kind of change the mermaid graph and this digest agree
   is not "API surface," matching the existing classification vocabulary
   (ADR 0014) rather than inventing a new one.
-- **Format, under an `### API changes` heading:**
-  - `SignatureChanged`: symbol name, then a ` ```diff ` block showing
-    `-` (previous signature) / `+` (current signature) — reusing the
-    exact `-`/`+` diff-block convention `render_markdown`'s
+- **Format, under an `### API changes` heading.** Every entry's header
+  is `name (path)`, not a bare name — the same `(path)` disambiguation
+  `render_markdown`'s `tree_label`/`removed_symbol_label` already
+  append, needed for the identical reason: two distinct files can each
+  define a symbol sharing a name (`new`, `run`, a common test helper,
+  ...), and a bare name alone cannot tell a reader which file's symbol
+  changed. Example, for a PR that adds `render_digest` to
+  `rinkaku-core/src/render/digest.rs`, changes `Cli::format`'s type in
+  `rinkaku/src/cli.rs`, and deletes `old_helper` from
+  `rinkaku-core/src/render/legacy.rs`:
+
+  ````markdown
+  ### API changes
+
+  - **+ render_digest (rinkaku-core/src/render/digest.rs)**
+    `pub(super) fn render_digest(report: &Report) -> String`
+  - **format (rinkaku/src/cli.rs)**
+    ```diff
+    -pub(crate) format: Format,
+    +pub(crate) format: Option<Format>,
+    ```
+  - ~~old_helper (rinkaku-core/src/render/legacy.rs)~~ — removed
+  ````
+
+  - `SignatureChanged`: `name (path)` header, then a ` ```diff ` block
+    showing `-` (previous signature) / `+` (current signature) —
+    reusing the exact `-`/`+` diff-block convention `render_markdown`'s
     "Definitions" section already uses for the same classification, so
     a reader who has seen either output recognizes the convention
     immediately rather than learning a second one.
-  - `Added`: `+ name` followed by the one-line signature in a fenced
-    code span — the `+` prefix mirrors the diff convention above (an
-    addition, no "previous" side to diff against) without needing a
-    second visual language.
-  - `Removed`: `~~name~~ — removed`, using Markdown strikethrough
-    (renders natively on github.com) since there is no signature left
-    to show at all (same data gap ADR 0035 hit for the mermaid case) —
-    the strikethrough itself communicates "gone" without more text.
+  - `Added`: `+ name (path)` header followed by the one-line signature
+    in a fenced code span — the `+` prefix mirrors the diff convention
+    above (an addition, no "previous" side to diff against) without
+    needing a second visual language.
+  - `Removed`: `~~name (path)~~ — removed`, using Markdown
+    strikethrough (renders natively on github.com) since there is no
+    signature left to show at all (same data gap ADR 0035 hit for the
+    mermaid case) — the strikethrough itself communicates "gone"
+    without more text. `path` here is `RemovedSymbol.path` directly
+    (removed symbols aren't grouped under a `FileReport` the way
+    surviving symbols are).
   - One line per symbol, walking `report.files` in source order (same
     per-file order every other format starts from) and each file's
     `symbols` in their own extraction order, with `report.removed`
