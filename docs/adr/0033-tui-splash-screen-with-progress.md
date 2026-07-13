@@ -370,3 +370,45 @@ which pipeline entry point produced it.
   during "Analyzing diff..." instead of a static label, matching the
   whole-repo-outline and dependency-index phases. Every non-TUI display
   mode is unaffected, same as the original decision.
+
+## Amendment: deferring `log::` records too
+
+Decision 8's buffering covers `AnalysisProgress::note`, but not `log::`
+records — `env_logger` writes straight to its configured target (stderr
+by default), bypassing `AnalysisProgress` entirely. `--tui` mode's
+alternate screen is the same physical terminal stderr writes to, so a
+`log::info!`/`log::warn!` fired during analysis (e.g. `workdir.rs`'s
+"using the current directory as a clone of ..." line, or `base_sha.rs`'s
+fallback warning) lands as raw bytes mid-redraw, corrupting the splash or
+entry screen frame — the same failure mode decision 8 fixed for notes,
+for a call path decision 8 did not cover.
+
+`rinkaku`'s bin crate gains a `log_writer` module: `DeferredLogSink<W>`, a
+cheaply cloneable `std::io::Write` sink wrapping `Arc<Mutex<State<W>>>`
+with two states, buffering while deferring and writing straight to `W`
+once released (draining the buffer first, so record order is preserved).
+`main` now resolves `display_mode` *before* initializing `env_logger`
+(reordered ahead of `Cli::parse`'s `SelfUpdate` branch too, which still
+logs directly to stderr since it never touches the alternate screen).
+`DisplayMode::Tui` initializes `env_logger` with
+`.target(env_logger::Target::Pipe(Box::new(sink.clone())))`; every other
+display mode keeps targeting stderr directly, unchanged. The sink is
+released at the same two points `main` already flushes buffered notes —
+after `TuiSession::run` returns, and after an early-return analysis error
+drops the `TuiSession` — so both drain in order once the terminal has
+actually left the alternate screen.
+
+This does not change any decision above: it is the same buffer-then-flush
+shape decision 8 already established, applied to the one write path that
+bypasses `AnalysisProgress`.
+
+- **`rinkaku` bin API** (all `pub(crate)`, no external surface): adds
+  `log_writer::DeferredLogSink<W>` (`new`, `release`, `Write` impl,
+  `Clone`). `main.rs` gains a `logger_builder()` helper (the
+  `env_logger::Builder` construction shared by every display mode) and a
+  `release_log_sink` helper mirroring `flush_notes`.
+- **Testing**: `DeferredLogSink` is unit tested as a pure `Write` sink
+  against an injected in-memory destination (`rstest` +
+  `pretty_assertions`) — buffering while deferring, in-order draining on
+  release, passthrough after release, and shared state across clones. No
+  real stderr is touched in tests.
