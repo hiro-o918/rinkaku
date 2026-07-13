@@ -73,16 +73,6 @@ MAX_BODY_LENGTH=65536
 # practice diagram and leaving nothing for the digest details.
 MAX_MERMAID_LENGTH=32768
 
-# One line spelling out the mermaid `classDef` colors (ADR 0021/0035) in
-# English, since GitHub's rendered mermaid diagram carries no legend of
-# its own — composed here, not by `render_mermaid`/`render_digest`,
-# because it's prose about this comment's presentation, not data derived
-# from the `Report` (ADR 0036's Decision). No emoji/color swatches (this
-# repository avoids decorative glyphs in rendered output on principle,
-# per ADR 0028's terminal-rendering rationale) — plain text names of the
-# `classDef`s themselves.
-MERMAID_LEGEND="_Legend: green = added · orange = API changed · gray dashed = removed · red heavy border = fan-in_"
-
 # Truncates `text` to at most `budget` bytes, then backs off up to 3 more
 # bytes (bounded: the longest a single UTF-8 character's continuation-byte
 # run can be) until the result is valid UTF-8 on its own — a byte-count
@@ -128,20 +118,23 @@ if [ -n "${MERMAID_PATH:-}" ] && [ -f "${MERMAID_PATH}" ]; then
   fi
 fi
 
+# No legend appended here (ADR 0038): the diagram itself now carries a
+# self-describing `Legend` subgraph, styled with its own real `classDef`s,
+# so this script has nothing to compose alongside it — a hand-written
+# prose legend risked drifting out of sync with the actual node styles
+# (the exact problem ADR 0038 fixes), which a legend built from those same
+# `classDef`s cannot do. The oversized-mermaid fallback below has no
+# legend either, since there is no diagram at all in that case.
 mermaid_section=""
 if [ -n "${mermaid_content}" ] && [ "${mermaid_oversized}" -eq 1 ]; then
   mermaid_section="
 ${mermaid_content}
-
-${MERMAID_LEGEND}
 "
 elif [ -n "${mermaid_content}" ]; then
   mermaid_section="
 \`\`\`mermaid
 ${mermaid_content}
 \`\`\`
-
-${MERMAID_LEGEND}
 "
 fi
 

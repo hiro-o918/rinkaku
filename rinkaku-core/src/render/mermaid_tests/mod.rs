@@ -1,0 +1,106 @@
+//! Tests for [`super::render_mermaid`]/[`super::render_mermaid_file_level`],
+//! split by which behavior each file pins:
+//!
+//! - [`empty_and_legend`] — the empty-graph short-circuit and the ADR 0038
+//!   `Legend` subgraph/`classDef` trailer every render path shares.
+//! - [`class_styling`] — `added`/`changed`/`fan-in` class assignment,
+//!   fan-in's `(in:N)` label suffix, and the fan-in-vs-changed/added
+//!   precedence rule.
+//! - [`escaping`] — label escaping for quotes/brackets/ampersands and
+//!   embedded newlines.
+//! - [`node_budget_fallback`] — the [`super::MERMAID_NODE_BUDGET`] boundary
+//!   and the file-level aggregation fallback.
+//! - [`removed_symbols`] — ADR 0037 `removed`-classed nodes, including the
+//!   removed-only-file case and the node-budget interaction.
+
+use super::*;
+use crate::diff::LineRange;
+use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
+use crate::graph::{Edge, FanIn, Node, SymbolGraph};
+use crate::render::report::{FileReport, ReportOrigin};
+use crate::render::{OutputFormat, render};
+
+mod class_styling;
+mod empty_and_legend;
+mod escaping;
+mod node_budget_fallback;
+mod removed_symbols;
+
+/// Same shape as the sibling `tests::symbol` helper, plus a
+/// `classification` parameter these tests need to exercise
+/// added/changed/fan-in styling.
+fn symbol(
+    id: &str,
+    name: &str,
+    kind: SymbolKind,
+    classification: Option<Classification>,
+) -> ExtractedSymbol {
+    ExtractedSymbol {
+        id: id.to_string(),
+        name: name.to_string(),
+        kind,
+        signature: format!("{name}()"),
+        range: LineRange { start: 1, end: 1 },
+        container: None,
+        referenced_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification,
+        previous_signature: None,
+    }
+}
+
+fn node(id: &str, path: &str, name: &str) -> Node {
+    Node {
+        id: id.to_string(),
+        path: path.to_string(),
+        name: name.to_string(),
+    }
+}
+
+fn empty_report(graph: SymbolGraph, files: Vec<FileReport>) -> Report {
+    Report {
+        origin: ReportOrigin::Diff,
+        files,
+        skipped: vec![],
+        graph,
+        tests: vec![],
+        fan_ins: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    }
+}
+
+fn removed_symbol(name: &str, path: &str) -> RemovedSymbol {
+    RemovedSymbol {
+        name: name.to_string(),
+        kind: SymbolKind::Function,
+        path: path.to_string(),
+        signature: format!("{name}()"),
+    }
+}
+
+/// The exact `Legend` subgraph + `classDef` trailer every render path
+/// appends (ADR 0038) — every test's `expected` string ends with this,
+/// shared here so a future style change is a one-line update instead of a
+/// find/replace across every test file. `concat!`, not a `"\`-continued
+/// literal: the latter strips leading whitespace from the continued line,
+/// which would silently swallow this block's leading indentation.
+const LEGEND_AND_CLASS_DEFS: &str = concat!(
+    "  subgraph Legend\n",
+    "    legend_added[\"added\"]\n",
+    "    legend_changed[\"API changed\"]\n",
+    "    legend_removed[\"removed\"]\n",
+    "    legend_fan_in[\"fan-in (in:N)\"]\n",
+    "  end\n",
+    "  class legend_added added\n",
+    "  class legend_changed changed\n",
+    "  class legend_removed removed\n",
+    "  class legend_fan_in fan-in\n",
+    "  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;\n",
+    "  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;\n",
+    "  classDef fan-in fill:#e9d8fd,stroke:#553c9a,stroke-width:3px,color:#1a202c;\n",
+    "  classDef removed fill:#fed7d7,stroke:#9b2c2c,color:#1a202c,stroke-dasharray: 5 5;\n",
+);
