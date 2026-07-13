@@ -123,13 +123,12 @@ pub(super) fn report_with_two_directories_and_graph() -> Report {
     Report { graph, ..report }
 }
 
-/// One production symbol plus one *whole* test file (ADR 0035 Phase B:
-/// every symbol in `lib_test.go` is test code, and its `_test.go` path
-/// also matches Go's `LanguageSupport::is_test_path` convention) — so
+/// One production symbol plus one *whole* test file (every symbol in
+/// `lib_test.go` is test code, and its `_test.go` path also matches
+/// Go's `LanguageSupport::is_test_path` convention), so
 /// `crate::tree::build_tree` produces a trailing `NodeKind::Section`
-/// root alongside the production `Dir` root. Expanded row order: lib.rs
-/// dir-collapsed? no — both files are root-level with no shared
-/// directory, so: `lib.rs`(0), foo(1), Tests(2), `lib_test.go`(3).
+/// root alongside the production `Dir` root. Expanded row order:
+/// `lib.rs`(0), foo(1), Tests(2), `lib_test.go`(3).
 pub(super) fn report_with_a_whole_test_file() -> Report {
     Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,

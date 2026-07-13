@@ -25,8 +25,6 @@ fn should_show_section_row_expanded_by_default_alongside_production_rows() {
         ],
         row_paths(&rows)
     );
-    // The Section row itself (index 2) must report `expanded: true`
-    // like any other non-empty Dir/File row would.
     assert_eq!(true, rows[2].expanded);
 }
 

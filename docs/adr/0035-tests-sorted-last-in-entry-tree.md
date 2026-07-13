@@ -1,6 +1,6 @@
 # 0035. Keep tests out of production directory ranking and out of the main tree
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-13
 - Amends: [ADR 0016](0016-tui-crate-and-stack.md) decision 4 (default
   topological directory ordering)

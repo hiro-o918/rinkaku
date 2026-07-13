@@ -70,17 +70,12 @@ pub fn entry_row_line(
             }
         }
         NodeKind::Section(section_kind) => {
-            // ADR 0035 Phase B: renders like a `Dir` row (expand marker,
-            // bold label, aggregated badges) but with the section's own
-            // fixed label instead of `label` (a section's `TreeNode::path`
-            // is a synthetic constant, not a real file-tree path, so there
-            // is nothing meaningful for `crate::ui`'s ancestor-prefix
-            // stripping to compute for it — `label` is simply unused
-            // here) — and deliberately never checks `ranks`/`(cycle)`: a
-            // section's synthetic path never has a `DirRank` entry
-            // (`crate::order::rank_directories` only ranks real file-tree
-            // directories), so cycle detection has nothing to say about
-            // it either way.
+            // `label` is unused: a section's path is a synthetic
+            // constant, not a real file-tree path for `crate::ui`'s
+            // ancestor-prefix stripping to compute a label from. No
+            // `ranks` lookup either — that path never gets a `DirRank`
+            // entry (`crate::order::rank_directories` only ranks real
+            // directories).
             spans.push(Span::raw(format!("{} ", expand_marker(row))));
             spans.push(Span::styled(
                 section_kind.label(),
@@ -124,12 +119,9 @@ pub fn entry_row_line(
                 symbol_ref.name.clone(),
                 symbol_name_style(symbol_ref),
             ));
-            // ADR 0035: only reachable for a test symbol left in the
-            // production tree — i.e. one living in a *mixed* file
-            // alongside non-test symbols, since a whole-test-file's
-            // symbols never reach the production tree at all (they are
-            // summarized by the file-level `[test] (N symbols)` badge
-            // above instead, see `TreeNode::test_symbol_count`).
+            // Only reachable for a mixed-file test symbol — a
+            // whole-test-file's symbols never reach the production tree
+            // (they get the file-level `[test]` badge above instead).
             if symbol_ref.is_test {
                 spans.push(Span::raw(" "));
                 spans.push(symbol_test_badge_span());
