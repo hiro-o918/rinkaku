@@ -41,6 +41,8 @@ The TUI greets you with this on startup, while it scans the diff:
 brew install hiro-o918/tap/rinkaku
 # or:
 curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh | bash
+# or install into your home directory (no sudo):
+INSTALL_DIR="$HOME/.local/bin" bash -c "$(curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh)"
 
 # 2. Point it at any GitHub PR — a local clone is optional
 rinkaku --pr https://github.com/owner/repo/pull/123
