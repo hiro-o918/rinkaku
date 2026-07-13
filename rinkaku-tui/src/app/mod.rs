@@ -671,6 +671,30 @@ impl App {
         self
     }
 
+    /// Moves the tree cursor to `symbol_id` (ADR 0030: manual diff-pane
+    /// scrolling syncs the cursor back to the visible symbol), expanding
+    /// collapsed ancestors on the way via [`Nav::move_cursor_to_symbol`] —
+    /// same underlying move [`Self::jump_to_symbol`] performs, but
+    /// deliberately *not* that method: this sync must not push a jumplist
+    /// entry (a scroll session through several symbols would otherwise
+    /// flood `Ctrl-o`/`Ctrl-i`'s history with moves the reviewer never
+    /// asked to navigate through — ADR 0022's jumplist is for explicit
+    /// `gd`/`gr` jumps only) and must not reset [`Self::right_pane_scroll`]
+    /// (the scroll offset that just triggered this sync is exactly the
+    /// value the caller wants preserved — resetting it here would make the
+    /// sync fight its own trigger). A no-op (returning `self` unchanged,
+    /// no status message — unlike `jump_to_symbol`'s, since a missing
+    /// symbol here is an ordinary transient case, e.g. mid-recompute after
+    /// a report reload, not a reviewer-facing navigation failure) when no
+    /// row's symbol id matches `symbol_id`.
+    pub fn sync_tree_cursor_to_symbol(mut self, symbol_id: &str) -> Self {
+        let mut nav = self.nav.clone();
+        if nav.move_cursor_to_symbol(&self.tree, symbol_id) {
+            self.nav = nav;
+        }
+        self
+    }
+
     /// Opens the jump-target popup (ADR 0022) over `candidates` — called by
     /// `crate::run_app` once it has resolved more than one candidate for a
     /// pending `gd`/`gr` (`InputKey::GotoDefinition`/`GotoReferences`'s own
