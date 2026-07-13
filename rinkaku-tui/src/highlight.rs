@@ -244,6 +244,50 @@ pub fn highlight_hunk(path: &str, hunk: &Hunk) -> Vec<LineHighlight> {
     result
 }
 
+/// Highlights a plain source file's lines (the `s`-key source drill-down,
+/// `crate::source::SourceView` — not a diff hunk), keyed by `path`'s
+/// extension, returning one [`LineHighlight`] per entry in `lines` (same
+/// length, same order). Falls back to `vec![None; lines.len()]` when
+/// `path`'s extension is unrecognized or the file fails to parse/highlight
+/// — `crate::ui`'s source screen already falls back to its plain
+/// unstyled-line rendering for `None`, the same contract [`highlight_hunk`]
+/// gives the diff pane.
+///
+/// Unlike [`highlight_hunk`], there is only one side to reconstruct: a
+/// source file (unlike a hunk) is already contiguous, parseable text, so
+/// this joins `lines` with `\n` directly rather than filtering by
+/// added/removed/context the way [`reconstruct_side`] does.
+pub fn highlight_source_lines(path: &str, lines: &[String]) -> Vec<LineHighlight> {
+    let fallback = || vec![None; lines.len()];
+
+    let Some(config) = config_for_path(path) else {
+        return fallback();
+    };
+
+    let mut text = String::new();
+    // (start byte, end byte) per line, in `lines`' own order — a plain
+    // source file has no "line kind" to filter on, so unlike
+    // `reconstruct_side`'s offsets this needs no original-index component:
+    // position in this vec already matches position in `lines`.
+    let mut offsets = Vec::with_capacity(lines.len());
+    for line in lines {
+        let start = text.len();
+        text.push_str(line);
+        let end = text.len();
+        offsets.push((start, end));
+        text.push('\n');
+    }
+
+    let Some(spans) = highlight_text(&config, &text) else {
+        return fallback();
+    };
+
+    offsets
+        .into_iter()
+        .map(|(start, end)| Some(spans_for_line(&spans, start, end)))
+        .collect()
+}
+
 /// One file's hunks, each already highlighted — `hunks[i]` corresponds
 /// positionally to `crate::diff_view::FileHunks::hunks[i]` for the same
 /// path (see [`highlight_diff_files`]'s doc comment on why this crate
@@ -730,5 +774,75 @@ mod tests {
         let actual = highlighted_file(&files, "missing.rs");
 
         assert_eq!(None, actual);
+    }
+
+    // --- highlight_source_lines ---
+
+    #[test]
+    fn should_highlight_keyword_and_string_tokens_in_a_source_file() {
+        let lines: Vec<String> = vec![
+            "fn foo() {".to_string(),
+            r#"    let x = "s";"#.to_string(),
+            "}".to_string(),
+        ];
+
+        let actual = highlight_source_lines("src/lib.rs", &lines);
+
+        assert_eq!(3, actual.len());
+        let first_line_spans = actual[0]
+            .clone()
+            .expect("expected Some(spans) for a .rs file");
+        let keyword_index = PALETTE.iter().position(|p| *p == "keyword").unwrap();
+        assert!(
+            first_line_spans
+                .iter()
+                .any(|s| s.start == 0 && s.end == 2 && s.palette_index == keyword_index)
+        );
+
+        let second_line_spans = actual[1]
+            .clone()
+            .expect("expected Some(spans) for a .rs file");
+        let string_index = PALETTE.iter().position(|p| *p == "string").unwrap();
+        let string_start = lines[1].find('"').unwrap();
+        assert!(second_line_spans.iter().any(|s| s.start == string_start
+            && s.end == string_start + 3
+            && s.palette_index == string_index));
+    }
+
+    #[test]
+    fn should_fall_back_to_all_none_for_source_lines_when_extension_is_unrecognized() {
+        let lines: Vec<String> = vec!["some: yaml".to_string()];
+
+        let actual = highlight_source_lines("config.yaml", &lines);
+
+        assert_eq!(vec![None], actual);
+    }
+
+    #[test]
+    fn should_fall_back_to_all_none_for_source_lines_when_path_has_no_extension() {
+        let lines: Vec<String> = vec!["text".to_string()];
+
+        let actual = highlight_source_lines("Makefile", &lines);
+
+        assert_eq!(vec![None], actual);
+    }
+
+    #[test]
+    fn should_return_empty_spans_for_a_blank_source_line() {
+        let lines: Vec<String> = vec!["fn a() {}".to_string(), String::new()];
+
+        let actual = highlight_source_lines("src/lib.rs", &lines);
+
+        assert_eq!(2, actual.len());
+        assert_eq!(Some(Vec::new()), actual[1].clone());
+    }
+
+    #[test]
+    fn should_return_empty_vec_when_lines_is_empty() {
+        let lines: Vec<String> = vec![];
+
+        let actual = highlight_source_lines("src/lib.rs", &lines);
+
+        assert_eq!(Vec::<LineHighlight>::new(), actual);
     }
 }

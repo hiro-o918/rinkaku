@@ -165,6 +165,19 @@ fn run_app(
     } else {
         diff_shape::DiffPaneContent::Empty
     };
+    // The source screen's (`s` key) file read + syntax highlight, computed
+    // once when `Screen::Source` is entered (the `InputKey::Source` arm
+    // below) and cached here across every subsequent draw — including the
+    // idle ~100ms poll ticks `ui::draw` runs on regardless of a key press —
+    // for the same reason `diff_highlights` above must not run inside the
+    // render loop: highlighting is a full tree-sitter parse, and repeating
+    // it roughly ten times a second while the screen merely sits open would
+    // reintroduce exactly the per-frame recompute bug ADR 0018 already had
+    // to fix once for the diff pane. `None` on startup (the source screen is
+    // never the initial screen — reached only via `s` from the entry view),
+    // so there is no up-front computation to mirror `diff_pane_content`'s/
+    // `blast_radius_selection`'s own `--entry`-driven initial state.
+    let mut source_content: Option<Result<source::HighlightedSourceView, String>> = None;
 
     loop {
         // `ui::draw`'s return value (the right-hand pane's scroll offset as
@@ -182,7 +195,7 @@ fn run_app(
                 &diff_pane_content,
                 &diff_highlights,
                 &blast_radius_selection,
-                repo_root,
+                source_content.as_ref(),
             );
         })?;
         app = clamp_right_pane_scroll_after_draw(app, clamped_scroll);
@@ -206,18 +219,19 @@ fn run_app(
             if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id } = app.screen().clone() {
-                    match source::load_symbol_source(report, &symbol_id, repo_root) {
-                        // The `SourceView` itself is discarded here — only
-                        // used to detect a failure early so it can be
-                        // surfaced on the status line right away, rather
-                        // than silently on the next redraw. `ui::draw`'s
-                        // `draw_source_screen` re-reads the file itself
-                        // when it renders the screen (see that function's
-                        // doc comment for why it re-reads instead of
-                        // caching this result).
-                        Ok(_) => {}
-                        Err(message) => app.set_status(message),
+                    let loaded =
+                        source::load_highlighted_symbol_source(report, &symbol_id, repo_root);
+                    // A failure is surfaced on the status line right away
+                    // (rather than only discovered on the next redraw) *and*
+                    // cached into `source_content` below so `ui::draw`'s
+                    // `draw_source_screen` shows the same error message in
+                    // the pane itself — mirrors the pre-caching behavior,
+                    // which attempted this same read eagerly for the same
+                    // early-feedback reason.
+                    if let Err(message) = &loaded {
+                        app.set_status(message.clone());
                     }
+                    source_content = Some(loaded);
                 }
             } else {
                 // Every non-`Source` key's dispatch is pure (no IO), so it
