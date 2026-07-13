@@ -6,7 +6,7 @@
 //!   aggregation, empty-file leaves, source-order preservation
 //! - `symbol_badges` — per-symbol badge derivation: contract-change
 //!   counting, removed-symbol marking, and fan-in propagation from
-//!   `report.hotspots`
+//!   `report.fan_ins`
 //! - `file_size_warnings` — ADR 0028 file-size badge propagation:
 //!   own line count, per-severity aggregation, and dir-node severity
 //!   invariant
@@ -19,7 +19,7 @@
 use super::*;
 use rinkaku_core::diff::LineRange;
 use rinkaku_core::extract::{ExtractedSymbol, RemovedSymbol};
-use rinkaku_core::graph::{Hotspot, SymbolGraph};
+use rinkaku_core::graph::{FanIn, SymbolGraph};
 use rinkaku_core::render::{FileReport, SkippedFile, TestFileSummary};
 
 mod build_tree_structure;
@@ -56,7 +56,7 @@ pub(super) fn empty_report() -> Report {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     }

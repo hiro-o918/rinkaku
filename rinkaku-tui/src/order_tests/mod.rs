@@ -60,7 +60,7 @@ pub(super) fn report_with_graph(nodes: Vec<Node>, edges: Vec<Edge>) -> Report {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     }

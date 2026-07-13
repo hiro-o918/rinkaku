@@ -178,7 +178,7 @@ func Foo() int { return 2 }
             roots: vec!["models/user.go::Foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -238,7 +238,7 @@ fn foo(a: i32) -> i32 {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -308,7 +308,7 @@ index e69de29..4b825dc 100644
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };

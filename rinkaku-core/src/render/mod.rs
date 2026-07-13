@@ -13,8 +13,9 @@
 //! Markdown renders in this order: a "Change graph" tree for a diff, or
 //! "Repository graph" for a whole-repo outline (names only, rooted at the
 //! graph's auto-detected entry points) giving the reader a call-hierarchy
-//! reading order, with an optional "Hotspots" sub-section (ADR 0013) right
-//! after it; "Definitions" — the full signature of every symbol, in the
+//! reading order, with an optional "High fan-in symbols" sub-section
+//! (ADR 0013, named per ADR 0033) right after it; "Definitions" — the full
+//! signature of every symbol, in the
 //! same tree order, each shown exactly once (ADR 0008's decision to avoid
 //! duplicating a symbol reachable from multiple roots); "Removed symbols" —
 //! base-side symbols with no head-side counterpart at all (ADR 0014,
@@ -26,10 +27,10 @@
 //! "changed" qualifier (`report.origin` picks the noun — see
 //! `change_graph_summary`), since nothing changed in that mode.
 //!
-//! ADR 0014 also marks each "Change graph"/"Hotspots"/"Definitions" line
-//! with its contract-impact classification (`— new` / `— signature
-//! changed`; `body_only` and not-attempted classifications render
-//! unmarked), and a `signature_changed` symbol's "Definitions" entry shows
+//! ADR 0014 also marks each "Change graph"/"High fan-in symbols"/
+//! "Definitions" line with its contract-impact classification (`— new` /
+//! `— signature changed`; `body_only` and not-attempted classifications
+//! render unmarked), and a `signature_changed` symbol's "Definitions" entry shows
 //! a ` ```diff ` block (base signature as `-`, head signature as `+`)
 //! instead of the plain fenced signature every other classification gets.
 //!

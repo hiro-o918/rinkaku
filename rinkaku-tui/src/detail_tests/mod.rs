@@ -2,7 +2,7 @@
 //! grouped by which pub function each block pins:
 //!
 //! - `build_detail` — signature (Current / Changed / fall-back), fan-in
-//!   used-by, hotspot used-by, callers/callees, and the defensive
+//!   used-by, high-fan-in used-by, callers/callees, and the defensive
 //!   dedup / self-edge exclusion (SHOULD-FIX 5)
 //! - `symbol_mentions` — the `symbol_mentions` extraction reused by
 //!   jump navigation (ADR 0022)
@@ -14,7 +14,7 @@
 use super::*;
 use rinkaku_core::diff::LineRange;
 use rinkaku_core::extract::ExtractedSymbol;
-use rinkaku_core::graph::{Edge, Hotspot, Node, SymbolGraph};
+use rinkaku_core::graph::{Edge, FanIn, Node, SymbolGraph};
 use rinkaku_core::render::FileReport;
 
 mod build_detail;
@@ -58,7 +58,7 @@ pub(super) fn empty_report() -> Report {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     }

@@ -1,4 +1,4 @@
-//! ADR 0014 contract-impact markers on tree/definition/hotspot lines,
+//! ADR 0014 contract-impact markers on tree/definition/fan-in lines,
 //! the ` ```diff ` block for a signature-changed symbol (with and
 //! without a container comment), and the "## Removed symbols" section
 //! including its deduplication rule for label-equivalent removed
@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::extract::{Classification, RemovedSymbol, SymbolKind};
-use crate::graph::Hotspot;
+use crate::graph::FanIn;
 use crate::render::report::{FileReport, ReportOrigin, TestFileSummary};
 use crate::render::{OutputFormat, render};
 use pretty_assertions::assert_eq;
@@ -31,7 +31,7 @@ fn should_append_new_marker_to_tree_and_definition_when_symbol_is_added() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -81,7 +81,7 @@ fn should_render_diff_block_and_marker_when_symbol_is_signature_changed() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -137,7 +137,7 @@ fn should_render_container_comment_above_diff_lines_when_signature_changed_symbo
             roots: vec!["src/lib.rs::bar".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -188,7 +188,7 @@ fn should_render_unmarked_tree_and_definition(#[case] classification: Option<Cla
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -216,7 +216,7 @@ fn foo()
 }
 
 #[test]
-fn should_append_marker_to_hotspot_line_before_used_by() {
+fn should_append_marker_to_fan_in_line_before_used_by() {
     let mut shared = symbol(
         "src/lib.rs::shared",
         "shared",
@@ -238,7 +238,7 @@ fn should_append_marker_to_hotspot_line_before_used_by() {
             roots: vec!["src/lib.rs::shared".to_string()],
         },
         tests: vec![],
-        hotspots: vec![Hotspot {
+        fan_ins: vec![FanIn {
             id: "src/lib.rs::shared".to_string(),
             path: "src/lib.rs".to_string(),
             name: "shared".to_string(),
@@ -251,18 +251,18 @@ fn should_append_marker_to_hotspot_line_before_used_by() {
     let markdown = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
     // NOTE: partial assert (searching for one line) rather than a
     // fully qualified comparison of the whole render — this test's
-    // concern is solely the "Hotspots" line's marker placement, and
-    // the "Change graph"/"Definitions" sections above it are
-    // already covered by other tests in this module (e.g.
+    // concern is solely the "High fan-in symbols" line's marker
+    // placement, and the "Change graph"/"Definitions" sections above it
+    // are already covered by other tests in this module (e.g.
     // `should_render_diff_block_and_marker_when_symbol_is_signature_changed`).
-    let hotspots_line = markdown
+    let fan_in_line = markdown
         .lines()
         .find(|line| line.contains("used by"))
-        .expect("hotspots section must contain the shared symbol's line");
+        .expect("high fan-in symbols section must contain the shared symbol's line");
 
     assert_eq!(
         "- fn shared (src/lib.rs) — signature changed — used by 2: caller_one, caller_two",
-        hotspots_line
+        fan_in_line
     );
 }
 
@@ -289,7 +289,7 @@ fn should_render_removed_symbols_section_between_definitions_and_tests() {
             path: "src/lib.rs".to_string(),
             symbol_count: 1,
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![RemovedSymbol {
             name: "old_helper".to_string(),
@@ -348,7 +348,7 @@ fn should_render_removed_symbols_section_alone_when_graph_is_empty() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![RemovedSymbol {
             name: "old_helper".to_string(),
@@ -389,7 +389,7 @@ fn should_deduplicate_identical_removed_symbol_lines() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![
             RemovedSymbol {
@@ -450,7 +450,7 @@ fn should_omit_removed_symbols_section_when_removed_is_empty() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -491,7 +491,7 @@ fn should_widen_fence_when_previous_signature_contains_a_backtick_run() {
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };

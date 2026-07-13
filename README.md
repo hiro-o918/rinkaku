@@ -20,7 +20,7 @@ Two ways to look at it:
   → [`docs/action.md`](docs/action.md)
 
 Both share one engine: tree-sitter extraction of changed symbols, 1-hop
-dependency expansion, hotspot / contract-change / entry-point
+dependency expansion, fan-in / contract-change / entry-point
 summarizers. Rust, Go, Python, and TypeScript out of the box.
 
 ## Try it in 30 seconds

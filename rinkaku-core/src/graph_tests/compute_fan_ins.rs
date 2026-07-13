@@ -2,15 +2,15 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn should_return_no_hotspots_when_every_node_has_fan_in_below_two() {
+fn should_return_no_fan_ins_when_every_node_has_fan_in_below_two() {
     let files = vec![FileReport {
         path: "src/lib.rs".to_string(),
         symbols: vec![symbol("foo", vec!["bar"]), symbol("bar", vec![])],
     }];
     let graph = build_graph(&files);
 
-    let expected: Vec<Hotspot> = vec![];
-    let actual = compute_hotspots(&graph);
+    let expected: Vec<FanIn> = vec![];
+    let actual = compute_fan_ins(&graph);
 
     assert_eq!(expected, actual);
 }
@@ -18,8 +18,8 @@ fn should_return_no_hotspots_when_every_node_has_fan_in_below_two() {
 #[test]
 fn should_count_fan_in_and_sort_referrer_names_when_two_symbols_reference_one_target() {
     // "zoo" and "alpha" both reference "shared" — fan-in 2 qualifies as
-    // a hotspot, and `used_by` must come back name-sorted ("alpha"
-    // before "zoo") regardless of edge order.
+    // a high-fan-in symbol, and `used_by` must come back name-sorted
+    // ("alpha" before "zoo") regardless of edge order.
     let files = vec![FileReport {
         path: "src/lib.rs".to_string(),
         symbols: vec![
@@ -30,13 +30,13 @@ fn should_count_fan_in_and_sort_referrer_names_when_two_symbols_reference_one_ta
     }];
     let graph = build_graph(&files);
 
-    let expected = vec![Hotspot {
+    let expected = vec![FanIn {
         id: "src/lib.rs::shared".to_string(),
         path: "src/lib.rs".to_string(),
         name: "shared".to_string(),
         used_by: vec!["alpha".to_string(), "zoo".to_string()],
     }];
-    let actual = compute_hotspots(&graph);
+    let actual = compute_fan_ins(&graph);
 
     assert_eq!(expected, actual);
 }
@@ -62,13 +62,13 @@ fn should_count_cycle_edge_toward_fan_in_when_referrer_is_part_of_a_cycle() {
     // depends on that.
     assert!(graph.edges.iter().any(|e| e.is_cycle));
 
-    let expected = vec![Hotspot {
+    let expected = vec![FanIn {
         id: "src/lib.rs::bar".to_string(),
         path: "src/lib.rs".to_string(),
         name: "bar".to_string(),
         used_by: vec!["baz".to_string(), "foo".to_string()],
     }];
-    let actual = compute_hotspots(&graph);
+    let actual = compute_fan_ins(&graph);
 
     assert_eq!(expected, actual);
 }
@@ -77,7 +77,7 @@ fn should_count_cycle_edge_toward_fan_in_when_referrer_is_part_of_a_cycle() {
 fn should_dedup_referrer_when_same_node_references_target_more_than_once() {
     // `collect_edges` cannot currently produce two edges from the same
     // referrer to the same target (referenced_names de-dups upstream),
-    // but `compute_hotspots` must not over-count fan-in if it ever did
+    // but `compute_fan_ins` must not over-count fan-in if it ever did
     // — constructing the graph by hand here rather than through
     // `build_graph` to exercise that defensively.
     let graph = SymbolGraph {
@@ -118,19 +118,19 @@ fn should_dedup_referrer_when_same_node_references_target_more_than_once() {
         roots: vec!["src/lib.rs::foo".to_string(), "src/lib.rs::bar".to_string()],
     };
 
-    let expected = vec![Hotspot {
+    let expected = vec![FanIn {
         id: "src/lib.rs::shared".to_string(),
         path: "src/lib.rs".to_string(),
         name: "shared".to_string(),
         used_by: vec!["bar".to_string(), "foo".to_string()],
     }];
-    let actual = compute_hotspots(&graph);
+    let actual = compute_fan_ins(&graph);
 
     assert_eq!(expected, actual);
 }
 
 #[test]
-fn should_sort_hotspots_by_fan_in_descending_when_multiple_hotspots_exist() {
+fn should_sort_fan_ins_by_fan_in_descending_when_multiple_fan_ins_exist() {
     // "low" has fan-in 2 ("a", "b"); "high" has fan-in 3 ("c", "d",
     // "e") — "high" must sort first despite "low" being discovered
     // first in edge order.
@@ -209,20 +209,20 @@ fn should_sort_hotspots_by_fan_in_descending_when_multiple_hotspots_exist() {
     };
 
     let expected = vec![
-        Hotspot {
+        FanIn {
             id: "src/lib.rs::high".to_string(),
             path: "src/lib.rs".to_string(),
             name: "high".to_string(),
             used_by: vec!["c".to_string(), "d".to_string(), "e".to_string()],
         },
-        Hotspot {
+        FanIn {
             id: "src/lib.rs::low".to_string(),
             path: "src/lib.rs".to_string(),
             name: "low".to_string(),
             used_by: vec!["a".to_string(), "b".to_string()],
         },
     ];
-    let actual = compute_hotspots(&graph);
+    let actual = compute_fan_ins(&graph);
 
     assert_eq!(expected, actual);
 }
@@ -233,7 +233,7 @@ fn should_break_fan_in_tie_by_id_when_path_and_name_are_also_equal() {
     // overloaded `helper` functions in the same file, disambiguated only
     // by `@line` in `id` (see `collect_nodes`'s doc comment) — and both
     // reach fan-in 2. Without an id-based tie-break, `HashMap` iteration
-    // order in `compute_hotspots` decides the order non-deterministically
+    // order in `compute_fan_ins` decides the order non-deterministically
     // across runs; the id ("a.rs::helper@1" before "a.rs::helper@9")
     // must fix it instead.
     let graph = SymbolGraph {
@@ -300,20 +300,20 @@ fn should_break_fan_in_tie_by_id_when_path_and_name_are_also_equal() {
     };
 
     let expected = vec![
-        Hotspot {
+        FanIn {
             id: "a.rs::helper@1".to_string(),
             path: "a.rs".to_string(),
             name: "helper".to_string(),
             used_by: vec!["m".to_string(), "n".to_string()],
         },
-        Hotspot {
+        FanIn {
             id: "a.rs::helper@9".to_string(),
             path: "a.rs".to_string(),
             name: "helper".to_string(),
             used_by: vec!["x".to_string(), "y".to_string()],
         },
     ];
-    let actual = compute_hotspots(&graph);
+    let actual = compute_fan_ins(&graph);
 
     assert_eq!(expected, actual);
 }
@@ -387,20 +387,20 @@ fn should_break_fan_in_tie_by_path_then_name_when_counts_are_equal() {
     };
 
     let expected = vec![
-        Hotspot {
+        FanIn {
             id: "a.rs::a_target".to_string(),
             path: "a.rs".to_string(),
             name: "a_target".to_string(),
             used_by: vec!["m".to_string(), "n".to_string()],
         },
-        Hotspot {
+        FanIn {
             id: "b.rs::b_target".to_string(),
             path: "b.rs".to_string(),
             name: "b_target".to_string(),
             used_by: vec!["x".to_string(), "y".to_string()],
         },
     ];
-    let actual = compute_hotspots(&graph);
+    let actual = compute_fan_ins(&graph);
 
     assert_eq!(expected, actual);
 }

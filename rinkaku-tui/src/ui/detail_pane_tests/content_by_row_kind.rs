@@ -12,7 +12,7 @@ fn should_draw_placeholder_message_when_there_are_no_rows_at_all() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -55,7 +55,7 @@ fn should_draw_dir_detail_content_when_cursor_is_on_a_directory_row() {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -108,7 +108,7 @@ fn should_draw_symbols_label_without_changed_wording_when_origin_is_repo_outline
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -231,7 +231,7 @@ fn should_draw_both_test_note_and_real_symbols_in_detail_pane_when_file_is_mixed
             path: "app.rs".to_string(),
             symbol_count: 5,
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };

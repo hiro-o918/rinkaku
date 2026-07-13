@@ -2,7 +2,7 @@
 //! extracting every symbol, the `classification: None` invariant,
 //! per-path skip cases (unsupported language / read failure /
 //! `generated_paths` / generated-content marker / test path), test
-//! symbol filtering by `include_tests`, and hotspot aggregation.
+//! symbol filtering by `include_tests`, and fan-in aggregation.
 
 use super::{empty_graph, fake_reader};
 use crate::diff::LineRange;
@@ -22,7 +22,7 @@ fn should_return_empty_report_when_paths_is_empty() {
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -105,7 +105,7 @@ struct Point {
             ],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -146,7 +146,7 @@ fn should_skip_path_without_registered_language_support() {
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -169,7 +169,7 @@ fn should_skip_path_when_read_file_fails() {
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -196,7 +196,7 @@ fn should_skip_path_in_generated_paths_set_without_reading_it() {
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -217,7 +217,7 @@ fn should_skip_file_with_generated_content_marker_when_include_generated_is_fals
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -255,7 +255,7 @@ func TestFoo(t *testing.T) {
         skipped: vec![],
         graph: empty_graph(),
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -316,9 +316,9 @@ mod tests {
 }
 
 #[test]
-fn should_populate_hotspots_when_repo_has_a_symbol_with_fan_in_of_two() {
-    // ADR 0017's Consequences: fan-in hotspots are computed over the
-    // whole repository in this mode, same aggregation as diff mode.
+fn should_populate_fan_ins_when_repo_has_a_symbol_with_fan_in_of_two() {
+    // ADR 0017's Consequences: fan-in is computed over the whole
+    // repository in this mode, same aggregation as diff mode.
     let source = "\
 fn shared_helper() -> i32 {
     1
@@ -337,11 +337,11 @@ fn caller_two() -> i32 {
 
     let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
 
-    let expected = vec![crate::graph::Hotspot {
+    let expected = vec![crate::graph::FanIn {
         id: "src/lib.rs::shared_helper".to_string(),
         path: "src/lib.rs".to_string(),
         name: "shared_helper".to_string(),
         used_by: vec!["caller_one".to_string(), "caller_two".to_string()],
     }];
-    assert_eq!(expected, report.hotspots);
+    assert_eq!(expected, report.fan_ins);
 }

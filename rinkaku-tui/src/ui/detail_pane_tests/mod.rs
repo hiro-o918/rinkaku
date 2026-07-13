@@ -61,7 +61,7 @@ pub(super) fn report_with_one_symbol() -> Report {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     }
@@ -97,7 +97,7 @@ pub(super) fn report_with_one_skipped_file() -> Report {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     }
@@ -119,7 +119,7 @@ pub(super) fn report_with_one_test_file() -> Report {
             path: "src/lib_test.go".to_string(),
             symbol_count: 3,
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     }
@@ -148,7 +148,7 @@ pub(super) fn report_with_many_symbols(count: usize) -> Report {
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     }

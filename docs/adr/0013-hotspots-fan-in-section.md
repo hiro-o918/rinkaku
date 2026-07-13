@@ -178,3 +178,16 @@ Unlike `chg:N`/`ref:N` (cyan, informational counts), `api:N`'s number is
 rendered in yellow — the same warning color the file-size `warn:` badge
 uses — so the color, not just the label, restores the "pay attention"
 signal the original `!` glyph carried on its own.
+
+## Amendment (2026-07-13, feat/rename-hotspots-to-fan-in)
+
+Superseded by [ADR 0033](0033-rename-hotspots-vocabulary-to-fan-in.md):
+user testing found "hotspot" collides with an unrelated, well-known
+term (CodeScene's change-frequency × complexity metric) and the `ref:`
+badge label collides visually with the `gr` keybinding despite naming
+unrelated concepts. Every "hotspot" identifier and string named in this
+ADR (`Hotspot`, `compute_hotspots`, `Report.hotspots`, the Markdown
+`## Hotspots` heading, the Mermaid `hotspot` class, and the `ref:N`
+badge label) is renamed to "fan-in" by ADR 0033. This ADR's Decision
+and both prior amendments remain the historical record of what shipped
+and why; see ADR 0033 for the current naming.

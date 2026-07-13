@@ -33,7 +33,7 @@ fn should_build_file_detail_with_symbol_summaries_and_fan_in() {
             edges: vec![],
             roots: vec![],
         },
-        hotspots: vec![Hotspot {
+        fan_ins: vec![FanIn {
             id: "lib.rs::bar".to_string(),
             path: "lib.rs".to_string(),
             name: "bar".to_string(),

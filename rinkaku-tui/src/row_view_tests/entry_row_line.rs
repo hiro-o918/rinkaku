@@ -17,8 +17,9 @@ fn should_render_plain_text_for_zero_badges_and_no_classification() {
 #[test]
 fn should_include_badge_labels_for_nonzero_badges_on_a_dir_row() {
     // ADR 0013 amendments (2026-07-13): all three badges use text labels
-    // (`chg:` / `api:` / `ref:`) instead of glyphs — the first amendment
-    // relabeled changed-symbol/fan-in, the second (feat/label-contract-
+    // (`chg:` / `api:` / `fan-in:`) instead of glyphs — the first
+    // amendment relabeled changed-symbol/fan-in (as `ref:`, later
+    // relabeled `fan-in:` per ADR 0033), the second (feat/label-contract-
     // changes-badge) relabeled contract-change from a bare `!` after
     // user testing showed it read as generic "warning" with no hint of
     // what changed.
@@ -40,7 +41,7 @@ fn should_include_badge_labels_for_nonzero_badges_on_a_dir_row() {
 
     let line = entry_row_line(&row, "src", &HashMap::new(), false);
 
-    assert_eq!("v src chg:2 api:1 ref:3", line_text(&line));
+    assert_eq!("v src chg:2 api:1 fan-in:3", line_text(&line));
 }
 
 #[test]

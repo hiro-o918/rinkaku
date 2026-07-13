@@ -73,14 +73,14 @@ fn should_list_top_fan_in_symbols_sorted_by_fan_in_descending() {
             edges: vec![],
             roots: vec![],
         },
-        hotspots: vec![
-            Hotspot {
+        fan_ins: vec![
+            FanIn {
                 id: "src/lib.rs::shared_low".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "shared_low".to_string(),
                 used_by: vec!["a".to_string(), "b".to_string()],
             },
-            Hotspot {
+            FanIn {
                 id: "src/lib.rs::shared_high".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "shared_high".to_string(),
@@ -116,8 +116,8 @@ fn should_truncate_top_fan_in_to_five_entries() {
     let nodes: Vec<Node> = (0..7)
         .map(|i| node(&format!("src/lib.rs::s{i}"), "src/lib.rs", &format!("s{i}")))
         .collect();
-    let hotspots: Vec<Hotspot> = (0..7)
-        .map(|i| Hotspot {
+    let fan_ins: Vec<FanIn> = (0..7)
+        .map(|i| FanIn {
             id: format!("src/lib.rs::s{i}"),
             path: "src/lib.rs".to_string(),
             name: format!("s{i}"),
@@ -135,7 +135,7 @@ fn should_truncate_top_fan_in_to_five_entries() {
             edges: vec![],
             roots: vec![],
         },
-        hotspots,
+        fan_ins,
         ..empty_report()
     };
     let tree = crate::tree::build_tree(&report);

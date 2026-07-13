@@ -7,7 +7,7 @@
 //! directly — no hand-written JSON codegen lives here.
 
 use crate::extract::{ExtractedSymbol, RemovedSymbol};
-use crate::graph::{Hotspot, SymbolGraph};
+use crate::graph::{FanIn, SymbolGraph};
 use serde::Serialize;
 
 /// The result of running the extraction pipeline over a whole diff.
@@ -42,13 +42,14 @@ pub struct Report {
     /// populated when the CLI passes `--exclude-tests`. Source order (the
     /// order files were first encountered in the diff), same as `files`.
     pub tests: Vec<TestFileSummary>,
-    /// Fan-in hotspots (ADR 0013): changed symbols referenced by two or more
-    /// other changed symbols, sorted by fan-in descending. Derived from
-    /// `graph` via [`crate::graph::compute_hotspots`] and kept as its own
-    /// `Report` field (rather than recomputed at render time) so JSON
-    /// consumers get it without recomputing the aggregation themselves,
-    /// matching how `graph` itself is already exposed alongside `files`.
-    pub hotspots: Vec<Hotspot>,
+    /// Fan-in symbols (ADR 0013, named "fan-in" per ADR 0033): changed
+    /// symbols referenced by two or more other changed symbols, sorted by
+    /// fan-in descending. Derived from `graph` via
+    /// [`crate::graph::compute_fan_ins`] and kept as its own `Report` field
+    /// (rather than recomputed at render time) so JSON consumers get it
+    /// without recomputing the aggregation themselves, matching how `graph`
+    /// itself is already exposed alongside `files`.
+    pub fan_ins: Vec<FanIn>,
     /// File-size warnings (ADR 0028): source files whose line count crosses
     /// the [`crate::file_size::WARN_LINE_THRESHOLD`] / [`crate::file_size::SPLIT_LINE_THRESHOLD`]
     /// watch/split thresholds. Derived from the same per-file content
@@ -56,7 +57,7 @@ pub struct Report {
     /// already read for parsing, via [`crate::file_size::compute_file_size_warnings`],
     /// and stored on `Report` (rather than recomputed at render time) so JSON
     /// consumers get it as an always-present top-level field, matching how
-    /// `hotspots` above is already exposed.
+    /// `fan_ins` above is already exposed.
     pub file_size_warnings: Vec<crate::file_size::FileSizeWarning>,
     /// Symbols present on the base side of a diff but absent from the head
     /// side entirely (ADR 0014's `removed` classification) — reported
@@ -205,7 +206,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };
@@ -225,7 +226,7 @@ mod tests {
     \"roots\": []
   },
   \"tests\": [],
-  \"hotspots\": [],
+  \"fan_ins\": [],
   \"file_size_warnings\": [],
   \"removed\": []
 }"
@@ -254,7 +255,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };
@@ -270,7 +271,7 @@ mod tests {
     \"roots\": []
   },
   \"tests\": [],
-  \"hotspots\": [],
+  \"fan_ins\": [],
   \"file_size_warnings\": [],
   \"removed\": []
 }"
@@ -303,7 +304,7 @@ mod tests {
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };
@@ -350,7 +351,7 @@ mod tests {
     ]
   },
   \"tests\": [],
-  \"hotspots\": [],
+  \"fan_ins\": [],
   \"file_size_warnings\": [],
   \"removed\": []
 }"
@@ -383,7 +384,7 @@ mod tests {
                 roots: vec!["src/lib.rs::foo".to_string()],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![RemovedSymbol {
                 name: "old_helper".to_string(),
@@ -432,7 +433,7 @@ mod tests {
     ]
   },
   \"tests\": [],
-  \"hotspots\": [],
+  \"fan_ins\": [],
   \"file_size_warnings\": [],
   \"removed\": [
     {

@@ -31,7 +31,7 @@ fn should_skip_definitions_entry_when_visit_order_id_has_no_matching_symbol() {
             roots: vec!["src/lib.rs::ghost".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -67,7 +67,7 @@ fn should_render_nothing_for_root_when_root_id_has_no_matching_symbol() {
             roots: vec!["src/lib.rs::ghost".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -121,7 +121,7 @@ fn should_omit_cycle_warning_line_when_cycle_target_id_has_no_matching_symbol() 
             roots: vec!["src/lib.rs::foo".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };

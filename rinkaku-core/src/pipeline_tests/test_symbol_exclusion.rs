@@ -97,7 +97,7 @@ fn should_add_two_numbers() {
             roots: vec!["src/lib.rs::should_add_two_numbers".to_string()],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -247,7 +247,7 @@ mod tests {
             path: "src/lib.rs".to_string(),
             symbol_count: 1,
         }],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };

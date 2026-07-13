@@ -57,8 +57,8 @@ pub struct DetailView {
     pub classification: Option<Classification>,
     /// Every changed symbol that references this one, i.e. this symbol's
     /// fan-in (ADR 0013). Computed directly from `report.graph.edges`
-    /// (every incoming edge), not from `report.hotspots` — `Hotspot` only
-    /// aggregates fan-in >= 2 (see `compute_hotspots`'s doc comment in
+    /// (every incoming edge), not from `report.fan_ins` — `FanIn` only
+    /// aggregates fan-in >= 2 (see `compute_fan_ins`'s doc comment in
     /// `rinkaku-core::graph`) and would under-report a fan-in of 0 or 1,
     /// so a symbol with exactly one referrer still shows it here instead
     /// of reading as "nobody depends on this".
@@ -113,13 +113,13 @@ pub fn build_detail(report: &Report, id: &str) -> Option<DetailView> {
     let callers = symbol_mentions(report, id, MentionDirection::Callers);
 
     // `used_by` is every incoming edge, same set `callers` already
-    // computed above — `report.hotspots` is not consulted here because it
-    // only aggregates fan-in >= 2 (see `compute_hotspots`'s doc comment in
+    // computed above — `report.fan_ins` is not consulted here because it
+    // only aggregates fan-in >= 2 (see `compute_fan_ins`'s doc comment in
     // `rinkaku-core::graph`) and would under-report a fan-in of 0 or 1;
     // reading `graph.edges` directly covers every fan-in count uniformly,
-    // `Hotspot` included (a hotspot's referrers are exactly its incoming
-    // edges). `used_by` is kept as its own field distinct from `callers`
-    // for the same forward-compatibility reason documented on
+    // `FanIn` included (a fan-in entry's referrers are exactly its
+    // incoming edges). `used_by` is kept as its own field distinct from
+    // `callers` for the same forward-compatibility reason documented on
     // `DetailView::callers`.
     let used_by = callers.clone();
 
@@ -154,13 +154,13 @@ pub enum MentionDirection {
 /// maintained copies of it.
 ///
 /// Edge uniqueness within `graph.edges` is not a contractual guarantee —
-/// `compute_hotspots`'s own doc comment in `rinkaku-core::graph` notes that
+/// `compute_fan_ins`'s own doc comment in `rinkaku-core::graph` notes that
 /// a repeated edge between the same pair of nodes is not something
 /// `build_graph` can currently produce, but nothing in this function's
 /// contract depends on that staying true either. Deduping by the other
 /// endpoint's id before collecting mentions keeps a duplicate edge from
 /// making the same caller/callee show up twice, mirroring
-/// `compute_hotspots`'s own dedup-by-referrer-id.
+/// `compute_fan_ins`'s own dedup-by-referrer-id.
 ///
 /// Self-edges (`from == to == id`) are filtered the same defensive way:
 /// `collect_edges` in `rinkaku-core::graph` explicitly excludes them (`if
@@ -238,9 +238,9 @@ impl From<&CycleEdge> for CycleEdgeView {
 pub struct DirDetail {
     pub path: String,
     pub badges: Badges,
-    /// This directory's own hotspot symbols (fan-in >= 2), sorted by
+    /// This directory's own high-fan-in symbols (fan-in >= 2), sorted by
     /// fan-in descending then `(path, name)` ascending for determinism —
-    /// mirrors `compute_hotspots`'s own tie-break in `rinkaku-core::graph`.
+    /// mirrors `compute_fan_ins`'s own tie-break in `rinkaku-core::graph`.
     /// Capped at 5: this is a "what stands out" summary, not an exhaustive
     /// listing (the badge's `fan_in` count already carries the full
     /// aggregate).
@@ -300,16 +300,16 @@ pub struct FileDetail {
 /// when no such directory node exists. `report` supplies the cycle
 /// explanation (`crate::order::cycle_explanation`, which builds the
 /// directory-level SCC condensation exactly once rather than once per
-/// piece of information) and the hotspot lookup for `top_fan_in` — both
+/// piece of information) and the fan-in lookup for `top_fan_in` — both
 /// computed fresh per call, same "recompute rather than cache" philosophy
 /// the rest of this view-model layer already follows (ADR 0016 decision 1).
 pub fn build_dir_detail(tree: &Tree, report: &Report, path: &str) -> Option<DirDetail> {
     let node = find_dir_node(tree, path)?;
 
-    let hotspot_by_id: std::collections::HashMap<&str, &rinkaku_core::graph::Hotspot> = report
-        .hotspots
+    let fan_in_by_id: std::collections::HashMap<&str, &rinkaku_core::graph::FanIn> = report
+        .fan_ins
         .iter()
-        .map(|hotspot| (hotspot.id.as_str(), hotspot))
+        .map(|fan_in| (fan_in.id.as_str(), fan_in))
         .collect();
 
     let mut symbol_ids = Vec::new();
@@ -317,23 +317,23 @@ pub fn build_dir_detail(tree: &Tree, report: &Report, path: &str) -> Option<DirD
 
     let mut top_fan_in: Vec<SymbolMention> = symbol_ids
         .iter()
-        .filter_map(|id| hotspot_by_id.get(id.as_str()).map(|h| (*h, id)))
-        .map(|(hotspot, id)| SymbolMention {
+        .filter_map(|id| fan_in_by_id.get(id.as_str()).map(|f| (*f, id)))
+        .map(|(fan_in, id)| SymbolMention {
             id: id.clone(),
-            name: hotspot.name.clone(),
-            path: hotspot.path.clone(),
+            name: fan_in.name.clone(),
+            path: fan_in.path.clone(),
         })
         .collect();
     // Sort by fan-in descending (looked up again per entry rather than
     // carried alongside — the list is small, capped at 5 below, so a
     // second map lookup per comparison is not worth avoiding via a tuple),
     // ties broken by (path, name) ascending, mirroring
-    // `compute_hotspots`'s own tie-break in `rinkaku-core::graph`.
+    // `compute_fan_ins`'s own tie-break in `rinkaku-core::graph`.
     top_fan_in.sort_by(|a, b| {
         let fan_in_of = |mention: &SymbolMention| {
-            hotspot_by_id
+            fan_in_by_id
                 .get(mention.id.as_str())
-                .map(|h| h.used_by.len())
+                .map(|f| f.used_by.len())
                 .unwrap_or(0)
         };
         fan_in_of(b)
@@ -361,9 +361,9 @@ pub fn build_file_detail(tree: &Tree, report: &Report, path: &str) -> Option<Fil
     let node = find_file_node(tree, path)?;
 
     let fan_in_by_id: std::collections::HashMap<&str, usize> = report
-        .hotspots
+        .fan_ins
         .iter()
-        .map(|hotspot| (hotspot.id.as_str(), hotspot.used_by.len()))
+        .map(|fan_in| (fan_in.id.as_str(), fan_in.used_by.len()))
         .collect();
 
     let symbols: Vec<FileSymbolSummary> = node

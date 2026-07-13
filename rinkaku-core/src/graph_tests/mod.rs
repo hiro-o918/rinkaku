@@ -9,7 +9,7 @@
 //!   non-cycle cases
 //! - `stamp_ids` — `stamp_ids`'s pairing of `ExtractedSymbol.id` back
 //!   onto the source `FileReport`s, including the disambiguated case
-//! - `compute_hotspots` — fan-in threshold, referrer dedup, cycle-edge
+//! - `compute_fan_ins` — fan-in threshold, referrer dedup, cycle-edge
 //!   contribution, and the descending / tie-break ordering
 //! - `pivot` — `pivot_graph` / `pivot_roots` / `path_under_prefix`:
 //!   subset root election, cycle across pivot, and empty-prefix identity
@@ -19,7 +19,7 @@ use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
 
 mod build_graph;
-mod compute_hotspots;
+mod compute_fan_ins;
 mod pivot;
 mod roots_and_cycles;
 mod stamp_ids;

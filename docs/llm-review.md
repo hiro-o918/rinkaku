@@ -35,8 +35,8 @@ aid.
    by the actual diff, with instructions along these lines:
 
    ```
-   Here is a structural map of this change (hotspots, contract markers,
-   entry-point trees). Use it to decide where to read deeply first, but
+   Here is a structural map of this change (high fan-in symbols, contract
+   markers, entry-point trees). Use it to decide where to read deeply first, but
    it is an attention-allocation aid, not a verifier: read the full
    implementation of anything it flags, and don't assume unflagged code
    is safe to skip. Then review the diff below.

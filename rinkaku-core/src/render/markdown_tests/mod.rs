@@ -10,9 +10,9 @@
 //!   `(see above)`, cycle warnings, and `— uses:` folding.
 //! - [`definition_body`] — one symbol's "### ..." entry: container
 //!   comment, `Depends on:` list, and the fence-widening rules.
-//! - [`sections_skipped_hotspots_filesize`] — the "Skipped files",
-//!   "Hotspots", and "File size warnings" sections plus the ADR 0028
-//!   JSON shape.
+//! - [`sections_skipped_fan_in_filesize`] — the "Skipped files",
+//!   "High fan-in symbols", and "File size warnings" sections plus the
+//!   ADR 0028 JSON shape.
 //! - [`lookup_miss_defenses`] — defensive branches for a `graph` node
 //!   with no matching `ExtractedSymbol` in `files`.
 //! - [`classification_and_removed`] — ADR 0014 classification markers,
@@ -29,7 +29,7 @@ mod classification_and_removed;
 mod definition_body;
 mod empty_and_ordering;
 mod lookup_miss_defenses;
-mod sections_skipped_hotspots_filesize;
+mod sections_skipped_fan_in_filesize;
 
 /// Builds an `ExtractedSymbol` for rendering tests, with `id` set (the
 /// graph-building pipeline stage this module assumes already ran) and

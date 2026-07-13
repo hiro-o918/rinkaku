@@ -279,7 +279,7 @@ mod tests {
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         }
@@ -393,7 +393,7 @@ index e69de29..4b825dc 100644
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
             files: vec![],
@@ -457,7 +457,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
             files: vec![],
@@ -524,7 +524,7 @@ index e69de29..4b825dc 100644
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };
@@ -587,7 +587,7 @@ index e69de29..4b825dc 100644
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };
@@ -820,7 +820,7 @@ index e69de29..4b825dc 100644
                 roots: vec![],
             },
             tests: vec![],
-            hotspots: vec![],
+            fan_ins: vec![],
             file_size_warnings: vec![],
             removed: vec![],
         };

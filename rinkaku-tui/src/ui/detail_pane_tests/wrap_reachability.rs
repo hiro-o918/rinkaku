@@ -26,7 +26,7 @@ fn should_reach_the_last_wrapped_line_of_content_via_scrolling_when_a_logical_li
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
@@ -86,7 +86,7 @@ fn should_report_indicator_total_as_wrapped_row_count_not_logical_line_count_whe
             roots: vec![],
         },
         tests: vec![],
-        hotspots: vec![],
+        fan_ins: vec![],
         file_size_warnings: vec![],
         removed: vec![],
     };
