@@ -135,9 +135,9 @@ struct Cli {
     /// themselves. Compatible with every input mode (stdin/`--base`/`--pr`/
     /// whole-repo) and with `--tui`: combined, the TUI opens with the
     /// cursor already on the tree row matching `path` and the right pane
-    /// already in Pivot mode (`rinkaku_tui::run`'s `entry_path` parameter),
-    /// rather than requiring the reviewer to find the row and press `p`
-    /// themselves.
+    /// already showing its Blast radius (`rinkaku_tui::run`'s `entry_path`
+    /// parameter; ADR 0023), rather than requiring the reviewer to find the
+    /// row and press `R` themselves.
     #[arg(long)]
     entry: Option<String>,
 }
