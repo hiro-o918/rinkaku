@@ -9,6 +9,7 @@
 use super::style::pane_border_style;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthChar;
@@ -222,6 +223,85 @@ pub(crate) fn truncate_to_width(text: &str, width: usize) -> String {
     result
 }
 
+/// Truncates a styled, possibly multi-[`Span`] [`Line`] to `width` display
+/// columns, the [`Line`]/[`Span`] counterpart of [`truncate_to_width`] —
+/// needed because a tree-pane row (`crate::row_view::entry_row_line`) is
+/// built from several differently-styled spans (indent, marker, label,
+/// badges), so truncating its flattened text would lose which style
+/// belonged to which surviving character. Per-span width accounting
+/// mirrors [`wrap_one_line`] (never splits a wide/CJK character), but
+/// stops at the first overflow and appends one `…` span instead of
+/// starting a new output line, preserving the "one logical row stays one
+/// rendered row" invariant [`windowed_rows_with_indicators`] depends on.
+///
+/// The `…` marker takes the style of the span it cuts into, and the
+/// line's own `style` (e.g. `entry_row_line`'s `Modifier::REVERSED` on the
+/// selected row) is preserved unchanged, since it lives outside `spans`.
+///
+/// `line` already fitting within `width` is returned unchanged. `width ==
+/// 0` returns an empty line (`style` preserved), mirroring
+/// `truncate_to_width`'s own `width == 0` case.
+pub(crate) fn truncate_line_to_width(line: &Line<'static>, width: usize) -> Line<'static> {
+    if width == 0 {
+        return Line::default().style(line.style);
+    }
+    let line_width: usize = line
+        .spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .map(|ch| ch.width().unwrap_or(1))
+        .sum();
+    if line_width <= width {
+        return line.clone();
+    }
+
+    let mut result_spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let mut last_style = Style::default();
+    // Reserve 1 column for the trailing `…` marker, mirroring
+    // `truncate_to_width`'s own budget reservation.
+    let budget = width.saturating_sub(1);
+
+    'spans: for span in &line.spans {
+        let style = span.style;
+        let mut fragment = String::new();
+        let mut fragment_width = 0usize;
+
+        for ch in span.content.chars() {
+            let char_width = ch.width().unwrap_or(1);
+            if used + fragment_width + char_width > budget {
+                if !fragment.is_empty() {
+                    result_spans.push(Span::styled(fragment, style));
+                }
+                last_style = style;
+                break 'spans;
+            }
+            fragment.push(ch);
+            fragment_width += char_width;
+        }
+
+        if !fragment.is_empty() {
+            result_spans.push(Span::styled(fragment, style));
+            used += fragment_width;
+        }
+        last_style = style;
+    }
+
+    // Merged into the last span when its style matches, rather than
+    // always pushed separately — otherwise a single-style line would
+    // truncate into a spuriously multi-span `Line`, failing whole-`Line`
+    // `PartialEq` comparisons against an equivalent single-span value.
+    match result_spans.last_mut() {
+        Some(last) if last.style == last_style => {
+            let mut content = last.content.to_string();
+            content.push('…');
+            last.content = content.into();
+        }
+        _ => result_spans.push(Span::styled("…", last_style)),
+    }
+    Line::from(result_spans).style(line.style)
+}
+
 /// Clamps a requested scroll offset (lines) to `[0, content_len -
 /// viewport_height]` — the largest offset that still leaves the viewport
 /// full of content rather than trailing off into blank space below the
@@ -372,7 +452,7 @@ pub(crate) fn scroll_indicator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::{Color, Modifier, Style};
 
     // --- clamp_scroll / scroll_indicator (pure helpers) ---
 
@@ -778,5 +858,104 @@ mod tests {
         let actual = truncate_to_width("あいう", 1);
 
         assert_eq!("…".to_string(), actual);
+    }
+
+    // --- truncate_line_to_width (styled, multi-span counterpart, tree-pane row truncation) ---
+
+    #[test]
+    fn should_return_line_unchanged_when_it_fits_within_width() {
+        let line = Line::from(vec![Span::raw("ab"), Span::styled("cde", Style::default())]);
+
+        let actual = truncate_line_to_width(&line, 5);
+
+        assert_eq!(line, actual);
+    }
+
+    #[test]
+    fn should_truncate_single_span_line_with_trailing_marker_when_it_overflows_width() {
+        let line = Line::raw("abcdefgh");
+
+        let actual = truncate_line_to_width(&line, 5);
+
+        assert_eq!(Line::raw("abcd…"), actual);
+    }
+
+    #[test]
+    fn should_preserve_each_surviving_spans_own_style_when_truncating_a_multi_span_line() {
+        let red = Style::default().fg(Color::Red);
+        let line = Line::from(vec![Span::raw("ab"), Span::styled("cdef", red)]);
+
+        // Budget after reserving 1 column for "…" is 3: "ab" (2, unstyled)
+        // + "c" (1, red) fits, "d" would overflow.
+        let actual = truncate_line_to_width(&line, 4);
+
+        assert_eq!(
+            Line::from(vec![Span::raw("ab"), Span::styled("c…", red)]),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_preserve_line_level_selected_style_when_truncating_an_overflowing_line() {
+        // `entry_row_line` applies the cursor row's reverse-video highlight
+        // as the `Line`'s own `style`, separate from any span's style —
+        // truncation must not drop it while trimming `spans`.
+        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+        let line = Line::from(vec![Span::raw("abcdefgh")]).style(selected_style);
+
+        let actual = truncate_line_to_width(&line, 5);
+
+        assert_eq!(
+            Line::from(vec![Span::raw("abcd…")]).style(selected_style),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_not_split_a_double_width_character_when_truncating_a_line() {
+        let line = Line::raw("aああb");
+
+        let actual = truncate_line_to_width(&line, 4);
+
+        assert_eq!(Line::raw("aあ…"), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_line_when_width_is_one() {
+        // Mirrors `truncate_to_width`'s own width=1 case: a budget of 0
+        // after reserving 1 column for "…" drops every character of the
+        // input, leaving only the marker — the narrowest width at which
+        // truncation still produces non-empty output (width=0 is the
+        // separate empty-line case covered below).
+        let line = Line::raw("abcdef");
+
+        let actual = truncate_line_to_width(&line, 1);
+
+        assert_eq!(Line::raw("…"), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_line_when_width_is_one_and_first_char_is_double_width() {
+        // Same width=1 boundary as above, but the first character is a
+        // 2-column CJK character that would not fit in the 0-column
+        // budget either — pins that the double-width guard and the
+        // width=1 budget-exhaustion guard compose correctly instead of
+        // one masking a bug in the other, same as `truncate_to_width`'s
+        // own symmetric case.
+        let line = Line::raw("あいう");
+
+        let actual = truncate_line_to_width(&line, 1);
+
+        assert_eq!(Line::raw("…"), actual);
+    }
+
+    #[test]
+    fn should_return_empty_line_when_width_is_zero() {
+        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+        let line = Line::from(vec![Span::raw("abcdef")]).style(selected_style);
+
+        let actual = truncate_line_to_width(&line, 0);
+
+        assert_eq!(Line::default().style(selected_style), actual);
     }
 }

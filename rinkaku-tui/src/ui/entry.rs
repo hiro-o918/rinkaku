@@ -5,7 +5,7 @@
 use super::blast_radius::draw_blast_radius_pane;
 use super::detail_pane::draw_detail_pane;
 use super::diff_pane::draw_diff_pane;
-use super::scroll::{scroll_indicator, windowed_rows_with_indicators};
+use super::scroll::{scroll_indicator, truncate_line_to_width, windowed_rows_with_indicators};
 use super::style::pane_border_style;
 use super::{ENTRY_RIGHT_WIDTH_PERCENT, ENTRY_TREE_WIDTH_PERCENT};
 use crate::app::{App, BlastRadiusSelection, Focus, RightPane};
@@ -80,9 +80,11 @@ pub(crate) fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
     let cursor = app.nav().cursor();
     let ranks = app.ranks();
 
-    // 2 rows for the top/bottom border, matching `render_scrollable_pane`'s
-    // own `saturating_sub(2)` convention for a bordered pane's inner height.
+    // 2 rows/columns for the top/bottom and left/right border, matching
+    // `render_scrollable_pane`'s own `saturating_sub(2)` convention for a
+    // bordered pane's inner height/width.
     let viewport_height = area.height.saturating_sub(2) as usize;
+    let viewport_width = area.width.saturating_sub(2) as usize;
     let (start, end, above, below) =
         windowed_rows_with_indicators(rows.len(), cursor, viewport_height);
 
@@ -108,6 +110,15 @@ pub(crate) fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().add_modifier(Modifier::DIM),
         ));
     }
+
+    // No `.wrap(...)`: `windowed_rows_with_indicators`' one-row-per-item
+    // window math requires each row to stay exactly one rendered row
+    // (`draw_jump_popup`'s doc comment on the same constraint), so an
+    // overflowing row is truncated with `…` rather than wrapped.
+    let lines: Vec<Line<'static>> = lines
+        .iter()
+        .map(|line| truncate_line_to_width(line, viewport_width))
+        .collect();
 
     // `end - start`, not the raw `viewport_height`, is the title
     // indicator's own "how many rows are actually visible" — the two can
@@ -410,5 +421,123 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(text.contains("sym55"), "jump target row not visible");
+    }
+
+    /// A single-file report whose path overflows an 80-column terminal's
+    /// tree pane (60% width, `ENTRY_TREE_WIDTH_PERCENT`, minus 2 columns
+    /// of border).
+    fn report_with_long_path_symbol() -> Report {
+        Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/very/deeply/nested/directory/tree/that/does/not/fit.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/very/deeply/nested/directory/tree/that/does/not/fit.rs::foo",
+                    "foo",
+                )],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![],
+                edges: vec![],
+                roots: vec![],
+            },
+            tests: vec![],
+            fan_ins: vec![],
+            file_size_warnings: vec![],
+            removed: vec![],
+        }
+    }
+
+    #[test]
+    fn should_truncate_tree_row_with_trailing_ellipsis_when_it_overflows_the_pane_width() {
+        let report = report_with_long_path_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains('…'),
+            "expected an ellipsis-truncated row in:\n{text}"
+        );
+        assert!(
+            !text.contains("src/very/deeply/nested/directory/tree/that/does/not/fit.rs"),
+            "the full overflowing path should not fit on screen:\n{text}"
+        );
+    }
+
+    #[test]
+    fn should_not_truncate_tree_row_when_it_fits_within_the_pane_width() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("lib.rs"),
+            "short file row should render in full"
+        );
+        assert!(
+            !text.contains('…'),
+            "no row should need truncation in:\n{text}"
+        );
+    }
+
+    #[test]
+    fn should_preserve_selection_highlight_style_on_a_truncated_cursor_row() {
+        let report = report_with_long_path_symbol();
+        let app = App::new(&report);
+        assert_eq!(0, app.nav().cursor());
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                );
+            })
+            .expect("draw");
+
+        // (1, 1): one column/row past the pane's own left/top border.
+        let buffer = terminal.backend().buffer();
+        let cell_style = buffer[(1, 1)].style();
+        assert!(
+            cell_style.add_modifier.contains(Modifier::REVERSED),
+            "cursor row cell should stay reversed after truncation, got {cell_style:?}"
+        );
     }
 }
