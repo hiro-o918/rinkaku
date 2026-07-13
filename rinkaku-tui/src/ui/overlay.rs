@@ -232,6 +232,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }

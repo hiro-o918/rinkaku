@@ -172,6 +172,22 @@ pub(crate) fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
         }
     }
 
+    // ADR 0028: an oversized-file warning renders above the "Symbols"
+    // listing, matching how `top_fan_in` sits above the equivalent
+    // rows on `DirDetail`. Skipped/deleted files never reach this point
+    // (the skip-reason arm returns early above), so the warning only
+    // shows for files rinkaku actually measured.
+    if let Some(warning) = &detail.size_warning {
+        lines.push(Line::styled(
+            file_size_warning_line(warning),
+            Style::default().fg(match warning.severity {
+                rinkaku_core::file_size::FileSizeSeverity::Warn => Color::Yellow,
+                rinkaku_core::file_size::FileSizeSeverity::Split => Color::Red,
+            }),
+        ));
+        lines.push(Line::raw(""));
+    }
+
     if !detail.symbols.is_empty() || detail.test_symbol_count.is_none() {
         lines.push(Line::styled(
             format!("Symbols ({})", detail.symbols.len()),
@@ -201,6 +217,24 @@ pub(crate) fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+/// Formats one file-size warning (ADR 0028) as the single line the Detail
+/// pane shows above the "Symbols" listing. The glyph tracks severity
+/// (`⚠` for `Warn`, `🚨` for `Split`) and the trailing hint names the
+/// threshold that was crossed, mirroring the Markdown surface's wording.
+fn file_size_warning_line(warning: &rinkaku_core::file_size::FileSizeWarning) -> String {
+    use rinkaku_core::file_size::{FileSizeSeverity, SPLIT_LINE_THRESHOLD, WARN_LINE_THRESHOLD};
+    match warning.severity {
+        FileSizeSeverity::Warn => format!(
+            "\u{26a0} {} lines \u{2014} consider splitting (>{WARN_LINE_THRESHOLD} watch)",
+            warning.line_count,
+        ),
+        FileSizeSeverity::Split => format!(
+            "\u{1f6a8} {} lines \u{2014} over the {SPLIT_LINE_THRESHOLD}-line split threshold",
+            warning.line_count,
+        ),
+    }
 }
 
 pub(crate) fn kind_abbrev(kind: rinkaku_core::extract::SymbolKind) -> &'static str {
@@ -281,7 +315,9 @@ pub(crate) fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 mod tests {
+    use super::file_detail_lines;
     use crate::app::{App, BlastRadiusSelection};
+    use crate::detail::FileDetail;
     use crate::ui::{DrawOutcome, draw};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -322,6 +358,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -352,6 +389,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // ADR 0020 defaults the right pane to Diff, whose own placeholder
@@ -394,6 +432,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
@@ -446,6 +485,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // See the sibling test above for why `ToggleDiff` is needed to
@@ -491,6 +531,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -545,6 +586,7 @@ mod tests {
                 symbol_count: 3,
             }],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -611,6 +653,7 @@ mod tests {
                 symbol_count: 5,
             }],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // Row 0 is the "app.rs" file row itself.
@@ -693,6 +736,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -942,6 +986,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // ADR 0020 defaults the right pane to Diff, whose own placeholder
@@ -1002,6 +1047,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
@@ -1029,5 +1075,85 @@ mod tests {
         // would have produced.
         assert!(text.contains("Detail (1-"));
         assert!(!text.contains("/2)"));
+    }
+
+    // ADR 0028: a `FileDetail` carrying a `size_warning` renders one
+    // extra line above the "Symbols" listing, with a severity-matched
+    // glyph and the crossed threshold named in the trailing hint. The
+    // `⚠` and `>1500 watch` wording pinned here is the same shape the
+    // Markdown surface uses, so a reviewer skimming either output reads
+    // the same signal.
+    #[test]
+    fn should_render_size_warning_line_when_file_detail_has_size_warning() {
+        let detail = FileDetail {
+            path: "src/big.rs".to_string(),
+            symbols: vec![],
+            skip_reason: None,
+            test_symbol_count: None,
+            size_warning: Some(rinkaku_core::file_size::FileSizeWarning {
+                path: "src/big.rs".to_string(),
+                line_count: 1734,
+                severity: rinkaku_core::file_size::FileSizeSeverity::Warn,
+            }),
+        };
+
+        let lines = file_detail_lines(&detail);
+
+        // NOTE: partial assert — the "File src/big.rs" header, the blank
+        // line, and the "Symbols (0)" listing come from unrelated arms
+        // of `file_detail_lines`; this test only pins the warning-line
+        // portion (a whole-vec compare would double-book coverage the
+        // sibling tests already have).
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line == "\u{26a0} 1734 lines \u{2014} consider splitting (>1500 watch)"),
+            "expected watch-severity warning line among: {rendered:?}",
+        );
+    }
+
+    // Companion to the Warn test above: the `Split` variant swaps the
+    // glyph to `🚨` and names the split threshold in the trailing hint.
+    #[test]
+    fn should_render_split_severity_glyph_when_file_detail_size_warning_is_split() {
+        let detail = FileDetail {
+            path: "src/huge.rs".to_string(),
+            symbols: vec![],
+            skip_reason: None,
+            test_symbol_count: None,
+            size_warning: Some(rinkaku_core::file_size::FileSizeWarning {
+                path: "src/huge.rs".to_string(),
+                line_count: 4837,
+                severity: rinkaku_core::file_size::FileSizeSeverity::Split,
+            }),
+        };
+
+        let lines = file_detail_lines(&detail);
+
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line
+                    == "\u{1f6a8} 4837 lines \u{2014} over the 2000-line split threshold"),
+            "expected split-severity warning line among: {rendered:?}",
+        );
     }
 }

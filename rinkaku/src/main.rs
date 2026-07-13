@@ -581,6 +581,7 @@ fn run_base_pipeline(
                 },
                 tests: Vec::new(),
                 hotspots: Vec::new(),
+                file_size_warnings: Vec::new(),
                 removed: Vec::new(),
             },
             diff_text,
@@ -3716,6 +3717,7 @@ Cargo.lock\0diff\0unset\0Cargo.lock\0linguist-generated\0unspecified\0normal.rs\
                 },
                 tests: Vec::new(),
                 hotspots: Vec::new(),
+                file_size_warnings: Vec::new(),
                 removed: Vec::new(),
             },
             actual_report
@@ -3916,6 +3918,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             }
         }
@@ -3931,6 +3934,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             }
         }
@@ -3978,6 +3982,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -4004,6 +4009,7 @@ fn should_add_two_numbers() {
                     symbol_count: 1,
                 }],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -4042,6 +4048,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -4101,6 +4108,7 @@ fn should_add_two_numbers() {
                 graph,
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             }
         }
@@ -4159,6 +4167,7 @@ fn should_add_two_numbers() {
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
 
@@ -4189,6 +4198,7 @@ fn should_add_two_numbers() {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             }
         }

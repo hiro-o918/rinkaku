@@ -9,6 +9,7 @@
 pub mod deps;
 pub mod diff;
 pub mod extract;
+pub mod file_size;
 pub mod graph;
 pub mod language;
 pub mod pipeline;

@@ -105,6 +105,37 @@ CI (`.github/workflows/lint-and-test.yaml` → `wc-rust-test.yaml`) runs the
 exact same `cargo` commands as the Makefile — never add a check to CI that
 isn't also runnable locally via `make`.
 
+## File size discipline
+
+Files grow by drift, not by design — see ADR 0028 for the rationale.
+Keep source files small enough that a reviewer can hold the outline in
+one context window.
+
+- **Thresholds** (mirror the `pub const`s in `rinkaku-core/src/file_size.rs`;
+  changing them is an ADR amendment):
+  - ≤ 1000 lines — normal, no action.
+  - 1000–1500 lines — watch; a follow-up split is on the horizon.
+  - > 1500 lines — warn; start planning the split now.
+  - > 2000 lines — split it, or write down in the PR body why not.
+- **Co-locate tests, but move them out when they push the file over.**
+  Default to `#[cfg(test)] mod tests { ... }` in the same file. When
+  production + test lines together exceed a threshold, switch to
+  `#[cfg(test)] #[path = "tests.rs"] mod tests;` so the counted file
+  stays under threshold without hiding the tests. Canonical example:
+  PR #82's `rinkaku-tui/src/app/{mod,input_key,tests}.rs`.
+- **Split along responsibility, not line count.** If a file is over
+  threshold, look for an independent responsibility to extract before
+  reaching for a mechanical top/bottom cut. Canonical example: PR #82's
+  `rinkaku-core/src/render/` split Markdown, Mermaid, and JSON
+  rendering into sibling modules because each is an independent output
+  format, not because the numbers demanded three parts.
+- **rinkaku's own warning is authoritative.** When
+  `rinkaku --base main` (from a trusted `main` build, per the
+  dogfooding rule above) prints a `## File size warnings` entry for a
+  file this PR touches, treat it as a review-blocker hint: either
+  perform the split in the same PR, or justify the continued growth
+  in the PR body. Do not merge past the warning silently.
+
 ## Conventions
 
 - **English only**: code comments, documentation, ADRs, and commit

@@ -49,6 +49,15 @@ pub struct Report {
     /// consumers get it without recomputing the aggregation themselves,
     /// matching how `graph` itself is already exposed alongside `files`.
     pub hotspots: Vec<Hotspot>,
+    /// File-size warnings (ADR 0028): source files whose line count crosses
+    /// the [`crate::file_size::WARN_LINE_THRESHOLD`] / [`crate::file_size::SPLIT_LINE_THRESHOLD`]
+    /// watch/split thresholds. Derived from the same per-file content
+    /// [`crate::pipeline::analyze_diff`] and [`crate::pipeline::analyze_repo`]
+    /// already read for parsing, via [`crate::file_size::compute_file_size_warnings`],
+    /// and stored on `Report` (rather than recomputed at render time) so JSON
+    /// consumers get it as an always-present top-level field, matching how
+    /// `hotspots` above is already exposed.
+    pub file_size_warnings: Vec<crate::file_size::FileSizeWarning>,
     /// Symbols present on the base side of a diff but absent from the head
     /// side entirely (ADR 0014's `removed` classification) — reported
     /// separately from `files` since a removed symbol has no head-side
@@ -197,6 +206,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -216,6 +226,7 @@ mod tests {
   },
   \"tests\": [],
   \"hotspots\": [],
+  \"file_size_warnings\": [],
   \"removed\": []
 }"
         .to_string();
@@ -244,6 +255,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -259,6 +271,7 @@ mod tests {
   },
   \"tests\": [],
   \"hotspots\": [],
+  \"file_size_warnings\": [],
   \"removed\": []
 }"
         .to_string();
@@ -291,6 +304,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
 
@@ -337,6 +351,7 @@ mod tests {
   },
   \"tests\": [],
   \"hotspots\": [],
+  \"file_size_warnings\": [],
   \"removed\": []
 }"
         .to_string();
@@ -369,6 +384,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![RemovedSymbol {
                 name: "old_helper".to_string(),
                 kind: SymbolKind::Function,
@@ -417,6 +433,7 @@ mod tests {
   },
   \"tests\": [],
   \"hotspots\": [],
+  \"file_size_warnings\": [],
   \"removed\": [
     {
       \"name\": \"old_helper\",

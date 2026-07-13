@@ -12,6 +12,7 @@ use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::{
     ExtractedSymbol, RemovedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
 };
+use crate::file_size::compute_file_size_warnings;
 use crate::graph::{build_graph, compute_hotspots, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile, TestFileSummary};
@@ -141,6 +142,12 @@ pub fn analyze_diff(
     let mut files = Vec::new();
     let mut skipped = Vec::new();
     let mut removed = Vec::new();
+    // ADR 0028: `(path, line_count)` for every file the pipeline actually
+    // reads content for, collected here rather than at the render layer so
+    // skipped files (binary/generated/deleted/unsupported-language) are
+    // excluded by construction — they have no content to measure, or are
+    // explicitly outside rinkaku's concern.
+    let mut sized_files: Vec<(String, usize)> = Vec::new();
 
     for changed_file in changed_files {
         if changed_file.kind == ChangeKind::Deleted {
@@ -224,6 +231,10 @@ pub fn analyze_diff(
             });
             continue;
         }
+        // ADR 0028: measure line count once the file's content has cleared
+        // every skip check above. `str::lines()` returns a sensible count
+        // whether or not the final line ends in a newline.
+        sized_files.push((changed_file.path.clone(), source.lines().count()));
         let mut symbols = extract_changed_symbols(&source, lang, &changed_file.changed_ranges);
 
         // ADR 0014: classify each symbol's contract impact against the
@@ -268,6 +279,9 @@ pub fn analyze_diff(
     // hotspot's `used_by` names always match the stamped ids/nodes
     // (ADR 0013).
     let hotspots = compute_hotspots(&graph);
+    // ADR 0028: file-size warnings from the `(path, line_count)` pairs
+    // collected inline above during the per-file read loop.
+    let file_size_warnings = compute_file_size_warnings(&sized_files);
 
     Ok(Report {
         origin: ReportOrigin::Diff,
@@ -276,6 +290,7 @@ pub fn analyze_diff(
         graph,
         tests,
         hotspots,
+        file_size_warnings,
         removed,
     })
 }
@@ -359,6 +374,11 @@ pub fn analyze_repo(
     include_generated: bool,
 ) -> Report {
     let mut files = Vec::new();
+    // ADR 0028: same collection strategy as `analyze_diff` — record every
+    // file whose content actually got read past the per-file filters, so
+    // filtered-out files (unsupported language, test path, generated) are
+    // never measured.
+    let mut sized_files: Vec<(String, usize)> = Vec::new();
 
     for path in paths {
         let Some(lang) = language_for_path(path) else {
@@ -381,6 +401,7 @@ pub fn analyze_repo(
         if !include_generated && is_generated_content(&content) {
             continue;
         }
+        sized_files.push((path.clone(), content.lines().count()));
 
         let symbols: Vec<ExtractedSymbol> = extract_all_symbols(&content, lang)
             .into_iter()
@@ -399,6 +420,7 @@ pub fn analyze_repo(
     let graph = build_graph(&files);
     stamp_ids(&mut files, &graph);
     let hotspots = compute_hotspots(&graph);
+    let file_size_warnings = compute_file_size_warnings(&sized_files);
 
     Report {
         origin: ReportOrigin::RepoOutline,
@@ -407,6 +429,7 @@ pub fn analyze_repo(
         graph,
         tests: Vec::new(),
         hotspots,
+        file_size_warnings,
         removed: Vec::new(),
     }
 }
@@ -618,6 +641,7 @@ mod tests {
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let actual = analyze_diff("", read_file, None, None, true, &HashSet::new(), true)
@@ -677,6 +701,7 @@ fn foo(a: i32) -> i32 {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -711,6 +736,7 @@ index 4b825dc..0000000
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -738,6 +764,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -773,6 +800,7 @@ index e69de29..4b825dc 100644
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -812,6 +840,7 @@ rename to src/new_name.rs
             graph: empty_graph(),
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -916,6 +945,7 @@ index e69de29..4b825dc 100644
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         };
         let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -1255,6 +1285,7 @@ fn should_add_two_numbers() {
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -1404,6 +1435,7 @@ mod tests {
                     symbol_count: 1,
                 }],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, None, false, &HashSet::new(), true)
@@ -1591,6 +1623,7 @@ func Foo() int { return 2 }
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
@@ -1650,6 +1683,7 @@ fn foo(a: i32) -> i32 {
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
@@ -1719,6 +1753,7 @@ index e69de29..4b825dc 100644
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), false)
@@ -2422,6 +2457,7 @@ index e69de29..4b825dc 100644
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_repo(&[], read_file, true, &HashSet::new(), true);
@@ -2504,6 +2540,7 @@ struct Point {
                 },
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
@@ -2544,6 +2581,7 @@ struct Point {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
@@ -2566,6 +2604,7 @@ struct Point {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
@@ -2592,6 +2631,7 @@ struct Point {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_repo(&paths, read_file, true, &generated_paths, true);
@@ -2613,6 +2653,7 @@ struct Point {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), false);
@@ -2651,6 +2692,7 @@ func TestFoo(t *testing.T) {
                 graph: empty_graph(),
                 tests: vec![],
                 hotspots: vec![],
+                file_size_warnings: vec![],
                 removed: vec![],
             };
             let actual = analyze_repo(&paths, read_file, false, &HashSet::new(), true);
@@ -2738,6 +2780,107 @@ fn caller_two() -> i32 {
                 used_by: vec!["caller_one".to_string(), "caller_two".to_string()],
             }];
             assert_eq!(expected, report.hotspots);
+        }
+    }
+
+    /// ADR 0028 integration tests: end-to-end wiring of `compute_file_size_warnings`
+    /// through both pipeline entry points. Unit-level ordering/threshold
+    /// behavior is already covered by `crate::file_size::tests`; these
+    /// tests only prove that the pipeline collects `(path, line_count)`
+    /// pairs correctly and threads them through to `Report::file_size_warnings`.
+    mod file_size_warnings_tests {
+        use super::*;
+        use crate::file_size::{FileSizeSeverity, FileSizeWarning, WARN_LINE_THRESHOLD};
+        use pretty_assertions::assert_eq;
+
+        /// Builds a Rust source string of roughly `line_count` lines whose
+        /// first line is a real function definition (so `analyze_diff` has
+        /// something to extract) padded to the requested line count by
+        /// trivial let-bindings on subsequent lines. The head function's
+        /// body-length itself is what pushes the file's total line count
+        /// over the threshold.
+        fn rust_source_with_line_count(line_count: usize) -> String {
+            let mut buf = String::from("fn touched() -> i32 {\n");
+            // Two lines already used (`fn touched() ... {` and the trailing
+            // `}`); the rest are body lines.
+            let filler_lines = line_count.saturating_sub(2);
+            for i in 0..filler_lines {
+                buf.push_str(&format!("    let _v{i} = {i};\n"));
+            }
+            buf.push_str("}\n");
+            buf
+        }
+
+        #[test]
+        fn should_include_warn_when_analyze_diff_reads_a_file_over_warn_threshold() {
+            let big_source = rust_source_with_line_count(WARN_LINE_THRESHOLD + 100);
+            let actual_line_count = big_source.lines().count();
+            // The diff itself only needs to touch one line for the file to
+            // enter the pipeline's per-file read loop — line-count
+            // measurement is on the read source, not on the diff hunks.
+            let diff = "\
+diff --git a/src/big.rs b/src/big.rs
+index e69de29..4b825dc 100644
+--- a/src/big.rs
++++ b/src/big.rs
+@@ -1,1 +1,1 @@
+-fn touched() -> i32 {
++fn touched() -> i32 {
+";
+            let read_file = fake_reader(HashMap::from([(
+                "src/big.rs",
+                Box::leak(big_source.into_boxed_str()) as &'static str,
+            )]));
+
+            let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
+                .expect("analyze should succeed");
+
+            let expected = vec![FileSizeWarning {
+                path: "src/big.rs".to_string(),
+                line_count: actual_line_count,
+                severity: FileSizeSeverity::Warn,
+            }];
+            assert_eq!(expected, report.file_size_warnings);
+        }
+
+        #[test]
+        fn should_exclude_skipped_files_from_file_size_warnings_when_analyze_diff_runs() {
+            // A binary file is skipped before any read happens, so it can
+            // never appear in `file_size_warnings` regardless of size — the
+            // (path, line_count) collection only records files whose
+            // content was actually read.
+            let diff = "\
+diff --git a/assets/logo.png b/assets/logo.png
+index e69de29..4b825dc 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ
+";
+            let read_file = fake_reader(HashMap::new());
+
+            let report = analyze_diff(diff, read_file, None, None, true, &HashSet::new(), true)
+                .expect("analyze should succeed");
+
+            let expected: Vec<FileSizeWarning> = vec![];
+            assert_eq!(expected, report.file_size_warnings);
+        }
+
+        #[test]
+        fn should_include_warn_when_analyze_repo_reads_a_file_over_warn_threshold() {
+            let big_source = rust_source_with_line_count(WARN_LINE_THRESHOLD + 200);
+            let actual_line_count = big_source.lines().count();
+            let read_file = fake_reader(HashMap::from([(
+                "src/big.rs",
+                Box::leak(big_source.into_boxed_str()) as &'static str,
+            )]));
+            let paths = vec!["src/big.rs".to_string()];
+
+            let report = analyze_repo(&paths, read_file, true, &HashSet::new(), true);
+
+            let expected = vec![FileSizeWarning {
+                path: "src/big.rs".to_string(),
+                line_count: actual_line_count,
+                severity: FileSizeSeverity::Warn,
+            }];
+            assert_eq!(expected, report.file_size_warnings);
         }
     }
 }

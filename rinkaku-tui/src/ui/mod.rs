@@ -178,7 +178,7 @@ pub fn draw(
         }
     };
 
-    draw_status_line(frame, app, status_area);
+    draw_status_line(frame, app, report, status_area);
 
     if app.help_open() {
         let (clamped_help_scroll, help_scroll_viewport_height) =

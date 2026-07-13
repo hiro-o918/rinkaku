@@ -289,6 +289,11 @@ pub struct FileDetail {
     pub symbols: Vec<FileSymbolSummary>,
     pub skip_reason: Option<rinkaku_core::render::SkipReason>,
     pub test_symbol_count: Option<usize>,
+    /// Oversized-file warning for this file (ADR 0028), when
+    /// `report.file_size_warnings` has an entry whose `path` matches this
+    /// file. `None` means the file is under the watch threshold — a
+    /// distinct signal from the aggregated total on the status line.
+    pub size_warning: Option<rinkaku_core::file_size::FileSizeWarning>,
 }
 
 /// Builds a [`DirDetail`] for the directory at `path` in `tree`, or `None`
@@ -370,11 +375,18 @@ pub fn build_file_detail(tree: &Tree, report: &Report, path: &str) -> Option<Fil
         })
         .collect();
 
+    let size_warning = report
+        .file_size_warnings
+        .iter()
+        .find(|warning| warning.path == node.path)
+        .cloned();
+
     Some(FileDetail {
         path: node.path.clone(),
         symbols,
         skip_reason: node.skip_reason,
         test_symbol_count: node.test_symbol_count,
+        size_warning,
     })
 }
 
@@ -474,6 +486,7 @@ mod tests {
             },
             tests: vec![],
             hotspots: vec![],
+            file_size_warnings: vec![],
             removed: vec![],
         }
     }
@@ -1174,6 +1187,7 @@ mod tests {
             ],
             skip_reason: None,
             test_symbol_count: None,
+            size_warning: None,
         };
         assert_eq!(expected, actual);
     }
@@ -1206,6 +1220,7 @@ mod tests {
             }],
             skip_reason: None,
             test_symbol_count: None,
+            size_warning: None,
         };
         assert_eq!(expected, actual);
     }
@@ -1229,6 +1244,7 @@ mod tests {
             symbols: vec![],
             skip_reason: Some(rinkaku_core::render::SkipReason::Binary),
             test_symbol_count: None,
+            size_warning: None,
         };
         assert_eq!(expected, actual);
     }
@@ -1252,6 +1268,7 @@ mod tests {
             symbols: vec![],
             skip_reason: None,
             test_symbol_count: Some(4),
+            size_warning: None,
         };
         assert_eq!(expected, actual);
     }
@@ -1295,6 +1312,46 @@ mod tests {
             }],
             skip_reason: None,
             test_symbol_count: Some(5),
+            size_warning: None,
+        };
+        assert_eq!(expected, actual);
+    }
+
+    // ADR 0028: a file whose path shows up in `report.file_size_warnings`
+    // must carry the matching warning onto its `FileDetail` so the detail
+    // pane can render the "1734 lines — consider splitting" hint above
+    // the symbols listing without re-scanning the report itself.
+    #[test]
+    fn should_populate_size_warning_on_file_detail_when_report_has_warning_for_that_path() {
+        let warning = rinkaku_core::file_size::FileSizeWarning {
+            path: "src/big.rs".to_string(),
+            line_count: 1734,
+            severity: rinkaku_core::file_size::FileSizeSeverity::Warn,
+        };
+        let report = Report {
+            files: vec![FileReport {
+                path: "src/big.rs".to_string(),
+                symbols: vec![symbol("src/big.rs::foo", "foo")],
+            }],
+            file_size_warnings: vec![warning.clone()],
+            ..empty_report()
+        };
+        let tree = crate::tree::build_tree(&report);
+
+        let actual = build_file_detail(&tree, &report, "src/big.rs").expect("file found");
+
+        let expected = FileDetail {
+            path: "src/big.rs".to_string(),
+            symbols: vec![FileSymbolSummary {
+                name: "foo".to_string(),
+                kind: SymbolKind::Function,
+                classification: None,
+                removed: false,
+                fan_in: 0,
+            }],
+            skip_reason: None,
+            test_symbol_count: None,
+            size_warning: Some(warning),
         };
         assert_eq!(expected, actual);
     }

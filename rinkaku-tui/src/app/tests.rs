@@ -35,6 +35,7 @@ fn empty_report() -> Report {
         },
         tests: vec![],
         hotspots: vec![],
+        file_size_warnings: vec![],
         removed: vec![],
     }
 }
@@ -203,6 +204,7 @@ fn should_return_file_detail_when_cursor_is_on_a_file_row() {
         }],
         skip_reason: None,
         test_symbol_count: None,
+        size_warning: None,
     });
     assert_eq!(Some(expected), actual);
 }
