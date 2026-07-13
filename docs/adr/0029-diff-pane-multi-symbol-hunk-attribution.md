@@ -67,21 +67,24 @@ the `MODULE_LEVEL_TITLE` bucket, unchanged.
 This amends ADR 0020 decision 4's "attributed to the first symbol
 (source order)" rule and confirms ADR 0027's decision 6 (`]c`/`[c`
 walks every hunk in the file) needs a companion rule: **hunk-jump order
-is deduplicated by `source_index`**, not by section. `hunk_start_lines`
-already walks sections in `crate::ui::draw_diff_pane`'s render order
-and would otherwise emit the *same* hunk's start line once per section
-it now appears in (e.g. a hunk shared by three adjacent symbols would
-make `]c` stop three times on what the reviewer sees as one hunk of
-text, since the section headers differ but the hunk body is identical
-content shown three times in the render itself). This ADR accepts that
-the **rendered content itself repeats the shared hunk once per owning
-section** (see Consequences) — the diff pane is not deduplicating the
-*display*, since a section without its own copy of the hunk would look
-incomplete when read on its own (exactly the "orient before reading"
-principle ADR 0020 built the section headers around) — but
-`hunk_start_lines` must still expose a distinct stop per **rendered**
-occurrence, so `]c`/`[c` continues to mean "jump to the next hunk
-header actually on screen", matching what the reviewer sees rather
+is *not* deduplicated by `source_index`** — it stays one stop per
+section, exactly as `hunk_start_lines` already computes it today.
+`hunk_start_lines` already walks sections in
+`crate::ui::draw_diff_pane`'s render order and, unchanged, emits the
+*same* hunk's start line once per section it now appears in (e.g. a
+hunk shared by three adjacent symbols makes `]c` stop three times on
+what the reviewer sees as one hunk of text, since the section headers
+differ but the hunk body is identical content shown three times in the
+render itself). This ADR accepts that the **rendered content itself
+repeats the shared hunk once per owning section** (see Consequences) —
+the diff pane is not deduplicating the *display*, since a section
+without its own copy of the hunk would look incomplete when read on
+its own (exactly the "orient before reading" principle ADR 0020 built
+the section headers around) — so `hunk_start_lines` needs no code
+change at all: its existing per-section walk already exposes a
+distinct stop per **rendered** occurrence, so `]c`/`[c` continues to
+mean "jump to the next hunk header actually on screen", matching what
+the reviewer sees rather
 than a deduplicated count that would silently skip over a hunk's
 second/third rendered appearance.
 
