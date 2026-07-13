@@ -1,6 +1,7 @@
 # 0039. Revise `--format mermaid`'s visual encoding and legend
 
-- Status: accepted
+- Status: accepted (Legend decision superseded by ADR 0040; color/style
+  reassignment below remains in effect)
 - Date: 2026-07-14
 
 ## Context
