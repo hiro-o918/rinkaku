@@ -41,13 +41,42 @@ pub enum InputKey {
     /// a distinct variant from [`Self::Open`] because Space must never move
     /// focus even on a file/symbol row, only Enter does.
     Select,
-    /// Enter on a file/symbol row: opens the source view on a symbol row
-    /// (unchanged from before ADR 0020) and additionally moves focus to
-    /// [`Focus::Right`] (ADR 0020's "drilling into a row is also a focus
-    /// change") — a no-op on a directory row (`App::handle_key`'s doc
-    /// comment; a directory row's Enter is [`Self::Select`]/`crate::run`'s
-    /// `translate_key`, matching on `KeyCode::Enter`, always emits `Open`
-    /// and lets `handle_key` decide what that means per row kind).
+    /// Enter on a file/symbol row: switches the right pane to
+    /// [`RightPane::Diff`] and moves focus to [`Focus::Right`] (ADR 0020's
+    /// "drilling into a row is also a focus change") — a no-op on a
+    /// directory row (`App::handle_key`'s doc comment; a directory row's
+    /// Enter is [`Self::Select`]/`crate::run`'s `translate_key`, matching on
+    /// `KeyCode::Enter`, always emits `Open` and lets `handle_key` decide
+    /// what that means per row kind).
+    ///
+    /// Post-ADR-0020 dogfooding finding: this used to open
+    /// [`Screen::Source`] for a symbol row specifically (reading the file
+    /// straight from the working tree, `crate::source::load_symbol_source`)
+    /// while a file row's Enter only changed focus — an asymmetry a
+    /// reviewer could not predict from the keypress alone, and one that
+    /// surfaced as an apparently random failure whenever the working tree
+    /// did not have the symbol's file in the expected state (a deleted or
+    /// not-yet-checked-out file, reported as "enter だと source を出そうとして
+    /// エラーになったりならなかったりする"). Enter now always means "show me
+    /// the diff for this row", which never touches the filesystem and so
+    /// never fails; opening the source view (which can fail, since it reads
+    /// a real file) stays behind the dedicated `s` key ([`Self::Source`])
+    /// only.
+    ///
+    /// Map-assisted-review finding: while already [`Focus::Right`] and the
+    /// right pane is already [`RightPane::Diff`] (i.e. Enter is pressed a
+    /// second time on the same row, mid-read), this is a **complete no-op**
+    /// — `App::handle_key`'s own doc comment on why this needs a dedicated
+    /// `preserve_scroll` case, distinct from `Focus::Tree`'s "switch to Diff"
+    /// case just below. Without this, Enter matched regardless of focus (the
+    /// `(Screen::Entry, _, InputKey::Open)` arm), so pressing it again while
+    /// deep in a long diff silently reset `right_pane_scroll` to 0 via the
+    /// blanket end-of-function reset, throwing the reviewer's reading
+    /// position away for no visible reason. While [`Focus::Right`] but the
+    /// right pane is [`RightPane::Detail`]/[`RightPane::BlastRadius`], Enter
+    /// still switches to Diff (a real pane change, so the existing
+    /// scroll-reset-on-other-keys rule is the correct behavior there, not a
+    /// bug).
     Open,
     /// `e`/`E`: expand every row.
     ExpandAll,
@@ -106,6 +135,14 @@ pub enum InputKey {
     /// `App::pending_prefix` to do that resolution). Every key clears any
     /// previously pending prefix (`App::handle_key`'s own doc comment) —
     /// this variant is what *sets* it in the first place.
+    ///
+    /// Also included in `App::handle_key`'s `preserve_scroll` exception list
+    /// (independent-review finding): being the leading key of the `gd`/`gr`
+    /// sequence, `g` alone is dispatched through `handle_key` one keypress
+    /// before `GotoDefinition`/`GotoReferences` itself — without this
+    /// exception, `g`'s own blanket scroll reset would have zeroed
+    /// `right_pane_scroll` before the following `d`/`r` even ran, defeating
+    /// [`Self::GotoDefinition`]'s own fix for the same jumplist-scroll bug.
     PendingGoto,
     /// `gd` (a two-key sequence, ADR 0022): jump toward a callee of the
     /// symbol under the cursor. Candidate resolution needs `report`
@@ -124,6 +161,14 @@ pub enum InputKey {
     /// two `g`-prefixed keys into `PendingGoto`'s own resolution) so
     /// `crate::lib::translate_key`'s key-to-intent mapping stays legible
     /// independent of where the intent is actually processed.
+    ///
+    /// Independent-review finding: that same required `handle_key(input_key)`
+    /// call (for `pending_prefix`) used to also run this function's blanket
+    /// end-of-function scroll reset *before* `App::jump_to_symbol` recorded
+    /// the jumplist entry, so every jumplist entry's saved scroll offset was
+    /// always 0 and `Ctrl-o`/`Ctrl-i` could never actually restore a reading
+    /// position — see `App::handle_key`'s `preserve_scroll`, which now
+    /// special-cases these two variants for that reason.
     GotoDefinition,
     /// `gr`: the caller-direction mirror of [`Self::GotoDefinition`].
     GotoReferences,
@@ -819,6 +864,51 @@ impl App {
             (&self.screen, self.focus, key),
             (Screen::Entry, Focus::Right, InputKey::Up)
                 | (Screen::Entry, Focus::Right, InputKey::Down)
+                // Independent-review finding: `crate::run_app`'s
+                // `dispatch_non_source_key` always calls `handle_key(input_key)`
+                // for `GotoDefinition`/`GotoReferences` first (ADR 0022's
+                // `pending_prefix`-clear requirement, this arm's own doc
+                // comment below), *before* `resolve_goto`/`Self::jump_to_symbol`
+                // ever runs. Without this case, that first call hit the
+                // blanket reset at the bottom of this function and zeroed
+                // `right_pane_scroll` *before* `jump_to_symbol` read it to
+                // record the jumplist entry the reviewer is jumping *from* —
+                // so every `Ctrl-o` (`InputKey::JumpBack`) landed back at
+                // scroll 0 regardless of how far down the reviewer had
+                // actually scrolled. `InputKey::PendingGoto` (the leading
+                // `g` of the two-key `gd`/`gr` sequence) needs the same
+                // exception for the identical reason: it is a real,
+                // separately-dispatched `handle_key` call in the actual
+                // `crate::run_app` event loop (unlike a test calling
+                // `dispatch_non_source_key(..., GotoDefinition)` directly,
+                // which skips straight past this — the gap an earlier
+                // version of this fix's own regression test had, caught only
+                // by a real terminal run), so scroll was already zeroed by
+                // the `g` press itself, one key before `GotoDefinition`/
+                // `GotoReferences` even had a chance to matter.
+                // `Self::jump_to_symbol` (and
+                // `Self::handle_key_with_popup_open`'s `PopupConfirm`, which
+                // calls it too) already does its own correct
+                // `self.right_pane_scroll = 0` reset for the *new* target
+                // once the jump actually happens, so preserving scroll
+                // through this first call only protects the jumplist
+                // snapshot of the *old* position — it does not defeat the
+                // reset a real jump still performs.
+                | (Screen::Entry, _, InputKey::PendingGoto)
+                | (Screen::Entry, _, InputKey::GotoDefinition)
+                | (Screen::Entry, _, InputKey::GotoReferences)
+        ) || matches!(
+            (&self.screen, self.focus, self.right_pane, key),
+            // Map-assisted-review finding (`InputKey::Open`'s own doc
+            // comment): Enter pressed again while already Right-focused on
+            // an already-showing Diff pane is a complete no-op — reading
+            // position must survive it, the same way plain scrolling does
+            // just above. Gated on `right_pane` too (not just `screen`/
+            // `focus`/`key`, unlike the `Up`/`Down` case above), since the
+            // *other* `Focus::Right` case — Detail/BlastRadius showing —
+            // is a real pane switch to Diff and must still fall through to
+            // the blanket reset below.
+            (Screen::Entry, Focus::Right, RightPane::Diff, InputKey::Open)
         );
         // Set by the `JumpBack`/`JumpForward` arms below when they actually
         // restore a jumplist entry's own scroll offset — that restored
@@ -875,6 +965,22 @@ impl App {
             // (`h`/Esc), which is the kind of spooky-action-at-a-distance
             // this gate closes off.
             (Screen::Entry, Focus::Right, InputKey::Select) => {}
+            // Map-assisted-review finding (`InputKey::Open`'s own doc
+            // comment): while already `Focus::Right`, Enter no longer
+            // re-derives "what row is this" from the tree cursor at all —
+            // it only ever means "make sure Diff is showing". When Diff is
+            // already showing this is a true no-op (nothing in `self`
+            // changes, including `right_pane_scroll` — this arm plus
+            // `preserve_scroll`'s matching `RightPane::Diff` case above are
+            // what make that hold); when Detail/BlastRadius is showing, it
+            // switches to Diff, matching `InputKey::ToggleDiff`'s own "from
+            // Detail or BlastRadius, land on Diff" precedent just below.
+            // Must come before the `(Screen::Entry, _, InputKey::Open)` arm
+            // below (whose `Focus::Tree`-only tree-cursor dispatch this arm
+            // deliberately bypasses) since match arms are tried in order.
+            (Screen::Entry, Focus::Right, InputKey::Open) => {
+                self.right_pane = RightPane::Diff;
+            }
             (Screen::Entry, _, InputKey::Open) => {
                 let rows = self.nav.rows(&self.tree);
                 match rows.get(self.nav.cursor()).map(|row| &row.node.kind) {
@@ -885,19 +991,24 @@ impl App {
                     Some(NodeKind::Dir) => {
                         self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
                     }
-                    Some(NodeKind::File) => {
+                    // File and symbol rows behave identically (dogfooding
+                    // fix, `Self::Open`'s own doc comment): switch to the
+                    // Diff pane and move focus there. A symbol row used to
+                    // additionally jump into `Screen::Source` here, which
+                    // read the file from the working tree and could fail —
+                    // an asymmetric, occasionally-erroring behavior a file
+                    // row's Enter never had. Enter is now always a pure,
+                    // never-failing screen/pane transition regardless of row
+                    // kind (including a removed symbol, which no longer
+                    // needs its own guard here — this arm never touches the
+                    // filesystem, unlike `InputKey::Source`'s own
+                    // `!symbol_ref.removed` guard below, which still applies
+                    // there since that key does open the source view).
+                    Some(NodeKind::File) | Some(NodeKind::Symbol(_)) => {
+                        self.right_pane = RightPane::Diff;
                         self.focus = Focus::Right;
                     }
-                    Some(NodeKind::Symbol(symbol_ref)) if !symbol_ref.removed => {
-                        self.focus = Focus::Right;
-                        self.screen = Screen::Source {
-                            symbol_id: symbol_ref.id.clone(),
-                        };
-                    }
-                    // A removed symbol has no source to open (mirrors
-                    // `InputKey::Source`'s own `!symbol_ref.removed` guard
-                    // below) and no row at all is simply a no-op.
-                    Some(NodeKind::Symbol(_)) | None => {}
+                    None => {}
                 }
             }
             (Screen::Entry, _, InputKey::ExpandAll) => {
@@ -1808,19 +1919,116 @@ mod tests {
     }
 
     #[test]
-    fn should_move_focus_to_right_and_open_source_when_open_is_pressed_on_a_symbol_row() {
+    fn should_move_focus_to_right_and_switch_to_diff_pane_when_open_is_pressed_on_a_symbol_row() {
+        // Dogfooding fix: a symbol row's Enter used to open `Screen::Source`
+        // directly (reading the file from the working tree, which could
+        // fail), asymmetric with a file row's Enter, which only switched
+        // panes. Both row kinds now behave identically — see `InputKey::Open`'s
+        // own doc comment.
         let report = report_with_one_symbol();
         let app = App::new(&report).handle_key(InputKey::Down);
 
         let app = app.handle_key(InputKey::Open);
 
         assert_eq!(Focus::Right, app.focus());
-        assert_eq!(
-            Screen::Source {
-                symbol_id: "lib.rs::foo".to_string()
-            },
-            *app.screen()
-        );
+        assert_eq!(Screen::Entry, *app.screen());
+        assert_eq!(RightPane::Diff, app.right_pane());
+    }
+
+    #[test]
+    fn should_move_focus_to_right_and_switch_to_diff_pane_when_open_is_pressed_on_a_removed_symbol_row()
+     {
+        // A removed symbol has no source to open, but Enter no longer opens
+        // source at all (`InputKey::Open`'s own doc comment) — it is a pure
+        // pane switch regardless of row kind, so a removed symbol's Enter no
+        // longer needs a special no-op case the way `InputKey::Source`'s own
+        // `!symbol_ref.removed` guard still does.
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            removed: vec![rinkaku_core::extract::RemovedSymbol {
+                name: "gone".to_string(),
+                kind: SymbolKind::Function,
+                path: "lib.rs".to_string(),
+                signature: "fn gone()".to_string(),
+            }],
+            ..empty_report()
+        };
+        let app = App::new(&report).handle_key(InputKey::Down);
+
+        let app = app.handle_key(InputKey::Open);
+
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(Screen::Entry, *app.screen());
+        assert_eq!(RightPane::Diff, app.right_pane());
+    }
+
+    #[test]
+    fn should_leave_scroll_unchanged_when_open_is_pressed_while_right_focused_on_diff() {
+        // Map-assisted-review finding: Enter pressed a second time while
+        // already reading the Diff pane (Focus::Right, RightPane::Diff) must
+        // be a complete no-op — before this fix, the `(Screen::Entry, _,
+        // InputKey::Open)` arm matched regardless of focus and the blanket
+        // "reset scroll to 0" rule at the end of `handle_key` then threw
+        // away the reviewer's reading position for no visible reason.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down) // cursor -> "foo" (a Symbol row)
+            .handle_key(InputKey::Open) // focus -> Right, RightPane::Diff
+            .handle_key(InputKey::Down) // scroll -> 1
+            .handle_key(InputKey::Down); // scroll -> 2
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(RightPane::Diff, app.right_pane());
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::Open);
+
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(RightPane::Diff, app.right_pane());
+        assert_eq!(2, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_switch_to_diff_pane_when_open_is_pressed_while_right_focused_on_detail() {
+        // The other half of the map-assisted-review finding just above:
+        // while Focus::Right but the pane showing is Detail (not Diff yet),
+        // Enter is a *real* pane switch, so the ordinary scroll-reset-on-
+        // other-keys rule is correct here, not a bug to preserve around.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down) // cursor -> "foo" (a Symbol row)
+            .handle_key(InputKey::Open) // focus -> Right, RightPane::Diff
+            .handle_key(InputKey::ToggleDiff); // RightPane::Detail, focus stays Right
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(RightPane::Detail, app.right_pane());
+
+        let app = app.handle_key(InputKey::Open);
+
+        assert_eq!(Focus::Right, app.focus());
+        assert_eq!(RightPane::Diff, app.right_pane());
+        assert_eq!(0, app.right_pane_scroll());
+    }
+
+    #[test]
+    fn should_leave_scroll_unchanged_when_pending_goto_is_pressed() {
+        // Independent-review finding (`InputKey::PendingGoto`'s own doc
+        // comment): `g`, the leading key of the two-key `gd`/`gr` sequence,
+        // is dispatched through `handle_key` on its own, one keypress before
+        // `GotoDefinition`/`GotoReferences` — its own blanket scroll reset
+        // must not fire, or the jumplist entry recorded once `d`/`r`
+        // eventually runs would already have lost the reviewer's scroll
+        // position before the jump even started.
+        let report = report_with_one_symbol();
+        let app = App::new(&report)
+            .handle_key(InputKey::Down) // cursor -> "foo" (a Symbol row)
+            .handle_key(InputKey::Open) // focus -> Right, RightPane::Diff
+            .handle_key(InputKey::Down) // scroll -> 1
+            .handle_key(InputKey::Down); // scroll -> 2
+        assert_eq!(2, app.right_pane_scroll());
+
+        let app = app.handle_key(InputKey::PendingGoto);
+
+        assert_eq!(Some(PendingPrefix::G), app.pending_prefix());
+        assert_eq!(2, app.right_pane_scroll());
     }
 
     #[test]
@@ -2066,7 +2274,7 @@ mod tests {
     #[test]
     fn should_keep_right_pane_scroll_at_zero_when_returning_from_source_screen() {
         // Opening the source screen itself always resets scroll to 0
-        // (`InputKey::Open`'s own reset, per the blanket rule) and every
+        // (`InputKey::Source`'s own reset, per the blanket rule) and every
         // key but `Back` is then a no-op while `Screen::Source` is active
         // (`App::handle_key`'s `Screen::Source` arm) — so scroll can never
         // become nonzero while the source screen is open in the first
@@ -2075,10 +2283,15 @@ mod tests {
         // swallowed but which could still be pending from before entering.
         // This test pins that invariant end to end: `Back` finds scroll
         // already at 0 and leaves it there.
+        //
+        // Post-dogfooding-fix note: the source screen is now reached only
+        // via the dedicated `s` key (`InputKey::Source`), not `Enter`
+        // (`InputKey::Open`'s own doc comment) — `Open` is exercised
+        // separately by the `Open`-specific tests above.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(InputKey::Down) // cursor -> "foo" (a Symbol row)
-            .handle_key(InputKey::Open); // opens Screen::Source, focus -> Right
+            .handle_key(InputKey::Source); // opens Screen::Source
         assert_eq!(
             Screen::Source {
                 symbol_id: "lib.rs::foo".to_string()
@@ -2094,10 +2307,14 @@ mod tests {
 
     #[test]
     fn should_ignore_scroll_keys_while_source_screen_is_open() {
+        // Post-dogfooding-fix note: the source screen is now reached only
+        // via the dedicated `s` key (`InputKey::Source`), not `Enter` — see
+        // `should_keep_right_pane_scroll_at_zero_when_returning_from_source_screen`'s
+        // own note.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(InputKey::Down)
-            .handle_key(InputKey::Open); // opens source, focus -> Right
+            .handle_key(InputKey::Source); // opens source
 
         let app = app.handle_key(InputKey::Down);
 
