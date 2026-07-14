@@ -395,8 +395,9 @@ fn should_resync_scroll_to_current_symbols_section_when_diff_pane_is_reentered_w
     let effects = apply_diff_pane_selection_effects(app, &report, &diff_hunks, None, 0);
 
     // bar's section starts at line 5 (same layout as every other test in
-    // this file); landing at 0 would show foo's section under a title
-    // (this PR's own addition) that still reads "Diff: bar".
+    // this file); landing at 0 would show foo's section under a pinned
+    // header that still names `bar` — the mismatch the resync exists to
+    // prevent.
     assert_eq!(5, effects.app.right_pane_scroll());
     assert_eq!(Some("lib.rs::bar"), effects.app.selected_symbol_id());
 }

@@ -3,12 +3,16 @@
 //! under the cursor, either clipped to a symbol row's own line range or
 //! grouped into per-symbol sections for a file row.
 
-use super::scroll::{render_scrollable_pane, truncate_to_width_keeping_tail};
+use super::scroll::{
+    render_scrollable_pane, truncate_line_to_width, truncate_to_width_keeping_tail,
+};
 use super::style::{pane_border_style, styled_content_spans};
 use crate::app::{App, DiffTarget, Focus};
-use crate::diff_shape::{ChangeStats, DiffSection};
+use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, TokenSpan};
+use crate::row_view::{BadgeContext, push_badge_spans};
+use crate::tree::{Badges, NodeKind};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -35,32 +39,37 @@ pub(crate) const REMOVED_BG: Color = Color::Indexed(52);
 /// the width the title bar had to work with.
 pub(crate) const DIFF_PANE_TITLE: &str = " Diff ";
 
-/// Builds the Diff pane's 2-line identification/stats header — pinned above
-/// the scrollable hunk content by `render_scrollable_pane`'s `header_lines`
-/// parameter so it never scrolls out of view, since knowing *which* symbol
-/// or file is being read stays useful no matter how far into its hunks the
-/// reviewer has scrolled.
+/// Builds the Diff pane's pinned in-pane header (above the scrollable hunk
+/// content via `render_scrollable_pane`'s `header_lines` parameter, so the
+/// row's identity and its badge summary stay visible no matter how far the
+/// reviewer has scrolled into the hunks):
 ///
-/// Line 1 identifies the selection: `"<symbol name> · <path>"` for a symbol
-/// row (`·` chosen over `::`/`/`, both of which collide with characters
-/// that already appear inside a symbol name or path), or the bare `path`
-/// for a file/skipped-file row
-/// (`selection_name` is `None` there — nothing to pair the path with). The
-/// whole line is truncated from the *head* when it overflows `width`
-/// ([`truncate_to_width_keeping_tail`]): the tail — the symbol's own name,
-/// or a path's basename — is what tells the two apart when many files share
-/// leading directories, so that is the part kept visible.
-///
-/// Line 2 reports `stats` as `"chg: <ranges> (+A/-R)"`, omitted entirely
-/// when `stats` has no ranges and no added/removed lines to show (an empty
-/// selection already took the placeholder path in [`draw_diff_pane`], so
-/// this only happens for a selection whose hunks this fold could not
-/// attribute a range to — better to show nothing than a misleadingly empty
-/// `"chg: "` line).
+/// - Line 1 (bold): `"<symbol name> · <path>"` for a symbol row, or the
+///   bare `path` for a file/skipped-file row (`selection_name` is `None`
+///   there). Truncated from the *head* when it overflows `width` — the
+///   symbol name or a path's basename is the informative tail.
+/// - Line 2 (badges via [`push_badge_spans`]): the exact same badge set
+///   the left tree row renders for this row — reused verbatim so the two
+///   views can't drift, and the diff pane inherits every future badge
+///   change for free. Rendered under [`BadgeContext::File`]: a `Dir` row
+///   never reaches this header (no diff to show), and a symbol row's
+///   badges ([`crate::tree::symbol_badges`]) contribute the same fields
+///   `BadgeContext::File` reads. Omitted when the row's badges are all
+///   zero.
+/// - Line 3 (dim, only when `ranges` is non-empty): `"range: 23-73, ..."`
+///   — the distinct new-side line spans. `ranges` must arrive already
+///   sorted+deduped ([`crate::diff_shape::changed_line_ranges`]) so a
+///   file selection whose hunks ADR 0029 clones across multiple owning
+///   symbols still produces one entry per distinct span, not one per
+///   section that owns it. On overflow the range list itself is
+///   head-truncated (the *later* line numbers are usually what the
+///   reviewer scrolled to see); the `"range: "` label stays fixed so
+///   the line's meaning survives.
 pub(crate) fn diff_pane_header_lines(
     selection_name: Option<&str>,
     path: &str,
-    stats: &ChangeStats,
+    badges: &Badges,
+    ranges: &[(usize, usize)],
     width: usize,
 ) -> Vec<Line<'static>> {
     let identification = match selection_name {
@@ -72,9 +81,14 @@ pub(crate) fn diff_pane_header_lines(
         Style::default().add_modifier(Modifier::BOLD),
     )];
 
-    if !stats.ranges.is_empty() || stats.added > 0 || stats.removed > 0 {
-        let ranges = stats
-            .ranges
+    let mut badge_spans: Vec<Span<'static>> = Vec::new();
+    push_badge_spans(&mut badge_spans, badges, BadgeContext::File);
+    if !badge_spans.is_empty() {
+        lines.push(truncate_line_to_width(&Line::from(badge_spans), width));
+    }
+
+    if !ranges.is_empty() {
+        let range_list = ranges
             .iter()
             .map(|(start, end)| {
                 if start == end {
@@ -85,16 +99,17 @@ pub(crate) fn diff_pane_header_lines(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let counts = format!("(+{}/-{})", stats.added, stats.removed);
-        let stats_text = if ranges.is_empty() {
-            format!("chg: {counts}")
-        } else {
-            format!("chg: {ranges} {counts}")
-        };
-        lines.push(Line::styled(
-            truncate_to_width_keeping_tail(&stats_text, width),
-            Style::default().add_modifier(Modifier::DIM),
-        ));
+        let prefix = "range: ";
+        let range_budget = width.saturating_sub(prefix.chars().count());
+        let truncated_range_list = truncate_to_width_keeping_tail(&range_list, range_budget);
+        let range_line = Line::from(vec![
+            Span::raw(prefix),
+            Span::styled(
+                truncated_range_list,
+                Style::default().add_modifier(Modifier::DIM),
+            ),
+        ]);
+        lines.push(range_line);
     }
 
     lines
@@ -165,11 +180,11 @@ pub(crate) fn draw_diff_pane(
     // place rather than hard-coding it inside `diff_pane_lines`.
     let lines = diff_pane_lines(&sections, true, highlighted_file);
 
-    // A symbol row's stats scope to that symbol's own section only; a file
-    // row (no `selected_diff_focus`) scopes to every section in the file —
-    // mirrors `App::selected_diff_target`'s own file-vs-symbol row scoping.
+    // A symbol row's ranges scope to that symbol's own section only; a
+    // file row (no `selected_diff_focus`) scopes to every section — mirrors
+    // `App::selected_diff_target`'s own file-vs-symbol row scoping.
     let focus = app.selected_diff_focus(report);
-    let stats_sections: Vec<&crate::diff_shape::DiffSection> = match &focus {
+    let range_sections: Vec<&crate::diff_shape::DiffSection> = match &focus {
         Some(focus) => sections
             .iter()
             .filter(|section| section.symbol_id.as_deref() == Some(focus.symbol_id.as_str()))
@@ -177,18 +192,32 @@ pub(crate) fn draw_diff_pane(
             .collect(),
         None => sections.clone(),
     };
-    let stats = crate::diff_shape::change_stats(&stats_sections);
+    let ranges = crate::diff_shape::changed_line_ranges(&range_sections);
     let header_width = area.width.saturating_sub(2) as usize;
-    // `selected_diff_title_name` returns the row's *path* itself on a file
-    // row (its own doc comment) — reusing it as the header's symbol-name
-    // pairing would duplicate the path against itself, so it is only passed
-    // through for an actual symbol row (`focus.is_some()`).
-    let selection_name = if focus.is_some() {
-        app.selected_diff_title_name()
+
+    // `selected_diff_header_name` is the single source for what line 1
+    // names: the symbol's own name on a symbol row (paired with `path`
+    // below to form `"<name> · <path>"`), or the file row's path
+    // (rendered bare, `selection_name = None`). Feeding both row kinds
+    // through the accessor — rather than only the symbol arm — keeps its
+    // file-row branch on the rendered path, not dead. Row `badges` come
+    // straight off the same `nav.rows(tree)` entry every other lookup
+    // already reads, so line 2 renders exactly what the tree row does
+    // (no drift).
+    let header_name = app.selected_diff_header_name();
+    let (selection_name, header_path) = if focus.is_some() {
+        (header_name, path)
     } else {
-        None
+        (None, header_name.unwrap_or(path))
     };
-    let header_lines = diff_pane_header_lines(selection_name, path, &stats, header_width);
+    let selected_badges = selected_row_badges(app);
+    let header_lines = diff_pane_header_lines(
+        selection_name,
+        header_path,
+        &selected_badges,
+        &ranges,
+        header_width,
+    );
 
     Some(render_scrollable_pane(
         frame,
@@ -199,6 +228,26 @@ pub(crate) fn draw_diff_pane(
         area,
         focused,
     ))
+}
+
+/// The `Badges` on the row currently under the cursor — read from the
+/// same `nav.rows(tree)` lookup every other selection accessor already
+/// uses, so the diff pane's line 2 renders exactly what the tree row
+/// renders (single source of truth for what a row's badges say).
+///
+/// Returns [`Badges::default`] (all-zero) when there is no row, or when
+/// the cursor is on a `Dir`/`Section`/`TestGroup` — those never reach the
+/// header path at all in practice (empty pane placeholder instead), but
+/// returning an empty badge set here is the honest fallback.
+fn selected_row_badges(app: &App) -> Badges {
+    let rows = app.nav().rows(app.tree());
+    let Some(row) = rows.get(app.nav().cursor()) else {
+        return Badges::default();
+    };
+    match &row.node.kind {
+        NodeKind::File | NodeKind::Symbol(_) => row.node.badges,
+        NodeKind::Dir | NodeKind::Section(_) | NodeKind::TestGroup { .. } => Badges::default(),
+    }
 }
 
 /// Formats every [`DiffSection`] in `sections` into styled lines (ADR

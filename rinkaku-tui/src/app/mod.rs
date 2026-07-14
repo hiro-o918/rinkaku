@@ -538,13 +538,14 @@ impl App {
         }
     }
 
-    /// The name [`crate::ui::diff_pane`] should show in its 2-line header
-    /// (paired with the path on a symbol row) for the row currently under
-    /// the cursor: a present symbol's own name, or a file/skipped-file
-    /// row's path — mirrors [`Self::selected_diff_target`]'s row-kind
-    /// scoping (present symbol or file only) so the header never names a
-    /// row the pane would not actually render a diff for.
-    pub fn selected_diff_title_name(&self) -> Option<&str> {
+    /// The label [`crate::ui::diff_pane`] shows on line 1 of its pinned
+    /// header for the row currently under the cursor: a present symbol's
+    /// own name (paired with the path on a symbol row), or a
+    /// file/skipped-file row's path (rendered bare) — mirrors
+    /// [`Self::selected_diff_target`]'s row-kind scoping (present symbol
+    /// or file only) so the header never names a row the pane would not
+    /// actually render a diff for.
+    pub fn selected_diff_header_name(&self) -> Option<&str> {
         let rows = self.nav.rows(&self.tree);
         let row = rows.get(self.nav.cursor())?;
         match &row.node.kind {

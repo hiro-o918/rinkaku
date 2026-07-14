@@ -355,45 +355,32 @@ fn contract_header_for_symbol(
     }
 }
 
-/// The changed-line ranges and added/removed line counts across `sections`'
-/// hunks, for the Diff pane header's `chg:` line
+/// The distinct changed-line ranges across `sections`' hunks, for the
+/// Diff pane header's `range:` line
 /// ([`crate::ui::diff_pane::diff_pane_header_lines`]) — `sections` is
-/// already the exact slice the caller is about to render (either every
-/// section for a file selection, or just the one matching a symbol's
-/// `symbol_id` for a symbol selection), so this only has to fold over
-/// `AttributedHunk`s already in hand rather than re-deriving them.
+/// already the exact slice the caller is about to render, so this only
+/// folds over `AttributedHunk`s already in hand.
 ///
 /// A pure-deletion hunk's `new_range` is a deliberately zero-width
-/// `(start, start - 1)` (see [`crate::diff_view::Hunk::new_range`]'s own doc
-/// comment) — excluded from `ranges` (nothing added/kept at that position to
-/// report a *range* for) but its removed lines still count toward
-/// `removed`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ChangeStats {
-    pub ranges: Vec<(usize, usize)>,
-    pub added: usize,
-    pub removed: usize,
-}
-
-pub fn change_stats(sections: &[&DiffSection]) -> ChangeStats {
-    let mut stats = ChangeStats::default();
-    for section in sections {
-        for attributed in &section.hunks {
-            if let Some((start, end)) = attributed.hunk.new_range
-                && start <= end
-            {
-                stats.ranges.push((start, end));
-            }
-            for line in &attributed.hunk.lines {
-                match line.kind {
-                    crate::diff_view::DiffLineKind::Added => stats.added += 1,
-                    crate::diff_view::DiffLineKind::Removed => stats.removed += 1,
-                    crate::diff_view::DiffLineKind::Context => {}
-                }
-            }
-        }
-    }
-    stats
+/// `(start, start - 1)` (see [`crate::diff_view::Hunk::new_range`]'s own
+/// doc comment) — excluded here, since there is no visible line span to
+/// name a *range* for.
+///
+/// Sorted and deduped so a file selection whose hunks ADR 0029 clones
+/// across multiple owning symbols produces one entry per distinct
+/// new-side span, not one per section that owns it (the tree's own
+/// `chg:` badge already counts changed symbols; the ranges line reports
+/// changed *lines*).
+pub fn changed_line_ranges(sections: &[&DiffSection]) -> Vec<(usize, usize)> {
+    let mut ranges: Vec<(usize, usize)> = sections
+        .iter()
+        .flat_map(|section| &section.hunks)
+        .filter_map(|attributed| attributed.hunk.new_range)
+        .filter(|(start, end)| start <= end)
+        .collect();
+    ranges.sort_unstable();
+    ranges.dedup();
+    ranges
 }
 
 #[cfg(test)]

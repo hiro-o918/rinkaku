@@ -221,7 +221,7 @@ pub fn relative_labels(rows: &[Row<'_>]) -> Vec<String> {
 /// reaches badge rendering (symbol rows have their own layout, no badge
 /// summary), so this only needs the two cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BadgeContext {
+pub(crate) enum BadgeContext {
     Dir,
     File,
 }
@@ -264,7 +264,11 @@ enum BadgeContext {
 ///   badge's color follows [`band_style`]'s 4-band scale, independent of
 ///   the directory-level `warn:N split:N` aggregate, which only ever
 ///   counts `Warn`/`Split` files (see `Badges`' doc comment).
-fn push_badge_spans(spans: &mut Vec<Span<'static>>, badges: &Badges, context: BadgeContext) {
+pub(crate) fn push_badge_spans(
+    spans: &mut Vec<Span<'static>>,
+    badges: &Badges,
+    context: BadgeContext,
+) {
     let cyan = Style::default().fg(Color::Cyan);
     let mut wrote_any_ascii_badge = false;
     if badges.changed_symbols > 0 {
