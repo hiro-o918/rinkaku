@@ -269,11 +269,13 @@ pub(crate) fn push_badge_spans(
     badges: &Badges,
     context: BadgeContext,
 ) {
-    let cyan = Style::default().fg(Color::Cyan);
     let mut wrote_any_ascii_badge = false;
     if badges.changed_symbols > 0 {
         spans.push(Span::raw("chg:"));
-        spans.push(Span::styled(badges.changed_symbols.to_string(), cyan));
+        spans.push(Span::styled(
+            badges.changed_symbols.to_string(),
+            cyan_badge_style(),
+        ));
         wrote_any_ascii_badge = true;
     }
     if badges.contract_changes > 0 {
@@ -283,7 +285,7 @@ pub(crate) fn push_badge_spans(
         spans.push(Span::raw("api:"));
         spans.push(Span::styled(
             badges.contract_changes.to_string(),
-            Style::default().fg(Color::Yellow),
+            warning_badge_style(),
         ));
         wrote_any_ascii_badge = true;
     }
@@ -292,7 +294,7 @@ pub(crate) fn push_badge_spans(
             spans.push(Span::raw(" "));
         }
         spans.push(Span::raw("fan-in:"));
-        spans.push(Span::styled(badges.fan_in.to_string(), cyan));
+        spans.push(Span::styled(badges.fan_in.to_string(), cyan_badge_style()));
         wrote_any_ascii_badge = true;
     }
 
@@ -320,7 +322,7 @@ pub(crate) fn push_badge_spans(
                 spans.push(Span::raw("warn:"));
                 spans.push(Span::styled(
                     badges.file_size_warn_count.to_string(),
-                    Style::default().fg(Color::Yellow),
+                    warning_badge_style(),
                 ));
             }
             if has_warn && has_split {
@@ -330,17 +332,43 @@ pub(crate) fn push_badge_spans(
                 spans.push(Span::raw("split:"));
                 spans.push(Span::styled(
                     badges.file_size_split_count.to_string(),
-                    Style::default().fg(Color::Red),
+                    split_badge_style(),
                 ));
             }
         }
     }
 }
 
+/// Style for the `chg:`/`fan-in:` badge numbers (cyan, informational
+/// counts — see [`push_badge_spans`]'s badge encoding rationale).
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend.
+pub(crate) fn cyan_badge_style() -> Style {
+    Style::default().fg(Color::Cyan)
+}
+
+/// Style for the `api:`/`warn:` badge numbers (yellow — the "pay
+/// attention" color, see [`push_badge_spans`]'s badge encoding rationale).
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend.
+pub(crate) fn warning_badge_style() -> Style {
+    Style::default().fg(Color::Yellow)
+}
+
+/// Style for the `split:` badge number (red).
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend.
+pub(crate) fn split_badge_style() -> Style {
+    Style::default().fg(Color::Red)
+}
+
 /// File-row `lines:N` badge style per [`FileSizeBand`] (ADR 0028
 /// amendment). `Split` is additionally bold so it doesn't read
 /// identically to `Warn`, which shares its red foreground.
-fn band_style(band: FileSizeBand) -> Style {
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend, the
+/// single source of truth for that legend's swatch styles.
+pub(crate) fn band_style(band: FileSizeBand) -> Style {
     match band {
         FileSizeBand::Normal => Style::default(),
         FileSizeBand::Watch => Style::default().fg(Color::Yellow),
@@ -391,8 +419,15 @@ fn test_badge_span(symbol_count: usize) -> Span<'static> {
     };
     Span::styled(
         format!("[test] ({symbol_count} {noun})"),
-        Style::default().fg(Color::Magenta),
+        test_badge_style(),
     )
+}
+
+/// Style for the `[test] (N symbols)` whole-test-file badge (magenta).
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend.
+pub(crate) fn test_badge_style() -> Style {
+    Style::default().fg(Color::Magenta)
 }
 
 /// A symbol row's leading classification marker: `+` added, `~`
@@ -400,7 +435,9 @@ fn test_badge_span(symbol_count: usize) -> Span<'static> {
 /// `x` removed. Kept as its own single-character span (rather than folded
 /// into `symbol_name_style`) so it reads as a consistent left-aligned
 /// column across rows regardless of name length.
-fn symbol_marker_span(symbol_ref: &SymbolRef) -> Span<'static> {
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend.
+pub(crate) fn symbol_marker_span(symbol_ref: &SymbolRef) -> Span<'static> {
     if symbol_ref.removed {
         return Span::styled("x", Style::default().fg(Color::Red));
     }
@@ -425,7 +462,9 @@ fn symbol_marker_span(symbol_ref: &SymbolRef) -> Span<'static> {
 /// dimmed the same way — group membership already conveys "this is test
 /// code", so the name itself only needs to read as lower review priority,
 /// not carry its own badge anymore.
-fn symbol_name_style(symbol_ref: &SymbolRef) -> Style {
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend.
+pub(crate) fn symbol_name_style(symbol_ref: &SymbolRef) -> Style {
     if symbol_ref.removed {
         Style::default()
             .fg(Color::DarkGray)
@@ -470,12 +509,16 @@ fn is_high_risk_symbol(symbol_ref: &SymbolRef, badges: &Badges) -> bool {
 /// layout is untouched (no reserved gutter column).
 fn push_risk_marker_span(spans: &mut Vec<Span<'static>>, is_risky: bool) {
     if is_risky {
-        spans.push(Span::styled(
-            "!",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled("!", risk_marker_style()));
         spans.push(Span::raw(" "));
     }
+}
+
+/// The `!` risk marker's style (bold red), factored out of
+/// [`push_risk_marker_span`] so `crate::ui::overlay`'s Markers legend can
+/// reuse it too.
+pub(crate) fn risk_marker_style() -> Style {
+    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
 }
 
 /// A short, fixed-width kind abbreviation for a symbol row (mirrors

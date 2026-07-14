@@ -26,6 +26,18 @@ pub struct GlossaryEntry {
     pub explanation: &'static str,
 }
 
+/// One marker-legend entry: a tree row marker/badge's display text paired
+/// with a short explanation of what it means — the visual-encoding
+/// counterpart to [`GlossaryEntry`]'s concept glossary. `crate::ui::overlay`
+/// renders `swatch` with the row's *real* style, looked up from
+/// `crate::row_view`'s own style producers rather than duplicated here, so
+/// this struct only needs to carry the text half.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkerLegendEntry {
+    pub swatch: &'static str,
+    pub explanation: &'static str,
+}
+
 /// One named group of [`KeyBinding`]s — "Tree focus", "Right focus", or
 /// "Global" (ADR 0020's own focus/global split).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,10 +47,12 @@ pub struct KeyBindingGroup {
 }
 
 /// The whole help overlay's content: every keymap group in display order,
-/// then the glossary. A `const`, not a function — the content is fixed at
-/// compile time, so there is nothing to compute per call.
+/// then the markers legend, then the glossary. A `const`, not a function —
+/// the content is fixed at compile time, so there is nothing to compute per
+/// call.
 pub struct HelpContent {
     pub keymap_groups: &'static [KeyBindingGroup],
+    pub markers: &'static [MarkerLegendEntry],
     pub glossary: &'static [GlossaryEntry],
 }
 
@@ -173,6 +187,87 @@ const KEYMAP_GROUPS: &[KeyBindingGroup] = &[
     },
 ];
 
+/// The tree pane's marker/badge legend, in the same added-like →
+/// changed-like → removed-like → aggregates reading order as the mermaid
+/// legend (ADR 0039/0040) — the visual-encoding reference for every marker
+/// `crate::row_view::entry_row_line` can draw. `swatch` is the display text
+/// only; `crate::ui::overlay` pairs each with its real style from
+/// `crate::row_view`.
+const MARKER_LEGEND: &[MarkerLegendEntry] = &[
+    MarkerLegendEntry {
+        swatch: "v / >",
+        explanation: "Expand marker: children shown / hidden (blank = leaf, nothing to expand)",
+    },
+    MarkerLegendEntry {
+        swatch: "fn struct enum trait class iface type",
+        explanation: "Symbol row's kind prefix, abbreviated from the language's own keyword",
+    },
+    MarkerLegendEntry {
+        swatch: "+",
+        explanation: "Added symbol",
+    },
+    MarkerLegendEntry {
+        swatch: "~",
+        explanation: "Signature-changed symbol",
+    },
+    MarkerLegendEntry {
+        swatch: "(dimmed name)",
+        explanation: "Body-only, unclassified, or test symbol — exists, but carries less review weight",
+    },
+    MarkerLegendEntry {
+        swatch: "x",
+        explanation: "Removed symbol",
+    },
+    MarkerLegendEntry {
+        swatch: "(dimmed + struck-through name)",
+        explanation: "Removed symbol's name",
+    },
+    MarkerLegendEntry {
+        swatch: "(cycle)",
+        explanation: "Directory contains a dependency cycle",
+    },
+    MarkerLegendEntry {
+        swatch: "!",
+        explanation: "Risk marker: a contract change and a high-fan-in symbol in the same subtree",
+    },
+    MarkerLegendEntry {
+        swatch: "[test] (N symbols)",
+        explanation: "Whole-test-file badge",
+    },
+    MarkerLegendEntry {
+        swatch: "N tests",
+        explanation: "Collapsed group of a file's test symbols",
+    },
+    MarkerLegendEntry {
+        swatch: "(skipped: ...)",
+        explanation: "Reason a file was not analyzed (parse failure, unsupported language, ...)",
+    },
+    MarkerLegendEntry {
+        swatch: "chg:N",
+        explanation: "Changed, non-removed symbols in this subtree",
+    },
+    MarkerLegendEntry {
+        swatch: "api:N",
+        explanation: "Contract changes in this subtree: signature-changed symbols plus removed symbols",
+    },
+    MarkerLegendEntry {
+        swatch: "fan-in:N",
+        explanation: "Sum of used_by counts over every high-fan-in symbol in this subtree",
+    },
+    MarkerLegendEntry {
+        swatch: "lines:N",
+        explanation: "This file's own line count, colored by file-size band (normal/watch/warn/split)",
+    },
+    MarkerLegendEntry {
+        swatch: "warn:N",
+        explanation: "Directory rows: count of Warn-band files in this subtree",
+    },
+    MarkerLegendEntry {
+        swatch: "split:N",
+        explanation: "Directory rows: count of Split-band files in this subtree",
+    },
+];
+
 const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "topological order",
@@ -194,23 +289,12 @@ const GLOSSARY: &[GlossaryEntry] = &[
         term: "jumplist",
         explanation: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it",
     },
-    GlossaryEntry {
-        term: "chg: / api: / fan-in:",
-        explanation: "Tree row badges: changed symbols, contract changes (signature-changed or deleted, shown in yellow), and fan-in (symbols referenced by 2+ other changed production symbols — tests exercising a symbol don't count toward its fan-in)",
-    },
-    GlossaryEntry {
-        term: "!",
-        explanation: "Risk marker: this row has both a contract change and a high-fan-in symbol in the same subtree — a change that is both hard to miss and wide-reaching",
-    },
-    GlossaryEntry {
-        term: "N tests",
-        explanation: "A collapsed group of a file's test symbols — expand it to see them individually, dimmed to show they carry less review weight than production code",
-    },
 ];
 
 /// The whole help overlay's content (module doc comment).
 pub const HELP_CONTENT: HelpContent = HelpContent {
     keymap_groups: KEYMAP_GROUPS,
+    markers: MARKER_LEGEND,
     glossary: GLOSSARY,
 };
 
@@ -270,6 +354,63 @@ mod tests {
     }
 
     #[test]
+    fn should_order_marker_legend_added_changed_removed_then_aggregates() {
+        let swatches: Vec<&str> = HELP_CONTENT
+            .markers
+            .iter()
+            .map(|entry| entry.swatch)
+            .collect();
+
+        assert_eq!(
+            vec![
+                "v / >",
+                "fn struct enum trait class iface type",
+                "+",
+                "~",
+                "(dimmed name)",
+                "x",
+                "(dimmed + struck-through name)",
+                "(cycle)",
+                "!",
+                "[test] (N symbols)",
+                "N tests",
+                "(skipped: ...)",
+                "chg:N",
+                "api:N",
+                "fan-in:N",
+                "lines:N",
+                "warn:N",
+                "split:N",
+            ],
+            swatches
+        );
+    }
+
+    #[test]
+    fn should_describe_api_badge_as_signature_changed_plus_removed_symbols() {
+        let entry = HELP_CONTENT
+            .markers
+            .iter()
+            .find(|entry| entry.swatch == "api:N")
+            .expect("api:N entry present");
+
+        assert!(entry.explanation.contains("removed"));
+        assert!(entry.explanation.contains("signature-changed"));
+    }
+
+    #[test]
+    fn should_describe_fan_in_badge_as_a_sum_over_high_fan_in_symbols() {
+        let entry = HELP_CONTENT
+            .markers
+            .iter()
+            .find(|entry| entry.swatch == "fan-in:N")
+            .expect("fan-in:N entry present");
+
+        assert!(entry.explanation.contains("Sum"));
+        assert!(entry.explanation.contains("high-fan-in"));
+    }
+
+    #[test]
     fn should_include_a_glossary_entry_for_blast_radius_and_cycle() {
         let terms: Vec<&str> = HELP_CONTENT
             .glossary
@@ -290,29 +431,6 @@ mod tests {
             .collect();
 
         assert!(terms.contains(&"jumplist"));
-    }
-
-    #[test]
-    fn should_include_a_glossary_entry_for_tree_row_badges() {
-        let terms: Vec<&str> = HELP_CONTENT
-            .glossary
-            .iter()
-            .map(|entry| entry.term)
-            .collect();
-
-        assert!(terms.contains(&"chg: / api: / fan-in:"));
-    }
-
-    #[test]
-    fn should_include_a_glossary_entry_for_the_risk_marker_and_test_group() {
-        let terms: Vec<&str> = HELP_CONTENT
-            .glossary
-            .iter()
-            .map(|entry| entry.term)
-            .collect();
-
-        assert!(terms.contains(&"!"));
-        assert!(terms.contains(&"N tests"));
     }
 
     #[test]
