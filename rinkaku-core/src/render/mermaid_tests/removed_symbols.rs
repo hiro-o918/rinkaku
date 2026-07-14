@@ -29,8 +29,8 @@ fn should_render_removed_node_in_its_file_subgraph_when_report_has_removed_symbo
     let expected = concat!(
         "flowchart LR\n",
         "  subgraph sub0[\"src/lib.rs\"]\n",
-        "    n0[\"foo\"]\n",
-        "    n1[\"old_helper\"]\n",
+        "    n0[\"+ foo\"]\n",
+        "    n1[\"- old_helper\"]\n",
         "  end\n",
         "  class n0 added\n",
         "  class n1 removed\n",
@@ -57,7 +57,7 @@ fn should_render_removed_only_file_subgraph_when_file_has_no_surviving_symbols()
     let expected = concat!(
         "flowchart LR\n",
         "  subgraph sub0[\"src/gone.rs\"]\n",
-        "    n0[\"old_only\"]\n",
+        "    n0[\"- old_only\"]\n",
         "  end\n",
         "  class n0 removed\n",
     )
@@ -162,6 +162,7 @@ fn should_render_removed_only_file_as_removed_node_when_fallback_fires() {
         "  n1[\"src/b.rs\"]\n",
         "  n2[\"src/gone.rs\"]\n",
         "  class n0 changed\n",
+        "  class n1 referenced\n",
         "  class n2 removed\n",
     )
     .to_string()
