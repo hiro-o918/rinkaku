@@ -7,10 +7,13 @@
 //! - `wrap_lines` — `wrap_lines`/`wrap_one_line`
 //! - `truncation` — `truncate_to_width`/`truncate_to_width_keeping_tail`/
 //!   `truncate_line_to_width`
+//! - `pair_wrap` — ADR 0044's per-side wrap-then-pad helper for the Diff
+//!   pane's split view
 
 use super::*;
 
 mod clamp_and_indicator;
+mod pair_wrap;
 mod truncation;
 mod windowing;
 mod wrap_lines;

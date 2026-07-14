@@ -1,5 +1,7 @@
 use super::{empty_report, report_with_one_symbol, report_with_two_directories_and_graph, symbol};
-use crate::app::{App, BlastRadiusSelection, DiffFocus, DiffTarget, InputKey, RightPane, Screen};
+use crate::app::{
+    App, BlastRadiusSelection, DiffFocus, DiffTarget, DiffViewMode, InputKey, RightPane, Screen,
+};
 use pretty_assertions::assert_eq;
 use rinkaku_core::diff::LineRange;
 use rinkaku_core::extract::ExtractedSymbol;
@@ -104,6 +106,60 @@ fn should_return_to_detail_when_blast_radius_is_toggled_off_after_entering_from_
     let app = app.handle_key(InputKey::ToggleBlastRadius);
 
     assert_eq!(RightPane::Detail, app.right_pane());
+}
+
+#[test]
+fn should_default_diff_view_mode_to_unified() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+}
+
+#[test]
+fn should_toggle_diff_view_mode_between_unified_and_split() {
+    let report = empty_report();
+    let app = App::new(&report);
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+
+    let app = app.handle_key(InputKey::ToggleSplitView);
+    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
+
+    let app = app.handle_key(InputKey::ToggleSplitView);
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+}
+
+#[test]
+fn should_preserve_diff_view_mode_when_cursor_moves_to_a_different_row() {
+    // A per-`App` mode, not a per-row one (ADR 0044 decision 2) — mirrors
+    // `RightPane`'s own persistence across cursor moves.
+    let report = report_with_two_directories_and_graph();
+    let app = App::new(&report).handle_key(InputKey::ToggleSplitView);
+    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
+
+    let app = app.handle_key(InputKey::Down);
+
+    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
+}
+
+#[test]
+fn should_ignore_toggle_split_view_while_source_screen_is_open() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Source);
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+
+    let app = app.handle_key(InputKey::ToggleSplitView);
+
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+    assert_eq!(
+        Screen::Source {
+            symbol_id: "lib.rs::foo".to_string(),
+            scroll_top: 0,
+        },
+        *app.screen()
+    );
 }
 
 #[test]

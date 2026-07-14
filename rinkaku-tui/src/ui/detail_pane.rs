@@ -3,7 +3,7 @@
 //! summary for a file row. Layout only — the underlying view models
 //! (`DetailView`, `DirDetail`, `FileDetail`) come from `crate::detail`.
 
-use super::scroll::render_scrollable_pane;
+use super::scroll::{Body, render_scrollable_pane};
 use super::style::pane_border_style;
 use crate::app::{App, Focus, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
@@ -46,7 +46,7 @@ pub(crate) fn draw_detail_pane(
         frame,
         " Detail ",
         &[],
-        &lines,
+        Body::Single(&lines),
         app.right_pane_scroll(),
         area,
         focused,

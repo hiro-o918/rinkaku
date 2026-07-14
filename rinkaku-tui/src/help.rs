@@ -135,6 +135,10 @@ const GLOBAL_BINDINGS: &[KeyBinding] = &[
         description: "Toggle the right pane to the blast radius of the selected row",
     },
     KeyBinding {
+        keys: "v / V",
+        description: "Toggle the Diff pane between unified and split (side-by-side) rendering",
+    },
+    KeyBinding {
         keys: "o / O",
         description: "Toggle topological/alphabetical ordering",
     },

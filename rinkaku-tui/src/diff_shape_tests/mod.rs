@@ -24,6 +24,7 @@ use rinkaku_core::render::{FileReport, ReportOrigin};
 mod build_diff_pane_content;
 mod changed_line_ranges;
 mod hunk_start_lines;
+mod pair_hunk_lines;
 mod section_start_line;
 mod symbol_id_for_scroll_line;
 

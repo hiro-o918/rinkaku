@@ -2,7 +2,9 @@
 //! composited on top of whatever screen was already rendered underneath,
 //! after the pane split has drawn everything else.
 
-use super::scroll::{render_scrollable_pane, truncate_to_width, windowed_rows_with_indicators};
+use super::scroll::{
+    Body, render_scrollable_pane, truncate_to_width, windowed_rows_with_indicators,
+};
 use crate::row_view::{
     band_style, cyan_badge_style, risk_marker_style, split_badge_style, symbol_marker_span,
     symbol_name_style, test_badge_style, warning_badge_style,
@@ -197,7 +199,7 @@ pub(crate) fn draw_help_overlay(
         frame,
         " Help (? to close) ",
         &[],
-        &lines,
+        Body::Single(&lines),
         requested_scroll,
         overlay_area,
         true,

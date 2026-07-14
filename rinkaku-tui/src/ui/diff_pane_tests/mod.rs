@@ -6,6 +6,9 @@
 //! - `row_kinds` — the "which content shows for which row" coverage:
 //!   symbol row, skipped file (binary and textual), file selection with
 //!   per-symbol section headers, and the contract-header disclosure order
+//! - `split_view` — ADR 0044's side-by-side rendering: paired old/new
+//!   lines, the narrow-pane fallback to unified, and unified staying the
+//!   default when the toggle was never pressed
 //! - `styling` — token/diff background tint, hunk-header color, and the
 //!   unrecognized-extension style fallback
 
@@ -21,6 +24,7 @@ use rinkaku_core::render::FileReport;
 
 mod header_lines;
 mod row_kinds;
+mod split_view;
 mod styling;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {
