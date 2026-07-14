@@ -233,12 +233,58 @@ index e69de29..4b825dc 100644
     let text = buffer_text(&terminal);
     assert!(text.contains("+b: 2"));
 
-    // Falls back to the pane's original plain green foreground with no
-    // background tint at all (`Some(Color::Reset)` is ratatui's
-    // "unset" — see the context-line test above for why this isn't
-    // `None`) — highlighting failing (or, here, never applying) must
-    // never break the pre-existing diff styling.
+    // Falls back to the pane's plain green foreground, now with the same
+    // `ADDED_BG` tint a highlighted line carries — highlighting failing
+    // (or, here, never applying) must not lose the diff background signal.
     let added_style = find_cell_style(&terminal, "+b: 2", "b");
-    assert_eq!(Some(Color::Reset), added_style.bg);
+    assert_eq!(Some(ADDED_BG), added_style.bg);
     assert_eq!(Some(Color::Green), added_style.fg);
+}
+
+#[test]
+fn should_apply_added_background_tint_to_plain_diff_line_when_no_token_spans() {
+    let line = crate::diff_view::DiffLine {
+        kind: crate::diff_view::DiffLineKind::Added,
+        content: "fn foo() {}".to_string(),
+    };
+
+    let actual = plain_diff_line(&line);
+
+    assert_eq!(
+        Line::styled(
+            "+fn foo() {}".to_string(),
+            Style::default().fg(Color::Green).bg(ADDED_BG),
+        ),
+        actual
+    );
+}
+
+#[test]
+fn should_apply_removed_background_tint_to_plain_diff_line_when_no_token_spans() {
+    let line = crate::diff_view::DiffLine {
+        kind: crate::diff_view::DiffLineKind::Removed,
+        content: "fn foo() {}".to_string(),
+    };
+
+    let actual = plain_diff_line(&line);
+
+    assert_eq!(
+        Line::styled(
+            "-fn foo() {}".to_string(),
+            Style::default().fg(Color::Red).bg(REMOVED_BG),
+        ),
+        actual
+    );
+}
+
+#[test]
+fn should_keep_context_line_unstyled_in_plain_diff_line_when_no_token_spans() {
+    let line = crate::diff_view::DiffLine {
+        kind: crate::diff_view::DiffLineKind::Context,
+        content: "fn foo() {}".to_string(),
+    };
+
+    let actual = plain_diff_line(&line);
+
+    assert_eq!(Line::raw(" fn foo() {}".to_string()), actual);
 }
