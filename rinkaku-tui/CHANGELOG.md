@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.3](https://github.com/hiro-o918/rinkaku/compare/v0.6.2...v0.6.3) (2026-07-14)
+
+
+### Features
+
+* **tui:** widen right pane and show symbol name in diff pane title ([#144](https://github.com/hiro-o918/rinkaku/issues/144)) ([24d4184](https://github.com/hiro-o918/rinkaku/commit/24d4184ec9ae2266be578bcfd36e016419de0b8e))
+
+
+### Miscellaneous
+
+* release main ([#141](https://github.com/hiro-o918/rinkaku/issues/141)) ([e290b43](https://github.com/hiro-o918/rinkaku/commit/e290b43693a5b7e5950a4175b226f3c4cc47dfda))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.2 to 0.6.3
+
 ## [0.6.2](https://github.com/hiro-o918/rinkaku/compare/v0.6.1...v0.6.2) (2026-07-14)
 
 
