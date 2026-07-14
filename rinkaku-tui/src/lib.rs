@@ -990,13 +990,47 @@ fn perform_export(
         }
         review::ExportRequest::Clipboard => {
             let packet = review::render_agent_packet(review.notes());
-            match ports.clipboard.copy(&packet) {
-                Ok(()) => review.set_status(
-                    "copied review notes to clipboard via OSC 52 (terminal support required)",
-                ),
-                Err(message) => review.set_status(format!("error copying to clipboard: {message}")),
+            let result = ports.clipboard.copy(&packet);
+            let status = clipboard_export_status(&packet, result);
+            review.set_status(status)
+        }
+    }
+}
+
+/// A conservative guard on the OSC 52 packet's *raw* byte length (ADR
+/// 0048), below common terminal-side payload caps (~100KB is a frequently
+/// cited limit, e.g. iTerm2/xterm.js) even after base64 inflates the wire
+/// payload to ~4/3 of this — terminals that enforce such a cap tend to
+/// silently drop or truncate an oversized OSC 52 sequence rather than
+/// erroring, so [`Osc52Clipboard::copy`]-equivalent ports (`rinkaku`'s own
+/// `Osc52Clipboard`) have no way to detect the failure themselves; this
+/// guard exists purely to warn the reviewer before that silent failure
+/// bites them.
+const OSC52_SIZE_GUARD_BYTES: usize = 48 * 1024;
+
+/// Folds sink B's [`review::ports::ClipboardSink::copy`] result into a
+/// status message: the port's own error message on `Err`, otherwise a
+/// plain success note — or, when `packet` exceeds
+/// [`OSC52_SIZE_GUARD_BYTES`], the same success note plus a warning that
+/// the terminal may have silently dropped or truncated it, with a manual-
+/// copy fallback suggestion. The copy itself already happened by the time
+/// this runs; the guard only changes the *message*, never whether the copy
+/// is attempted.
+fn clipboard_export_status(packet: &str, result: Result<(), String>) -> String {
+    match result {
+        Ok(()) => {
+            let base = "copied review notes to clipboard via OSC 52 (terminal support required)";
+            if packet.len() > OSC52_SIZE_GUARD_BYTES {
+                format!(
+                    "{base} — packet is {} bytes, which may exceed the terminal's OSC 52 limit; \
+                     copy manually if the paste looks truncated",
+                    packet.len()
+                )
+            } else {
+                base.to_string()
             }
         }
+        Err(message) => format!("error copying to clipboard: {message}"),
     }
 }
 
