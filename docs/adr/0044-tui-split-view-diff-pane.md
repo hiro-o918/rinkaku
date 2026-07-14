@@ -250,3 +250,66 @@ whenever the pane is too narrow for split, independent of
 `diff_view_mode` — so this default change carries no new risk for
 narrow terminals, only for wide ones where split was already available
 a keypress away.
+
+## Amendment: similarity-based alignment within a run
+
+Decision 3's positional pairing (row `i` of a replace run gets the
+run's `i`-th removed/added line) and the Alternatives section's
+rejection of "a real Myers-diff-style token/line alignment" both
+assumed a replace run's removed and added lines correspond 1:1 by
+position — reasonable when git's own line-level diff already resolved
+which old line corresponds to which new line, as Alternatives argued.
+Dogfooding surfaced a run shape where that assumption breaks: lines
+inserted *ahead* of an otherwise-unchanged line (e.g. a doc comment
+added above an unchanged function signature) shift every position
+after the insertion, so positional pairing puts the unchanged
+signature's `Removed` row next to the *comment's* `Added` row instead
+of the signature's own — the exact "scan past unrelated content to
+find the real counterpart" problem this whole ADR exists to fix,
+reintroduced inside the pane meant to fix it.
+
+The Alternatives section's rejection was about *re-diffing git's
+output* (finding correspondence git's line-level diff didn't already
+resolve) — that reasoning does not cover this case, where the
+correspondence *is* resolvable (the signature line is still
+recognizably the same line) but positional pairing discards the
+signal by only ever comparing same-offset lines.
+
+**`crate::split_pairing::pair_hunk_lines`'s per-run pairing
+(`crate::diff_shape::pair_hunk_lines` before this amendment split the
+module) is now a similarity-based alignment**, not pure position:
+
+- Each removed/added run pair is scored with a Needleman-Wunsch-style
+  alignment DP (gap cost 0) over per-line similarity — the Jaccard
+  index of each line's whitespace-split token set, `0.0..=1.0`.
+- Only pairs scoring at or above `SIMILARITY_THRESHOLD` (`0.5`) are
+  matched; an unmatched line becomes its own row against `None` on the
+  other side, preserving order.
+- **Two fallbacks reproduce the pre-amendment behavior exactly**,
+  rather than degrading alignment quality below what positional
+  pairing already offered: a run pair with zero matches above
+  threshold (no similarity signal to exploit) and a run longer than
+  `SIMILARITY_ALIGNMENT_MAX_RUN_LEN` (`200`, avoiding the DP's
+  quadratic cost on a rare, very large replace) both call the extracted
+  `positional_pairing` helper directly.
+- The total-row invariant (decision 4) is preserved by construction:
+  one filler row per *matched pair* (generalizing the old "one filler
+  row per positionally-paired row" count), so
+  `crate::diff_shape::walk_sections`/`hunk_start_lines`/
+  `section_start_line_for_symbol`/`symbol_id_for_scroll_line` still
+  need no changes — this amendment only changes *which* lines end up
+  paired on a row, never how many rows a run produces.
+
+This grew the pairing logic past what fits comfortably alongside
+`crate::diff_shape`'s section-building and unified-view line counting
+(CLAUDE.md's file-size discipline), so `SplitRow`/`pair_hunk_lines`
+and their helpers moved to a new sibling module,
+`crate::split_pairing`, re-exported from `crate::diff_shape` so every
+existing `crate::diff_shape::{SplitRow, pair_hunk_lines}` call site is
+unchanged.
+
+Token-based similarity (not a character diff) was chosen so
+reindentation or a single changed argument does not swamp the score,
+and order-insensitive token-set overlap (not a positional token
+comparison) so a reordered clause still scores high — both suit
+comparing source lines, whose meaningful unit of change is the token.
