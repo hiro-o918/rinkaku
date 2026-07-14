@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.1](https://github.com/hiro-o918/rinkaku/compare/v0.6.0...v0.6.1) (2026-07-14)
+
+
+### Features
+
+* exclude test referrers from fan-in and encode review risk in the TUI ([#137](https://github.com/hiro-o918/rinkaku/issues/137)) ([eacb845](https://github.com/hiro-o918/rinkaku/commit/eacb8453b852acc4b224880f825d3df6fc4c1f6b))
+* tighten file size thresholds and always show per-file line counts ([#123](https://github.com/hiro-o918/rinkaku/issues/123)) ([e6ff1d0](https://github.com/hiro-o918/rinkaku/commit/e6ff1d0009b5e03102eaf491ba402e1d2dbd5983))
+* **tui:** move test badge before the file label in entry tree ([#120](https://github.com/hiro-o918/rinkaku/issues/120)) ([53d18bf](https://github.com/hiro-o918/rinkaku/commit/53d18bf8812e346b8656457b1ef994eca3e045e1))
+* **tui:** truncate overflowing entry tree rows with ellipsis ([#121](https://github.com/hiro-o918/rinkaku/issues/121)) ([f3441dc](https://github.com/hiro-o918/rinkaku/commit/f3441dcf0975473639d93d70cf77b436100a39c3))
+
+
+### Miscellaneous
+
+* release main ([#119](https://github.com/hiro-o918/rinkaku/issues/119)) ([957c4d4](https://github.com/hiro-o918/rinkaku/commit/957c4d4a00cada5f01d6a0df54a5a2cc20b8451d))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.0 to 0.6.1
+
 ## [0.6.0](https://github.com/hiro-o918/rinkaku/compare/v0.5.0...v0.6.0) (2026-07-13)
 
 

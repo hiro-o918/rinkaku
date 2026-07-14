@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.2](https://github.com/hiro-o918/rinkaku/compare/v0.6.1...v0.6.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* buffer log:: output during --tui mode to prevent splash corruption ([#134](https://github.com/hiro-o918/rinkaku/issues/134)) ([81cba22](https://github.com/hiro-o918/rinkaku/commit/81cba224803cf75e8f380339d6b9c6b3a2990ad4))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.0 to 0.6.1
+    * rinkaku-tui bumped from 0.6.0 to 0.6.1
+
 ## [0.6.1](https://github.com/hiro-o918/rinkaku/compare/v0.6.0...v0.6.1) (2026-07-13)
 
 
