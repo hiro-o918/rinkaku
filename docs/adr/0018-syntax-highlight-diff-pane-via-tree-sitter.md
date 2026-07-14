@@ -96,3 +96,18 @@ edited on disk after opening the source screen no longer picks up the
 edit until the screen is re-opened (`s` again), trading that rare case
 for the "no per-frame reparse" invariant this crate holds everywhere
 else.
+
+## Amendment: fallback style now carries the background tint too
+
+Dogfooding found the plain-style fallback (`plain_diff_line`, used when a
+hunk has no highlight data at all) inconsistent with the highlighted
+path: a highlighted line's `+`/`-` marker and tokens sit on the
+`ADDED_BG`/`REMOVED_BG` tint from this ADR's main decision, but the
+fallback rendered green/red foreground on no background, so an
+unrecognized-extension file's hunks read visually different from a
+highlighted one for the same diff signal. `plain_diff_line` now applies
+the same `ADDED_BG`/`REMOVED_BG` tint as the highlighted path (context
+lines stay unstyled either way); the contract header (the bold red `-`/
+green `+` old/new signature pair before a section's hunks) is unchanged,
+since it is not an actual diff line and keeps signaling via foreground
+color alone.

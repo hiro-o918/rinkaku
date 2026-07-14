@@ -37,7 +37,10 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, ar
 /// `]`/`[` jump for that pane/focus combination (it needs the Diff pane's
 /// shaped hunk-offset table, which Detail/BlastRadius have no equivalent
 /// of), so advertising the key while Detail/BlastRadius is showing would
-/// describe a binding that does nothing there.
+/// describe a binding that does nothing there. `v: split`
+/// ([`crate::app::InputKey::ToggleSplitView`], ADR 0044) is scoped the
+/// same way: the toggle is global, but it only has a visible effect while
+/// the Diff pane is on screen.
 ///
 /// Extracted as its own pure function (no `ratatui` types) so the text
 /// itself — not just that *something* renders — is unit-testable, mirroring
@@ -68,7 +71,7 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
                     "j/k: move  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
-                    "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+                    "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  v: split  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right => {
                     "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
@@ -268,7 +271,7 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  v: split  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );

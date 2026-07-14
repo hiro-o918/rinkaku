@@ -316,11 +316,11 @@ fn selected_row_badges(app: &App) -> Badges {
 /// Within each section, hunk headers stay dim, `+`/`-` marker glyphs keep
 /// their existing bold green/red foreground, and each line's own code
 /// tokens are colored by [`highlight::lookup_hunk_highlight_by_index`] when
-/// available (ADR 0018/0020) — falling back to the plain green/red/
-/// unstyled line style this pane always had when a hunk has no highlight
-/// (unknown extension, parse/query failure, or `highlighted_file` itself
-/// being `None`) so highlighting can never make a diff harder to read than
-/// before.
+/// available (ADR 0018/0020) — falling back to [`plain_diff_line`] (green/
+/// red foreground plus the same `ADDED_BG`/`REMOVED_BG` tint, unstyled for
+/// context) when a hunk has no highlight (unknown extension, parse/query
+/// failure, or `highlighted_file` itself being `None`) so highlighting can
+/// never make a diff harder to read than before.
 pub(crate) fn diff_pane_lines(
     sections: &[&DiffSection],
     show_section_headers: bool,
@@ -489,10 +489,12 @@ fn split_side_line(
 
 /// Builds one display line for a hunk body line, coloring its code tokens
 /// per `token_spans` (`None` when highlighting is unavailable for this
-/// line — falls back to the pane's original plain style). The `+`/`-`
-/// marker glyph itself is always pushed as its own bold-colored span, kept
-/// outside of `line.content`'s token coloring so it is never masked by a
-/// token span that happens to start at byte 0.
+/// line — falls back to [`plain_diff_line`], which now also carries the
+/// `ADDED_BG`/`REMOVED_BG` tint so a highlighted and an unhighlighted hunk
+/// read as the same "this line changed" signal). The `+`/`-` marker glyph
+/// itself is always pushed as its own bold-colored span, kept outside of
+/// `line.content`'s token coloring so it is never masked by a token span
+/// that happens to start at byte 0.
 pub(crate) fn diff_line(line: &DiffLine, token_spans: Option<Vec<TokenSpan>>) -> Line<'static> {
     match &token_spans {
         Some(spans) => {
@@ -509,17 +511,20 @@ pub(crate) fn diff_line(line: &DiffLine, token_spans: Option<Vec<TokenSpan>>) ->
     }
 }
 
-/// The pane's original (pre-ADR-0018) plain green/red/unstyled line style —
-/// the fallback for a line highlighting could not cover.
+/// The fallback line style for a line highlighting could not cover
+/// (unknown extension, parse/query failure, or no highlighted file at
+/// all): the same `+`/`-`/green/red foreground as the highlighted path,
+/// plus the same `ADDED_BG`/`REMOVED_BG` tint — a context line stays
+/// unstyled since it carries no diff signal either way.
 pub(crate) fn plain_diff_line(line: &DiffLine) -> Line<'static> {
     match line.kind {
         DiffLineKind::Added => Line::styled(
             format!("+{}", line.content),
-            Style::default().fg(Color::Green),
+            Style::default().fg(Color::Green).bg(ADDED_BG),
         ),
         DiffLineKind::Removed => Line::styled(
             format!("-{}", line.content),
-            Style::default().fg(Color::Red),
+            Style::default().fg(Color::Red).bg(REMOVED_BG),
         ),
         DiffLineKind::Context => Line::raw(format!(" {}", line.content)),
     }

@@ -119,13 +119,15 @@ pub enum RightPane {
 /// cursor moves to a different row, the same way [`RightPane`] already
 /// persists across cursor moves.
 ///
-/// Defaults to `Unified`: every prior ADR describing the Diff pane assumes
-/// unified rendering, so it stays the opening state rather than surprising
-/// a reviewer who has not yet discovered the toggle.
+/// Defaults to `Split` (ADR 0044 amendment): dogfooding found split the
+/// more useful opening state for the pane's usual case (a signature or
+/// small block edit), and `MIN_SPLIT_VIEW_WIDTH`'s narrow-terminal
+/// fallback already keeps a cramped pane on unified regardless of this
+/// default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DiffViewMode {
-    #[default]
     Unified,
+    #[default]
     Split,
 }
 

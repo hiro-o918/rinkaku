@@ -55,11 +55,12 @@ only becomes load-bearing when the output would otherwise not be TUI
 - **Diff pane (right, default)** — the raw unified-diff hunks touching
   the selected row, syntax-highlighted for the four built-in languages
   ([ADR 0018](adr/0018-syntax-highlight-diff-pane-via-tree-sitter.md)).
-  Press `v`/`V` to switch to a split (side-by-side old/new) view for the
-  same hunks — useful for edits where seeing the old and new lines
-  aligned next to each other is easier to scan than interleaved `-`/`+`
-  lines. Split view needs a reasonably wide pane; on a narrow terminal
-  it falls back to unified and the pane header notes why.
+  Opens in a split (side-by-side old/new) view by default — useful for
+  edits where seeing the old and new lines aligned next to each other is
+  easier to scan than interleaved `-`/`+` lines. Press `v`/`V` to switch
+  to unified rendering for the same hunks. Split view needs a reasonably
+  wide pane; on a narrow terminal it falls back to unified regardless of
+  the toggle, and the pane header notes why.
 - **Detail pane (right)** — what the cursor is on: classification,
   signature (with an old/new diff on contract change), used-by, callees;
   or, for a directory, its badge breakdown and cycle members.

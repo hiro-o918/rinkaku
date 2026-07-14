@@ -235,3 +235,18 @@ two modes.
 - No backward-compatibility concern: the TUI has never shipped a
   release (ADR 0015/0016, restated by every TUI-scoped ADR since), so
   this is a pure addition, not a migration.
+
+## Amendment: default flipped to `Split`
+
+Decision 2 originally defaulted `DiffViewMode` to `Unified`, reasoning
+that every prior ADR's screenshots assumed unified rendering. Further
+dogfooding after the toggle shipped found the opposite: split is the
+more useful *opening* state for the pane's typical case (a signature or
+small block edit, exactly what the split view exists to make legible),
+and reviewers were pressing `v` immediately on most sessions anyway.
+`DiffViewMode::default()` now returns `Split`. Decision 7's narrow-
+terminal fallback (`MIN_SPLIT_VIEW_WIDTH`) already renders unified
+whenever the pane is too narrow for split, independent of
+`diff_view_mode` — so this default change carries no new risk for
+narrow terminals, only for wide ones where split was already available
+a keypress away.
