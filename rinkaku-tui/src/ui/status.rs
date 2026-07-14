@@ -225,6 +225,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");

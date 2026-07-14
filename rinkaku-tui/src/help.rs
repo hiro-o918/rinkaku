@@ -125,6 +125,21 @@ const SOURCE_SCREEN_BINDINGS: &[KeyBinding] = &[
     },
 ];
 
+const REVIEW_BINDINGS: &[KeyBinding] = &[
+    KeyBinding {
+        keys: "n",
+        description: "Compose a review note over the symbol under the cursor",
+    },
+    KeyBinding {
+        keys: "N",
+        description: "Open the review notes list",
+    },
+    KeyBinding {
+        keys: "j/k, Enter, Esc, d",
+        description: "Notes list: move, export, close, delete",
+    },
+];
+
 const GLOBAL_BINDINGS: &[KeyBinding] = &[
     KeyBinding {
         keys: "d / D",
@@ -184,6 +199,10 @@ const KEYMAP_GROUPS: &[KeyBindingGroup] = &[
     KeyBindingGroup {
         title: "Source view",
         bindings: SOURCE_SCREEN_BINDINGS,
+    },
+    KeyBindingGroup {
+        title: "Review",
+        bindings: REVIEW_BINDINGS,
     },
     KeyBindingGroup {
         title: "Global",
@@ -308,7 +327,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn should_list_keymap_groups_in_tree_right_source_global_order() {
+    fn should_list_keymap_groups_in_tree_right_source_review_global_order() {
         let titles: Vec<&str> = HELP_CONTENT
             .keymap_groups
             .iter()
@@ -316,7 +335,13 @@ mod tests {
             .collect();
 
         assert_eq!(
-            vec!["Tree focus", "Right focus", "Source view", "Global"],
+            vec![
+                "Tree focus",
+                "Right focus",
+                "Source view",
+                "Review",
+                "Global"
+            ],
             titles
         );
     }
@@ -451,6 +476,21 @@ mod tests {
         assert!(keys.contains(&"gr"));
         assert!(keys.contains(&"ctrl-o"));
         assert!(keys.contains(&"ctrl-i"));
+    }
+
+    #[test]
+    fn should_document_review_notes_bindings_in_a_review_group() {
+        let review = HELP_CONTENT
+            .keymap_groups
+            .iter()
+            .find(|group| group.title == "Review")
+            .expect("Review group present");
+
+        let keys: Vec<&str> = review.bindings.iter().map(|binding| binding.keys).collect();
+
+        assert!(keys.contains(&"n"));
+        assert!(keys.contains(&"N"));
+        assert!(keys.contains(&"j/k, Enter, Esc, d"));
     }
 
     #[test]

@@ -36,6 +36,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -88,6 +89,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -115,7 +117,13 @@ fn should_pair_old_and_new_signature_on_one_row_when_section_has_a_contract_head
         hunks: vec![],
     };
 
-    let (left, right) = diff_pane_split_rows(&[&section], true, None);
+    let (left, right) = diff_pane_split_rows(
+        &[&section],
+        true,
+        None,
+        &crate::note_markers::NoteMarkers::default(),
+        "lib.rs",
+    );
 
     assert_eq!(
         vec![
@@ -204,6 +212,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -253,6 +262,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");

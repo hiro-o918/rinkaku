@@ -32,6 +32,11 @@ use rinkaku_core::render::Report;
 /// of `draw_detail_pane`/`draw_diff_pane`/`draw_blast_radius_pane` ran for
 /// `app.right_pane()` (`render_scrollable_pane`'s doc comment on why
 /// `crate::run_app` needs this).
+// See `crate::ui::draw`'s own `#[allow(clippy::too_many_arguments)]`
+// comment — this function is that one's direct pass-through and shares
+// the identical "each parameter is independently-cached content, not
+// coupled state" reasoning.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_entry_screen(
     frame: &mut Frame,
     app: &App,
@@ -39,6 +44,7 @@ pub(crate) fn draw_entry_screen(
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     blast_radius_selection: &BlastRadiusSelection,
+    note_markers: &crate::note_markers::NoteMarkers,
     area: Rect,
 ) -> Option<usize> {
     let [tree_area, right_area] = Layout::horizontal([
@@ -47,7 +53,7 @@ pub(crate) fn draw_entry_screen(
     ])
     .areas(area);
 
-    draw_tree_pane(frame, app, tree_area);
+    draw_tree_pane(frame, app, note_markers, tree_area);
     match app.right_pane() {
         RightPane::Detail => draw_detail_pane(frame, app, report, right_area),
         RightPane::Diff => draw_diff_pane(
@@ -56,6 +62,7 @@ pub(crate) fn draw_entry_screen(
             report,
             diff_content,
             diff_highlights,
+            note_markers,
             right_area,
         ),
         RightPane::BlastRadius => {
@@ -77,7 +84,12 @@ pub(crate) fn draw_entry_screen(
 /// not start/end at the list's own edge — belt and braces with the title
 /// suffix, since the title is easy to miss but the in-pane line sits right
 /// where the reviewer's eye already is.
-pub(crate) fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
+pub(crate) fn draw_tree_pane(
+    frame: &mut Frame,
+    app: &App,
+    note_markers: &crate::note_markers::NoteMarkers,
+    area: Rect,
+) {
     let rows = app.nav().rows(app.tree());
     let labels = relative_labels(&rows);
     let cursor = app.nav().cursor();
@@ -102,7 +114,7 @@ pub(crate) fn draw_tree_pane(frame: &mut Frame, app: &App, area: Rect) {
             .zip(labels[start..end].iter())
             .enumerate()
             .map(|(offset, (row, label))| {
-                entry_row_line(row, label, ranks, start + offset == cursor)
+                entry_row_line(row, label, ranks, note_markers, start + offset == cursor)
             }),
     );
     if let Some(below) = below {
@@ -240,6 +252,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -288,6 +301,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -318,6 +332,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -358,6 +373,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -413,6 +429,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -474,6 +491,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -506,6 +524,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -539,6 +558,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");

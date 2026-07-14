@@ -20,7 +20,13 @@ fn should_render_lines_count_unstyled_when_file_has_normal_band() {
         expanded: false,
     };
 
-    let line = entry_row_line(&row, "small.rs", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "small.rs",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("  small.rs lines:80", line_text(&line));
     assert_eq!(None, fg_of_span_with_content(&line, "80"));
@@ -46,7 +52,13 @@ fn should_render_lines_count_in_yellow_when_file_has_watch_band() {
         expanded: false,
     };
 
-    let line = entry_row_line(&row, "mid.rs", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "mid.rs",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("  mid.rs lines:700", line_text(&line));
     assert_eq!(Some(Color::Yellow), fg_of_span_with_content(&line, "700"));
@@ -72,7 +84,13 @@ fn should_render_lines_count_in_red_when_file_has_warn_band() {
         expanded: false,
     };
 
-    let line = entry_row_line(&row, "big.rs", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "big.rs",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("  big.rs lines:1734", line_text(&line));
     assert_eq!(Some(Color::Red), fg_of_span_with_content(&line, "1734"));
@@ -99,7 +117,13 @@ fn should_render_lines_count_in_bold_red_when_file_has_split_band() {
         expanded: false,
     };
 
-    let line = entry_row_line(&row, "huge.rs", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "huge.rs",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("  huge.rs lines:4837", line_text(&line));
     assert_eq!(Some(Color::Red), fg_of_span_with_content(&line, "4837"));
@@ -128,7 +152,13 @@ fn should_render_warn_and_split_labels_side_by_side_on_dir_row() {
         expanded: true,
     };
 
-    let line = entry_row_line(&row, "src", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "src",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("v src warn:2 split:1", line_text(&line));
     assert_eq!(Some(Color::Yellow), fg_of_span_with_content(&line, "2"));
@@ -146,7 +176,13 @@ fn should_not_render_file_size_badge_when_file_node_has_no_band() {
         expanded: false,
     };
 
-    let line = entry_row_line(&row, "lib.rs", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "lib.rs",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     let text = line_text(&line);
     assert!(!text.contains("lines:"));
@@ -171,7 +207,13 @@ fn should_render_only_warn_label_on_dir_row_when_no_split_files() {
         expanded: true,
     };
 
-    let line = entry_row_line(&row, "src", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "src",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("v src warn:3", line_text(&line));
 }

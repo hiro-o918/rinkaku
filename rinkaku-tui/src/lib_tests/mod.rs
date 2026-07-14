@@ -18,6 +18,8 @@
 //! - `diff_scroll_sync` — `sync_target_for_scroll` and
 //!   `apply_diff_pane_selection_effects` (ADR 0030): the diff → tree
 //!   auto-sync in the reverse direction of ADR 0027's tree → diff scroll
+//! - `perform_export` — `clipboard_export_status`'s OSC 52 size-guard
+//!   warning and error-message passthrough (ADR 0048)
 
 use crate::app::JumpCandidate;
 use crate::source;
@@ -27,6 +29,8 @@ use rinkaku_core::render::Report;
 mod diff_scroll_sync;
 mod goto_dispatch;
 mod hunk_jump;
+mod note_snapshot;
+mod perform_export;
 mod recompute_and_reload;
 mod scroll_clamp;
 mod translate_key;
