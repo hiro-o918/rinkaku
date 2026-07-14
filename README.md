@@ -87,7 +87,7 @@ caveats on ordering and dependency resolution.
 | Homebrew | `brew install hiro-o918/tap/rinkaku` |
 | Install script | `curl -fsSL https://raw.githubusercontent.com/hiro-o918/rinkaku/main/install.sh \| bash` |
 | From source | `cargo install rinkaku` |
-| Manual | Grab a tarball from the [latest release](https://github.com/hiro-o918/rinkaku/releases/latest) and put `rinkaku` on your `PATH`. Targets: `{x86_64,aarch64}-{unknown-linux-gnu,apple-darwin}`. |
+| Manual | Grab a tarball from the [latest release](https://github.com/hiro-o918/rinkaku/releases/latest) and put `rinkaku` on your `PATH`. Targets: `{x86_64,aarch64}-{unknown-linux-musl,unknown-linux-gnu,apple-darwin}` (Linux tooling picks the statically linked musl build). |
 
 Update with `rinkaku self-update` (see
 [`docs/cli.md#self-update`](docs/cli.md#self-update) for the

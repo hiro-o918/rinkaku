@@ -45,6 +45,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # musl targets are statically linked, so the published binary runs
+          # on any Linux regardless of the host glibc version — the gnu
+          # binaries require the builder's glibc (currently 2.39 from
+          # ubuntu-latest) or newer, which broke on older self-hosted runners.
+          # gnu is kept for callers that still pull those asset names directly.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
@@ -67,12 +76,15 @@ jobs:
         run: |
           rustup target add ${{ matrix.target }}
 
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+      # Sets up the cross linker/CC for every Linux target except the native
+      # host (x86_64-gnu): aarch64-gnu (cross) plus both musl targets, whose
+      # C dependency (ring) needs a musl-capable compiler. Replaces the
+      # previous hand-rolled apt step, which only handled aarch64-gnu.
+      - name: Setup cross toolchain
+        if: contains(matrix.target, 'linux') && matrix.target != 'x86_64-unknown-linux-gnu'
+        uses: taiki-e/setup-cross-toolchain-action@3d9770ce98eb7dbcf378563182a5e8031165f75b # v1.41.0
+        with:
+          target: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
