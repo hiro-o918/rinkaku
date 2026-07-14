@@ -84,9 +84,9 @@ pub struct PrContext {
     pub head_sha: String,
 }
 
-/// The PR's own page on github.com (ADR 0049) — the URL `w` opens in the
+/// The PR's own page on github.com (ADR 0050) — the URL `w` opens in the
 /// reviewer's default browser. Scoped to the PR page itself, not a
-/// cursor-relative deep link into the diff (ADR 0049's Alternatives).
+/// cursor-relative deep link into the diff (ADR 0050's Alternatives).
 pub fn pr_url(ctx: &PrContext) -> String {
     format!(
         "https://github.com/{owner}/{repo}/pull/{number}",

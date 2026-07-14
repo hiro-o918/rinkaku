@@ -1,4 +1,4 @@
-# 0049. TUI: open the PR in a web browser
+# 0050. TUI: open the PR in a web browser
 
 - Status: Accepted
 - Date: 2026-07-15

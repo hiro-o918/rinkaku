@@ -1,4 +1,4 @@
-//! Opens a URL in the reviewer's default web browser (ADR 0049) by spawning
+//! Opens a URL in the reviewer's default web browser (ADR 0050) by spawning
 //! the platform's own "open a URL" command (`open` on macOS, `xdg-open` on
 //! Linux) — mirroring `clipboard.rs`'s direct-spawn shape rather than adding
 //! a crate dependency for one OS command invocation.

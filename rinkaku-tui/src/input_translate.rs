@@ -216,7 +216,7 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // already no-ops every non-scroll key there.
         KeyCode::Char('n') => Some(InputKey::NoteCompose),
         KeyCode::Char('N') => Some(InputKey::NotesList),
-        // `w`/`W` (ADR 0049): opens the current PR's page in a web browser —
+        // `w`/`W` (ADR 0050): opens the current PR's page in a web browser —
         // matches `gh` CLI's own `-w`/`--web` convention. Global regardless
         // of screen/focus, like `d`/`r`/`s`; `crate::lib::run_app`
         // special-cases the actual dispatch (it needs the session's

@@ -31,7 +31,7 @@ pub trait ClipboardSink {
     fn copy(&self, text: &str) -> Result<String, String>;
 }
 
-/// Opens `url` in the reviewer's default web browser (ADR 0049), best-effort
+/// Opens `url` in the reviewer's default web browser (ADR 0050), best-effort
 /// — implemented by spawning the platform's own "open a URL" command
 /// (`open`/`xdg-open`), mirroring [`ClipboardSink`]'s direct-spawn shape
 /// rather than adding a crate dependency for one OS command invocation.

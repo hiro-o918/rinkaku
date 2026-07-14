@@ -106,7 +106,7 @@ Press `?` in the TUI for the always-up-to-date table.
 | `gd` / `gr` | Jump to a callee / caller ([ADR 0022](adr/0022-jump-navigation-and-jumplist.md)) |
 | `ctrl-o` / `ctrl-i` | Jump back / forward through the jumplist |
 | `n` / `N` | Compose a review note / open the notes list ([ADR 0048](adr/0048-tui-review-actions.md)) |
-| `w` / `W` | Open the current PR's page in a web browser, `--pr` mode only ([ADR 0049](adr/0049-tui-open-pr-in-browser.md)) |
+| `w` / `W` | Open the current PR's page in a web browser, `--pr` mode only ([ADR 0050](adr/0050-tui-open-pr-in-browser.md)) |
 | `?` | Toggle the help overlay |
 | `q` / `ctrl-c` | Quit (from the entry view); `esc`/`q` also returns from the source view |
 

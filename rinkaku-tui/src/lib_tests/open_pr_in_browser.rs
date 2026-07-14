@@ -1,4 +1,4 @@
-//! `open_pr_in_browser` tests (ADR 0049): the no-`PrContext` and
+//! `open_pr_in_browser` tests (ADR 0050): the no-`PrContext` and
 //! spawn-failure status-line messages, and the URL actually passed to
 //! [`crate::review::ports::BrowserOpener`] when a `PrContext` is present.
 

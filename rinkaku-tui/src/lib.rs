@@ -81,7 +81,7 @@ pub(crate) use review_flow::first_anchor_run;
 /// `submitter` are both `Some`/`None` together (sink A's own "absent when
 /// no PR context" rule — [`crate::app::App::with_review_sink_a_available`]'s
 /// own doc comment), `clipboard` is always present since sink B never
-/// depends on a PR. `browser` (ADR 0049) is likewise always present — `w` is
+/// depends on a PR. `browser` (ADR 0050) is likewise always present — `w` is
 /// a global key regardless of `pr_context`, so the port itself always
 /// exists; only the `PrContext` it needs to build a URL may be absent.
 pub struct ReviewPorts<'a> {
@@ -306,7 +306,7 @@ pub(crate) fn run_app(
                 let snapshot = derive_selection_snapshot(&app, report, &diff_hunks);
                 app = dispatch_note_compose_key(app, snapshot);
             } else if let InputKey::OpenPrInBrowser = input_key {
-                // ADR 0049: needs `review_ports.pr_context`/`.browser`,
+                // ADR 0050: needs `review_ports.pr_context`/`.browser`,
                 // neither of which `App::handle_key` has access to (mirrors
                 // `InputKey::NoteCompose`'s own precedent just above).
                 // `app.handle_key(input_key)` still runs first for the

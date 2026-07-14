@@ -21,7 +21,7 @@
 //! - `perform_export` — `clipboard_export_status`'s OSC 52 size-guard
 //!   warning and error-message passthrough (ADR 0048)
 //! - `open_pr_in_browser` — the no-`PrContext`/spawn-failure status-line
-//!   messages and the URL built from a `PrContext` (ADR 0049)
+//!   messages and the URL built from a `PrContext` (ADR 0050)
 
 use crate::app::JumpCandidate;
 use crate::review::ports::BrowserOpener;
@@ -41,7 +41,7 @@ mod translate_key;
 mod translate_mouse;
 
 /// A [`BrowserOpener`] fake shared by [`perform_export`]/[`open_pr_in_browser`]'s
-/// tests — `ReviewPorts::browser` is always present (ADR 0049), so every
+/// tests — `ReviewPorts::browser` is always present (ADR 0050), so every
 /// `ReviewPorts` fixture needs one even when the test itself is not
 /// exercising `w`. `opened_url` records the last URL passed to
 /// [`BrowserOpener::open_url`] so a test can assert the exact URL built from

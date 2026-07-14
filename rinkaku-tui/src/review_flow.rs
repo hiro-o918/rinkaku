@@ -13,7 +13,7 @@ use crate::app::{App, InputKey, Screen};
 use crate::{ReviewPorts, diff_view, review};
 use rinkaku_core::render::Report;
 
-/// Applies [`InputKey::OpenPrInBrowser`] (ADR 0049): opens `ports.pr_context`'s
+/// Applies [`InputKey::OpenPrInBrowser`] (ADR 0050): opens `ports.pr_context`'s
 /// PR page via `ports.browser`, given `App` has no `PrContext` of its own
 /// (mirroring [`dispatch_note_compose_key`]'s own "needs data `handle_key`
 /// doesn't have" precedent). Sets a status-line message either way — success
