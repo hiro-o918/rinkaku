@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.2](https://github.com/hiro-o918/rinkaku/compare/v0.6.1...v0.6.2) (2026-07-14)
+
+
+### Features
+
+* classify Rust *_tests/ directories as test paths ([#130](https://github.com/hiro-o918/rinkaku/issues/130)) ([129de60](https://github.com/hiro-o918/rinkaku/commit/129de60089b15bb45e6d9d7b9f4f7a4490a76a54)), closes [#114](https://github.com/hiro-o918/rinkaku/issues/114)
+* diff-style marker prefixes and referenced class for mermaid output (ADR 0041) ([#133](https://github.com/hiro-o918/rinkaku/issues/133)) ([1b7f695](https://github.com/hiro-o918/rinkaku/commit/1b7f6954d71680f98ef4a8e0bc75340f4e1a87ce))
+* exclude test referrers from fan-in and encode review risk in the TUI ([#137](https://github.com/hiro-o918/rinkaku/issues/137)) ([eacb845](https://github.com/hiro-o918/rinkaku/commit/eacb8453b852acc4b224880f825d3df6fc4c1f6b))
+* rework mermaid visual encoding and legend (ADR 0039) ([#128](https://github.com/hiro-o918/rinkaku/issues/128)) ([5e0e44b](https://github.com/hiro-o918/rinkaku/commit/5e0e44b25645ecd5c4274f5d247ca393b59a7625))
+
+
+### Bug Fixes
+
+* **core:** resolve Rust scoped_identifier path references (e.g. enum variant paths) ([#126](https://github.com/hiro-o918/rinkaku/issues/126)) ([b8aaedf](https://github.com/hiro-o918/rinkaku/commit/b8aaedf48332d6c777b928d1409b1a2bc5d2ba4b))
+
+
+### Miscellaneous
+
+* release main ([#124](https://github.com/hiro-o918/rinkaku/issues/124)) ([2f8f6ad](https://github.com/hiro-o918/rinkaku/commit/2f8f6ad1b88258e8a320172cfbe8b8fd75a0a27b))
+
 ## [0.6.1](https://github.com/hiro-o918/rinkaku/compare/v0.6.0...v0.6.1) (2026-07-14)
 
 
