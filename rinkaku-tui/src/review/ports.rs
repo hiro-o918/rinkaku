@@ -22,10 +22,11 @@ pub trait ReviewSubmitter {
     ) -> Result<(), String>;
 }
 
-/// Writes `text` to the system clipboard (ADR 0048 sink B), best-effort —
-/// see the ADR's Alternatives on why this is OSC 52 rather than a
-/// clipboard crate, and why a successful `Ok(())` here does not guarantee
-/// the terminal actually populated the clipboard.
+/// Writes `text` to the system clipboard (ADR 0048 sink B), best-effort.
+/// `Ok` carries the status line shown to the reviewer: only the
+/// implementation knows which backend performed the copy and whether
+/// success is actually verifiable (e.g. an OSC 52 write cannot be), so the
+/// caveat wording lives with the implementation, not here.
 pub trait ClipboardSink {
-    fn copy(&self, text: &str) -> Result<(), String>;
+    fn copy(&self, text: &str) -> Result<String, String>;
 }

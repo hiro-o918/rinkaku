@@ -70,11 +70,10 @@ use rinkaku_core::render::Report;
 use std::time::Duration;
 
 // Re-exported at the crate root purely so `lib_tests/note_snapshot.rs`'s
-// and `lib_tests/perform_export.rs`'s existing `use crate::{...}` imports
-// (predating the ADR 0028 split of these two into `review_flow`) keep
-// working unchanged.
+// existing `use crate::{...}` import (predating the ADR 0028 split into
+// `review_flow`) keeps working unchanged.
 #[cfg(test)]
-pub(crate) use review_flow::{OSC52_SIZE_GUARD_BYTES, clipboard_export_status, first_anchor_run};
+pub(crate) use review_flow::first_anchor_run;
 
 /// Review-notes export wiring (ADR 0048), assembled once by `main.rs`'s
 /// composition root and threaded through unchanged from

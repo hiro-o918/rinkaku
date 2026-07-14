@@ -401,6 +401,15 @@ feature must fit rather than invent a fourth:
   silently does not populate the system clipboard, so the TUI must
   surface the packet text itself as a visible fallback rather than
   assuming the write succeeded.
+  - **Amendment (2026-07-15)**: dogfooding hit OSC 52's silent-drop mode
+    immediately on a *local* setup (tmux `set-clipboard external`
+    forwarding to an outer terminal that doesn't support or permit
+    OSC 52), so sink B now prefers a native clipboard command
+    (`pbcopy`/`wl-copy`/`xclip`/`xsel`) when the session is local, and
+    uses OSC 52 only for remote sessions (`SSH_TTY`/`SSH_CONNECTION`) or
+    hosts with no such command — the environments OSC 52 was chosen for.
+    The Alternatives entry's rejection of shelling out was scoped to
+    *replacing* OSC 52 outright, not to layering both by locality.
 - Sink C's shape (suspend TUI, run configured interactive command,
   resume) is fixed by this ADR but not implemented; a follow-up PR
   implements it against this shape rather than re-litigating the design.

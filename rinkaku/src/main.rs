@@ -58,7 +58,7 @@ mod test_util;
 
 use clap::Parser;
 use cli::{Cli, Command};
-use clipboard::Osc52Clipboard;
+use clipboard::SystemClipboard;
 use display::{DisplayMode, resolve_display_mode};
 use generated_paths::check_generated_paths_batch;
 use git::commands::{list_repo_files_for_outline, resolve_repo_root};
@@ -221,15 +221,16 @@ fn main() -> anyhow::Result<()> {
             };
             // ADR 0048: sink A (GitHub PR review) is wired up only when
             // `pr_context` resolved; sink B (clipboard) is always
-            // available. `GhReviewSubmitter`/`Osc52Clipboard` are the
+            // available. `GhReviewSubmitter`/`SystemClipboard` are the
             // composition root's only concrete port implementations —
             // `rinkaku-tui` depends on the `ReviewSubmitter`/`ClipboardSink`
             // trait definitions alone.
             let submitter = pr_context.is_some().then_some(&GhReviewSubmitter as _);
+            let system_clipboard = SystemClipboard::detect();
             let review_ports = rinkaku_tui::ReviewPorts {
                 pr_context,
                 submitter,
-                clipboard: &Osc52Clipboard,
+                clipboard: &system_clipboard,
             };
             let result = session
                 .run(
