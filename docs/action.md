@@ -30,6 +30,63 @@ On each pull request, the action:
 On a fork PR the run still succeeds (exit 0) — see
 [Fork PR fallback](#fork-pr-fallback) below.
 
+## Example
+
+A trimmed excerpt from a real sticky comment the action posted on this
+repository's own PR #137, showing the mermaid graph GitHub renders
+natively in the comment body (the "API changes" digest that follows it
+in a `<details>` section is omitted here for brevity):
+
+```mermaid
+flowchart LR
+  subgraph sub0["rinkaku-core/src/graph.rs"]
+    n0["Node (in:2)"]
+    n1["compute_fan_ins"]
+  end
+  subgraph sub3["rinkaku-tui/src/detail.rs"]
+    n8["build_file_detail"]
+  end
+  subgraph sub7["rinkaku-tui/src/tree/mod.rs"]
+    n18["NodeKind (in:9)"]
+    n25["~ build_file_node"]
+    n26["+ build_test_group_node"]
+    n27["- symbol_test_badge_span"]
+  end
+  n1 --> n0
+  n8 --> n18
+  n25 --> n18
+  n25 --> n26
+  n26 --> n18
+  class n0 fan-in
+  class n1 referenced
+  class n8 referenced
+  class n18 fan-in
+  class n25 changed
+  class n26 added
+  class n27 removed
+  classDef added fill:#c6f6d5,stroke:#276749,color:#1a202c;
+  classDef changed fill:#feebc8,stroke:#9c4221,color:#1a202c;
+  classDef fan-in fill:#e9d8fd,stroke:#553c9a,stroke-width:3px,color:#1a202c;
+  classDef removed fill:#fed7d7,stroke:#9b2c2c,color:#1a202c,stroke-dasharray: 5 5;
+  classDef referenced fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
+```
+
+### Legend
+
+| | Meaning |
+|---|---|
+| $`{\color{#c6f6d5}\blacksquare}`$ | + added — new symbol |
+| $`{\color{#feebc8}\blacksquare}`$ | ~ API changed — signature changed |
+| $`{\color{#e9d8fd}\blacksquare}`$ | fan-in — highly referenced, thick border, label shows (in:N) |
+| $`{\color{#fed7d7}\blacksquare}`$ | - removed (dashed border in graph) |
+| $`{\color{#e2e8f0}\blacksquare}`$ | referenced — unchanged dependency (not part of the diff) |
+
+The Legend table is generated on each run from the same `classDef`
+lines rendered in the diagram, so it can't drift out of sync with the
+colors above it. This whole block — diagram plus legend — is what gets
+edited in place on every push to the PR, per the sticky-comment
+behavior described above.
+
 ## Quick start
 
 Add a workflow like this to the target repository, e.g.
