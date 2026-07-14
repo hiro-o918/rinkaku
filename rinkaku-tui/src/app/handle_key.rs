@@ -591,18 +591,17 @@ impl App {
             // `crate::lib::run_app` special-cases `NoteCompose` before
             // dispatch (`InputKey::NoteCompose`'s own doc comment) and the
             // review-overlay priority check at the top of this function
-            // intercepts `ComposeChar`/`ComposeBackspace`/`NoteDelete`/
-            // `NoteExport` whenever a review mode is actually open — kept
-            // only so the match stays exhaustive against future refactors,
-            // same reasoning as the `ToggleHelp`/`PopupConfirm` arms above.
+            // intercepts `ComposeChar`/`ComposeBackspace`/`NoteDelete`
+            // whenever a review mode is actually open — kept only so the
+            // match stays exhaustive against future refactors, same
+            // reasoning as the `ToggleHelp`/`PopupConfirm` arms above.
             (
                 Screen::Entry,
                 _,
                 InputKey::NoteCompose
                 | InputKey::ComposeChar(_)
                 | InputKey::ComposeBackspace
-                | InputKey::NoteDelete
-                | InputKey::NoteExport,
+                | InputKey::NoteDelete,
             ) => {}
         }
 
@@ -637,7 +636,7 @@ impl App {
                 InputKey::Up => review.list_up(),
                 InputKey::Down => review.list_down(),
                 InputKey::NoteDelete => review.delete_selected(),
-                InputKey::NoteExport => review.open_export_menu(),
+                InputKey::PopupConfirm => review.open_export_menu(),
                 InputKey::PopupCancel => review.close(),
                 _ => review,
             },

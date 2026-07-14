@@ -28,6 +28,8 @@
 //! - `jump` — `selected_symbol_id`, `jump_to_symbol`, the jump popup's
 //!   own key handling, `PendingPrefix::G` bookkeeping, and the
 //!   `JumpBack`/`JumpForward` jumplist (ADR 0022)
+//! - `review` — `handle_review_key`'s notes-list overlay dispatch (ADR
+//!   0048)
 
 use crate::app::App;
 use crate::app::InputKey;
@@ -40,6 +42,7 @@ mod basics;
 mod focus;
 mod help_overlay;
 mod jump;
+mod review;
 mod right_pane;
 mod scroll_reset;
 mod source_screen;

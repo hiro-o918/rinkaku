@@ -219,6 +219,4 @@ pub enum InputKey {
     /// `d` while the notes list overlay is open: deletes the note under
     /// the list cursor.
     NoteDelete,
-    /// `x` while the notes list overlay is open: opens the export menu.
-    NoteExport,
 }

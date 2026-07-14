@@ -272,16 +272,18 @@ pub(crate) fn run_app(
                 // ADR 0048: needs a `SelectionSnapshot` derived from
                 // `report`/`diff_hunks`, which `App::handle_key` has no
                 // access to (`InputKey::NoteCompose`'s own doc comment) —
-                // handled here instead, mirroring `InputKey::Source`'s own
-                // "IO/derivation stays outside `App`" precedent just below.
-                // A `None` snapshot (cursor not on a present symbol row, or
-                // on the source screen) leaves `app` untouched — pressing
-                // `n` over a directory/file row is a silent no-op rather
-                // than opening an overlay with nothing to attach a note to.
-                if let Some(snapshot) = derive_selection_snapshot(&app, report, &diff_hunks) {
-                    let review = app.review().clone().begin_compose(snapshot);
-                    app = app.with_review(review);
-                }
+                // derived here, mirroring `InputKey::Source`'s own "IO/
+                // derivation stays outside `App`" precedent just below, then
+                // applied via `dispatch_note_compose_key` (extracted for the
+                // same "sequencing needs its own regression coverage"
+                // reason `dispatch_non_source_key`'s own doc comment gives —
+                // an earlier version of this arm left `app` completely
+                // untouched on a `None` snapshot, which skipped
+                // `App::handle_key`'s unconditional `pending_prefix` clear
+                // the same way the ADR 0022 bug `dispatch_non_source_key`
+                // documents did).
+                let snapshot = derive_selection_snapshot(&app, report, &diff_hunks);
+                app = dispatch_note_compose_key(app, snapshot);
             } else if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id, .. } = app.screen().clone()
@@ -714,6 +716,29 @@ fn dispatch_non_source_key(
     app.handle_key(input_key)
 }
 
+/// Applies [`InputKey::NoteCompose`] given the [`review::SelectionSnapshot`]
+/// `crate::run_app` already derived from the cursor (that derivation needs
+/// `report`/the parsed diff hunks, which `App::handle_key` has no access
+/// to — `InputKey::NoteCompose`'s own doc comment). Always routes through
+/// `App::handle_key` first, even on a `None` snapshot (cursor not on a
+/// present symbol row, or on the source screen): `handle_key`'s own
+/// `NoteCompose` match arm is a no-op stub, but what matters is its
+/// unconditional `pending_prefix` clear at the top of the function — the
+/// same "call `handle_key` for its clear even when its own arm does
+/// nothing" contract [`dispatch_non_source_key`]'s `GotoDefinition`/
+/// `GotoReferences` arm documents for itself. A `Some` snapshot opens the
+/// compose overlay after that call; `None` leaves `review` untouched.
+fn dispatch_note_compose_key(app: App, snapshot: Option<review::SelectionSnapshot>) -> App {
+    let app = app.handle_key(InputKey::NoteCompose);
+    match snapshot {
+        Some(snapshot) => {
+            let review = app.review().clone().begin_compose(snapshot);
+            app.with_review(review)
+        }
+        None => app,
+    }
+}
+
 /// Whether `crate::run_app`'s event loop should recompute the diff pane's
 /// shaped content this key, rather than keep showing the previously cached
 /// one — mirrors `should_recompute_blast_radius_selection`'s own contract and
@@ -1092,17 +1117,20 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
     // The review overlay (ADR 0048) is checked before even the help
     // overlay: while composing a note, every printable character the
     // reviewer types (including `?`) must land in the note buffer, not
-    // trigger the help overlay or any other single-key gesture.
+    // trigger the help overlay or any other single-key gesture. Composing
+    // is also the one mode exempt from full-width normalization below —
+    // free text must keep whatever the reviewer actually typed.
+    if let review::ReviewMode::Compose { .. } = app.review().mode() {
+        return match code {
+            KeyCode::Enter => Some(InputKey::PopupConfirm),
+            KeyCode::Esc => Some(InputKey::PopupCancel),
+            KeyCode::Backspace => Some(InputKey::ComposeBackspace),
+            KeyCode::Char(c) => Some(InputKey::ComposeChar(c)),
+            _ => None,
+        };
+    }
+    let code = normalize_fullwidth_key(code);
     match app.review().mode() {
-        review::ReviewMode::Compose { .. } => {
-            return match code {
-                KeyCode::Enter => Some(InputKey::PopupConfirm),
-                KeyCode::Esc => Some(InputKey::PopupCancel),
-                KeyCode::Backspace => Some(InputKey::ComposeBackspace),
-                KeyCode::Char(c) => Some(InputKey::ComposeChar(c)),
-                _ => None,
-            };
-        }
         review::ReviewMode::List { .. }
         | review::ReviewMode::ExportMenu { .. }
         | review::ReviewMode::VerdictMenu { .. } => {
@@ -1112,10 +1140,10 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
                 KeyCode::Enter => Some(InputKey::PopupConfirm),
                 KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::PopupCancel),
                 KeyCode::Char('d') => Some(InputKey::NoteDelete),
-                KeyCode::Char('x') => Some(InputKey::NoteExport),
                 _ => None,
             };
         }
+        review::ReviewMode::Compose { .. } => unreachable!("handled by the early return above"),
         review::ReviewMode::Idle => {}
     }
 
@@ -1272,6 +1300,22 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') => Some(InputKey::Quit),
         _ => None,
+    }
+}
+
+/// Folds a full-width form (U+FF01-U+FF5E, the Unicode "Fullwidth ASCII
+/// Variants" block a Japanese/CJK IME sends when left on while a reviewer
+/// presses an otherwise-ASCII binding) down to its ordinary half-width
+/// `KeyCode::Char`, leaving every other `KeyCode` untouched. Applied to
+/// every normal-mode/overlay gesture in [`translate_key`] but not while
+/// [`review::ReviewMode::Compose`] is open — that buffer is free text, so a
+/// full-width character typed there must reach the note body unchanged.
+fn normalize_fullwidth_key(code: KeyCode) -> KeyCode {
+    match code {
+        KeyCode::Char(c @ '\u{FF01}'..='\u{FF5E}') => {
+            KeyCode::Char(char::from_u32(c as u32 - 0xFEE0).unwrap_or(c))
+        }
+        other => other,
     }
 }
 

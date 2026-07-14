@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::App;
 use crate::diff_view::{FileHunks, Hunk};
-use crate::{derive_selection_snapshot, first_anchor_run};
+use crate::{derive_selection_snapshot, dispatch_note_compose_key, first_anchor_run};
 
 fn hunk(new_range: Option<(usize, usize)>) -> Hunk {
     Hunk {
@@ -169,5 +169,53 @@ mod derive_selection_snapshot_tests {
             }),
             actual
         );
+    }
+}
+
+mod dispatch_note_compose_key_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn should_open_compose_overlay_when_snapshot_is_some() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+        let snapshot = derive_selection_snapshot(&app, &report, &[]);
+        assert!(snapshot.is_some());
+
+        let actual = dispatch_note_compose_key(app, snapshot);
+
+        assert!(matches!(
+            actual.review().mode(),
+            crate::review::ReviewMode::Compose { .. }
+        ));
+    }
+
+    #[test]
+    fn should_clear_pending_prefix_when_snapshot_is_none() {
+        // Regression test (ADR 0022's `pending_prefix` bug, same class):
+        // pressing `n` over a row with no derivable snapshot (a directory
+        // row, or the source screen) must still discard a pending `g`
+        // prefix — otherwise a `g` press followed by an ineffective `n`
+        // leaves `pending_prefix` stuck at `Some(G)`, and the *next* `d`
+        // the reviewer types for its own ordinary reason (`ToggleDiff`)
+        // silently resolves as `GotoDefinition` instead.
+        let report = empty_report();
+        let app = App::new(&report).handle_key(crate::app::InputKey::PendingGoto);
+        assert_eq!(Some(crate::app::PendingPrefix::G), app.pending_prefix());
+
+        let actual = dispatch_note_compose_key(app, None);
+
+        assert_eq!(None, actual.pending_prefix());
+    }
+
+    #[test]
+    fn should_leave_review_idle_when_snapshot_is_none() {
+        let report = empty_report();
+        let app = App::new(&report);
+
+        let actual = dispatch_note_compose_key(app, None);
+
+        assert_eq!(&crate::review::ReviewMode::Idle, actual.review().mode());
     }
 }
