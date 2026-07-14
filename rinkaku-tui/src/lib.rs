@@ -40,6 +40,7 @@ pub mod order;
 pub mod row_view;
 mod session;
 pub mod source;
+pub mod source_diff;
 pub mod splash;
 pub mod tree;
 pub mod ui;
