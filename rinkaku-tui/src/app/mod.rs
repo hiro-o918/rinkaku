@@ -523,6 +523,17 @@ impl App {
         &self.review
     }
 
+    /// Whether sink A (posting a GitHub PR review) is on the export menu
+    /// this session — see [`Self::with_review_sink_a_available`]'s own doc
+    /// comment. `crate::ui::review_overlay` reads this to keep the export
+    /// menu's *rendered* entries in sync with the entry list
+    /// [`crate::review::ReviewState::confirm_export`] resolves the cursor
+    /// against, so the two never disagree about what selecting position 0
+    /// means.
+    pub fn review_sink_a_available(&self) -> bool {
+        self.review_sink_a_available
+    }
+
     /// Replaces `App`'s [`ReviewState`] wholesale — used by
     /// `crate::lib::run_app` for the one review transition that needs data
     /// (a [`crate::review::SelectionSnapshot`]) `App::handle_key` cannot

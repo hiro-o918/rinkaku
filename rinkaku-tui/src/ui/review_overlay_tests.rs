@@ -134,6 +134,7 @@ fn should_draw_notes_list_overlay_with_note_summary() {
 
     assert!(text.contains("Review notes"));
     assert!(text.contains("lib.rs:1-5 foo: fix"));
+    assert!(text.contains("Enter: export"));
     assert!(text.contains("d: delete"));
 }
 
@@ -149,7 +150,57 @@ fn should_draw_empty_notes_list_placeholder_when_there_are_no_notes() {
 }
 
 #[test]
-fn should_draw_export_menu_overlay_entries() {
+fn should_draw_both_export_menu_entries_when_sink_a_is_available() {
+    let report = report_with_one_symbol();
+    let review = ReviewState::default()
+        .begin_compose(snapshot())
+        .push_char('x')
+        .confirm_compose()
+        .open_list()
+        .open_export_menu();
+    let app = App::new(&report)
+        .with_review_sink_a_available(true)
+        .with_review(review);
+
+    let text = draw_app(&app, &report);
+
+    assert!(text.contains("Export to"));
+    assert!(text.contains("GitHub PR review"));
+    assert!(text.contains("Clipboard"));
+}
+
+#[test]
+fn should_draw_only_clipboard_entry_when_sink_a_is_unavailable() {
+    // Regression test: the export menu's *rendering* must match
+    // `ReviewState::confirm_export`'s own `sink_a_available`-gated entry
+    // list (`export_menu_entries`) — drawing "GitHub PR review"
+    // unconditionally, regardless of whether a `PrContext` was ever wired
+    // up, misleads the reviewer into thinking cursor position 0 posts a
+    // GitHub review when it actually confirms whatever
+    // `export_menu_entries(false)` put there instead (`Clipboard`).
+    let report = report_with_one_symbol();
+    let review = ReviewState::default()
+        .begin_compose(snapshot())
+        .push_char('x')
+        .confirm_compose()
+        .open_list()
+        .open_export_menu();
+    let app = App::new(&report).with_review(review);
+    assert!(!app.review_sink_a_available());
+
+    let text = draw_app(&app, &report);
+
+    assert!(text.contains("Export to"));
+    assert!(!text.contains("GitHub PR review"));
+    assert!(text.contains("Clipboard"));
+}
+
+#[test]
+fn should_export_to_clipboard_when_confirming_cursor_zero_with_sink_a_unavailable() {
+    // The other half of the regression above: confirming the menu's
+    // cursor-0 entry while sink A is unavailable must produce the same
+    // `ExportRequest` the rendered (sink-A-omitted) menu actually shows at
+    // that position — `Clipboard`, not a silently-closed menu.
     let report = report_with_one_symbol();
     let review = ReviewState::default()
         .begin_compose(snapshot())
@@ -159,11 +210,13 @@ fn should_draw_export_menu_overlay_entries() {
         .open_export_menu();
     let app = App::new(&report).with_review(review);
 
-    let text = draw_app(&app, &report);
+    let app = app.handle_key(crate::app::InputKey::PopupConfirm);
 
-    assert!(text.contains("Export to"));
-    assert!(text.contains("GitHub PR review"));
-    assert!(text.contains("Clipboard"));
+    let mut review = app.review().clone();
+    assert_eq!(
+        Some(crate::review::ExportRequest::Clipboard),
+        review.take_pending_export()
+    );
 }
 
 #[test]

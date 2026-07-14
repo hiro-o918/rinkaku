@@ -221,7 +221,7 @@ pub fn draw(
     // popup — `App::handle_key`'s own priority check gives it the highest
     // key-space priority for the identical reason (a reviewer mid-compose
     // must see their own overlay, not have it silently obscured).
-    review_overlay::draw_review_overlay(frame, app.review(), area);
+    review_overlay::draw_review_overlay(frame, app.review(), app.review_sink_a_available(), area);
 
     outcome
 }

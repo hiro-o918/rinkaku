@@ -143,9 +143,22 @@ pub enum ReviewMode {
 /// per ADR 0048's "no implicit fallback" decision — see
 /// [`ReviewState::open_export_menu`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExportMenuEntry {
+pub(crate) enum ExportMenuEntry {
     Github,
     Clipboard,
+}
+
+impl ExportMenuEntry {
+    /// This entry's display label — shared by `crate::ui::review_overlay`
+    /// so the rendered menu's text always matches what [`ExportMenuEntry`]
+    /// itself represents, rather than a second hand-written string list
+    /// that could drift from [`export_menu_entries`]'s own set.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Github => "GitHub PR review",
+            Self::Clipboard => "Clipboard (for an AI agent)",
+        }
+    }
 }
 
 /// The verdict menu's selectable entries, in display order.
@@ -388,9 +401,12 @@ impl ReviewState {
 }
 
 /// The export menu's entries given whether sink A is available — extracted
-/// so [`ReviewState::confirm_export`]/[`ReviewState::list_down`] share one
-/// definition of "what's on the menu, in what order".
-fn export_menu_entries(sink_a_available: bool) -> Vec<ExportMenuEntry> {
+/// so [`ReviewState::confirm_export`]/[`ReviewState::list_down`]/
+/// `crate::ui::review_overlay`'s rendering share one definition of "what's
+/// on the menu, in what order" (rather than the render path keeping a
+/// second, hand-written entry list that could disagree with the one
+/// `confirm_export` resolves the cursor against).
+pub(crate) fn export_menu_entries(sink_a_available: bool) -> Vec<ExportMenuEntry> {
     let mut entries = Vec::new();
     if sink_a_available {
         entries.push(ExportMenuEntry::Github);

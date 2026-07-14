@@ -6,7 +6,7 @@
 //! in by `crate::ui::draw`.
 
 use super::overlay::centered_rect;
-use crate::review::{ReviewMode, ReviewState, Verdict};
+use crate::review::{ReviewMode, ReviewState, Verdict, export_menu_entries};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -16,8 +16,16 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 /// Draws whichever review overlay `review.mode()` currently calls for
 /// (compose, list, export menu, verdict menu), or nothing at all while
 /// [`ReviewMode::Idle`] — the single entry point `crate::ui::draw` calls
-/// unconditionally as its final compositing step.
-pub(crate) fn draw_review_overlay(frame: &mut Frame, review: &ReviewState, full_area: Rect) {
+/// unconditionally as its final compositing step. `sink_a_available`
+/// (`App::review_sink_a_available`) is only consulted by the export menu,
+/// which must render the same entries [`ReviewState::confirm_export`]
+/// resolves the cursor against.
+pub(crate) fn draw_review_overlay(
+    frame: &mut Frame,
+    review: &ReviewState,
+    sink_a_available: bool,
+    full_area: Rect,
+) {
     match review.mode() {
         ReviewMode::Idle => {}
         ReviewMode::Compose { snapshot, buffer } => {
@@ -25,7 +33,7 @@ pub(crate) fn draw_review_overlay(frame: &mut Frame, review: &ReviewState, full_
         }
         ReviewMode::List { cursor } => draw_notes_overlay(frame, review, *cursor, full_area),
         ReviewMode::ExportMenu { cursor } => {
-            draw_export_menu_overlay(frame, review, *cursor, full_area)
+            draw_export_menu_overlay(frame, sink_a_available, *cursor, full_area)
         }
         ReviewMode::VerdictMenu { cursor } => draw_verdict_menu_overlay(frame, *cursor, full_area),
     }
@@ -112,7 +120,7 @@ fn draw_notes_overlay(frame: &mut Frame, review: &ReviewState, cursor: usize, fu
     }
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "j/k: move  d: delete  x: export  Esc/q: close",
+        "j/k: move  Enter: export  d: delete  Esc/q: close",
         Style::default().add_modifier(Modifier::DIM),
     ));
 
@@ -145,31 +153,26 @@ fn notes_list_entry_text(note: &crate::review::Note) -> String {
     format!("{location_text}: {body_first_line}")
 }
 
-/// The export menu: `GitHub PR review` (only when `review`'s notes list
-/// was opened with sink A available — the caller derives this by simply
-/// not rendering the entry, since [`ReviewState`] itself carries no
-/// `PrContext`) is not distinguishable from here alone, so this draws
-/// both entries unconditionally; `crate::app::App::handle_review_key`'s
-/// own `sink_a_available` gate is what actually prevents selecting a
-/// `Github` entry that isn't really on the menu — see that method's own
-/// doc comment. Kept simple (always two lines) rather than threading
-/// `sink_a_available` through the whole render path for a v1 cosmetic
-/// concern; the reviewer discovers unavailability the moment `Enter`
-/// silently closes the menu instead of opening the verdict menu.
+/// The export menu: `GitHub PR review` only when `sink_a_available` (ADR
+/// 0048's "no implicit fallback" decision), built from
+/// [`export_menu_entries`] — the exact same entry list
+/// [`ReviewState::confirm_export`] resolves the menu's cursor against, so
+/// what the reviewer sees at a given position and what confirming that
+/// position does can never disagree.
 fn draw_export_menu_overlay(
     frame: &mut Frame,
-    _review: &ReviewState,
+    sink_a_available: bool,
     cursor: usize,
     full_area: Rect,
 ) {
     let overlay_area = centered_rect(full_area, 50, 30);
     frame.render_widget(Clear, overlay_area);
 
-    let entries = ["GitHub PR review", "Clipboard (for an AI agent)"];
+    let entries = export_menu_entries(sink_a_available);
     let lines: Vec<Line<'static>> = entries
         .iter()
         .enumerate()
-        .map(|(index, label)| menu_line(label, index == cursor))
+        .map(|(index, entry)| menu_line(entry.label(), index == cursor))
         .collect();
 
     let block = Block::bordered().title(" Export to (enter: choose, esc: cancel) ");
