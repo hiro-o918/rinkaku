@@ -17,17 +17,41 @@ only becomes load-bearing when the output would otherwise not be TUI
 ## Layout
 
 - **Tree pane (left)** — a directory tree of *changed files*, mirroring
-  your repository layout. Rows carry badges: `chg:N` changed symbols,
-  `api:N` contract changes (added / removed / signature-changed),
-  `fan-in:N` symbols referenced by 2+ other changed symbols. `chg:`/
-  `fan-in:` numbers are cyan (informational); `api:` is yellow, the same
-  warning color as the file-size `warn:` badge, flagging it as the one
-  badge worth a second look. Directories in a dependency cycle are
-  marked `(cycle)`. Symbol rows show a kind abbreviation (`fn`,
-  `struct`, ...) and a classification marker: `+` added, `~`
-  signature-changed, `x` removed. Files rinkaku couldn't analyze appear
+  your repository layout. Sibling directories order topologically over
+  the change graph: entry-point directories (nothing else depends on
+  them) sort first, heavily-depended-upon foundations sort last. Files
+  within a directory are alphabetical; symbols keep source order. When
+  a diff has no cross-directory references, ranking has nothing to
+  work with and the order silently falls back to alphabetical — don't
+  over-read ordering in that case. The underlying dependency edges come
+  from syntactic tree-sitter resolution, not a type checker, so a
+  reference can occasionally be missed.
+
+  Rows carry badges: `chg:N` changed symbols, `api:N` contract changes
+  (added / removed / signature-changed), `fan-in:N` other *production*
+  symbols referencing this one — tests exercising it don't count, so
+  the number reflects blast radius among changed code, not test
+  coverage. `chg:`/`fan-in:` numbers are cyan (informational);
+  `api:` is yellow, the same warning color as the file-size `warn:`
+  badge, flagging it as the one badge worth a second look. A row whose
+  badges show both a contract change and a high-fan-in symbol in its
+  subtree gets a leading `!` (red, bold) — the combination that makes a
+  change both hard to miss and wide-reaching; a signature-changed
+  symbol with high fan-in of its own gets the same marker. Directories
+  in a dependency cycle are marked `(cycle)`.
+
+  Symbol rows show a kind abbreviation (`fn`, `struct`, ...) and a
+  classification marker: `+` added, `~` signature-changed, `x` removed,
+  or blank for body-only/unclassified — a blank-marker symbol's name
+  also dims to DarkGray, since its signature didn't change and it
+  carries less review weight. Files rinkaku couldn't analyze appear
   dimmed as `(skipped: <reason>)`; whole-test files as
-  `[test] (N symbols)`.
+  `[test] (N symbols)`. A *mixed* file's test symbols (real code
+  alongside `#[cfg(test)]`-style tests in the same file) fold into a
+  trailing `N tests` row (`1 test` singular), collapsed by default —
+  expand it with `space`/`enter` to see them individually, dimmed and
+  without any per-symbol badge, since group membership already says
+  "this is test code".
 - **Diff pane (right, default)** — the raw unified-diff hunks touching
   the selected row, syntax-highlighted for the four built-in languages
   ([ADR 0018](adr/0018-syntax-highlight-diff-pane-via-tree-sitter.md)).
@@ -77,7 +101,8 @@ Press `?` in the TUI for the always-up-to-date table.
 | `?` | Toggle the help overlay |
 | `q` / `ctrl-c` | Quit (from the entry view); `esc`/`q` also returns from the source view |
 
-Glyphs are plain ASCII (`~`/`!`/`^`/`+`/`x`, `v`/`>` for expand state).
+Glyphs are plain ASCII: `+` added, `~` signature-changed, `x` removed,
+blank for body-only, `!` for the risk marker, `v`/`>` for expand state.
 
 ## Jump navigation (`gd` / `gr`)
 

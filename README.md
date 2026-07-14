@@ -60,42 +60,25 @@ aid, not a verifier, and we have the experiment rounds to prove it.
 
 ## How to read the TUI
 
-The tree pane orders sibling directories topologically over the change
-graph, not alphabetically: entry-point directories (nothing else
-depends on them) sort first, heavily-depended-upon foundations sort
-last. Tests are excluded from that ranking entirely and pinned into a
-trailing `Tests` section instead. Files within a directory are
-alphabetical; symbols keep source order. When a diff has no
-cross-directory references, ranking has nothing to work with and the
-order silently falls back to alphabetical — don't over-read ordering
-in that case, and remember the underlying dependency edges come from
-syntactic tree-sitter resolution, not a type checker, so a reference
-can occasionally be missed.
+```
+v ! auth chg:4 api:2 fan-in:3   <- contract change + high fan-in
+    ! token.rs api:1 fan-in:2   <- same, rolled up to the file
+      ~ fn ! verify_token       <- changed + high fan-in itself
+      + fn rotate_secret        <- added
+        fn log_attempt          <- body-only, dimmed: skim
+    > 6 tests                   <- folded tests, dimmed
+v tui                           <- no risk marker here
+    render.rs lines:812         <- file-size watch badge
+  legacy  (cycle)               <- dependency cycle
+```
 
-Badges on a row: `chg:N` changed symbols, `api:N` (yellow) contract/
-signature changes, `fan-in:N` symbols that reference this one — i.e.
-this row's *blast radius*, not a measure of its importance —
-`lines:`/`warn:`/`split:` file-size discipline, and `(cycle)` for a
-directory-level dependency cycle. A symbol's leading marker is `+`
-added, `~` signature-changed, `x` removed, or blank for body-only.
+Top-down = callers before callees: entry points sort first, foundations
+last. `fan-in:` counts other *production* symbols referencing this one,
+never tests. Press `r`/`R` on any row to pivot the right pane to its
+blast radius; `?` opens the full keymap.
 
-A reading protocol that uses those signals instead of scrolling
-top-to-bottom through the diff:
-
-1. Read the tree top-down — callers appear before the callees they
-   depend on.
-2. Deep-read any row where `api:` and a high `fan-in:` co-occur: a
-   changed contract with many referrers is the highest-risk zone in the
-   PR.
-3. Skim blank-marker (body-only) symbols — their signature didn't
-   change, so they're locally contained.
-4. Press `r`/`R` on a row you're suspicious of to pivot the right pane
-   to its blast-radius tree and see everything downstream of it.
-5. Treat `(cycle)` markers and file-size warnings as structural
-   findings worth calling out separately, not as line-level bugs.
-
-See [`docs/tui.md`](docs/tui.md) for the full layout and key-binding
-reference.
+See [`docs/tui.md`](docs/tui.md) for the full layout, key bindings, and
+caveats on ordering and dependency resolution.
 
 ## Install
 
