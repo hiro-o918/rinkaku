@@ -18,6 +18,11 @@
 //!   with `ratatui`, reads source files for the drill-down view, and owns
 //!   the terminal lifecycle (raw mode, alternate screen, the event loop).
 //!   This is the only layer that performs IO or holds a live `Terminal`.
+//!   [`run_app`]'s own event loop delegates two responsibilities to
+//!   sibling modules (ADR 0028, split out once this file grew past the
+//!   file-size threshold): `input_translate` (raw `crossterm` events →
+//!   [`app::InputKey`]) and `review_flow` (ADR 0048's review-notes
+//!   composing/exporting/caching glue).
 //!
 //! [`run`] is the crate's single public entry point for the CLI binary:
 //! `rinkaku`'s `main.rs` hands it a [`rinkaku_core::render::Report`] once
@@ -35,8 +40,12 @@ pub mod diff_shape;
 pub mod diff_view;
 pub mod help;
 pub mod highlight;
+mod input_translate;
 pub mod nav;
+pub mod note_markers;
 pub mod order;
+pub mod review;
+mod review_flow;
 pub mod row_view;
 mod session;
 pub mod source;
@@ -50,9 +59,35 @@ pub mod ui;
 pub use session::{TuiSession, run};
 
 use app::{App, BlastRadiusSelection, InputKey, Screen};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use input_translate::{translate_key, translate_mouse_event};
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use review::PrContext;
+use review::ports::{ClipboardSink, ReviewSubmitter};
+use review_flow::{
+    derive_selection_snapshot, dispatch_note_compose_key, perform_export,
+    should_recompute_note_markers,
+};
 use rinkaku_core::render::Report;
 use std::time::Duration;
+
+// Re-exported at the crate root purely so `lib_tests/note_snapshot.rs`'s
+// existing `use crate::{...}` import (predating the ADR 0028 split into
+// `review_flow`) keeps working unchanged.
+#[cfg(test)]
+pub(crate) use review_flow::first_anchor_run;
+
+/// Review-notes export wiring (ADR 0048), assembled once by `main.rs`'s
+/// composition root and threaded through unchanged from
+/// [`crate::session::TuiSession::run`] to [`run_app`]: `pr_context`/
+/// `submitter` are both `Some`/`None` together (sink A's own "absent when
+/// no PR context" rule — [`crate::app::App::with_review_sink_a_available`]'s
+/// own doc comment), `clipboard` is always present since sink B never
+/// depends on a PR.
+pub struct ReviewPorts<'a> {
+    pub pr_context: Option<PrContext>,
+    pub submitter: Option<&'a dyn ReviewSubmitter>,
+    pub clipboard: &'a dyn ClipboardSink,
+}
 
 /// The event loop [`TuiSession::run`] (`crate::session`) drives once it has
 /// taken over the terminal — see [`run`]'s doc comment (re-exported from
@@ -68,8 +103,9 @@ pub(crate) fn run_app(
     entry_path: Option<&str>,
     repo_root: &std::path::Path,
     source_reader: &dyn source::SourceReader,
+    review_ports: ReviewPorts<'_>,
 ) -> std::io::Result<()> {
-    let mut app = App::new(report);
+    let mut app = App::new(report).with_review_sink_a_available(review_ports.pr_context.is_some());
     if let Some(path) = entry_path {
         app = app.with_entry_pivot(path);
     }
@@ -169,6 +205,17 @@ pub(crate) fn run_app(
     // would produce a step that does not match what the reviewer is
     // actually looking at.
     let mut last_help_scroll_viewport_height: Option<usize> = None;
+    // ADR 0048's `NoteMarkers` cache-on-change, mirroring
+    // `blast_radius_selection`/`diff_pane_content`'s own up-front-then-
+    // gated-recompute shape: built once from `App::new`'s initial (empty)
+    // `review` state, then only recomputed when `should_recompute_note_markers`
+    // reports the note set actually changed. `last_note_markers_revision`
+    // starts at `app.review().revision()` itself (0 on a fresh session)
+    // rather than a sentinel, so the first key press that does not touch
+    // `review` correctly skips a redundant recompute of an already-empty
+    // table.
+    let mut note_markers = note_markers::build_note_markers(app.review().notes());
+    let mut last_note_markers_revision = app.review().revision();
 
     loop {
         // `ui::draw`'s return value (`DrawOutcome`, `ui::draw`'s own doc
@@ -187,6 +234,7 @@ pub(crate) fn run_app(
                 &blast_radius_selection,
                 source_content.as_ref(),
                 &diff_hunks,
+                &note_markers,
             );
         })?;
         app = clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll);
@@ -239,7 +287,23 @@ pub(crate) fn run_app(
             // variants, `]c`/`[c`) can all change the scroll offset and this
             // sync applies uniformly to any of them.
             let scroll_before_dispatch = app.right_pane_scroll();
-            if let InputKey::Source = input_key {
+            if let InputKey::NoteCompose = input_key {
+                // ADR 0048: needs a `SelectionSnapshot` derived from
+                // `report`/`diff_hunks`, which `App::handle_key` has no
+                // access to (`InputKey::NoteCompose`'s own doc comment) —
+                // derived here, mirroring `InputKey::Source`'s own "IO/
+                // derivation stays outside `App`" precedent just below, then
+                // applied via `dispatch_note_compose_key` (extracted for the
+                // same "sequencing needs its own regression coverage"
+                // reason `dispatch_non_source_key`'s own doc comment gives —
+                // an earlier version of this arm left `app` completely
+                // untouched on a `None` snapshot, which skipped
+                // `App::handle_key`'s unconditional `pending_prefix` clear
+                // the same way the ADR 0022 bug `dispatch_non_source_key`
+                // documents did).
+                let snapshot = derive_selection_snapshot(&app, report, &diff_hunks);
+                app = dispatch_note_compose_key(app, snapshot);
+            } else if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id, .. } = app.screen().clone()
                     && should_reload_source_content(
@@ -320,6 +384,24 @@ pub(crate) fn run_app(
                 // `dispatch_non_source_key`'s own doc comment for why this
                 // split exists (ADR 0022's `pending_prefix` regression).
                 app = dispatch_non_source_key(app, report, &diff_pane_content, input_key);
+            }
+
+            // ADR 0048: performs the export this key requested, if any —
+            // the one place `review`'s plain `ExportRequest` data actually
+            // reaches a port (`gh api`/OSC 52), since `review` itself
+            // never calls one. Runs once per handled key, after every
+            // review-state transition above (`begin_compose`/`handle_review_key`)
+            // has already produced the export request via the verdict/
+            // export menu's own confirm step.
+            let mut review = app.review().clone();
+            if let Some(export) = review.take_pending_export() {
+                review = perform_export(review, &review_ports, export);
+                app = app.with_review(review);
+            }
+
+            if should_recompute_note_markers(&app, last_note_markers_revision) {
+                note_markers = note_markers::build_note_markers(app.review().notes());
+                last_note_markers_revision = app.review().revision();
             }
 
             if should_recompute_blast_radius_selection(&app) {
@@ -841,214 +923,6 @@ fn resolve_goto(app: &App, report: &Report, direction: InputKey) -> GotoOutcome 
 /// need a wasted recompute on the `d` press that briefly leaves it.
 fn should_recompute_blast_radius_selection(app: &App) -> bool {
     matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::BlastRadius
-}
-
-/// Translates a raw `crossterm` key press into this crate's
-/// terminal-agnostic [`InputKey`], or `None` for a key the app does not
-/// react to. Depends on `app.screen()` to disambiguate `q`/Esc (`Quit`/
-/// `FocusLeft` on the entry view depending on focus, `Back` on the source
-/// view) and on `app.focus()` (ADR 0020) to route Esc between `FocusLeft`
-/// and its other meanings — every other mapping is context-free.
-///
-/// `app.help_open()` (ADR 0020) short-circuits every other rule: while the
-/// help overlay is open, `?`/Esc/`q` all translate to `ToggleHelp` (closing
-/// it) regardless of what they would otherwise mean, and this check runs
-/// before every other arm so none of them — especially `q`, which would
-/// otherwise mean `Quit` — can reach past the overlay. `App::handle_key`'s
-/// own `help_open` guard is a second, independent layer of the same rule
-/// (swallowing every non-`ToggleHelp` key while open) — belt and braces,
-/// since "the overlay is a safe action that can never accidentally quit
-/// the app" is exactly the property ADR 0020 asks this feature to hold.
-///
-/// `app.jump_popup()` (ADR 0022) is the next short-circuit, mirroring the
-/// help overlay's own structure: while the jump-target popup is open,
-/// `j`/`k`/Up/Down move its own selection, Enter confirms (`PopupConfirm`),
-/// Esc cancels (`PopupCancel`), and every other key is swallowed.
-///
-/// `app.pending_prefix()` (ADR 0022) is consulted only for `d`/`r`: when a
-/// `g` press is still pending, `d` resolves to `GotoDefinition` and `r` to
-/// `GotoReferences` instead of their own ordinary meanings (`ToggleDiff`/
-/// unbound) — every other key falls through to its normal translation
-/// unconditionally, which is what lets the pending prefix's own state
-/// (`App::handle_key`'s blanket clear-unless-`PendingGoto` rule) correctly
-/// unwind on any key that is not `d`/`r`.
-fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
-    if app.help_open() {
-        // The overlay's own content can run longer than its box (this
-        // feature's whole reason for existing) — `j`/`k`/`Ctrl-d`/`Ctrl-u`/
-        // `G` scroll it, mirroring the plain-key mapping each already has
-        // outside the overlay so a reviewer does not have to learn a
-        // second gesture just because the overlay is open. `gg`'s
-        // second-`g` resolution still goes through the `pending_prefix`
-        // branch below (this early return only covers `?`/Esc/`q`/`Ctrl-d`/
-        // `Ctrl-u`/`G` and the bare `j`/`k`/arrow keys; a first `g` press
-        // is deliberately *not* matched here so it falls through to the
-        // ordinary `PendingGoto` arm at the bottom of this function, which
-        // works identically whether the overlay is open or not since it
-        // only touches `app.pending_prefix()`).
-        return match code {
-            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::ToggleHelp),
-            KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
-            KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
-            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(InputKey::ScrollHalfPageDown)
-            }
-            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(InputKey::ScrollHalfPageUp)
-            }
-            KeyCode::Char('G') => Some(InputKey::ScrollToBottom),
-            KeyCode::Char('g') if app.pending_prefix() == Some(app::PendingPrefix::G) => {
-                Some(InputKey::ScrollToTop)
-            }
-            KeyCode::Char('g') => Some(InputKey::PendingGoto),
-            _ => None,
-        };
-    }
-
-    if app.jump_popup().is_some() {
-        return match code {
-            KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
-            KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
-            KeyCode::Enter => Some(InputKey::PopupConfirm),
-            KeyCode::Esc => Some(InputKey::PopupCancel),
-            _ => None,
-        };
-    }
-
-    let on_source_screen = matches!(app.screen(), Screen::Source { .. });
-    let right_focused = app.focus() == app::Focus::Right;
-
-    if app.pending_prefix() == Some(app::PendingPrefix::G) {
-        match code {
-            KeyCode::Char('d') | KeyCode::Char('D') => return Some(InputKey::GotoDefinition),
-            KeyCode::Char('r') | KeyCode::Char('R') => return Some(InputKey::GotoReferences),
-            // `gg` (ADR 0026): scroll the reading pane to the top —
-            // resolved here the same way `gd`/`gr` are, piggybacking on
-            // the existing `g`-prefix state machine (ADR 0022) rather
-            // than reserving single-key `g` for this and breaking the
-            // two-key sequences above. Uppercase `G` is a *distinct*
-            // single-key gesture (`ScrollToBottom` below), unrelated to
-            // this prefix — a second `g` in this arm is what means "top".
-            KeyCode::Char('g') => return Some(InputKey::ScrollToTop),
-            _ => {}
-        }
-    }
-
-    match code {
-        KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
-        KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
-        // Space always means "expand/collapse", never "drill in" — kept
-        // distinct from Enter's own `InputKey::Open` (ADR 0020) so Space on
-        // a file/symbol row never moves focus. Translated unconditionally
-        // here regardless of `app.focus()`, same as every other key this
-        // function maps context-free — `App::handle_key`'s own
-        // `Focus::Tree`-only arm for `Select` is where the actual
-        // Tree-focus requirement lives (mirroring how `NextHunk`/`PrevHunk`
-        // are also translated unconditionally but only acted on under
-        // certain conditions elsewhere).
-        KeyCode::Char(' ') => Some(InputKey::Select),
-        KeyCode::Enter => Some(InputKey::Open),
-        KeyCode::Char('e') | KeyCode::Char('E') => Some(InputKey::ExpandAll),
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::Quit),
-        KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
-        KeyCode::Char('o') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::JumpBack),
-        // Ctrl-I and Tab share the same control code (0x09) at the terminal
-        // protocol level — without Kitty's keyboard-enhancement protocol
-        // (which this crate does not enable), a real Ctrl-I keypress
-        // arrives here as plain `KeyCode::Tab`, not `KeyCode::Char('i')` +
-        // `CONTROL` (confirmed via manual tmux testing against a real
-        // terminal, not just documentation: the `Char('i') + CONTROL` arm
-        // alone never matched a real Ctrl-I press). Both patterns are kept
-        // so this still works correctly in an environment that *does*
-        // report the modifier form (e.g. a test harness constructing the
-        // event directly, as this module's own tests do).
-        KeyCode::Tab => Some(InputKey::JumpForward),
-        KeyCode::Char('i') if modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputKey::JumpForward)
-        }
-        KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
-        // `Ctrl-d`/`Ctrl-u` (ADR 0026): half-page scroll on the reading
-        // pane (`Screen::Source`, or `Screen::Entry` + `Focus::Right`).
-        // Must come *before* the plain `Char('d')`/`Char('u')` arms —
-        // otherwise a `Ctrl-d` press would match `ToggleDiff` first and
-        // the modifier would be ignored, silently rebinding "half-page
-        // down" to "toggle diff pane". Emitted regardless of screen/
-        // focus; `App::handle_scroll_key` no-ops on `Focus::Tree` in the
-        // entry view (ADR 0026 decision 3's Tree-focus rule).
-        KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputKey::ScrollHalfPageDown)
-        }
-        KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(InputKey::ScrollHalfPageUp)
-        }
-        KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
-        KeyCode::Char('r') | KeyCode::Char('R') => Some(InputKey::ToggleBlastRadius),
-        KeyCode::Char('v') | KeyCode::Char('V') => Some(InputKey::ToggleSplitView),
-        // `G` (`Shift-g`, ADR 0026): scroll to the bottom. Distinct from
-        // single-key lowercase `g` (`PendingGoto` below), which is the
-        // leading key of the `gd`/`gr`/`gg` two-key sequences resolved
-        // at the top of this function.
-        KeyCode::Char('G') => Some(InputKey::ScrollToBottom),
-        // `h`, or Esc while the right pane has focus: return focus to the
-        // tree (ADR 0020's neovim-style "move left/back"). Checked before
-        // the source-screen Esc arm below so `h`/Esc while Right-focused
-        // never reaches the source screen (impossible in practice today,
-        // since opening the source screen already moves focus to `Right`,
-        // but ordered defensively rather than relying on that invariant).
-        KeyCode::Char('h') if right_focused => Some(InputKey::FocusLeft),
-        KeyCode::Esc if right_focused && !on_source_screen => Some(InputKey::FocusLeft),
-        // `]c`/`[c` (vim's hunk-jump idiom) are read here as a single
-        // bracket keystroke rather than a buffered two-key chord — this
-        // crate's event loop (`run_app`) has no notion of a pending-chord
-        // state machine today, and introducing one for exactly one binding
-        // would be disproportionate; `]`/`[` alone are otherwise unbound,
-        // so no existing gesture is lost by this simplification.
-        KeyCode::Char(']') => Some(InputKey::NextHunk),
-        KeyCode::Char('[') => Some(InputKey::PrevHunk),
-        KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
-        // `g` (ADR 0022): the first half of the `gd`/`gr` two-key sequence.
-        // Checked after the `pending_prefix` resolution above so a second
-        // `g` press (`gg`, not a bound sequence today) simply restarts the
-        // pending state rather than doing anything else — `App::handle_key`
-        // sets `pending_prefix` from this variant unconditionally.
-        KeyCode::Char('g') => Some(InputKey::PendingGoto),
-        KeyCode::Char('?') => Some(InputKey::ToggleHelp),
-        KeyCode::Esc if on_source_screen => Some(InputKey::Back),
-        KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
-        KeyCode::Char('q') => Some(InputKey::Quit),
-        _ => None,
-    }
-}
-
-/// Translates a raw `crossterm` mouse event into an [`InputKey`], the same
-/// boundary role [`translate_key`] plays for keyboard input — a pure
-/// function so the mapping is unit-testable without a live terminal.
-///
-/// Only `ScrollUp`/`ScrollDown` (wheel/trackpad) are mapped, and they are
-/// mapped onto the *existing* [`InputKey::Up`]/[`InputKey::Down`] variants
-/// rather than a dedicated pair of scroll variants: `App::handle_key`
-/// already gives `Up`/`Down` the right contextual meaning everywhere a
-/// wheel scroll should act — the tree cursor while [`app::Focus::Tree`],
-/// [`app::App::right_pane_scroll`] by one line while [`app::Focus::Right`]
-/// (ADR 0020), and [`app::Screen::Source`]'s `scroll_top` on the source
-/// screen (ADR 0026) — so reusing them is a strict simplification (no new
-/// state-machine surface) rather than introducing a second, parallel
-/// motion concept the app would have to keep in sync with the first.
-///
-/// `MouseEventKind::ScrollLeft`/`ScrollRight` (horizontal wheel/trackpad)
-/// and every click/drag/move variant are deliberately unmapped (`None`):
-/// this crate has no horizontally-scrollable pane, and no pane targeting by
-/// click position — the row/column the event occurred at is intentionally
-/// not consulted here. Wheel input always acts on whichever pane already
-/// has focus, exactly like a keyboard `j`/`k` press would; teaching the
-/// wheel to also *change* focus by clicking a pane is future scope, not
-/// attempted by this function.
-fn translate_mouse_event(kind: event::MouseEventKind) -> Option<InputKey> {
-    match kind {
-        event::MouseEventKind::ScrollUp => Some(InputKey::Up),
-        event::MouseEventKind::ScrollDown => Some(InputKey::Down),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

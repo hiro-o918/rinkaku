@@ -145,6 +145,7 @@ pub(super) fn draw_source_screen_for_test(
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 diff_hunks,
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");

@@ -80,6 +80,20 @@ blast radius; `?` opens the full keymap.
 See [`docs/tui.md`](docs/tui.md) for the full layout, key bindings, and
 caveats on ordering and dependency resolution.
 
+### Leaving review notes
+
+Press `n` over a symbol row to attach a note; `N` opens the notes list
+(`j`/`k` to move, `Enter` to export, `d` to delete). Export goes to
+whichever sinks apply to how you launched the TUI:
+
+- **GitHub PR review** — only when you started with `rinkaku --pr
+  <url or number>`. Picking this opens a verdict menu (Approve /
+  Request changes / Comment) and posts every note as one batched PR
+  review.
+- **Clipboard, for an AI agent** — always available. Copies a Markdown
+  packet (one section per note, with the note's own symbol signature)
+  via an OSC 52 terminal escape sequence, so it works over SSH too.
+
 ## Install
 
 | Method | Command |

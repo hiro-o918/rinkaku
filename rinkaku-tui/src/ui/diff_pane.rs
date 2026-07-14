@@ -158,6 +158,7 @@ pub(crate) fn draw_diff_pane(
     report: &Report,
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
+    note_markers: &crate::note_markers::NoteMarkers,
     area: Rect,
 ) -> Option<usize> {
     use crate::diff_shape::DiffPaneContent;
@@ -208,10 +209,10 @@ pub(crate) fn draw_diff_pane(
     let unified_lines = if render_split {
         Vec::new()
     } else {
-        diff_pane_lines(&sections, true, highlighted_file)
+        diff_pane_lines(&sections, true, highlighted_file, note_markers, path)
     };
     let split_rows = if render_split {
-        diff_pane_split_rows(&sections, true, highlighted_file)
+        diff_pane_split_rows(&sections, true, highlighted_file, note_markers, path)
     } else {
         (Vec::new(), Vec::new())
     };
@@ -325,6 +326,8 @@ pub(crate) fn diff_pane_lines(
     sections: &[&DiffSection],
     show_section_headers: bool,
     highlighted_file: Option<&HighlightedFile>,
+    note_markers: &crate::note_markers::NoteMarkers,
+    path: &str,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (section_index, section) in sections.iter().enumerate() {
@@ -361,6 +364,7 @@ pub(crate) fn diff_pane_lines(
                 highlighted_file,
                 attributed.source_index,
             );
+            let new_side_lines = new_side_line_numbers(&attributed.hunk);
 
             for (line_index, line) in attributed.hunk.lines.iter().enumerate() {
                 // `hunk_highlight` is `Option<&[LineHighlight]>`, and
@@ -373,11 +377,65 @@ pub(crate) fn diff_pane_lines(
                 let token_spans = hunk_highlight
                     .and_then(|lines| lines.get(line_index).cloned())
                     .flatten();
-                lines.push(diff_line(line, token_spans));
+                let has_note = new_side_lines[line_index].is_some_and(|line_no| {
+                    crate::note_markers::line_has_note(note_markers, path, line_no)
+                });
+                lines.push(prefix_note_marker(diff_line(line, token_spans), has_note));
             }
         }
     }
     lines
+}
+
+/// This hunk's own new-side line number for each of `hunk.lines`, `None`
+/// for a pure-`Removed` line (which has no new-side position of its own —
+/// [`crate::diff_view::hunk_intersects`]'s own doc comment on the same
+/// "a removed line is a position, not a range" distinction). Starts
+/// counting from `hunk.new_range`'s own start (already the hunk body's
+/// *actual* new-side extent, not the header's possibly-inaccurate claim —
+/// `Hunk::new_range`'s own doc comment), incrementing once per `Added`/
+/// `Context` line, mirroring how a unified diff's new-side numbering works.
+///
+/// `None` for every line when `hunk.new_range` itself is `None` (an
+/// unreadable header, or new-side start `0` — [`crate::diff_view::Hunk::new_range`]'s
+/// doc comment) — there is no starting point to count from.
+fn new_side_line_numbers(hunk: &crate::diff_view::Hunk) -> Vec<Option<usize>> {
+    let Some((start, _)) = hunk.new_range else {
+        return vec![None; hunk.lines.len()];
+    };
+    let mut next_line = start;
+    hunk.lines
+        .iter()
+        .map(|line| match line.kind {
+            DiffLineKind::Removed => None,
+            DiffLineKind::Added | DiffLineKind::Context => {
+                let current = next_line;
+                next_line += 1;
+                Some(current)
+            }
+        })
+        .collect()
+}
+
+/// Prepends a 1-character note-marker column (ADR 0048) to `line`: a cyan
+/// `*` when `has_note`, a space otherwise — every diff-pane row gets this
+/// column regardless, so the marker's presence/absence never shifts the
+/// rest of the line's own columns out of alignment with its neighbors.
+fn prefix_note_marker(line: Line<'static>, has_note: bool) -> Line<'static> {
+    let marker = if has_note {
+        Span::styled("*", Style::default().fg(Color::Cyan))
+    } else {
+        Span::raw(" ")
+    };
+    let mut spans = vec![marker];
+    spans.extend(line.spans);
+    // `Line::from(spans)` alone would drop `line.style` — the base style
+    // `Line::styled` (e.g. `plain_diff_line`'s single-span Added/Removed
+    // lines) applies at the *line* level, patched onto each span at render
+    // time (`Line::styled_graphemes`), not copied onto the spans
+    // themselves — so this rebuilt `Line` must carry the same base style
+    // forward, or every span here silently loses its foreground/background.
+    Line::from(spans).style(line.style)
 }
 
 /// Split-view (ADR 0044) counterpart of [`diff_pane_lines`]: the same
@@ -401,6 +459,8 @@ pub(crate) fn diff_pane_split_rows(
     sections: &[&DiffSection],
     show_section_headers: bool,
     highlighted_file: Option<&HighlightedFile>,
+    note_markers: &crate::note_markers::NoteMarkers,
+    path: &str,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
     let mut left = Vec::new();
     let mut right = Vec::new();
@@ -447,17 +507,26 @@ pub(crate) fn diff_pane_split_rows(
                 attributed.source_index,
             );
             let split_rows = crate::diff_shape::pair_hunk_lines(&attributed.hunk.lines);
+            let new_side_lines = new_side_line_numbers(&attributed.hunk);
 
             for split_row in &split_rows {
                 left.push(split_side_line(
                     split_row.left.as_ref(),
                     split_row.left_index,
                     hunk_highlight,
+                    None,
                 ));
+                let right_has_note = split_row
+                    .right_index
+                    .and_then(|index| new_side_lines.get(index).copied().flatten())
+                    .is_some_and(|line_no| {
+                        crate::note_markers::line_has_note(note_markers, path, line_no)
+                    });
                 right.push(split_side_line(
                     split_row.right.as_ref(),
                     split_row.right_index,
                     hunk_highlight,
+                    Some(right_has_note),
                 ));
             }
         }
@@ -471,12 +540,20 @@ pub(crate) fn diff_pane_split_rows(
 /// interleaved `lines`, [`crate::diff_shape::SplitRow::left_index`]/
 /// `right_index`'s own doc comment on why this must be the original index,
 /// not the split row's own position).
+///
+/// `has_note` (ADR 0048) is `Some(bool)` on the new-side (right) call, and
+/// `None` on the old-side (left) call — split view only marks the new
+/// side, matching [`crate::review::NoteLocation`]'s own new-side-only
+/// anchoring; a `Some` value prefixes the 1-column marker, `None` prefixes
+/// nothing at all (the old side keeps its pre-ADR-0048 column layout
+/// unchanged).
 fn split_side_line(
     line: Option<&DiffLine>,
     index: Option<usize>,
     hunk_highlight: Option<&[Option<Vec<TokenSpan>>]>,
+    has_note: Option<bool>,
 ) -> Line<'static> {
-    match (line, index) {
+    let rendered = match (line, index) {
         (Some(line), Some(index)) => {
             let token_spans = hunk_highlight
                 .and_then(|lines| lines.get(index).cloned())
@@ -484,6 +561,10 @@ fn split_side_line(
             diff_line(line, token_spans)
         }
         _ => Line::raw(""),
+    };
+    match has_note {
+        Some(has_note) => prefix_note_marker(rendered, has_note),
+        None => rendered,
     }
 }
 

@@ -81,6 +81,23 @@ impl App {
             None
         };
 
+        // The review overlay (ADR 0048) takes over the whole key space
+        // while any of its modes is open — the highest-priority check in
+        // this function, ahead of even the `?` help overlay, mirroring
+        // that overlay's own "takes over the whole key space" structure
+        // (this function's own doc comment on `help_open`) but checked
+        // first: a reviewer mid-compose must never have a stray `?` yank
+        // focus away into the help overlay instead of typing a literal
+        // `?` into their note. `InputKey::NoteCompose` itself never
+        // reaches this function at all while `review` is `Idle`
+        // (`crate::lib::run_app` special-cases it before dispatch, see
+        // that variant's own doc comment), so this branch only needs to
+        // handle the overlay's *own* key space once it is already open.
+        if !matches!(self.review.mode(), crate::review::ReviewMode::Idle) {
+            self.review = self.handle_review_key(key);
+            return self;
+        }
+
         if self.help_open {
             match key {
                 InputKey::ToggleHelp => {
@@ -580,6 +597,25 @@ impl App {
             // exhaustive against future refactors — same reasoning as the
             // `ToggleHelp` arm just above.
             (Screen::Entry, _, InputKey::PopupConfirm | InputKey::PopupCancel) => {}
+            (Screen::Entry, _, InputKey::NotesList) => {
+                self.review = self.review.clone().open_list();
+            }
+            // Unreachable while `handle_key` is entered directly:
+            // `crate::lib::run_app` special-cases `NoteCompose` before
+            // dispatch (`InputKey::NoteCompose`'s own doc comment) and the
+            // review-overlay priority check at the top of this function
+            // intercepts `ComposeChar`/`ComposeBackspace`/`NoteDelete`
+            // whenever a review mode is actually open — kept only so the
+            // match stays exhaustive against future refactors, same
+            // reasoning as the `ToggleHelp`/`PopupConfirm` arms above.
+            (
+                Screen::Entry,
+                _,
+                InputKey::NoteCompose
+                | InputKey::ComposeChar(_)
+                | InputKey::ComposeBackspace
+                | InputKey::NoteDelete,
+            ) => {}
         }
 
         if !preserve_scroll && !preserve_scroll_after_jump {
@@ -587,6 +623,52 @@ impl App {
         }
 
         self
+    }
+
+    /// Handles one [`InputKey`] while a review overlay mode (ADR 0048) is
+    /// open — dispatched by [`Self::handle_key`]'s own top-of-function
+    /// priority check. `report`/diff data are never needed here: every
+    /// review transition this method reaches is a plain
+    /// [`crate::review::ReviewState`] method call, since the one review
+    /// action that *does* need external data (opening the compose overlay,
+    /// [`InputKey::NoteCompose`]) is special-cased by `crate::lib::run_app`
+    /// before dispatch and never reaches this method while `review` is
+    /// `Idle` — this method only ever runs once a review mode is already
+    /// open.
+    fn handle_review_key(&self, key: InputKey) -> crate::review::ReviewState {
+        let review = self.review.clone();
+        match review.mode() {
+            crate::review::ReviewMode::Compose { .. } => match key {
+                InputKey::ComposeChar(c) => review.push_char(c),
+                InputKey::ComposeBackspace => review.backspace(),
+                InputKey::PopupConfirm => review.confirm_compose(),
+                InputKey::PopupCancel => review.cancel_compose(),
+                _ => review,
+            },
+            crate::review::ReviewMode::List { .. } => match key {
+                InputKey::Up => review.list_up(),
+                InputKey::Down => review.list_down(),
+                InputKey::NoteDelete => review.delete_selected(),
+                InputKey::PopupConfirm => review.open_export_menu(),
+                InputKey::PopupCancel => review.close(),
+                _ => review,
+            },
+            crate::review::ReviewMode::ExportMenu { .. } => match key {
+                InputKey::Up => review.list_up(),
+                InputKey::Down => review.list_down(),
+                InputKey::PopupConfirm => review.confirm_export(self.review_sink_a_available),
+                InputKey::PopupCancel => review.close(),
+                _ => review,
+            },
+            crate::review::ReviewMode::VerdictMenu { .. } => match key {
+                InputKey::Up => review.list_up(),
+                InputKey::Down => review.list_down(),
+                InputKey::PopupConfirm => review.confirm_verdict(),
+                InputKey::PopupCancel => review.close(),
+                _ => review,
+            },
+            crate::review::ReviewMode::Idle => review,
+        }
     }
 
     /// Handles one [`InputKey`] while the jump-target popup (ADR 0022) is

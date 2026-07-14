@@ -494,3 +494,70 @@ fn should_translate_q_to_none_while_jump_popup_is_open() {
 
     assert_eq!(None, actual);
 }
+
+// Full-width key normalization: a reviewer who forgot to switch off a
+// Japanese IME sends full-width forms of otherwise-bound ASCII keys —
+// normal-mode translation must still resolve them to the same InputKey
+// their half-width counterpart would.
+
+#[test]
+fn should_translate_fullwidth_n_to_the_same_input_key_as_halfwidth_n() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('ｎ'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::NoteCompose), actual);
+}
+
+#[test]
+fn should_translate_fullwidth_j_to_down_regardless_of_focus() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('ｊ'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::Down), actual);
+}
+
+#[test]
+fn should_translate_fullwidth_q_to_quit_on_entry_screen() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('ｑ'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::Quit), actual);
+}
+
+#[test]
+fn should_translate_fullwidth_question_mark_to_toggle_help() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('？'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::ToggleHelp), actual);
+}
+
+#[test]
+fn should_not_normalize_fullwidth_characters_while_composing_a_note() {
+    // The compose buffer is free text (ADR 0048) — a full-width character
+    // typed there must land in the note body verbatim, not get folded to
+    // its half-width form the way normal-mode single-key gestures are.
+    let report = report_with_one_symbol();
+    let snapshot = crate::review::SelectionSnapshot {
+        path: "lib.rs".to_string(),
+        symbol_id: Some("lib.rs::foo".to_string()),
+        symbol_name: Some("foo".to_string()),
+        range: Some((1, 1)),
+        anchor: Some((1, 1)),
+        signature: Some("fn foo()".to_string()),
+    };
+    let review = crate::review::ReviewState::default().begin_compose(snapshot);
+    let app = App::new(&report).with_review(review);
+
+    let actual = translate_key(KeyCode::Char('ｎ'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::ComposeChar('ｎ')), actual);
+}

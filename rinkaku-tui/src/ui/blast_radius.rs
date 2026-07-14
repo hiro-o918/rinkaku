@@ -216,6 +216,7 @@ mod tests {
                     &blast_radius_selection,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -245,6 +246,7 @@ mod tests {
                     &blast_radius_selection,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -289,6 +291,7 @@ mod tests {
                     &blast_radius_selection,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");

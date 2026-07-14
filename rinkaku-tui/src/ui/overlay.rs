@@ -617,15 +617,15 @@ mod tests {
     fn should_draw_help_overlay_with_keymap_markers_and_glossary_when_help_is_open() {
         let report = report_with_one_symbol();
         let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
-        // A 150x70 terminal (up from 100x50): wider so the Markers
-        // section's longest explanation line doesn't wrap onto a second
-        // row, taller so the overlay's 80% x 90% area fits every keymap
-        // group, the Markers legend, *and* the trailing Glossary section
-        // without the last section being pushed off the bottom. Grown here
-        // rather than narrowing the content itself, same rationale as the
-        // 100x40 -> 100x50 growth this test already went through for ADR
-        // 0026's keymap additions.
-        let mut terminal = Terminal::new(TestBackend::new(150, 70)).expect("terminal");
+        // A 150x74 terminal (up from 150x70): taller again so the
+        // overlay's 80% x 90% area still fits every keymap group —
+        // now including the "Review" group (ADR 0048) — the Markers
+        // legend, and the trailing Glossary section without the last
+        // section being pushed off the bottom. Grown here rather than
+        // narrowing the content itself, same rationale as the
+        // 100x40 -> 100x50 -> 150x70 growths this test already went
+        // through for ADR 0026's keymap additions.
+        let mut terminal = Terminal::new(TestBackend::new(150, 74)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -638,6 +638,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -681,6 +682,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -716,6 +718,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -757,6 +760,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -782,6 +786,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -818,6 +823,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -861,6 +867,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");
@@ -920,6 +927,7 @@ mod tests {
                         &BlastRadiusSelection::NotApplicable,
                         None,
                         &[],
+                        &crate::note_markers::NoteMarkers::default(),
                     );
                 })
                 .expect("draw");
@@ -951,6 +959,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
+                    &crate::note_markers::NoteMarkers::default(),
                 );
             })
             .expect("draw");

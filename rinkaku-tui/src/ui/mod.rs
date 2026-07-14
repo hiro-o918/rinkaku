@@ -14,6 +14,7 @@ mod detail_pane;
 mod diff_pane;
 mod entry;
 mod overlay;
+mod review_overlay;
 mod scroll;
 mod source_screen;
 mod status;
@@ -126,9 +127,14 @@ pub struct DrawOutcome {
 /// that already seeds `diff_highlights` above, passed through unchanged so
 /// the source screen can composite it onto the drilled-into symbol's file
 /// as an added/removed overlay.
-// Each parameter is a distinct once-per-session/once-per-key computation a
-// prior ADR deliberately keeps outside this render loop; grouping them into
-// a struct is a bigger refactor than this ADR's own scope.
+// This function's parameter list already sat at clippy's 7-argument
+// threshold before ADR 0046 added `diff_hunks`/ADR 0048 added
+// `note_markers`; every existing parameter is an independently-computed,
+// independently-cached piece of content `crate::run_app` must not
+// recompute inside the draw path (this function's own doc comment), so
+// bundling them into a struct now would only rename the same 9 values one
+// level deeper, not reduce the actual coupling — not worth the churn
+// across this module's own ~50 call sites for a lint threshold.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -139,6 +145,7 @@ pub fn draw(
     blast_radius_selection: &BlastRadiusSelection,
     source_content: Option<&Result<HighlightedSourceView, String>>,
     diff_hunks: &[FileHunks],
+    note_markers: &crate::note_markers::NoteMarkers,
 ) -> DrawOutcome {
     let area = frame.area();
     let [body, status_area] =
@@ -153,6 +160,7 @@ pub fn draw(
                 diff_content,
                 diff_highlights,
                 blast_radius_selection,
+                note_markers,
                 body,
             );
             // Right-pane inner height (borders excluded), computed the
@@ -208,6 +216,13 @@ pub fn draw(
     if let Some(popup) = app.jump_popup() {
         draw_jump_popup(frame, popup, area);
     }
+
+    // ADR 0048: the review overlay (compose/list/export/verdict) draws
+    // last, on top of everything above including the help overlay/jump
+    // popup — `App::handle_key`'s own priority check gives it the highest
+    // key-space priority for the identical reason (a reviewer mid-compose
+    // must see their own overlay, not have it silently obscured).
+    review_overlay::draw_review_overlay(frame, app.review(), app.review_sink_a_available(), area);
 
     outcome
 }
