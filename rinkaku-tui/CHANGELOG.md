@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.2](https://github.com/hiro-o918/rinkaku/compare/v0.6.1...v0.6.2) (2026-07-14)
+
+
+### Features
+
+* exclude test referrers from fan-in and encode review risk in the TUI ([#137](https://github.com/hiro-o918/rinkaku/issues/137)) ([eacb845](https://github.com/hiro-o918/rinkaku/commit/eacb8453b852acc4b224880f825d3df6fc4c1f6b))
+
+
+### Miscellaneous
+
+* release main ([#124](https://github.com/hiro-o918/rinkaku/issues/124)) ([2f8f6ad](https://github.com/hiro-o918/rinkaku/commit/2f8f6ad1b88258e8a320172cfbe8b8fd75a0a27b))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.1 to 0.6.2
+
 ## [0.6.1](https://github.com/hiro-o918/rinkaku/compare/v0.6.0...v0.6.1) (2026-07-14)
 
 
