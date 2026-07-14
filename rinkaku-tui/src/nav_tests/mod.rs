@@ -11,10 +11,13 @@
 //! - `section_crossing` — ADR 0035 Phase B: `Nav` treating a
 //!   `NodeKind::Section` like a `Dir` for expand/collapse and cursor
 //!   traversal across the production/Tests boundary
+//! - `default_collapse` — visual-encoding prototype:
+//!   `Nav::new_collapsing_test_groups`'s initial collapse seeding
 
 use super::*;
 use crate::tree::Badges;
 
+mod default_collapse;
 mod expand_collapse;
 mod move_cursor;
 mod retarget_cursor;
@@ -66,6 +69,22 @@ pub(super) fn section_node(children: Vec<TreeNode>) -> TreeNode {
     TreeNode {
         kind: NodeKind::Section(crate::tree::SectionKind::Tests),
         path: crate::tree::TESTS_SECTION_PATH.to_string(),
+        badges: Badges::default(),
+        children,
+        skip_reason: None,
+        test_symbol_count: None,
+    }
+}
+
+/// A `NodeKind::TestGroup` node (visual-encoding prototype), keyed by the
+/// same `{file_path}::tests` synthetic path `crate::tree::build_tree`
+/// uses for a mixed file's test-symbol group.
+pub(super) fn test_group_node(file_path: &str, children: Vec<TreeNode>) -> TreeNode {
+    TreeNode {
+        kind: NodeKind::TestGroup {
+            count: children.len(),
+        },
+        path: format!("{file_path}::tests"),
         badges: Badges::default(),
         children,
         skip_reason: None,

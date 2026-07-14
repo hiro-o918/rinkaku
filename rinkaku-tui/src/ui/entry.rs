@@ -371,6 +371,7 @@ mod tests {
             // Unreachable in this test fixture (no test files), but
             // required to stay exhaustive.
             crate::tree::NodeKind::Section(section_kind) => section_kind.label().to_string(),
+            crate::tree::NodeKind::TestGroup { count } => format!("{count} tests"),
         };
         let text = buffer_text(&terminal);
         assert!(

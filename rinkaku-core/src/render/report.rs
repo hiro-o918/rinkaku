@@ -191,6 +191,7 @@ mod tests {
             id: id.to_string(),
             path: path.to_string(),
             name: name.to_string(),
+            is_test: false,
         }
     }
 

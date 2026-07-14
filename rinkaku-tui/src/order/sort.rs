@@ -134,7 +134,13 @@ fn tier(node: &crate::tree::TreeNode) -> SiblingTier {
     match node.kind {
         crate::tree::NodeKind::Dir => SiblingTier::Dir,
         crate::tree::NodeKind::Section(_) => SiblingTier::Section,
-        crate::tree::NodeKind::File | crate::tree::NodeKind::Symbol(_) => SiblingTier::File,
+        // A `TestGroup` only ever appears as a `File`'s child, and
+        // `order_siblings` never recurses into a `File`'s children (only
+        // `Dir`, above) — this arm is exhaustiveness bookkeeping, not a
+        // reachable sort decision, same as `Symbol`'s.
+        crate::tree::NodeKind::File
+        | crate::tree::NodeKind::Symbol(_)
+        | crate::tree::NodeKind::TestGroup { .. } => SiblingTier::File,
     }
 }
 

@@ -366,9 +366,15 @@ pub fn build_file_detail(tree: &Tree, report: &Report, path: &str) -> Option<Fil
         .map(|fan_in| (fan_in.id.as_str(), fan_in.used_by.len()))
         .collect();
 
-    let symbols: Vec<FileSymbolSummary> = node
-        .children
-        .iter()
+    // A mixed file's test symbols are nested one level deeper, under a
+    // synthetic `TestGroup` child (visual-encoding prototype) rather than
+    // directly under the file — flatten that one level so the detail pane
+    // still lists every symbol regardless of the tree's grouping.
+    let symbol_source = node.children.iter().flat_map(|child| match &child.kind {
+        NodeKind::TestGroup { .. } => child.children.iter(),
+        _ => std::slice::from_ref(child).iter(),
+    });
+    let symbols: Vec<FileSymbolSummary> = symbol_source
         .filter_map(|child| match &child.kind {
             NodeKind::Symbol(symbol_ref) => Some(file_symbol_summary(symbol_ref, &fan_in_by_id)),
             _ => None,

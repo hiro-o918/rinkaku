@@ -329,9 +329,11 @@ impl App {
                     // A directory row's Enter behaves exactly like Space
                     // (`InputKey::Select`) — expand/collapse, no focus
                     // change (ADR 0020: only a file/symbol row's Enter also
-                    // drills in). A section row, a pure grouping node,
-                    // behaves the same way.
-                    Some(NodeKind::Dir) | Some(NodeKind::Section(_)) => {
+                    // drills in). A section row and a test group row, both
+                    // pure grouping nodes, behave the same way.
+                    Some(NodeKind::Dir)
+                    | Some(NodeKind::Section(_))
+                    | Some(NodeKind::TestGroup { .. }) => {
                         self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
                     }
                     // File and symbol rows behave identically (dogfooding

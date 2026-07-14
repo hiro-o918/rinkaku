@@ -75,6 +75,21 @@ impl Nav {
         Self::default()
     }
 
+    /// Like [`Self::new`], but starts with every [`NodeKind::TestGroup`]
+    /// row pre-collapsed (visual-encoding prototype): a mixed file's test
+    /// symbols are lower review priority than its production symbols (see
+    /// `crate::tree::NodeKind::TestGroup`'s doc comment), so they start
+    /// folded away rather than adding to the initial wall of rows every
+    /// other node type shows expanded by default.
+    pub fn new_collapsing_test_groups(tree: &Tree) -> Self {
+        let mut collapsed = HashSet::new();
+        collect_test_group_paths(tree, &mut collapsed);
+        Self {
+            collapsed,
+            cursor: 0,
+        }
+    }
+
     /// The current cursor position, as an index into [`Nav::rows`]'s
     /// result for the same `tree`. Exposed so a caller building a detail
     /// pane can look up `rows(tree)[cursor()]` without this module
@@ -339,6 +354,23 @@ fn collect_collapsible(node: &TreeNode, paths: &mut HashSet<String>) {
         for child in &node.children {
             collect_collapsible(child, paths);
         }
+    }
+}
+
+/// Every [`NodeKind::TestGroup`] row's path in `tree` — used by
+/// [`Nav::new_collapsing_test_groups`] to seed the initial collapse set.
+fn collect_test_group_paths(node_or_root: &Tree, paths: &mut HashSet<String>) {
+    for root in &node_or_root.roots {
+        collect_test_group_paths_in(root, paths);
+    }
+}
+
+fn collect_test_group_paths_in(node: &TreeNode, paths: &mut HashSet<String>) {
+    if matches!(node.kind, NodeKind::TestGroup { .. }) {
+        paths.insert(node.path.clone());
+    }
+    for child in &node.children {
+        collect_test_group_paths_in(child, paths);
     }
 }
 

@@ -117,6 +117,7 @@ pub(super) fn report_with_symbols_and_edges(
                 id: format!("{path}::{name}"),
                 path: path.to_string(),
                 name: name.to_string(),
+                is_test: false,
             })
         })
         .collect();

@@ -16,6 +16,59 @@ fn should_return_no_fan_ins_when_every_node_has_fan_in_below_two() {
 }
 
 #[test]
+fn should_exclude_test_referrers_when_counting_fan_in() {
+    // "zoo" and "alpha" both reference "shared", but "zoo" is a test
+    // symbol (`#[cfg(test)]`-style AST context) — only "alpha" is a real
+    // production referrer, so "shared"'s fan-in is 1 and it must not
+    // appear in the result at all (below `HIGH_FAN_IN_THRESHOLD`).
+    let mut zoo = symbol("zoo", vec!["shared"]);
+    zoo.is_test = true;
+    let files = vec![FileReport {
+        path: "src/lib.rs".to_string(),
+        symbols: vec![
+            zoo,
+            symbol("alpha", vec!["shared"]),
+            symbol("shared", vec![]),
+        ],
+    }];
+    let graph = build_graph(&files);
+
+    let expected: Vec<FanIn> = vec![];
+    let actual = compute_fan_ins(&graph);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_keep_only_production_referrers_in_used_by_when_a_test_referrer_is_also_present() {
+    // "alpha" and "zoo" are production referrers of "shared" (fan-in 2,
+    // qualifying on its own); "spec" is an additional test referrer and
+    // must not appear in `used_by` at all.
+    let mut spec = symbol("spec", vec!["shared"]);
+    spec.is_test = true;
+    let files = vec![FileReport {
+        path: "src/lib.rs".to_string(),
+        symbols: vec![
+            symbol("zoo", vec!["shared"]),
+            symbol("alpha", vec!["shared"]),
+            spec,
+            symbol("shared", vec![]),
+        ],
+    }];
+    let graph = build_graph(&files);
+
+    let expected = vec![FanIn {
+        id: "src/lib.rs::shared".to_string(),
+        path: "src/lib.rs".to_string(),
+        name: "shared".to_string(),
+        used_by: vec!["alpha".to_string(), "zoo".to_string()],
+    }];
+    let actual = compute_fan_ins(&graph);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_count_fan_in_and_sort_referrer_names_when_two_symbols_reference_one_target() {
     // "zoo" and "alpha" both reference "shared" — fan-in 2 qualifies as
     // a high-fan-in symbol, and `used_by` must come back name-sorted
@@ -86,16 +139,19 @@ fn should_dedup_referrer_when_same_node_references_target_more_than_once() {
                 id: "src/lib.rs::foo".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "foo".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::bar".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "bar".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::shared".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "shared".to_string(),
+                is_test: false,
             },
         ],
         edges: vec![
@@ -140,36 +196,43 @@ fn should_sort_fan_ins_by_fan_in_descending_when_multiple_fan_ins_exist() {
                 id: "src/lib.rs::a".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "a".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::b".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "b".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::low".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "low".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::c".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "c".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::d".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "d".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::e".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "e".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::high".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "high".to_string(),
+                is_test: false,
             },
         ],
         edges: vec![
@@ -242,31 +305,37 @@ fn should_break_fan_in_tie_by_id_when_path_and_name_are_also_equal() {
                 id: "a.rs::helper@9".to_string(),
                 path: "a.rs".to_string(),
                 name: "helper".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::helper@1".to_string(),
                 path: "a.rs".to_string(),
                 name: "helper".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::x".to_string(),
                 path: "a.rs".to_string(),
                 name: "x".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::y".to_string(),
                 path: "a.rs".to_string(),
                 name: "y".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::m".to_string(),
                 path: "a.rs".to_string(),
                 name: "m".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::n".to_string(),
                 path: "a.rs".to_string(),
                 name: "n".to_string(),
+                is_test: false,
             },
         ],
         edges: vec![
@@ -329,31 +398,37 @@ fn should_break_fan_in_tie_by_path_then_name_when_counts_are_equal() {
                 id: "b.rs::b_target".to_string(),
                 path: "b.rs".to_string(),
                 name: "b_target".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::a_target".to_string(),
                 path: "a.rs".to_string(),
                 name: "a_target".to_string(),
+                is_test: false,
             },
             Node {
                 id: "b.rs::x".to_string(),
                 path: "b.rs".to_string(),
                 name: "x".to_string(),
+                is_test: false,
             },
             Node {
                 id: "b.rs::y".to_string(),
                 path: "b.rs".to_string(),
                 name: "y".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::m".to_string(),
                 path: "a.rs".to_string(),
                 name: "m".to_string(),
+                is_test: false,
             },
             Node {
                 id: "a.rs::n".to_string(),
                 path: "a.rs".to_string(),
                 name: "n".to_string(),
+                is_test: false,
             },
         ],
         edges: vec![

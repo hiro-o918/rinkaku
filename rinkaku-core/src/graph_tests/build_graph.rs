@@ -27,9 +27,59 @@ fn should_build_single_node_graph_with_itself_as_root_when_one_symbol_and_no_ref
             id: "src/lib.rs::foo".to_string(),
             path: "src/lib.rs".to_string(),
             name: "foo".to_string(),
+            is_test: false,
         }],
         edges: vec![],
         roots: vec!["src/lib.rs::foo".to_string()],
+    };
+    let actual = build_graph(&files);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_mark_node_is_test_when_symbol_is_test_by_ast_context() {
+    let mut spec = symbol("should_add", vec![]);
+    spec.is_test = true;
+    let files = vec![FileReport {
+        path: "src/lib.rs".to_string(),
+        symbols: vec![spec],
+    }];
+
+    let expected = SymbolGraph {
+        nodes: vec![Node {
+            id: "src/lib.rs::should_add".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "should_add".to_string(),
+            is_test: true,
+        }],
+        edges: vec![],
+        roots: vec!["src/lib.rs::should_add".to_string()],
+    };
+    let actual = build_graph(&files);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_mark_node_is_test_when_file_path_is_a_whole_test_file() {
+    // Go's `*_test.go` convention: `is_test_path` alone must mark every
+    // symbol in the file as a test node, regardless of the symbol's own
+    // `is_test` (AST-context) flag.
+    let files = vec![FileReport {
+        path: "repo_test.go".to_string(),
+        symbols: vec![symbol("TestFoo", vec![])],
+    }];
+
+    let expected = SymbolGraph {
+        nodes: vec![Node {
+            id: "repo_test.go::TestFoo".to_string(),
+            path: "repo_test.go".to_string(),
+            name: "TestFoo".to_string(),
+            is_test: true,
+        }],
+        edges: vec![],
+        roots: vec!["repo_test.go::TestFoo".to_string()],
     };
     let actual = build_graph(&files);
 
@@ -49,11 +99,13 @@ fn should_build_edge_when_symbol_references_another_changed_symbol_by_name() {
                 id: "src/lib.rs::foo".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "foo".to_string(),
+                is_test: false,
             },
             Node {
                 id: "src/lib.rs::bar".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "bar".to_string(),
+                is_test: false,
             },
         ],
         edges: vec![Edge {
@@ -84,6 +136,7 @@ fn should_exclude_self_reference_edge_when_symbol_references_its_own_name() {
             id: "src/lib.rs::Point".to_string(),
             path: "src/lib.rs".to_string(),
             name: "Point".to_string(),
+            is_test: false,
         }],
         edges: vec![],
         roots: vec!["src/lib.rs::Point".to_string()],

@@ -32,6 +32,20 @@ pub struct Node {
     pub id: NodeId,
     pub path: String,
     pub name: String,
+    /// Whether this symbol counts as test code (ADR 0009's test-detection
+    /// rule: [`crate::extract::ExtractedSymbol::is_test`] by AST context,
+    /// or [`crate::language::LanguageSupport::is_test_path`] for the whole
+    /// file). A test referrer still gets a real edge in `SymbolGraph::edges`
+    /// (the blast-radius view keeps showing it — a test genuinely does
+    /// depend on the symbol it exercises), but [`compute_fan_ins`] excludes
+    /// it from a target's fan-in count/`used_by` list: a symbol thoroughly
+    /// covered by its own tests should not read as "high fan-in" purely
+    /// because of that coverage, which is the opposite of what fan-in is
+    /// meant to flag (production blast radius, not test count). Not part of
+    /// rinkaku's output shape, same rationale as `ExtractedSymbol::is_test`,
+    /// so excluded from serialization.
+    #[serde(skip)]
+    pub is_test: bool,
 }
 
 /// A directed edge from one changed symbol to another, both identified by
@@ -88,11 +102,13 @@ pub struct FanIn {
 }
 
 /// Aggregates `graph.edges` by target node into [`FanIn`]s: nodes
-/// referenced by two or more distinct changed symbols (fan-in >=
+/// referenced by two or more distinct non-test changed symbols (fan-in >=
 /// [`HIGH_FAN_IN_THRESHOLD`]). A cycle edge (`Edge::is_cycle`) still counts
 /// as a real reference — the referrer really does depend on the target's
 /// signature, cycle or not — so cycle and non-cycle edges are aggregated
-/// together without distinction.
+/// together without distinction. A referrer that is itself test code
+/// (`Node::is_test`) is excluded before this threshold is applied, so
+/// coverage by tests never inflates a symbol's fan-in.
 ///
 /// Multiple edges from the same referrer node to the same target
 /// (`collect_edges` cannot currently produce these, since a symbol's
@@ -119,8 +135,17 @@ pub fn compute_fan_ins(graph: &SymbolGraph) -> Vec<FanIn> {
 
     // Dedup by (target, referrer id) first, so a target with multiple edges
     // from the same referrer (however unlikely today) is not over-counted.
+    // A referrer that is itself test code is excluded here (rather than at
+    // the edge level, see `Node::is_test`'s doc comment) so a symbol's fan-in
+    // reflects production blast radius, not how many tests exercise it.
     let mut referrers_by_target: HashMap<&str, Vec<&str>> = HashMap::new();
     for edge in &graph.edges {
+        if node_by_id
+            .get(edge.from.as_str())
+            .is_some_and(|referrer| referrer.is_test)
+        {
+            continue;
+        }
         let referrers = referrers_by_target.entry(edge.to.as_str()).or_default();
         if !referrers.contains(&edge.from.as_str()) {
             referrers.push(edge.from.as_str());
@@ -314,6 +339,8 @@ fn collect_nodes(files: &[FileReport]) -> Vec<Node> {
 
     let mut nodes = Vec::new();
     for file in files {
+        let is_test_path = crate::language::language_for_path(&file.path)
+            .is_some_and(|lang| lang.is_test_path(&file.path));
         for symbol in &file.symbols {
             let is_duplicate = name_counts[&(file.path.as_str(), symbol.name.as_str())] > 1;
             let id = if is_duplicate {
@@ -325,6 +352,7 @@ fn collect_nodes(files: &[FileReport]) -> Vec<Node> {
                 id,
                 path: file.path.clone(),
                 name: symbol.name.clone(),
+                is_test: is_test_path || symbol.is_test,
             });
         }
     }

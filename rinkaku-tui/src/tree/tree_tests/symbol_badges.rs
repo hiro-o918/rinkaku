@@ -238,10 +238,9 @@ fn should_leave_fan_in_at_zero_when_symbol_has_no_matching_fan_in_entry() {
 
 // The following tests pin ADR 0035's `SymbolRef::is_test` propagation: a
 // mixed file (real + test symbols in `report.files`, ADR 0025's default)
-// keeps its test symbols as ordinary `Symbol` children, but each one now
-// carries `is_test` through from `ExtractedSymbol::is_test` so
-// `row_view` can render a `test` badge on it without a second lookup
-// back into the `Report`.
+// nests its test symbols under a synthetic `TestGroup` child (visual-
+// encoding prototype), but each one still carries `is_test` through from
+// `ExtractedSymbol::is_test`, same as before the grouping was added.
 
 #[test]
 fn should_carry_is_test_true_onto_symbol_ref_for_a_test_symbol_in_a_mixed_file() {
@@ -270,8 +269,12 @@ fn should_carry_is_test_true_onto_symbol_ref_for_a_test_symbol_in_a_mixed_file()
 
     let tree = build_tree(&report);
 
-    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[1].kind else {
-        panic!("expected a Symbol child");
+    let NodeKind::TestGroup { count } = &tree.roots[0].children[1].kind else {
+        panic!("expected a TestGroup child");
+    };
+    assert_eq!(1, *count);
+    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[1].children[0].kind else {
+        panic!("expected a Symbol grandchild");
     };
     assert!(symbol_ref.is_test);
 }

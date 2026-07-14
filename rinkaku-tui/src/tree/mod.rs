@@ -69,6 +69,17 @@ pub enum NodeKind {
     /// `Dir`'s rank by path, and a fake path there risks an accidental
     /// rank/collision bug (ADR 0035's Alternatives).
     Section(SectionKind),
+    /// A synthetic grouping of a *mixed* file's test symbols (visual-
+    /// encoding prototype), nested as the last child of that `File` node.
+    /// Unlike `Section` (which pulls whole test files out to a top-level
+    /// trailing group), this groups the *subset* of one file's symbols
+    /// that are test code, so a file mixing production and test code
+    /// (e.g. `mermaid.rs` with a dozen `#[cfg(test)]` functions) collapses
+    /// to one `N tests` row instead of flooding the tree with individual
+    /// `test`-badged rows. `count` is the number of test symbols grouped
+    /// (equal to `children.len()`, kept as its own field so `row_view` can
+    /// render the `N tests` label without counting children first).
+    TestGroup { count: usize },
 }
 
 /// Which kind of synthetic grouping a [`NodeKind::Section`] is. An enum
@@ -274,8 +285,8 @@ pub fn build_tree(report: &Report) -> Tree {
         .map(|entry| (entry.path.as_str(), (entry.band, entry.line_count)))
         .collect();
 
-    let mut production = TreeBuilder::new(fan_in_by_id.clone(), file_size_by_path.clone());
-    let mut tests = TreeBuilder::new(fan_in_by_id, file_size_by_path);
+    let mut production = TreeBuilder::new(fan_in_by_id.clone(), file_size_by_path.clone(), true);
+    let mut tests = TreeBuilder::new(fan_in_by_id, file_size_by_path, false);
 
     // A mixed file (some non-test symbols alongside some test symbols)
     // always stays in `production` untouched — only a *whole* test file
@@ -328,6 +339,14 @@ struct TreeBuilder<'a> {
     /// covers every analyzed file, not only `Warn`/`Split` as the
     /// pre-amendment `file_size_warnings`-derived map did.
     file_size_by_path: HashMap<&'a str, (FileSizeBand, usize)>,
+    /// Whether a mixed file's test symbols fold into a trailing
+    /// `TestGroup` child (visual-encoding prototype): `true` for the
+    /// `production` builder, `false` for the `tests` builder — a
+    /// whole-test file already reads as test code via its enclosing
+    /// `Section::Tests` (ADR 0035 Phase B), so grouping its symbols again
+    /// one level deeper would be redundant nesting with nothing left to
+    /// distinguish from production siblings (it has none).
+    group_test_symbols: bool,
 }
 
 #[derive(Default)]
@@ -355,11 +374,13 @@ impl<'a> TreeBuilder<'a> {
     fn new(
         fan_in_by_id: HashMap<&'a str, usize>,
         file_size_by_path: HashMap<&'a str, (FileSizeBand, usize)>,
+        group_test_symbols: bool,
     ) -> Self {
         Self {
             root: DirBuilder::default(),
             fan_in_by_id,
             file_size_by_path,
+            group_test_symbols,
         }
     }
 
@@ -458,9 +479,12 @@ impl<'a> TreeBuilder<'a> {
 
     fn finish(self) -> Tree {
         Tree {
-            roots: self
-                .root
-                .into_nodes(String::new(), &self.fan_in_by_id, &self.file_size_by_path),
+            roots: self.root.into_nodes(
+                String::new(),
+                &self.fan_in_by_id,
+                &self.file_size_by_path,
+                self.group_test_symbols,
+            ),
         }
     }
 }
@@ -505,6 +529,7 @@ impl DirBuilder {
         prefix: String,
         fan_in_by_id: &HashMap<&str, usize>,
         file_size_by_path: &HashMap<&str, (FileSizeBand, usize)>,
+        group_test_symbols: bool,
     ) -> Vec<TreeNode> {
         let DirBuilder {
             mut dirs,
@@ -522,6 +547,7 @@ impl DirBuilder {
                     child,
                     fan_in_by_id,
                     file_size_by_path,
+                    group_test_symbols,
                 ));
             } else if let Some(file_name) = key.strip_prefix("f:") {
                 let file = files
@@ -533,6 +559,7 @@ impl DirBuilder {
                     file,
                     fan_in_by_id,
                     file_size_by_path,
+                    group_test_symbols,
                 ));
             }
         }
@@ -553,6 +580,7 @@ fn build_dir_node(
     mut dir: DirBuilder,
     fan_in_by_id: &HashMap<&str, usize>,
     file_size_by_path: &HashMap<&str, (FileSizeBand, usize)>,
+    group_test_symbols: bool,
 ) -> TreeNode {
     let mut label = name;
     loop {
@@ -571,7 +599,12 @@ fn build_dir_node(
     }
 
     let path = join_path(prefix, &label);
-    let children = dir.into_nodes(path.clone(), fan_in_by_id, file_size_by_path);
+    let children = dir.into_nodes(
+        path.clone(),
+        fan_in_by_id,
+        file_size_by_path,
+        group_test_symbols,
+    );
     let mut badges = Badges::default();
     for child in &children {
         badges.merge(child.badges);
@@ -593,6 +626,7 @@ fn build_file_node(
     file: FileBuilder,
     fan_in_by_id: &HashMap<&str, usize>,
     file_size_by_path: &HashMap<&str, (FileSizeBand, usize)>,
+    group_test_symbols: bool,
 ) -> TreeNode {
     let path = join_path(prefix, &name);
     let (own_file_size_band, own_file_line_count) = match file_size_by_path.get(path.as_str()) {
@@ -612,8 +646,18 @@ fn build_file_node(
         file_size_split_count,
         ..Badges::default()
     };
-    let children: Vec<TreeNode> = file
-        .symbols
+    // Grouping only ever applies to the `production` builder — a
+    // whole-test file (routed entirely into the `tests` builder, see
+    // `build_tree`) already reads as test code via its enclosing
+    // `Section::Tests`, so its symbols stay flat, ungrouped children here
+    // (`TreeBuilder::group_test_symbols`'s doc comment).
+    let (test_symbols, production_symbols): (Vec<_>, Vec<_>) = if group_test_symbols {
+        file.symbols.into_iter().partition(|s| s.is_test)
+    } else {
+        (Vec::new(), file.symbols)
+    };
+
+    let mut children: Vec<TreeNode> = production_symbols
         .into_iter()
         .map(|symbol_ref| {
             let symbol_badges = symbol_badges(&symbol_ref, fan_in_by_id);
@@ -628,6 +672,11 @@ fn build_file_node(
             }
         })
         .collect();
+
+    if let Some(test_group) = build_test_group_node(&path, test_symbols, fan_in_by_id) {
+        badges.merge(test_group.badges);
+        children.push(test_group);
+    }
 
     TreeNode {
         kind: NodeKind::File,
@@ -666,6 +715,56 @@ fn symbol_badges(symbol_ref: &SymbolRef, fan_in_by_id: &HashMap<&str, usize>) ->
         file_size_warn_count: 0,
         file_size_split_count: 0,
     }
+}
+
+/// The synthetic path suffix a mixed file's [`NodeKind::TestGroup`] child
+/// carries on [`TreeNode::path`] — appended to the file's own path so the
+/// group has a stable, distinct key for `crate::nav::Nav`'s collapse-state
+/// map (which is generic over `TreeNode::path`, same rationale as
+/// [`TESTS_SECTION_PATH`]). Cannot collide with a real file path since no
+/// file path contains `::`.
+const TEST_GROUP_PATH_SUFFIX: &str = "::tests";
+
+/// Builds the `TestGroup` child node grouping `test_symbols` under a mixed
+/// file, or `None` when there are no test symbols to group (the common
+/// case: most files are pure production or pure test, the latter routed
+/// entirely into [`tests_section`] instead — see `build_tree`'s doc
+/// comment).
+fn build_test_group_node(
+    file_path: &str,
+    test_symbols: Vec<SymbolRef>,
+    fan_in_by_id: &HashMap<&str, usize>,
+) -> Option<TreeNode> {
+    if test_symbols.is_empty() {
+        return None;
+    }
+
+    let count = test_symbols.len();
+    let mut badges = Badges::default();
+    let children: Vec<TreeNode> = test_symbols
+        .into_iter()
+        .map(|symbol_ref| {
+            let symbol_badges = symbol_badges(&symbol_ref, fan_in_by_id);
+            badges.merge(symbol_badges);
+            TreeNode {
+                kind: NodeKind::Symbol(symbol_ref),
+                path: file_path.to_string(),
+                badges: symbol_badges,
+                children: Vec::new(),
+                skip_reason: None,
+                test_symbol_count: None,
+            }
+        })
+        .collect();
+
+    Some(TreeNode {
+        kind: NodeKind::TestGroup { count },
+        path: format!("{file_path}{TEST_GROUP_PATH_SUFFIX}"),
+        badges,
+        children,
+        skip_reason: None,
+        test_symbol_count: None,
+    })
 }
 
 fn join_path(prefix: &str, segment: &str) -> String {
