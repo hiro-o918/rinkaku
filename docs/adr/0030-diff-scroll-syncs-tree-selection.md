@@ -258,3 +258,17 @@ ADR needs to touch.
 - No backward-compatibility concern: the TUI has never shipped a
   release (ADR 0015/0016, restated by every TUI-scoped ADR since),
   so this amendment applies in place.
+
+## Amendment (dynamic review, post-acceptance)
+
+Decision 7's claim that re-entering `RightPane::Diff` always resets to
+the current symbol's section top (ADR 0027 decision 2) held only when
+the tree cursor had moved since Diff was last shown: `last_diff_focus`
+survived a Diff -> Detail/BlastRadius -> Diff round trip unchanged, so
+with the cursor untouched across the round trip, `run_app`'s auto-scroll
+gate (`next_focus != last_diff_focus`) saw no change and skipped the
+resync, leaving `right_pane_scroll` at whatever the blanket key-reset
+left it rather than the section start. Fixed by resetting
+`last_diff_focus` to `None` whenever a handled key leaves `RightPane`
+other than `Diff`, so the next re-entry is always treated as a fresh
+selection — restoring decision 7's guarantee for this case too.

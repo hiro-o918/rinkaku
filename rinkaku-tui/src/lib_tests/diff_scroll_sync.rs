@@ -369,3 +369,34 @@ fn should_not_bounce_scroll_back_on_the_next_key_after_a_sync() {
     assert_eq!(6, second.app.right_pane_scroll());
     assert_eq!(Some("lib.rs::bar"), second.app.selected_symbol_id());
 }
+
+// --- apply_diff_pane_selection_effects (re-entering RightPane::Diff with
+// an unchanged cursor: `run_app`'s loop resets `last_diff_focus` to
+// `None` while the right pane is not Diff, so re-entry looks like a
+// fresh selection to the ADR 0027 auto-scroll branch below) ---
+
+#[test]
+fn should_resync_scroll_to_current_symbols_section_when_diff_pane_is_reentered_with_cursor_unchanged()
+ {
+    let report = report_with_two_symbols();
+    let diff_hunks = diff_hunks_with_two_symbol_sections();
+    // Cursor on `bar` (row 2), already inside bar's own section — the
+    // *symbol* did not change, only the right pane's visibility did.
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Open);
+    assert_eq!(Some("lib.rs::bar"), app.selected_symbol_id());
+
+    // `last_diff_focus: None` and `scroll_before_dispatch: 0` are what
+    // `run_app`'s loop passes in after a Diff -> Detail -> Diff toggle
+    // with the cursor untouched, per the fix.
+    let app = app.with_right_pane_scroll(0);
+    let effects = apply_diff_pane_selection_effects(app, &report, &diff_hunks, None, 0);
+
+    // bar's section starts at line 5 (same layout as every other test in
+    // this file); landing at 0 would show foo's section under a title
+    // (this PR's own addition) that still reads "Diff: bar".
+    assert_eq!(5, effects.app.right_pane_scroll());
+    assert_eq!(Some("lib.rs::bar"), effects.app.selected_symbol_id());
+}
