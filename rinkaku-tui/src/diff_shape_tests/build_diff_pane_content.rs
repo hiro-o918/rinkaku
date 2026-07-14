@@ -302,10 +302,16 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
     // decision 2 / decision 4) — not just the first.
     assert_eq!(
         Some(0),
-        section_start_line_for_symbol(&actual, "file_size.rs::foo")
+        section_start_line_for_symbol(&actual, "file_size.rs::foo", DiffViewMode::Unified)
     );
-    assert!(section_start_line_for_symbol(&actual, "file_size.rs::bar").is_some());
-    assert!(section_start_line_for_symbol(&actual, "file_size.rs::baz").is_some());
+    assert!(
+        section_start_line_for_symbol(&actual, "file_size.rs::bar", DiffViewMode::Unified)
+            .is_some()
+    );
+    assert!(
+        section_start_line_for_symbol(&actual, "file_size.rs::baz", DiffViewMode::Unified)
+            .is_some()
+    );
 }
 
 #[test]

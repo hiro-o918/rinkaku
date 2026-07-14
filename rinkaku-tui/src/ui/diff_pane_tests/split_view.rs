@@ -101,12 +101,11 @@ index e69de29..4b825dc 100644
 }
 
 #[test]
-fn should_pair_old_and_new_signature_on_one_row_when_section_has_a_contract_header() {
-    // Regression coverage for the diagonal-placement bug a static review
-    // caught: the contract header's old/new signatures must land on the
-    // *same* row (left = old, right = new), not on two separate rows with
-    // one side blank each — the whole point of a split view is comparing
-    // them without scanning past an interleaved row in between.
+fn should_pair_old_and_new_signature_on_the_anchor_row_when_section_has_a_contract_header() {
+    // The changed signature replaces the section's title outright rather
+    // than adding a header below it: old/new land on the *same* one row
+    // (left = old, right = new) — the whole point of a split view is
+    // comparing them without scanning past an interleaved row in between.
     let section = DiffSection {
         title: "fn foo(a: i32, b: i32)".to_string(),
         symbol_id: Some("lib.rs::foo".to_string()),
@@ -126,31 +125,23 @@ fn should_pair_old_and_new_signature_on_one_row_when_section_has_a_contract_head
     );
 
     assert_eq!(
-        vec![
-            Line::styled(
-                "fn foo(a: i32, b: i32)".to_string(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Line::styled(
-                "- fn foo(a: i32)".to_string(),
-                Style::default().fg(Color::Red),
-            ),
-            Line::raw(""),
-        ],
+        vec![Line::styled(
+            "- fn foo(a: i32)".to_string(),
+            Style::default()
+                .fg(Color::Red)
+                .bg(REMOVED_BG)
+                .add_modifier(Modifier::BOLD),
+        )],
         left
     );
     assert_eq!(
-        vec![
-            Line::styled(
-                "fn foo(a: i32, b: i32)".to_string(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Line::styled(
-                "+ fn foo(a: i32, b: i32)".to_string(),
-                Style::default().fg(Color::Green),
-            ),
-            Line::raw(""),
-        ],
+        vec![Line::styled(
+            "+ fn foo(a: i32, b: i32)".to_string(),
+            Style::default()
+                .fg(Color::Green)
+                .bg(ADDED_BG)
+                .add_modifier(Modifier::BOLD),
+        )],
         right
     );
     // ADR 0044 decision 4's shared line-counting invariant: both sides

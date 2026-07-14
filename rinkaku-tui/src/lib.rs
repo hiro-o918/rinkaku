@@ -571,8 +571,11 @@ fn sync_target_for_scroll(
     if app.right_pane_scroll() == scroll_before_dispatch {
         return None;
     }
-    let target_symbol_id =
-        diff_shape::symbol_id_for_scroll_line(diff_pane_content, app.right_pane_scroll())?;
+    let target_symbol_id = diff_shape::symbol_id_for_scroll_line(
+        diff_pane_content,
+        app.right_pane_scroll(),
+        app.diff_view_mode(),
+    )?;
     if Some(target_symbol_id) == app.selected_symbol_id() {
         return None;
     }
@@ -698,7 +701,7 @@ fn dispatch_non_source_key(
         // caller (to know where each hunk starts — `App::handle_key` itself
         // has no notion of that content), so the jump target is computed
         // here rather than inside `App`.
-        let scroll = diff_shape::hunk_start_lines(diff_pane_content);
+        let scroll = diff_shape::hunk_start_lines(diff_pane_content, app.diff_view_mode());
         let next = jump_scroll_target(&scroll, app.right_pane_scroll(), input_key);
         if let Some(target) = next {
             return app.handle_key(input_key).with_right_pane_scroll(target);
@@ -775,7 +778,11 @@ fn auto_scroll_for_diff_focus(
     diff_pane_content: &diff_shape::DiffPaneContent,
 ) -> Option<usize> {
     let focus = app.selected_diff_focus(report)?;
-    diff_shape::section_start_line_for_symbol(diff_pane_content, &focus.symbol_id)
+    diff_shape::section_start_line_for_symbol(
+        diff_pane_content,
+        &focus.symbol_id,
+        app.diff_view_mode(),
+    )
 }
 
 /// Whether `crate::run_app`'s [`InputKey::Source`] arm should re-run

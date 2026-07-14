@@ -306,8 +306,9 @@ index e69de29..4b825dc 100644
         .expect("draw");
 
     let text = buffer_text(&terminal);
-    // The 2-line old/new contract header precedes the hunk body itself
-    // (ADR 0020's outline-before-implementation disclosure order).
+    // The 2-line old/new signature pair stands in for the section title and
+    // precedes the hunk body itself (ADR 0020's outline-before-
+    // implementation disclosure order).
     assert!(text.contains("- fn foo(a: i32)"));
     assert!(text.contains("+ fn foo(a: i32, b: i32)"));
     assert!(text.contains("-fn foo(a: i32) {}"));

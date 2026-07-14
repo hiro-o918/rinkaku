@@ -298,3 +298,71 @@ fn should_keep_context_line_unstyled_in_plain_diff_line_when_no_token_spans() {
 
     assert_eq!(Line::raw(" fn foo() {}".to_string()), actual);
 }
+
+#[test]
+fn should_replace_the_section_title_with_a_tinted_old_new_pair_in_unified_view_when_signature_changed()
+ {
+    let section = crate::diff_shape::DiffSection {
+        title: "fn foo(a: i32, b: i32)".to_string(),
+        symbol_id: Some("lib.rs::foo".to_string()),
+        contract_header: Some(crate::diff_shape::ContractHeader {
+            previous_signature: "fn foo(a: i32)".to_string(),
+            signature: "fn foo(a: i32, b: i32)".to_string(),
+        }),
+        hunks: vec![],
+    };
+
+    let actual = diff_pane_lines(
+        &[&section],
+        true,
+        None,
+        &crate::note_markers::NoteMarkers::default(),
+        "lib.rs",
+    );
+
+    assert_eq!(
+        vec![
+            Line::styled(
+                "- fn foo(a: i32)".to_string(),
+                Style::default()
+                    .fg(Color::Red)
+                    .bg(REMOVED_BG)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                "+ fn foo(a: i32, b: i32)".to_string(),
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(ADDED_BG)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_keep_the_plain_bold_title_in_unified_view_when_signature_is_unchanged() {
+    let section = crate::diff_shape::DiffSection {
+        title: "fn foo()".to_string(),
+        symbol_id: Some("lib.rs::foo".to_string()),
+        contract_header: None,
+        hunks: vec![],
+    };
+
+    let actual = diff_pane_lines(
+        &[&section],
+        true,
+        None,
+        &crate::note_markers::NoteMarkers::default(),
+        "lib.rs",
+    );
+
+    assert_eq!(
+        vec![Line::styled(
+            "fn foo()".to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )],
+        actual
+    );
+}
