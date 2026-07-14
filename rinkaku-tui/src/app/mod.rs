@@ -112,6 +112,23 @@ pub enum RightPane {
     BlastRadius,
 }
 
+/// Whether the Diff pane renders unified (interleaved `-`/`+` lines) or
+/// split (side-by-side old/new columns) content (ADR 0044). A per-`App`
+/// mode, independent of the current row selection — toggling `v`/`V`
+/// ([`InputKey::ToggleSplitView`]) keeps showing split (or unified) as the
+/// cursor moves to a different row, the same way [`RightPane`] already
+/// persists across cursor moves.
+///
+/// Defaults to `Unified`: every prior ADR describing the Diff pane assumes
+/// unified rendering, so it stays the opening state rather than surprising
+/// a reviewer who has not yet discovered the toggle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffViewMode {
+    #[default]
+    Unified,
+    Split,
+}
+
 /// The right-hand pane's content for the row currently under the cursor
 /// (TUI iteration 2), unifying what used to be [`App::selected_detail`]'s
 /// symbol-only contract: a directory or file row now has its own detail
@@ -256,6 +273,9 @@ pub struct App {
     /// "go to Diff" gesture (see that branch's own comment) and does not
     /// read this field at all.
     blast_radius_return_pane: RightPane,
+    /// Whether the Diff pane renders unified or split content (ADR 0044) —
+    /// see [`DiffViewMode`]'s own doc comment.
+    diff_view_mode: DiffViewMode,
     /// The user's requested scroll offset (in lines) into the right-hand
     /// pane's content, as an unclamped "how far down would the user like to
     /// be" value rather than an authoritative display position: `App` has
@@ -343,6 +363,7 @@ impl App {
             screen: Screen::Entry,
             right_pane: RightPane::default(),
             blast_radius_return_pane: RightPane::default(),
+            diff_view_mode: DiffViewMode::default(),
             right_pane_scroll: 0,
             focus: Focus::default(),
             help_open: false,
@@ -419,6 +440,11 @@ impl App {
 
     pub fn right_pane(&self) -> RightPane {
         self.right_pane
+    }
+
+    /// Whether the Diff pane renders unified or split content (ADR 0044).
+    pub fn diff_view_mode(&self) -> DiffViewMode {
+        self.diff_view_mode
     }
 
     /// Which pane currently receives motion keys (ADR 0020) — see [`Focus`]'s

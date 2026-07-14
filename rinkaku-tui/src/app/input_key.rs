@@ -193,4 +193,11 @@ pub enum InputKey {
     /// Reuses [`Self::Back`]'s physical key for the same reason
     /// `PopupConfirm` reuses `Open`'s.
     PopupCancel,
+    /// `v`/`V` (ADR 0044): toggles the Diff pane between unified and split
+    /// (side-by-side) rendering. A per-`App` mode, not a per-row one —
+    /// mirrors [`Self::ToggleDiff`]/[`Self::ToggleBlastRadius`]'s own
+    /// "global regardless of `Focus`" precedent, since this is a display
+    /// mode for whichever content the Diff pane already shows, not an
+    /// action on the row under the cursor.
+    ToggleSplitView,
 }

@@ -55,6 +55,11 @@ only becomes load-bearing when the output would otherwise not be TUI
 - **Diff pane (right, default)** — the raw unified-diff hunks touching
   the selected row, syntax-highlighted for the four built-in languages
   ([ADR 0018](adr/0018-syntax-highlight-diff-pane-via-tree-sitter.md)).
+  Press `v`/`V` to switch to a split (side-by-side old/new) view for the
+  same hunks — useful for edits where seeing the old and new lines
+  aligned next to each other is easier to scan than interleaved `-`/`+`
+  lines. Split view needs a reasonably wide pane; on a narrow terminal
+  it falls back to unified and the pane header notes why.
 - **Detail pane (right)** — what the cursor is on: classification,
   signature (with an old/new diff on contract change), used-by, callees;
   or, for a directory, its badge breakdown and cycle members.
@@ -95,6 +100,7 @@ Press `?` in the TUI for the always-up-to-date table.
 | `o` / `O` | Toggle topological / alphabetical ordering |
 | `d` / `D` | Toggle right pane between diff and detail |
 | `r` / `R` | Toggle right pane to blast radius |
+| `v` / `V` | Toggle the Diff pane between unified and split (side-by-side) rendering |
 | `s` / `S` | Open the source view for the symbol under the cursor |
 | `gd` / `gr` | Jump to a callee / caller ([ADR 0022](adr/0022-jump-navigation-and-jumplist.md)) |
 | `ctrl-o` / `ctrl-i` | Jump back / forward through the jumplist |

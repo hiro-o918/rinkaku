@@ -122,6 +122,26 @@ fn should_translate_uppercase_r_to_toggle_blast_radius() {
 }
 
 #[test]
+fn should_translate_lowercase_v_to_toggle_split_view() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('v'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::ToggleSplitView), actual);
+}
+
+#[test]
+fn should_translate_uppercase_v_to_toggle_split_view() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('V'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::ToggleSplitView), actual);
+}
+
+#[test]
 fn should_translate_right_bracket_to_next_hunk() {
     let report = empty_report();
     let app = App::new(&report);

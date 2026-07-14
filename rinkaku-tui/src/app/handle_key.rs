@@ -4,7 +4,7 @@
 //! against `Screen`/`Focus` state. Struct/enum definitions and state
 //! accessors stay in `app/mod.rs`; only the dispatch logic lives here.
 
-use super::{App, Focus, InputKey, JumplistEntry, PendingPrefix, RightPane, Screen};
+use super::{App, DiffViewMode, Focus, InputKey, JumplistEntry, PendingPrefix, RightPane, Screen};
 use crate::nav::Action;
 use crate::order::OrderMode;
 use crate::tree::NodeKind;
@@ -406,6 +406,12 @@ impl App {
                     // the previous pane" rule that would only apply to
                     // some keys and not others.
                     RightPane::Detail | RightPane::BlastRadius => RightPane::Diff,
+                };
+            }
+            (Screen::Entry, _, InputKey::ToggleSplitView) => {
+                self.diff_view_mode = match self.diff_view_mode {
+                    DiffViewMode::Unified => DiffViewMode::Split,
+                    DiffViewMode::Split => DiffViewMode::Unified,
                 };
             }
             (Screen::Entry, _, InputKey::ToggleBlastRadius) => {

@@ -74,11 +74,15 @@ use unicode_width::UnicodeWidthChar;
 /// content itself was considered and rejected for exactly this reason. Pass
 /// `&[]` for a pane with no pinned header (every caller except the Diff
 /// pane's identification/stats header).
+///
+/// `body` selects single-column (`Body::Single`, every caller except the
+/// Diff pane's split mode) or side-by-side (`Body::Split`, ADR 0044)
+/// rendering of the scrollable content — see [`Body`]'s own doc comment.
 pub(crate) fn render_scrollable_pane(
     frame: &mut Frame,
     title: &str,
     header_lines: &[Line<'static>],
-    lines: &[Line<'static>],
+    body: Body<'_>,
     requested_scroll: usize,
     area: Rect,
     focused: bool,
@@ -91,16 +95,55 @@ pub(crate) fn render_scrollable_pane(
     let [header_area, body_area] =
         Layout::vertical([Constraint::Length(header_rows), Constraint::Min(0)]).areas(inner_area);
 
-    let viewport_width = body_area.width as usize;
     let viewport_height = body_area.height as usize;
-    let wrapped = wrap_lines(lines, viewport_width);
-    let scroll = clamp_scroll(wrapped.len(), viewport_height, requested_scroll);
+    let (content_len, scroll) = match body {
+        Body::Single(lines) => {
+            let viewport_width = body_area.width as usize;
+            let wrapped = wrap_lines(lines, viewport_width);
+            let scroll = clamp_scroll(wrapped.len(), viewport_height, requested_scroll);
+            let paragraph = Paragraph::new(wrapped.clone()).scroll((scroll as u16, 0));
+            frame.render_widget(paragraph, body_area);
+            (wrapped.len(), scroll)
+        }
+        Body::Split(left, right) => {
+            // A 1-column gutter between the two sides, mirroring a border's
+            // own single-column width, so the two columns read as visually
+            // distinct panes rather than running edge to edge.
+            let [left_area, gutter_area, right_area] = Layout::horizontal([
+                Constraint::Percentage(50),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .areas(body_area);
+            let (left_rows, right_rows) = pair_wrap(
+                left,
+                right,
+                left_area.width as usize,
+                right_area.width as usize,
+            );
+            let scroll = clamp_scroll(left_rows.len(), viewport_height, requested_scroll);
+
+            frame.render_widget(
+                Paragraph::new(left_rows.clone()).scroll((scroll as u16, 0)),
+                left_area,
+            );
+            frame.render_widget(
+                Paragraph::new(vec![Line::raw("│"); left_rows.len()]).scroll((scroll as u16, 0)),
+                gutter_area,
+            );
+            frame.render_widget(
+                Paragraph::new(right_rows.clone()).scroll((scroll as u16, 0)),
+                right_area,
+            );
+            (left_rows.len(), scroll)
+        }
+    };
 
     // Callers pass a title already padded with a leading/trailing space
     // (e.g. `" Detail "`, matching every other `Block` title in this
     // module) — trim the trailing one before appending the indicator so
     // the two don't produce a double space (`"Detail  (1-17/43)"`).
-    let title = match scroll_indicator(wrapped.len(), viewport_height, scroll) {
+    let title = match scroll_indicator(content_len, viewport_height, scroll) {
         Some(indicator) => format!("{}{indicator} ", title.trim_end()),
         None => title.to_string(),
     };
@@ -113,9 +156,52 @@ pub(crate) fn render_scrollable_pane(
         let header = Paragraph::new(header_lines[..header_rows as usize].to_vec());
         frame.render_widget(header, header_area);
     }
-    let paragraph = Paragraph::new(wrapped).scroll((scroll as u16, 0));
-    frame.render_widget(paragraph, body_area);
     scroll
+}
+
+/// [`render_scrollable_pane`]'s scrollable content, either a single column
+/// (every pane except the Diff pane's split mode) or two side-by-side
+/// columns (ADR 0044) sharing one scroll offset.
+pub(crate) enum Body<'a> {
+    Single(&'a [Line<'static>]),
+    Split(&'a [Line<'static>], &'a [Line<'static>]),
+}
+
+/// Wraps `left`/`right` independently to their own column widths, then pads
+/// the shorter wrapped side back up to the longer side's row count with
+/// blank filler lines — so both columns scroll in lockstep off one shared
+/// offset (ADR 0044 decision 6). `left`/`right` already agree on *logical*
+/// row count by construction ([`crate::diff_shape::SplitRow`]'s own
+/// invariant, `diff_pane_split_rows`'s doc comment), but a long single
+/// logical line can still wrap to a different number of *visual* rows than
+/// its counterpart on the other side at a narrow column width — this
+/// function pads per logical row so the two columns never drift out of
+/// alignment after wrapping.
+pub(crate) fn pair_wrap(
+    left: &[Line<'static>],
+    right: &[Line<'static>],
+    left_width: usize,
+    right_width: usize,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let mut left_out = Vec::new();
+    let mut right_out = Vec::new();
+    let row_count = left.len().max(right.len());
+    for index in 0..row_count {
+        let left_wrapped = left
+            .get(index)
+            .map(|line| wrap_one_line(line, left_width))
+            .unwrap_or_else(|| vec![Line::raw("")]);
+        let right_wrapped = right
+            .get(index)
+            .map(|line| wrap_one_line(line, right_width))
+            .unwrap_or_else(|| vec![Line::raw("")]);
+        let rows = left_wrapped.len().max(right_wrapped.len());
+        for row in 0..rows {
+            left_out.push(left_wrapped.get(row).cloned().unwrap_or(Line::raw("")));
+            right_out.push(right_wrapped.get(row).cloned().unwrap_or(Line::raw("")));
+        }
+    }
+    (left_out, right_out)
 }
 
 /// Wraps each of `lines` to `width` display columns, splitting a logical

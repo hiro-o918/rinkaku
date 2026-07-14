@@ -974,6 +974,7 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         }
         KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
         KeyCode::Char('r') | KeyCode::Char('R') => Some(InputKey::ToggleBlastRadius),
+        KeyCode::Char('v') | KeyCode::Char('V') => Some(InputKey::ToggleSplitView),
         // `G` (`Shift-g`, ADR 0026): scroll to the bottom. Distinct from
         // single-key lowercase `g` (`PendingGoto` below), which is the
         // leading key of the `gd`/`gr`/`gg` two-key sequences resolved

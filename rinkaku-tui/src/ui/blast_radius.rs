@@ -3,7 +3,7 @@
 //! row under the cursor. Layout only — the actual re-rooted view is
 //! computed once per handled key by `crate::run_app` and handed in.
 
-use super::scroll::render_scrollable_pane;
+use super::scroll::{Body, render_scrollable_pane};
 use super::style::pane_border_style;
 use crate::app::{App, BlastRadiusSelection, Focus};
 use ratatui::Frame;
@@ -73,7 +73,7 @@ pub(crate) fn draw_blast_radius_pane(
                 frame,
                 &title,
                 &[],
-                &lines,
+                Body::Single(&lines),
                 app.right_pane_scroll(),
                 area,
                 focused,

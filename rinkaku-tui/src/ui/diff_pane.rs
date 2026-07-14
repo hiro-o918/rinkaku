@@ -4,10 +4,10 @@
 //! grouped into per-symbol sections for a file row.
 
 use super::scroll::{
-    render_scrollable_pane, truncate_line_to_width, truncate_to_width_keeping_tail,
+    Body, render_scrollable_pane, truncate_line_to_width, truncate_to_width_keeping_tail,
 };
 use super::style::{pane_border_style, styled_content_spans};
-use crate::app::{App, DiffTarget, Focus};
+use crate::app::{App, DiffTarget, DiffViewMode, Focus};
 use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, TokenSpan};
@@ -19,6 +19,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use rinkaku_core::render::Report;
+
+/// The Diff pane's own area width below which split (side-by-side)
+/// rendering falls back to unified regardless of [`DiffViewMode`] (ADR 0044
+/// decision 7): 100 columns leaves roughly 49 usable columns per side after
+/// the border and the 1-column gutter — narrower than that, a real code
+/// line wraps onto several visual rows on each side and the two columns no
+/// longer stay visually aligned, defeating split view's own purpose.
+pub(crate) const MIN_SPLIT_VIEW_WIDTH: u16 = 100;
 
 /// Background tint for an `Added`/`Removed` line (ADR 0018 decision: diff
 /// signal moves to the background so a token's own color can carry the
@@ -180,12 +188,33 @@ pub(crate) fn draw_diff_pane(
     };
 
     let highlighted_file = highlight::highlighted_file(diff_highlights, path);
+
+    // ADR 0044 decision 7: split view falls back to unified below
+    // `MIN_SPLIT_VIEW_WIDTH`, regardless of `diff_view_mode` — a pane this
+    // narrow cannot show two aligned columns without each one wrapping to a
+    // different visual-row count, defeating the alignment split view exists
+    // for. The toggle itself is untouched (`app.diff_view_mode()` keeps its
+    // real value), so widening the terminal immediately shows split without
+    // needing `v` pressed again.
+    let split_requested = app.diff_view_mode() == DiffViewMode::Split;
+    let split_fits = area.width >= MIN_SPLIT_VIEW_WIDTH;
+    let render_split = split_requested && split_fits;
+
     // ADR 0027: `DiffPaneContent` no longer has a symbol-clip variant, so
-    // the diff pane always renders with section headers on. `diff_pane_lines`'s
-    // `show_section_headers` parameter is now always `true` at this call
-    // site, kept as a parameter to leave that layout knob visible in one
-    // place rather than hard-coding it inside `diff_pane_lines`.
-    let lines = diff_pane_lines(&sections, true, highlighted_file);
+    // the diff pane always renders with section headers on. `diff_pane_lines`'s/
+    // `diff_pane_split_rows`'s `show_section_headers` parameter is now always
+    // `true` at this call site, kept as a parameter to leave that layout knob
+    // visible in one place rather than hard-coding it inside either function.
+    let unified_lines = if render_split {
+        Vec::new()
+    } else {
+        diff_pane_lines(&sections, true, highlighted_file)
+    };
+    let split_rows = if render_split {
+        diff_pane_split_rows(&sections, true, highlighted_file)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     // A symbol row's ranges scope to that symbol's own section only; a
     // file row (no `selected_diff_focus`) scopes to every section — mirrors
@@ -218,19 +247,34 @@ pub(crate) fn draw_diff_pane(
         (None, header_name.unwrap_or(path))
     };
     let selected_badges = selected_row_badges(app);
-    let header_lines = diff_pane_header_lines(
+    let mut header_lines = diff_pane_header_lines(
         selection_name,
         header_path,
         &selected_badges,
         &ranges,
         header_width,
     );
+    // ADR 0044 decision 7: the toggle stays flipped even when the pane is
+    // too narrow to honor it — this note is the only visible sign why `v`
+    // didn't change anything, rather than a silent no-op.
+    if split_requested && !split_fits {
+        header_lines.push(Line::styled(
+            "(split view needs a wider pane)",
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+
+    let body = if render_split {
+        Body::Split(&split_rows.0, &split_rows.1)
+    } else {
+        Body::Single(&unified_lines)
+    };
 
     Some(render_scrollable_pane(
         frame,
         DIFF_PANE_TITLE,
         &header_lines,
-        &lines,
+        body,
         app.right_pane_scroll(),
         area,
         focused,
@@ -334,6 +378,108 @@ pub(crate) fn diff_pane_lines(
         }
     }
     lines
+}
+
+/// Split-view (ADR 0044) counterpart of [`diff_pane_lines`]: the same
+/// section/contract-header/hunk-header scaffold (a scaffold line renders
+/// identically on both sides, so `left`/`right` share it), but each hunk's
+/// body is paired via [`crate::diff_shape::pair_hunk_lines`] into old-side/
+/// new-side columns instead of one interleaved column. Returns `(left,
+/// right)`, each the same length — [`crate::diff_shape::SplitRow`]'s own
+/// invariant (one row per source [`DiffLine`]) means every hunk contributes
+/// the same row count here as it does to [`diff_pane_lines`], so this
+/// function's total line count always matches `diff_pane_lines`'s for the
+/// same `sections`/`show_section_headers` — required for `walk_sections`'
+/// shared line-counting (ADR 0044 decision 4) to stay correct regardless of
+/// which of the two this pane actually renders.
+pub(crate) fn diff_pane_split_rows(
+    sections: &[&DiffSection],
+    show_section_headers: bool,
+    highlighted_file: Option<&HighlightedFile>,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    for (section_index, section) in sections.iter().enumerate() {
+        if section_index > 0 {
+            left.push(Line::raw(""));
+            right.push(Line::raw(""));
+        }
+        if show_section_headers {
+            let title = Line::styled(
+                section.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+            left.push(title.clone());
+            right.push(title);
+        }
+        if let Some(contract) = &section.contract_header {
+            left.push(Line::styled(
+                format!("- {}", contract.previous_signature),
+                Style::default().fg(Color::Red),
+            ));
+            right.push(Line::raw(""));
+            left.push(Line::raw(""));
+            right.push(Line::styled(
+                format!("+ {}", contract.signature),
+                Style::default().fg(Color::Green),
+            ));
+        }
+
+        for (hunk_index, attributed) in section.hunks.iter().enumerate() {
+            if hunk_index > 0 || show_section_headers || section.contract_header.is_some() {
+                left.push(Line::raw(""));
+                right.push(Line::raw(""));
+            }
+            let header = Line::styled(
+                attributed.hunk.header.clone(),
+                Style::default().fg(Color::DarkGray),
+            );
+            left.push(header.clone());
+            right.push(header);
+
+            let hunk_highlight = highlight::lookup_hunk_highlight_by_index(
+                highlighted_file,
+                attributed.source_index,
+            );
+            let split_rows = crate::diff_shape::pair_hunk_lines(&attributed.hunk.lines);
+
+            for split_row in &split_rows {
+                left.push(split_side_line(
+                    split_row.left.as_ref(),
+                    split_row.left_index,
+                    hunk_highlight,
+                ));
+                right.push(split_side_line(
+                    split_row.right.as_ref(),
+                    split_row.right_index,
+                    hunk_highlight,
+                ));
+            }
+        }
+    }
+    (left, right)
+}
+
+/// One [`SplitRow`](crate::diff_shape::SplitRow) side's rendered [`Line`] —
+/// a blank filler line for a `None` cell, or `diff_line`'s usual rendering
+/// looked up by `index` (that side's position in the hunk's *original*
+/// interleaved `lines`, [`crate::diff_shape::SplitRow::left_index`]/
+/// `right_index`'s own doc comment on why this must be the original index,
+/// not the split row's own position).
+fn split_side_line(
+    line: Option<&DiffLine>,
+    index: Option<usize>,
+    hunk_highlight: Option<&[Option<Vec<TokenSpan>>]>,
+) -> Line<'static> {
+    match (line, index) {
+        (Some(line), Some(index)) => {
+            let token_spans = hunk_highlight
+                .and_then(|lines| lines.get(index).cloned())
+                .flatten();
+            diff_line(line, token_spans)
+        }
+        _ => Line::raw(""),
+    }
 }
 
 /// Builds one display line for a hunk body line, coloring its code tokens
