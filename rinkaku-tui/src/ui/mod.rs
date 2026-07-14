@@ -194,8 +194,8 @@ pub fn draw(
 }
 
 /// The right pane's inner height (borders excluded), computed from `body`
-/// (the entry screen's full body area) using the same 60/40 horizontal
-/// split and `saturating_sub(2)` border deduction [`draw_entry_screen`]
+/// (the entry screen's full body area) using the same horizontal split and
+/// `saturating_sub(2)` border deduction [`draw_entry_screen`]
 /// itself uses (`ENTRY_TREE_WIDTH_PERCENT`/`ENTRY_RIGHT_WIDTH_PERCENT`
 /// below, referenced both here and there so the two never drift).
 /// Extracted so [`DrawOutcome`]'s `scroll_viewport_height` reflects the
@@ -214,5 +214,5 @@ fn right_pane_viewport_height(body: Rect) -> usize {
 /// [`right_pane_viewport_height`]'s report of that layout to
 /// [`DrawOutcome::scroll_viewport_height`] (ADR 0026) so the two cannot
 /// drift.
-pub(crate) const ENTRY_TREE_WIDTH_PERCENT: u16 = 60;
-pub(crate) const ENTRY_RIGHT_WIDTH_PERCENT: u16 = 40;
+pub(crate) const ENTRY_TREE_WIDTH_PERCENT: u16 = 40;
+pub(crate) const ENTRY_RIGHT_WIDTH_PERCENT: u16 = 60;

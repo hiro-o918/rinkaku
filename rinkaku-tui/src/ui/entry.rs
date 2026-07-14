@@ -18,12 +18,14 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use rinkaku_core::render::Report;
 
-/// Left entry pane (directory tree) + right pane, split 60/40 — this
+/// Left entry pane (directory tree) + right pane, split 40/60 — this
 /// implementation's own choice (ADR 0015/0016 left the exact ratio open):
-/// the tree is the primary navigation surface and typically has more rows
-/// than the right pane has fields, so it gets the larger share. The right
-/// pane itself shows either the detail view or the diff view depending on
-/// `app.right_pane()` (`d`/`D` toggles between them, TUI iteration 2).
+/// the right pane's Diff/Detail/BlastRadius content is code and prose that
+/// needs width to read comfortably, while the tree's rows stay legible
+/// truncated (the Diff pane's title now names the truncated row's symbol/
+/// file, `diff_pane::diff_pane_title`). The right pane itself shows either
+/// the detail view or the diff view depending on `app.right_pane()` (`d`/`D`
+/// toggles between them, TUI iteration 2).
 ///
 /// Returns the clamped right-pane scroll offset actually applied — whichever
 /// of `draw_detail_pane`/`draw_diff_pane`/`draw_blast_radius_pane` ran for
@@ -288,11 +290,11 @@ mod tests {
             .expect("draw");
 
         // Tree pane's own top-left border corner is at (0, 0); the right
-        // pane's 60/40 split (`ENTRY_TREE_WIDTH_PERCENT`) puts its top-left
-        // corner at column 48 of an 80-column terminal.
+        // pane's split (`ENTRY_TREE_WIDTH_PERCENT`) puts its top-left
+        // corner at column 32 of an 80-column terminal.
         let buffer = terminal.backend().buffer();
         let tree_border_style = buffer[(0, 0)].style();
-        let right_border_style = buffer[(48, 0)].style();
+        let right_border_style = buffer[(32, 0)].style();
         assert_eq!(Some(Color::Cyan), tree_border_style.fg);
         assert!(tree_border_style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(Some(Color::DarkGray), right_border_style.fg);
@@ -318,7 +320,7 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         let tree_border_style = buffer[(0, 0)].style();
-        let right_border_style = buffer[(48, 0)].style();
+        let right_border_style = buffer[(32, 0)].style();
         assert_eq!(Some(Color::DarkGray), tree_border_style.fg);
         assert!(!tree_border_style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(Some(Color::Cyan), right_border_style.fg);
@@ -423,7 +425,7 @@ mod tests {
     }
 
     /// A single-file report whose path overflows an 80-column terminal's
-    /// tree pane (60% width, `ENTRY_TREE_WIDTH_PERCENT`, minus 2 columns
+    /// tree pane (40% width, `ENTRY_TREE_WIDTH_PERCENT`, minus 2 columns
     /// of border).
     fn report_with_long_path_symbol() -> Report {
         Report {

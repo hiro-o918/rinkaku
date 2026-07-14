@@ -248,9 +248,9 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Blast radius"));
-        // Not the full placeholder sentence: the pane is narrow enough
-        // (40% of an 80-column terminal) that `Paragraph`'s word-wrapping
-        // splits it across rows, and `buffer_text` joins rows with `\n` —
+        // Not the full placeholder sentence: `Paragraph`'s word-wrapping
+        // can still split it across rows even at this pane's width, and
+        // `buffer_text` joins rows with `\n` —
         // a multi-row substring would never match. "directory" alone fits
         // on one wrapped line and is unique enough to confirm the
         // placeholder rendered, mirroring this module's other coarse
@@ -292,9 +292,8 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("Blast radius of lib.rs"));
         // NOTE: asserting a substring, not the full parenthesized sentence —
-        // the pane is narrow enough (40% of an 80-column terminal) that
-        // `Paragraph`'s word-wrapping can split the sentence across rows,
-        // and `buffer_text` joins rows with `\n`, so a wrapped multi-row
+        // `Paragraph`'s word-wrapping can still split the sentence across
+        // rows, and `buffer_text` joins rows with `\n`, so a wrapped multi-row
         // substring would never match a single-line `contains` check
         // (mirroring `should_draw_blast_radius_placeholder_when_cursor_is_on_a_symbol_row`'s
         // own "directory" fragment check just above, for the same reason).
