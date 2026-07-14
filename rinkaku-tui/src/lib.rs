@@ -42,6 +42,7 @@ mod session;
 pub mod source;
 pub mod source_diff;
 pub mod splash;
+mod split_pairing;
 pub mod tree;
 pub mod ui;
 

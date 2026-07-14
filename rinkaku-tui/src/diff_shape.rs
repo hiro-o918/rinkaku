@@ -26,7 +26,8 @@
 //! `ui::draw` must not call `App::selected_blast_radius_view` either.
 
 use crate::app::DiffTarget;
-use crate::diff_view::{DiffLine, DiffLineKind, FileHunks, Hunk, file_hunks};
+use crate::diff_view::{FileHunks, Hunk, file_hunks};
+pub use crate::split_pairing::{SplitRow, pair_hunk_lines};
 use rinkaku_core::extract::Classification;
 use rinkaku_core::render::Report;
 
@@ -381,118 +382,6 @@ pub fn changed_line_ranges(sections: &[&DiffSection]) -> Vec<(usize, usize)> {
     ranges.sort_unstable();
     ranges.dedup();
     ranges
-}
-
-/// One rendered row of a split (side-by-side) diff view (ADR 0044): the
-/// old-side and new-side [`DiffLine`] shown on that row, either of which
-/// can be `None` — a filler cell with nothing on that side. `left_index`/
-/// `right_index` is that side's line's position in the hunk's original
-/// `lines` slice (`None` alongside a `None` line) — `crate::ui::diff_pane`
-/// needs this to look up [`crate::highlight::lookup_hunk_highlight_by_index`]'s
-/// per-line highlight table, which is indexed by that original interleaved
-/// position, not by `SplitRow` position (the two diverge as soon as any run
-/// merges two source lines onto one row).
-///
-/// [`pair_hunk_lines`] always returns one `SplitRow` per input
-/// [`DiffLine`], never fewer, so a hunk's split-mode row count matches its
-/// unified-mode row count exactly (ADR 0044 decision 4) — this is what lets
-/// [`walk_sections`]/[`hunk_start_lines`]/[`section_start_line_for_symbol`]/
-/// [`symbol_id_for_scroll_line`] stay unchanged regardless of
-/// [`crate::app::DiffViewMode`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SplitRow {
-    pub left: Option<DiffLine>,
-    pub left_index: Option<usize>,
-    pub right: Option<DiffLine>,
-    pub right_index: Option<usize>,
-}
-
-/// Pairs a hunk's interleaved `lines` into old-side/new-side [`SplitRow`]s
-/// for the split diff view (ADR 0044 decision 3). A `Context` line mirrors
-/// onto both sides. A maximal run of consecutive `Removed` lines
-/// immediately followed by a maximal run of consecutive `Added` lines pairs
-/// positionally (row `i` of the run gets the run's `i`-th removed/added
-/// line); when the two runs differ in length, the longer run's excess lines
-/// pair against `None` on the shorter side, one row per excess line. A
-/// `Removed` run with no following `Added` run (or vice versa) pairs every
-/// line against `None` on the other side.
-///
-/// Always returns exactly `lines.len()` rows (ADR 0044 decision 4): when a
-/// positional pairing merges two source lines onto one rendered row, a
-/// trailing `SplitRow { left: None, right: None }` filler row is appended
-/// for each merge, so the total row count never drops below the unified
-/// view's own line count — see [`SplitRow`]'s own doc comment for why this
-/// invariant matters.
-pub fn pair_hunk_lines(lines: &[DiffLine]) -> Vec<SplitRow> {
-    let mut rows = Vec::with_capacity(lines.len());
-    let mut i = 0;
-    while i < lines.len() {
-        match lines[i].kind {
-            DiffLineKind::Context => {
-                rows.push(SplitRow {
-                    left: Some(lines[i].clone()),
-                    left_index: Some(i),
-                    right: Some(lines[i].clone()),
-                    right_index: Some(i),
-                });
-                i += 1;
-            }
-            DiffLineKind::Removed => {
-                let removed_start = i;
-                let mut removed_end = i;
-                while removed_end < lines.len() && lines[removed_end].kind == DiffLineKind::Removed
-                {
-                    removed_end += 1;
-                }
-                let added_start = removed_end;
-                let mut added_end = removed_start.max(added_start);
-                while added_end < lines.len() && lines[added_end].kind == DiffLineKind::Added {
-                    added_end += 1;
-                }
-
-                let removed_run = &lines[removed_start..removed_end];
-                let added_run = &lines[added_start..added_end];
-                let paired = removed_run.len().max(added_run.len());
-                for offset in 0..paired {
-                    rows.push(SplitRow {
-                        left: removed_run.get(offset).cloned(),
-                        left_index: (offset < removed_run.len()).then_some(removed_start + offset),
-                        right: added_run.get(offset).cloned(),
-                        right_index: (offset < added_run.len()).then_some(added_start + offset),
-                    });
-                }
-                // Decision 4's filler rows: the run consumed
-                // `removed_run.len() + added_run.len()` source lines but
-                // only emitted `paired` rows so far — pad back up to the
-                // source count with blank filler rows.
-                let consumed = removed_run.len() + added_run.len();
-                for _ in paired..consumed {
-                    rows.push(SplitRow {
-                        left: None,
-                        left_index: None,
-                        right: None,
-                        right_index: None,
-                    });
-                }
-
-                i = added_end;
-            }
-            DiffLineKind::Added => {
-                // An `Added` run with no preceding `Removed` run (a pure
-                // insertion) — the `Removed` arm above already consumes any
-                // `Added` run that immediately follows a `Removed` run, so
-                // reaching this arm means there was none.
-                rows.push(SplitRow {
-                    left: None,
-                    left_index: None,
-                    right: Some(lines[i].clone()),
-                    right_index: Some(i),
-                });
-                i += 1;
-            }
-        }
-    }
-    rows
 }
 
 #[cfg(test)]

@@ -14,6 +14,9 @@
 //! - `changed_line_ranges` — the Diff pane header's `range:` line data
 //!   (distinct new-side line spans, sorted and deduped across sections
 //!   so ADR 0029's cloned hunks produce one entry per span)
+//!
+//! `pair_hunk_lines`'s own tests moved to `crate::split_pairing_tests`
+//! alongside the rest of that module's split-out implementation.
 
 use super::*;
 use rinkaku_core::diff::LineRange;
@@ -24,7 +27,6 @@ use rinkaku_core::render::{FileReport, ReportOrigin};
 mod build_diff_pane_content;
 mod changed_line_ranges;
 mod hunk_start_lines;
-mod pair_hunk_lines;
 mod section_start_line;
 mod symbol_id_for_scroll_line;
 
