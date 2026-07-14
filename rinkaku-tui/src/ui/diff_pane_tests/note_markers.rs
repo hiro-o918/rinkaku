@@ -36,8 +36,7 @@ fn section_for(diff_text: &str) -> DiffSection {
 fn should_prefix_note_marker_only_on_the_line_inside_the_notes_range_in_unified_view() {
     let section = section_for(DIFF_TEXT);
     let mut note_markers = crate::note_markers::NoteMarkers::default();
-    // New-side line 2 is "+fn foo() {}" (line 1 is context "fn a() {}",
-    // unchanged; line 3 is context "fn b() {}").
+    // New-side line 2 is the added "+fn foo() {}" line in DIFF_TEXT above.
     note_markers
         .line_ranges
         .insert("lib.rs".to_string(), vec![(2, 2)]);
