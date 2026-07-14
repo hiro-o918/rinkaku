@@ -8,7 +8,7 @@
 
 use super::style::pane_border_style;
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
@@ -59,19 +59,40 @@ use unicode_width::UnicodeWidthChar;
 /// Detail/Diff/Blast-radius panes pass `app.focus() == Focus::Right`; the
 /// `?` help overlay and jump popup, which are modal and always the active
 /// surface while shown, pass `true` unconditionally.
+///
+/// `header_lines` renders fixed above the scrollable body, inside the same
+/// bordered `Block`, via its own `Layout::vertical` split of the block's
+/// inner area — a separate `Paragraph` with no `.scroll(..)` of its own, so
+/// it lives entirely outside the coordinate system `requested_scroll`/
+/// `clamp_scroll`/`scroll_indicator` operate in (the same way the `Block`'s
+/// border and title already sit outside that coordinate system). This
+/// matters beyond layout: `crate::diff_shape::walk_sections` hand-mirrors
+/// this function's line-counting to place both ADR 0027's forward
+/// (selection → scroll target) and ADR 0030's reverse (scroll position →
+/// selected symbol) sync, so a header that shifted the body's own scroll
+/// coordinates would desync both — splicing the header into the scrolled
+/// content itself was considered and rejected for exactly this reason. Pass
+/// `&[]` for a pane with no pinned header (every caller except the Diff
+/// pane's identification/stats header).
 pub(crate) fn render_scrollable_pane(
     frame: &mut Frame,
     title: &str,
+    header_lines: &[Line<'static>],
     lines: &[Line<'static>],
     requested_scroll: usize,
     area: Rect,
     focused: bool,
 ) -> usize {
-    // 2 columns/rows for the left/right and top/bottom border, matching
-    // `draw_source_screen`'s own `saturating_sub(2)` convention for a
-    // bordered pane's inner height.
-    let viewport_width = area.width.saturating_sub(2) as usize;
-    let viewport_height = area.height.saturating_sub(2) as usize;
+    // `Block::inner` already folds in the border's own row/column, matching
+    // `draw_source_screen`'s `saturating_sub(2)` convention for a bordered
+    // pane's inner height without a manual subtraction here.
+    let inner_area = Block::bordered().inner(area);
+    let header_rows = (header_lines.len() as u16).min(inner_area.height);
+    let [header_area, body_area] =
+        Layout::vertical([Constraint::Length(header_rows), Constraint::Min(0)]).areas(inner_area);
+
+    let viewport_width = body_area.width as usize;
+    let viewport_height = body_area.height as usize;
     let wrapped = wrap_lines(lines, viewport_width);
     let scroll = clamp_scroll(wrapped.len(), viewport_height, requested_scroll);
 
@@ -83,14 +104,17 @@ pub(crate) fn render_scrollable_pane(
         Some(indicator) => format!("{}{indicator} ", title.trim_end()),
         None => title.to_string(),
     };
-
     let block = Block::bordered()
         .title(title)
         .border_style(pane_border_style(focused));
-    let paragraph = Paragraph::new(wrapped)
-        .block(block)
-        .scroll((scroll as u16, 0));
-    frame.render_widget(paragraph, area);
+
+    frame.render_widget(block, area);
+    if !header_lines.is_empty() {
+        let header = Paragraph::new(header_lines[..header_rows as usize].to_vec());
+        frame.render_widget(header, header_area);
+    }
+    let paragraph = Paragraph::new(wrapped).scroll((scroll as u16, 0));
+    frame.render_widget(paragraph, body_area);
     scroll
 }
 
@@ -285,6 +309,45 @@ pub(crate) fn truncate_line_to_width(line: &Line<'static>, width: usize) -> Line
         _ => result_spans.push(Span::styled("…", last_style)),
     }
     Line::from(result_spans).style(line.style)
+}
+
+/// Truncates `text` to fit within `width` display columns from the *tail*,
+/// replacing the head with a leading `…` when it does not fit — the mirror
+/// image of [`truncate_to_width`], for callers whose most informative part
+/// is at the end of the string rather than the start (the Diff pane's
+/// header line: a long path's basename/symbol name is the part worth
+/// keeping visible, not its leading directories).
+///
+/// Same width measurement and edge cases as [`truncate_to_width`]
+/// (`width == 0` returns empty, text already fitting is returned
+/// unchanged), mirrored from the tail instead of the head.
+pub(crate) fn truncate_to_width_keeping_tail(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let text_width: usize = text.chars().map(|ch| ch.width().unwrap_or(1)).sum();
+    if text_width <= width {
+        return text.to_string();
+    }
+
+    // Reserve 1 column for the leading `…` marker, then greedily take
+    // characters from the end until the next one (going backwards) would
+    // overflow the remaining budget.
+    let budget = width - 1;
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 0usize;
+    for ch in text.chars().rev() {
+        let char_width = ch.width().unwrap_or(1);
+        if used + char_width > budget {
+            break;
+        }
+        kept.push(ch);
+        used += char_width;
+    }
+    kept.reverse();
+    let mut result = String::from('…');
+    result.extend(kept);
+    result
 }
 
 /// Clamps a requested scroll offset (lines) to `[0, content_len -
@@ -841,6 +904,45 @@ mod tests {
         // budget-exhaustion guard compose correctly instead of one
         // masking a bug in the other.
         let actual = truncate_to_width("あいう", 1);
+
+        assert_eq!("…".to_string(), actual);
+    }
+
+    // --- truncate_to_width_keeping_tail (pure helper, Diff pane header) ---
+
+    #[test]
+    fn should_return_text_unchanged_when_it_fits_within_width_keeping_tail() {
+        let actual = truncate_to_width_keeping_tail("abcde", 5);
+
+        assert_eq!("abcde".to_string(), actual);
+    }
+
+    #[test]
+    fn should_return_empty_string_when_width_is_zero_keeping_tail() {
+        let actual = truncate_to_width_keeping_tail("abcdef", 0);
+
+        assert_eq!("".to_string(), actual);
+    }
+
+    #[test]
+    fn should_truncate_long_ascii_text_with_leading_marker_when_it_overflows_width() {
+        // width=5 -> 4 chars of budget + 1 column for the leading "…",
+        // keeping the tail ("efgh") rather than the head.
+        let actual = truncate_to_width_keeping_tail("abcdefgh", 5);
+
+        assert_eq!("…efgh".to_string(), actual);
+    }
+
+    #[test]
+    fn should_not_split_a_double_width_character_when_truncating_keeping_tail() {
+        let actual = truncate_to_width_keeping_tail("aああb", 4);
+
+        assert_eq!("…あb".to_string(), actual);
+    }
+
+    #[test]
+    fn should_return_only_the_marker_when_width_is_one_keeping_tail() {
+        let actual = truncate_to_width_keeping_tail("abcdef", 1);
 
         assert_eq!("…".to_string(), actual);
     }

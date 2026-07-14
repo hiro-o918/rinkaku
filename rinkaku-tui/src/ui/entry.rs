@@ -22,10 +22,10 @@ use rinkaku_core::render::Report;
 /// implementation's own choice (ADR 0015/0016 left the exact ratio open):
 /// the right pane's Diff/Detail/BlastRadius content is code and prose that
 /// needs width to read comfortably, while the tree's rows stay legible
-/// truncated (the Diff pane's title now names the truncated row's symbol/
-/// file, `diff_pane::diff_pane_title`). The right pane itself shows either
-/// the detail view or the diff view depending on `app.right_pane()` (`d`/`D`
-/// toggles between them, TUI iteration 2).
+/// truncated (the Diff pane's own 2-line header names the truncated row's
+/// symbol/file in full, `diff_pane::diff_pane_header_lines`). The right
+/// pane itself shows either the detail view or the diff view depending on
+/// `app.right_pane()` (`d`/`D` toggles between them, TUI iteration 2).
 ///
 /// Returns the clamped right-pane scroll offset actually applied — whichever
 /// of `draw_detail_pane`/`draw_diff_pane`/`draw_blast_radius_pane` ran for

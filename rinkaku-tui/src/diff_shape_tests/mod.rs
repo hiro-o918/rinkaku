@@ -11,6 +11,8 @@
 //! - `symbol_id_for_scroll_line` — the reverse lookup added by ADR 0030
 //!   (scroll offset → symbol id under it), powering the diff → tree
 //!   auto-sync
+//! - `change_stats` — the Diff pane header's `chg:` line data (changed-line
+//!   ranges and added/removed counts folded over a selection's sections)
 
 use super::*;
 use rinkaku_core::diff::LineRange;
@@ -19,6 +21,7 @@ use rinkaku_core::graph::SymbolGraph;
 use rinkaku_core::render::{FileReport, ReportOrigin};
 
 mod build_diff_pane_content;
+mod change_stats;
 mod hunk_start_lines;
 mod section_start_line;
 mod symbol_id_for_scroll_line;

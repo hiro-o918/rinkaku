@@ -3,10 +3,10 @@
 //! under the cursor, either clipped to a symbol row's own line range or
 //! grouped into per-symbol sections for a file row.
 
-use super::scroll::render_scrollable_pane;
+use super::scroll::{render_scrollable_pane, truncate_to_width_keeping_tail};
 use super::style::{pane_border_style, styled_content_spans};
 use crate::app::{App, DiffTarget, Focus};
-use crate::diff_shape::DiffSection;
+use crate::diff_shape::{ChangeStats, DiffSection};
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, TokenSpan};
 use ratatui::Frame;
@@ -27,16 +27,77 @@ use rinkaku_core::render::Report;
 pub(crate) const ADDED_BG: Color = Color::Indexed(22);
 pub(crate) const REMOVED_BG: Color = Color::Indexed(52);
 
-/// Builds the Diff pane's base title (before [`super::scroll::scroll_indicator`]'s
-/// suffix is appended): `" Diff: <name> "` when a row is selected, else the
-/// plain `" Diff "` every other pane's placeholder title uses. Extracted so
-/// the narrower tree pane (40% of the entry screen) truncating a long
-/// symbol/file name still leaves the diff pane naming what is on screen.
-pub(crate) fn diff_pane_title(selection_name: Option<&str>) -> String {
-    match selection_name {
-        Some(name) => format!(" Diff: {name} "),
-        None => " Diff ".to_string(),
+/// The Diff pane's base title (before [`super::scroll::scroll_indicator`]'s
+/// suffix is appended) — always the plain `" Diff "` every other pane's
+/// title uses. Naming the current row now lives in
+/// [`diff_pane_header_lines`] instead (a 2-line in-pane header, not the
+/// title), since a symbol/file name plus its full path routinely overflows
+/// the width the title bar had to work with.
+pub(crate) const DIFF_PANE_TITLE: &str = " Diff ";
+
+/// Builds the Diff pane's 2-line identification/stats header — pinned above
+/// the scrollable hunk content by `render_scrollable_pane`'s `header_lines`
+/// parameter so it never scrolls out of view, since knowing *which* symbol
+/// or file is being read stays useful no matter how far into its hunks the
+/// reviewer has scrolled.
+///
+/// Line 1 identifies the selection: `"<symbol name> · <path>"` for a symbol
+/// row (`·` chosen over `::`/`/`, both of which collide with characters
+/// that already appear inside a symbol name or path), or the bare `path`
+/// for a file/skipped-file row
+/// (`selection_name` is `None` there — nothing to pair the path with). The
+/// whole line is truncated from the *head* when it overflows `width`
+/// ([`truncate_to_width_keeping_tail`]): the tail — the symbol's own name,
+/// or a path's basename — is what tells the two apart when many files share
+/// leading directories, so that is the part kept visible.
+///
+/// Line 2 reports `stats` as `"chg: <ranges> (+A/-R)"`, omitted entirely
+/// when `stats` has no ranges and no added/removed lines to show (an empty
+/// selection already took the placeholder path in [`draw_diff_pane`], so
+/// this only happens for a selection whose hunks this fold could not
+/// attribute a range to — better to show nothing than a misleadingly empty
+/// `"chg: "` line).
+pub(crate) fn diff_pane_header_lines(
+    selection_name: Option<&str>,
+    path: &str,
+    stats: &ChangeStats,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let identification = match selection_name {
+        Some(name) => format!("{name} · {path}"),
+        None => path.to_string(),
+    };
+    let mut lines = vec![Line::styled(
+        truncate_to_width_keeping_tail(&identification, width),
+        Style::default().add_modifier(Modifier::BOLD),
+    )];
+
+    if !stats.ranges.is_empty() || stats.added > 0 || stats.removed > 0 {
+        let ranges = stats
+            .ranges
+            .iter()
+            .map(|(start, end)| {
+                if start == end {
+                    start.to_string()
+                } else {
+                    format!("{start}-{end}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let counts = format!("(+{}/-{})", stats.added, stats.removed);
+        let stats_text = if ranges.is_empty() {
+            format!("chg: {counts}")
+        } else {
+            format!("chg: {ranges} {counts}")
+        };
+        lines.push(Line::styled(
+            truncate_to_width_keeping_tail(&stats_text, width),
+            Style::default().add_modifier(Modifier::DIM),
+        ));
     }
+
+    lines
 }
 
 /// Draws the diff pane (TUI iteration 2, [`crate::app::RightPane::Diff`]; ADR 0020
@@ -77,7 +138,6 @@ pub(crate) fn draw_diff_pane(
         Some(DiffTarget::File { path }) => path.as_str(),
         None => "",
     };
-    let title = diff_pane_title(app.selected_diff_title_name());
 
     let sections: Vec<&crate::diff_shape::DiffSection> = match diff_content {
         DiffPaneContent::Empty => {
@@ -86,7 +146,7 @@ pub(crate) fn draw_diff_pane(
                 Some(_) => format!("(no diff hunks found for {path})"),
             };
             let block = Block::bordered()
-                .title(title)
+                .title(DIFF_PANE_TITLE)
                 .border_style(pane_border_style(focused));
             let paragraph = Paragraph::new(message)
                 .block(block)
@@ -104,9 +164,36 @@ pub(crate) fn draw_diff_pane(
     // site, kept as a parameter to leave that layout knob visible in one
     // place rather than hard-coding it inside `diff_pane_lines`.
     let lines = diff_pane_lines(&sections, true, highlighted_file);
+
+    // A symbol row's stats scope to that symbol's own section only; a file
+    // row (no `selected_diff_focus`) scopes to every section in the file —
+    // mirrors `App::selected_diff_target`'s own file-vs-symbol row scoping.
+    let focus = app.selected_diff_focus(report);
+    let stats_sections: Vec<&crate::diff_shape::DiffSection> = match &focus {
+        Some(focus) => sections
+            .iter()
+            .filter(|section| section.symbol_id.as_deref() == Some(focus.symbol_id.as_str()))
+            .copied()
+            .collect(),
+        None => sections.clone(),
+    };
+    let stats = crate::diff_shape::change_stats(&stats_sections);
+    let header_width = area.width.saturating_sub(2) as usize;
+    // `selected_diff_title_name` returns the row's *path* itself on a file
+    // row (its own doc comment) — reusing it as the header's symbol-name
+    // pairing would duplicate the path against itself, so it is only passed
+    // through for an actual symbol row (`focus.is_some()`).
+    let selection_name = if focus.is_some() {
+        app.selected_diff_title_name()
+    } else {
+        None
+    };
+    let header_lines = diff_pane_header_lines(selection_name, path, &stats, header_width);
+
     Some(render_scrollable_pane(
         frame,
-        &title,
+        DIFF_PANE_TITLE,
+        &header_lines,
         &lines,
         app.right_pane_scroll(),
         area,
@@ -263,39 +350,143 @@ mod tests {
     use rinkaku_core::graph::SymbolGraph;
     use rinkaku_core::render::FileReport;
 
-    // --- diff_pane_title (pure helper) ---
+    // --- diff_pane_header_lines (pure helper) ---
 
     #[test]
-    fn should_return_plain_title_when_no_selection_name() {
-        let actual = diff_pane_title(None);
+    fn should_join_symbol_name_and_path_on_first_header_line_when_selection_name_is_present() {
+        let stats = ChangeStats::default();
 
-        assert_eq!(" Diff ".to_string(), actual);
+        let actual = diff_pane_header_lines(Some("foo"), "src/lib.rs", &stats, 80);
+
+        assert_eq!(
+            vec![Line::styled(
+                "foo · src/lib.rs".to_string(),
+                Style::default().add_modifier(Modifier::BOLD)
+            )],
+            actual
+        );
     }
 
     #[test]
-    fn should_include_selection_name_in_title_when_present() {
-        let actual = diff_pane_title(Some("foo"));
+    fn should_show_bare_path_on_first_header_line_when_no_selection_name() {
+        let stats = ChangeStats::default();
 
-        assert_eq!(" Diff: foo ".to_string(), actual);
+        let actual = diff_pane_header_lines(None, "src/lib.rs", &stats, 80);
+
+        assert_eq!(
+            vec![Line::styled(
+                "src/lib.rs".to_string(),
+                Style::default().add_modifier(Modifier::BOLD)
+            )],
+            actual
+        );
     }
 
     #[test]
-    fn should_include_file_path_in_title_when_selection_name_is_a_path() {
-        let actual = diff_pane_title(Some("src/lib.rs"));
+    fn should_add_change_stats_line_when_stats_has_ranges_and_counts() {
+        let stats = ChangeStats {
+            ranges: vec![(23, 41), (57, 60)],
+            added: 18,
+            removed: 4,
+        };
 
-        assert_eq!(" Diff: src/lib.rs ".to_string(), actual);
+        let actual = diff_pane_header_lines(Some("foo"), "src/lib.rs", &stats, 80);
+
+        assert_eq!(
+            vec![
+                Line::styled(
+                    "foo · src/lib.rs".to_string(),
+                    Style::default().add_modifier(Modifier::BOLD)
+                ),
+                Line::styled(
+                    "chg: 23-41, 57-60 (+18/-4)".to_string(),
+                    Style::default().add_modifier(Modifier::DIM)
+                ),
+            ],
+            actual
+        );
     }
 
     #[test]
-    fn should_include_empty_selection_name_verbatim_in_title() {
-        // Defensive: `App::selected_diff_title_name` never actually
-        // returns `Some("")` (a tree row's `name`/`path` is never empty),
-        // but this pins that an empty string is not treated the same as
-        // `None` — the caller decides `Option`-ness, this function only
-        // formats.
-        let actual = diff_pane_title(Some(""));
+    fn should_format_single_line_range_without_a_dash() {
+        let stats = ChangeStats {
+            ranges: vec![(5, 5)],
+            added: 1,
+            removed: 0,
+        };
 
-        assert_eq!(" Diff:  ".to_string(), actual);
+        let actual = diff_pane_header_lines(Some("foo"), "src/lib.rs", &stats, 80);
+
+        assert_eq!(
+            vec![
+                Line::styled(
+                    "foo · src/lib.rs".to_string(),
+                    Style::default().add_modifier(Modifier::BOLD)
+                ),
+                Line::styled(
+                    "chg: 5 (+1/-0)".to_string(),
+                    Style::default().add_modifier(Modifier::DIM)
+                ),
+            ],
+            actual
+        );
+    }
+
+    #[test]
+    fn should_omit_change_stats_line_when_stats_is_entirely_empty() {
+        let stats = ChangeStats::default();
+
+        let actual = diff_pane_header_lines(Some("foo"), "src/lib.rs", &stats, 80);
+
+        assert_eq!(1, actual.len());
+    }
+
+    #[test]
+    fn should_show_counts_without_ranges_when_ranges_is_empty_but_counts_are_nonzero() {
+        // A pure-deletion selection: `ChangeStats::ranges` excludes the
+        // zero-width deletion range (`change_stats`'s own doc comment), but
+        // the removed count is still real and worth reporting.
+        let stats = ChangeStats {
+            ranges: vec![],
+            added: 0,
+            removed: 2,
+        };
+
+        let actual = diff_pane_header_lines(Some("foo"), "src/lib.rs", &stats, 80);
+
+        assert_eq!(
+            vec![
+                Line::styled(
+                    "foo · src/lib.rs".to_string(),
+                    Style::default().add_modifier(Modifier::BOLD)
+                ),
+                Line::styled(
+                    "chg: (+0/-2)".to_string(),
+                    Style::default().add_modifier(Modifier::DIM)
+                ),
+            ],
+            actual
+        );
+    }
+
+    #[test]
+    fn should_truncate_first_header_line_keeping_the_tail_when_it_overflows_width() {
+        let stats = ChangeStats::default();
+
+        let actual = diff_pane_header_lines(
+            Some("very_long_symbol_name_here"),
+            "src/very/deeply/nested/module/lib.rs",
+            &stats,
+            20,
+        );
+
+        assert_eq!(
+            vec![Line::styled(
+                "…ested/module/lib.rs".to_string(),
+                Style::default().add_modifier(Modifier::BOLD)
+            )],
+            actual
+        );
     }
 
     fn symbol(id: &str, name: &str) -> ExtractedSymbol {

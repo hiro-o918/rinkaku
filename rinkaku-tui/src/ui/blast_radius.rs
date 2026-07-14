@@ -72,6 +72,7 @@ pub(crate) fn draw_blast_radius_pane(
             Some(render_scrollable_pane(
                 frame,
                 &title,
+                &[],
                 &lines,
                 app.right_pane_scroll(),
                 area,
