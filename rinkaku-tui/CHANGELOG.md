@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.4](https://github.com/hiro-o918/rinkaku/compare/v0.6.3...v0.6.4) (2026-07-14)
+
+
+### Features
+
+* **tui:** add a markers legend section to the help overlay ([#147](https://github.com/hiro-o918/rinkaku/issues/147)) ([3ca2a9c](https://github.com/hiro-o918/rinkaku/commit/3ca2a9c1783d29a2129f7e1a1a6b490cb2d459c8))
+* **tui:** widen right pane and show symbol name in diff pane title ([#144](https://github.com/hiro-o918/rinkaku/issues/144)) ([24d4184](https://github.com/hiro-o918/rinkaku/commit/24d4184ec9ae2266be578bcfd36e016419de0b8e))
+
+
+### Miscellaneous
+
+* release main ([#143](https://github.com/hiro-o918/rinkaku/issues/143)) ([32957b3](https://github.com/hiro-o918/rinkaku/commit/32957b39e823bf0101fa0c6523ed77517717e498))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.3 to 0.6.4
+
 ## [0.6.3](https://github.com/hiro-o918/rinkaku/compare/v0.6.2...v0.6.3) (2026-07-14)
 
 
