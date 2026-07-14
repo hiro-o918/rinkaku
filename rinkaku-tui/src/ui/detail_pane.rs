@@ -45,6 +45,7 @@ pub(crate) fn draw_detail_pane(
     Some(render_scrollable_pane(
         frame,
         " Detail ",
+        &[],
         &lines,
         app.right_pane_scroll(),
         area,

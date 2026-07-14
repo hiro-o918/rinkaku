@@ -3,12 +3,16 @@
 //! under the cursor, either clipped to a symbol row's own line range or
 //! grouped into per-symbol sections for a file row.
 
-use super::scroll::render_scrollable_pane;
+use super::scroll::{
+    render_scrollable_pane, truncate_line_to_width, truncate_to_width_keeping_tail,
+};
 use super::style::{pane_border_style, styled_content_spans};
 use crate::app::{App, DiffTarget, Focus};
 use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, TokenSpan};
+use crate::row_view::{BadgeContext, push_badge_spans};
+use crate::tree::{Badges, NodeKind};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -27,16 +31,95 @@ use rinkaku_core::render::Report;
 pub(crate) const ADDED_BG: Color = Color::Indexed(22);
 pub(crate) const REMOVED_BG: Color = Color::Indexed(52);
 
-/// Builds the Diff pane's base title (before [`super::scroll::scroll_indicator`]'s
-/// suffix is appended): `" Diff: <name> "` when a row is selected, else the
-/// plain `" Diff "` every other pane's placeholder title uses. Extracted so
-/// the narrower tree pane (40% of the entry screen) truncating a long
-/// symbol/file name still leaves the diff pane naming what is on screen.
-pub(crate) fn diff_pane_title(selection_name: Option<&str>) -> String {
-    match selection_name {
-        Some(name) => format!(" Diff: {name} "),
-        None => " Diff ".to_string(),
+/// The Diff pane's base title (before [`super::scroll::scroll_indicator`]'s
+/// suffix is appended) — always the plain `" Diff "` every other pane's
+/// title uses. Naming the current row now lives in
+/// [`diff_pane_header_lines`] instead (a 2-line in-pane header, not the
+/// title), since a symbol/file name plus its full path routinely overflows
+/// the width the title bar had to work with.
+pub(crate) const DIFF_PANE_TITLE: &str = " Diff ";
+
+/// Builds the Diff pane's pinned in-pane header (above the scrollable hunk
+/// content via `render_scrollable_pane`'s `header_lines` parameter, so the
+/// row's identity and its badge summary stay visible no matter how far the
+/// reviewer has scrolled into the hunks):
+///
+/// - Line 1 (bold): `"<symbol name> · <path>"` for a symbol row, or the
+///   bare `path` for a file/skipped-file row (`selection_name` is `None`
+///   there). Truncated from the *head* when it overflows `width` — the
+///   symbol name or a path's basename is the informative tail.
+/// - Line 2 (badges via [`push_badge_spans`]): the exact same badge set
+///   the left tree row renders for this row — reused verbatim so the two
+///   views can't drift, and the diff pane inherits every future badge
+///   change for free. Rendered under [`BadgeContext::File`]: a `Dir` row
+///   never reaches this header (no diff to show), and a symbol row's
+///   badges ([`crate::tree::symbol_badges`]) contribute the same fields
+///   `BadgeContext::File` reads. Omitted when the row's badges are all
+///   zero.
+/// - Line 3 (dim, only when `ranges` is non-empty): `"range: 23-73, ..."`
+///   — the distinct new-side line spans. `ranges` must arrive already
+///   sorted+deduped ([`crate::diff_shape::changed_line_ranges`]) so a
+///   file selection whose hunks ADR 0029 clones across multiple owning
+///   symbols still produces one entry per distinct span, not one per
+///   section that owns it. On overflow the range list itself is
+///   head-truncated (the *later* line numbers are usually what the
+///   reviewer scrolled to see); the `"range: "` label stays fixed so
+///   the line's meaning survives.
+pub(crate) fn diff_pane_header_lines(
+    selection_name: Option<&str>,
+    path: &str,
+    badges: &Badges,
+    ranges: &[(usize, usize)],
+    width: usize,
+) -> Vec<Line<'static>> {
+    let identification = match selection_name {
+        Some(name) => format!("{name} · {path}"),
+        None => path.to_string(),
+    };
+    let mut lines = vec![Line::styled(
+        truncate_to_width_keeping_tail(&identification, width),
+        Style::default().add_modifier(Modifier::BOLD),
+    )];
+
+    let mut badge_spans: Vec<Span<'static>> = Vec::new();
+    push_badge_spans(&mut badge_spans, badges, BadgeContext::File);
+    if !badge_spans.is_empty() {
+        lines.push(truncate_line_to_width(&Line::from(badge_spans), width));
     }
+
+    if !ranges.is_empty() {
+        let prefix = "range: ";
+        // Drop the whole line rather than push a `range: ` prefix with
+        // nothing after it — a truncated tail is meaningful, an empty tail
+        // is not, and letting the prefix render alone would overflow
+        // `width` (ratatui clips silently, so the overflow reads as
+        // "range: " being the whole message).
+        if width > prefix.chars().count() {
+            let range_list = ranges
+                .iter()
+                .map(|(start, end)| {
+                    if start == end {
+                        start.to_string()
+                    } else {
+                        format!("{start}-{end}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let range_budget = width - prefix.chars().count();
+            let truncated_range_list = truncate_to_width_keeping_tail(&range_list, range_budget);
+            let range_line = Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(
+                    truncated_range_list,
+                    Style::default().add_modifier(Modifier::DIM),
+                ),
+            ]);
+            lines.push(range_line);
+        }
+    }
+
+    lines
 }
 
 /// Draws the diff pane (TUI iteration 2, [`crate::app::RightPane::Diff`]; ADR 0020
@@ -77,7 +160,6 @@ pub(crate) fn draw_diff_pane(
         Some(DiffTarget::File { path }) => path.as_str(),
         None => "",
     };
-    let title = diff_pane_title(app.selected_diff_title_name());
 
     let sections: Vec<&crate::diff_shape::DiffSection> = match diff_content {
         DiffPaneContent::Empty => {
@@ -86,7 +168,7 @@ pub(crate) fn draw_diff_pane(
                 Some(_) => format!("(no diff hunks found for {path})"),
             };
             let block = Block::bordered()
-                .title(title)
+                .title(DIFF_PANE_TITLE)
                 .border_style(pane_border_style(focused));
             let paragraph = Paragraph::new(message)
                 .block(block)
@@ -104,14 +186,75 @@ pub(crate) fn draw_diff_pane(
     // site, kept as a parameter to leave that layout knob visible in one
     // place rather than hard-coding it inside `diff_pane_lines`.
     let lines = diff_pane_lines(&sections, true, highlighted_file);
+
+    // A symbol row's ranges scope to that symbol's own section only; a
+    // file row (no `selected_diff_focus`) scopes to every section — mirrors
+    // `App::selected_diff_target`'s own file-vs-symbol row scoping.
+    let focus = app.selected_diff_focus(report);
+    let range_sections: Vec<&crate::diff_shape::DiffSection> = match &focus {
+        Some(focus) => sections
+            .iter()
+            .filter(|section| section.symbol_id.as_deref() == Some(focus.symbol_id.as_str()))
+            .copied()
+            .collect(),
+        None => sections.clone(),
+    };
+    let ranges = crate::diff_shape::changed_line_ranges(&range_sections);
+    let header_width = area.width.saturating_sub(2) as usize;
+
+    // `selected_diff_header_name` is the single source for what line 1
+    // names: the symbol's own name on a symbol row (paired with `path`
+    // below to form `"<name> · <path>"`), or the file row's path
+    // (rendered bare, `selection_name = None`). Feeding both row kinds
+    // through the accessor — rather than only the symbol arm — keeps its
+    // file-row branch on the rendered path, not dead. Row `badges` come
+    // straight off the same `nav.rows(tree)` entry every other lookup
+    // already reads, so line 2 renders exactly what the tree row does
+    // (no drift).
+    let header_name = app.selected_diff_header_name();
+    let (selection_name, header_path) = if focus.is_some() {
+        (header_name, path)
+    } else {
+        (None, header_name.unwrap_or(path))
+    };
+    let selected_badges = selected_row_badges(app);
+    let header_lines = diff_pane_header_lines(
+        selection_name,
+        header_path,
+        &selected_badges,
+        &ranges,
+        header_width,
+    );
+
     Some(render_scrollable_pane(
         frame,
-        &title,
+        DIFF_PANE_TITLE,
+        &header_lines,
         &lines,
         app.right_pane_scroll(),
         area,
         focused,
     ))
+}
+
+/// The `Badges` on the row currently under the cursor — read from the
+/// same `nav.rows(tree)` lookup every other selection accessor already
+/// uses, so the diff pane's line 2 renders exactly what the tree row
+/// renders (single source of truth for what a row's badges say).
+///
+/// Returns [`Badges::default`] (all-zero) when there is no row, or when
+/// the cursor is on a `Dir`/`Section`/`TestGroup` — those never reach the
+/// header path at all in practice (empty pane placeholder instead), but
+/// returning an empty badge set here is the honest fallback.
+fn selected_row_badges(app: &App) -> Badges {
+    let rows = app.nav().rows(app.tree());
+    let Some(row) = rows.get(app.nav().cursor()) else {
+        return Badges::default();
+    };
+    match &row.node.kind {
+        NodeKind::File | NodeKind::Symbol(_) => row.node.badges,
+        NodeKind::Dir | NodeKind::Section(_) | NodeKind::TestGroup { .. } => Badges::default(),
+    }
 }
 
 /// Formats every [`DiffSection`] in `sections` into styled lines (ADR
@@ -252,678 +395,5 @@ pub(crate) fn marker_span(kind: DiffLineKind, bg: Option<Color>) -> Span<'static
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::{App, BlastRadiusSelection};
-    use crate::ui::draw;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use rinkaku_core::diff::LineRange;
-    use rinkaku_core::extract::{Classification, ExtractedSymbol, SymbolKind};
-    use rinkaku_core::graph::SymbolGraph;
-    use rinkaku_core::render::FileReport;
-
-    // --- diff_pane_title (pure helper) ---
-
-    #[test]
-    fn should_return_plain_title_when_no_selection_name() {
-        let actual = diff_pane_title(None);
-
-        assert_eq!(" Diff ".to_string(), actual);
-    }
-
-    #[test]
-    fn should_include_selection_name_in_title_when_present() {
-        let actual = diff_pane_title(Some("foo"));
-
-        assert_eq!(" Diff: foo ".to_string(), actual);
-    }
-
-    #[test]
-    fn should_include_file_path_in_title_when_selection_name_is_a_path() {
-        let actual = diff_pane_title(Some("src/lib.rs"));
-
-        assert_eq!(" Diff: src/lib.rs ".to_string(), actual);
-    }
-
-    #[test]
-    fn should_include_empty_selection_name_verbatim_in_title() {
-        // Defensive: `App::selected_diff_title_name` never actually
-        // returns `Some("")` (a tree row's `name`/`path` is never empty),
-        // but this pins that an empty string is not treated the same as
-        // `None` — the caller decides `Option`-ness, this function only
-        // formats.
-        let actual = diff_pane_title(Some(""));
-
-        assert_eq!(" Diff:  ".to_string(), actual);
-    }
-
-    fn symbol(id: &str, name: &str) -> ExtractedSymbol {
-        ExtractedSymbol {
-            id: id.to_string(),
-            name: name.to_string(),
-            kind: SymbolKind::Function,
-            signature: format!("fn {name}()"),
-            range: LineRange { start: 1, end: 1 },
-            container: None,
-            referenced_names: vec![],
-            dependencies: vec![],
-            omitted_dependency_matches: 0,
-            is_test: false,
-            classification: None,
-            previous_signature: None,
-        }
-    }
-
-    fn report_with_one_symbol() -> Report {
-        Report {
-            origin: rinkaku_core::render::ReportOrigin::Diff,
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![symbol("lib.rs::foo", "foo")],
-            }],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        }
-    }
-
-    fn diff_content_for(
-        report: &Report,
-        diff_files: &[crate::diff_view::FileHunks],
-        app: &App,
-    ) -> crate::diff_shape::DiffPaneContent {
-        crate::diff_shape::build_diff_pane_content(
-            report,
-            diff_files,
-            app.selected_diff_target(report).as_ref(),
-        )
-    }
-
-    fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
-        let buffer = terminal.backend().buffer();
-        let area = buffer.area;
-        (0..area.height)
-            .map(|y| {
-                (0..area.width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn find_cell_style(terminal: &Terminal<TestBackend>, line_needle: &str, token: &str) -> Style {
-        let buffer = terminal.backend().buffer();
-        let area = buffer.area;
-        for y in 0..area.height {
-            let row: String = (0..area.width)
-                .map(|x| buffer[(x, y)].symbol().to_string())
-                .collect();
-            let Some(needle_byte_offset) = row.find(line_needle) else {
-                continue;
-            };
-            let Some(token_byte_offset) = row[needle_byte_offset..].find(token) else {
-                continue;
-            };
-            let byte_offset = needle_byte_offset + token_byte_offset;
-            let column = row[..byte_offset].chars().count() as u16;
-            return buffer[(column, y)].style();
-        }
-        panic!("expected to find {token:?} within a row containing {line_needle:?}");
-    }
-
-    #[test]
-    fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_symbol_row() {
-        let report = report_with_one_symbol();
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,1 +1,2 @@
- fn a() {}
-+fn foo() {}
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(text.contains("Diff"));
-        assert!(text.contains("+fn foo() {}"));
-    }
-
-    // Dynamic-verification note (see CLAUDE.md's reviewing-changes
-    // section): this pins that a skipped file's diff pane still resolves
-    // real hunks from the raw diff text — `App::selected_diff_target`
-    // scopes a `NodeKind::File` row to `DiffTarget::File { path }`
-    // regardless of `skip_reason` (see the `app.rs` unit test
-    // `should_return_file_diff_target_when_cursor_is_on_a_skipped_file_row`),
-    // and `draw_diff_pane` looks hunks up by that path alone — so a
-    // skipped file (which has no `FileReport`/symbols to key off of) must
-    // not silently fall back to the "no diff hunks found" placeholder just
-    // because rinkaku didn't extract symbols from it.
-    #[test]
-    fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_skipped_file_row() {
-        let report = Report {
-            origin: rinkaku_core::render::ReportOrigin::Diff,
-            skipped: vec![rinkaku_core::render::SkippedFile {
-                path: "assets/logo.png".to_string(),
-                reason: rinkaku_core::render::SkipReason::Binary,
-            }],
-            graph: SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-            files: vec![],
-        };
-        // Row 0 is the collapsing "assets" dir; row 1 is the skipped file.
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/assets/logo.png b/assets/logo.png
-index e69de29..4b825dc 100644
-Binary files a/assets/logo.png and b/assets/logo.png differ
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        // A binary file has no hunks at all in the diff text itself (git
-        // reports "Binary files ... differ" instead of `@@` hunks), so the
-        // correct, honest behavior is the pane's own "no diff hunks found"
-        // placeholder — this test's real assertion is that it names the
-        // right path, not a stale/mismatched one, confirming the lookup
-        // reached this row's `path` at all. Checked as two substrings
-        // rather than the whole phrase since it wraps across rendered
-        // lines at this terminal's pane width.
-        assert!(text.contains("no diff hunks found for"));
-        assert!(text.contains("assets/logo.png"));
-    }
-
-    /// Sibling of the binary-skip test above, using an unsupported-language
-    /// skip (a real text file with real hunks in the raw diff) to confirm
-    /// the diff pane actually renders content — not just the placeholder —
-    /// for a skipped-but-textual file.
-    #[test]
-    fn should_draw_diff_pane_with_hunk_lines_for_an_unsupported_language_skipped_file() {
-        let report = Report {
-            origin: rinkaku_core::render::ReportOrigin::Diff,
-            skipped: vec![rinkaku_core::render::SkippedFile {
-                path: "vendor/lib.zig".to_string(),
-                reason: rinkaku_core::render::SkipReason::UnsupportedLanguage,
-            }],
-            graph: SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-            files: vec![],
-        };
-        // Row 0 is the collapsing "vendor" dir; row 1 is the skipped file.
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/vendor/lib.zig b/vendor/lib.zig
-index e69de29..4b825dc 100644
---- a/vendor/lib.zig
-+++ b/vendor/lib.zig
-@@ -1,1 +1,2 @@
- const a = 1;
-+const b = 2;
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(text.contains("Diff"));
-        assert!(text.contains("+const b = 2;"));
-    }
-
-    #[test]
-    fn should_draw_per_symbol_section_headers_when_diff_pane_shows_a_file_selection() {
-        // Cursor stays on row 0, the "lib.rs" file row itself — a file
-        // selection (ADR 0020) groups hunks under each symbol's own
-        // signature as a section header, unlike a symbol selection (the
-        // sibling test above), which shows no header at all.
-        let report = Report {
-            origin: rinkaku_core::render::ReportOrigin::Diff,
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![
-                    symbol("lib.rs::foo", "foo"),
-                    ExtractedSymbol {
-                        range: LineRange { start: 10, end: 10 },
-                        ..symbol("lib.rs::bar", "bar")
-                    },
-                ],
-            }],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        };
-        let app = App::new(&report);
-        let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,1 +1,1 @@
--fn a() {}
-+fn foo() {}
-@@ -9,1 +10,1 @@
--fn old_bar() {}
-+fn bar() {}
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(text.contains("fn foo()"));
-        assert!(text.contains("fn bar()"));
-        assert!(text.contains("+fn foo() {}"));
-        assert!(text.contains("+fn bar() {}"));
-    }
-
-    #[test]
-    fn should_draw_contract_header_before_hunks_when_symbol_signature_changed() {
-        let report = Report {
-            origin: rinkaku_core::render::ReportOrigin::Diff,
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![ExtractedSymbol {
-                    classification: Some(Classification::SignatureChanged),
-                    previous_signature: Some("fn foo(a: i32)".to_string()),
-                    signature: "fn foo(a: i32, b: i32)".to_string(),
-                    ..symbol("lib.rs::foo", "foo")
-                }],
-            }],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        };
-        // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,1 +1,1 @@
--fn foo(a: i32) {}
-+fn foo(a: i32, b: i32) {}
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        // The 2-line old/new contract header precedes the hunk body itself
-        // (ADR 0020's outline-before-implementation disclosure order).
-        assert!(text.contains("- fn foo(a: i32)"));
-        assert!(text.contains("+ fn foo(a: i32, b: i32)"));
-        assert!(text.contains("-fn foo(a: i32) {}"));
-        assert!(text.contains("+fn foo(a: i32, b: i32) {}"));
-    }
-
-    #[test]
-    fn should_apply_added_background_tint_and_keyword_foreground_in_diff_pane() {
-        let report = report_with_one_symbol();
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,1 +1,2 @@
- fn a() {}
-+fn foo() {}
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        // The added line's "fn" keyword: foreground colored by the keyword
-        // palette entry, background tinted with `ADDED_BG` — both signals
-        // present on the same cell, per ADR 0018's "fg is token color, bg is
-        // diff signal" decision. Disambiguated against the row via
-        // "+fn foo() {}" (the marker plus full added line): the left-hand
-        // tree pane's cursor row also happens to render a truncated "fn
-        // foo" label for this fixture's one symbol.
-        let keyword_style = find_cell_style(&terminal, "+fn foo() {}", "fn");
-        assert_eq!(Some(ADDED_BG), keyword_style.bg);
-        assert_eq!(Some(Color::Magenta), keyword_style.fg);
-    }
-
-    #[test]
-    fn should_apply_removed_background_tint_in_diff_pane() {
-        let report = report_with_one_symbol();
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,2 +1,1 @@
- fn a() {}
--fn foo() {}
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let keyword_style = find_cell_style(&terminal, "-fn foo() {}", "fn");
-        assert_eq!(Some(REMOVED_BG), keyword_style.bg);
-        assert_eq!(Some(Color::Magenta), keyword_style.fg);
-    }
-
-    #[test]
-    fn should_keep_context_line_unstyled_background_in_diff_pane() {
-        let report = report_with_one_symbol();
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,1 +1,2 @@
- fn a() {}
-+fn foo() {}
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        // Context line "fn a() {}" keeps its keyword token color but must
-        // not carry either diff background tint (`Style::bg` reports an
-        // unset background as `Some(Color::Reset)`, not `None` — ratatui's
-        // own `Cell` defaults every cell's `bg` field to `Color::Reset`
-        // rather than leaving it absent). Disambiguated the same way as
-        // the added-line test above (a leading space marker rather than
-        // `+`/`-`, matching `diff_line`'s context-line rendering).
-        let context_style = find_cell_style(&terminal, " fn a() {}", "fn");
-        assert_eq!(Some(Color::Reset), context_style.bg);
-        assert_eq!(Some(Color::Magenta), context_style.fg);
-    }
-
-    #[test]
-    fn should_keep_hunk_header_dark_gray_when_diff_pane_is_highlighted() {
-        let report = report_with_one_symbol();
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,1 +1,2 @@
- fn a() {}
-+fn foo() {}
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let header_style = find_cell_style(&terminal, "@@ -1,1 +1,2 @@", "@@");
-        assert_eq!(Some(Color::DarkGray), header_style.fg);
-        // DarkGray alone gives sufficient contrast; stacking `Modifier::DIM`
-        // on top of it double-dims the header to near-invisibility on many
-        // terminal themes (especially light backgrounds).
-        assert!(!header_style.add_modifier.contains(Modifier::DIM));
-    }
-
-    #[test]
-    fn should_fall_back_to_plain_diff_style_when_file_extension_is_unrecognized() {
-        // A symbol whose path has no known extension (mirrors an unbuilt
-        // language, e.g. YAML): `App::selected_diff_target` reads the path
-        // straight off the symbol/file row, so this only needs a report
-        // whose file path is unrecognized by `highlight::config_for_path`,
-        // not a real diff for an actual YAML grammar.
-        let report = Report {
-            origin: rinkaku_core::render::ReportOrigin::Diff,
-            files: vec![FileReport {
-                path: "config.yaml".to_string(),
-                symbols: vec![symbol("config.yaml::foo", "foo")],
-            }],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        };
-        // ADR 0020 defaults the right pane to Diff already, so no
-        // `ToggleDiff` press is needed to reach it here.
-        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-        let diff_text = "\
-diff --git a/config.yaml b/config.yaml
-index e69de29..4b825dc 100644
---- a/config.yaml
-+++ b/config.yaml
-@@ -1,1 +1,2 @@
- a: 1
-+b: 2
-";
-        let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-        let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-        let diff_content = diff_content_for(&report, &diff_files, &app);
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &diff_content,
-                    &diff_highlights,
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(text.contains("+b: 2"));
-
-        // Falls back to the pane's original plain green foreground with no
-        // background tint at all (`Some(Color::Reset)` is ratatui's
-        // "unset" — see the context-line test above for why this isn't
-        // `None`) — highlighting failing (or, here, never applying) must
-        // never break the pre-existing diff styling.
-        let added_style = find_cell_style(&terminal, "+b: 2", "b");
-        assert_eq!(Some(Color::Reset), added_style.bg);
-        assert_eq!(Some(Color::Green), added_style.fg);
-    }
-}
+#[path = "diff_pane_tests/mod.rs"]
+mod tests;

@@ -8,7 +8,7 @@
 
 use super::style::pane_border_style;
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
@@ -59,19 +59,40 @@ use unicode_width::UnicodeWidthChar;
 /// Detail/Diff/Blast-radius panes pass `app.focus() == Focus::Right`; the
 /// `?` help overlay and jump popup, which are modal and always the active
 /// surface while shown, pass `true` unconditionally.
+///
+/// `header_lines` renders fixed above the scrollable body, inside the same
+/// bordered `Block`, via its own `Layout::vertical` split of the block's
+/// inner area — a separate `Paragraph` with no `.scroll(..)` of its own, so
+/// it lives entirely outside the coordinate system `requested_scroll`/
+/// `clamp_scroll`/`scroll_indicator` operate in (the same way the `Block`'s
+/// border and title already sit outside that coordinate system). This
+/// matters beyond layout: `crate::diff_shape::walk_sections` hand-mirrors
+/// this function's line-counting to place both ADR 0027's forward
+/// (selection → scroll target) and ADR 0030's reverse (scroll position →
+/// selected symbol) sync, so a header that shifted the body's own scroll
+/// coordinates would desync both — splicing the header into the scrolled
+/// content itself was considered and rejected for exactly this reason. Pass
+/// `&[]` for a pane with no pinned header (every caller except the Diff
+/// pane's identification/stats header).
 pub(crate) fn render_scrollable_pane(
     frame: &mut Frame,
     title: &str,
+    header_lines: &[Line<'static>],
     lines: &[Line<'static>],
     requested_scroll: usize,
     area: Rect,
     focused: bool,
 ) -> usize {
-    // 2 columns/rows for the left/right and top/bottom border, matching
-    // `draw_source_screen`'s own `saturating_sub(2)` convention for a
-    // bordered pane's inner height.
-    let viewport_width = area.width.saturating_sub(2) as usize;
-    let viewport_height = area.height.saturating_sub(2) as usize;
+    // `Block::inner` already folds in the border's own row/column, matching
+    // `draw_source_screen`'s `saturating_sub(2)` convention for a bordered
+    // pane's inner height without a manual subtraction here.
+    let inner_area = Block::bordered().inner(area);
+    let header_rows = (header_lines.len() as u16).min(inner_area.height);
+    let [header_area, body_area] =
+        Layout::vertical([Constraint::Length(header_rows), Constraint::Min(0)]).areas(inner_area);
+
+    let viewport_width = body_area.width as usize;
+    let viewport_height = body_area.height as usize;
     let wrapped = wrap_lines(lines, viewport_width);
     let scroll = clamp_scroll(wrapped.len(), viewport_height, requested_scroll);
 
@@ -83,14 +104,17 @@ pub(crate) fn render_scrollable_pane(
         Some(indicator) => format!("{}{indicator} ", title.trim_end()),
         None => title.to_string(),
     };
-
     let block = Block::bordered()
         .title(title)
         .border_style(pane_border_style(focused));
-    let paragraph = Paragraph::new(wrapped)
-        .block(block)
-        .scroll((scroll as u16, 0));
-    frame.render_widget(paragraph, area);
+
+    frame.render_widget(block, area);
+    if !header_lines.is_empty() {
+        let header = Paragraph::new(header_lines[..header_rows as usize].to_vec());
+        frame.render_widget(header, header_area);
+    }
+    let paragraph = Paragraph::new(wrapped).scroll((scroll as u16, 0));
+    frame.render_widget(paragraph, body_area);
     scroll
 }
 
@@ -287,6 +311,45 @@ pub(crate) fn truncate_line_to_width(line: &Line<'static>, width: usize) -> Line
     Line::from(result_spans).style(line.style)
 }
 
+/// Truncates `text` to fit within `width` display columns from the *tail*,
+/// replacing the head with a leading `…` when it does not fit — the mirror
+/// image of [`truncate_to_width`], for callers whose most informative part
+/// is at the end of the string rather than the start (the Diff pane's
+/// header line: a long path's basename/symbol name is the part worth
+/// keeping visible, not its leading directories).
+///
+/// Same width measurement and edge cases as [`truncate_to_width`]
+/// (`width == 0` returns empty, text already fitting is returned
+/// unchanged), mirrored from the tail instead of the head.
+pub(crate) fn truncate_to_width_keeping_tail(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let text_width: usize = text.chars().map(|ch| ch.width().unwrap_or(1)).sum();
+    if text_width <= width {
+        return text.to_string();
+    }
+
+    // Reserve 1 column for the leading `…` marker, then greedily take
+    // characters from the end until the next one (going backwards) would
+    // overflow the remaining budget.
+    let budget = width - 1;
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 0usize;
+    for ch in text.chars().rev() {
+        let char_width = ch.width().unwrap_or(1);
+        if used + char_width > budget {
+            break;
+        }
+        kept.push(ch);
+        used += char_width;
+    }
+    kept.reverse();
+    let mut result = String::from('…');
+    result.extend(kept);
+    result
+}
+
 /// Clamps a requested scroll offset (lines) to `[0, content_len -
 /// viewport_height]` — the largest offset that still leaves the viewport
 /// full of content rather than trailing off into blank space below the
@@ -435,496 +498,5 @@ pub(crate) fn scroll_indicator(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::style::{Color, Modifier, Style};
-
-    // --- clamp_scroll / scroll_indicator (pure helpers) ---
-
-    #[test]
-    fn should_return_zero_scroll_when_content_fits_entirely() {
-        let actual = clamp_scroll(5, 10, 3);
-
-        assert_eq!(0, actual);
-    }
-
-    #[test]
-    fn should_clamp_requested_scroll_to_max_scroll_when_it_overshoots() {
-        // 20 lines of content in a 10-row viewport: max_scroll = 10, so a
-        // request of 15 clamps down to 10 (the last full page).
-        let actual = clamp_scroll(20, 10, 15);
-
-        assert_eq!(10, actual);
-    }
-
-    #[test]
-    fn should_pass_through_requested_scroll_when_within_bounds() {
-        let actual = clamp_scroll(20, 10, 4);
-
-        assert_eq!(4, actual);
-    }
-
-    #[test]
-    fn should_return_zero_scroll_when_viewport_height_is_zero() {
-        // A degenerate (zero-height) pane can never scroll — `max_scroll`
-        // saturates at `content_len` itself, but a requested scroll of 0
-        // (the only value `App` ever starts at) still clamps to 0.
-        let actual = clamp_scroll(20, 0, 0);
-
-        assert_eq!(0, actual);
-    }
-
-    #[test]
-    fn should_return_none_indicator_when_content_fits_entirely() {
-        let actual = scroll_indicator(5, 10, 0);
-
-        assert_eq!(None, actual);
-    }
-
-    #[test]
-    fn should_return_indicator_at_top_when_content_overflows_and_scroll_is_zero() {
-        let actual = scroll_indicator(20, 10, 0);
-
-        assert_eq!(Some(" (1-10/20)".to_string()), actual);
-    }
-
-    #[test]
-    fn should_return_indicator_reflecting_scroll_position() {
-        let actual = scroll_indicator(20, 10, 4);
-
-        assert_eq!(Some(" (5-14/20)".to_string()), actual);
-    }
-
-    #[test]
-    fn should_clamp_last_visible_to_content_len_at_max_scroll() {
-        // scroll=10, viewport=10 would naively suggest last_visible=20,
-        // which happens to equal content_len here anyway; this pins the
-        // `.min(content_len)` clamp directly rather than relying on the
-        // coincidence.
-        let actual = scroll_indicator(20, 10, 10);
-
-        assert_eq!(Some(" (11-20/20)".to_string()), actual);
-    }
-
-    // --- visible_index_window / window_overflow_indicators (pure helpers,
-    // #61-review fix: cursor-follow scroll for the tree pane and jump popup)
-
-    #[test]
-    fn should_return_empty_window_when_total_items_is_zero() {
-        let actual = visible_index_window(0, 0, 10);
-
-        assert_eq!((0, 0), actual);
-    }
-
-    #[test]
-    fn should_return_empty_window_when_viewport_height_is_zero() {
-        let actual = visible_index_window(20, 5, 0);
-
-        assert_eq!((0, 0), actual);
-    }
-
-    #[test]
-    fn should_show_whole_list_when_it_fits_entirely_within_viewport() {
-        let actual = visible_index_window(5, 2, 10);
-
-        assert_eq!((0, 5), actual);
-    }
-
-    #[test]
-    fn should_center_window_around_cursor_when_list_exceeds_viewport() {
-        // 100 items, cursor at index 49, viewport 10 -> half=5,
-        // ideal_start=44, max_start=90 (not clamped) -> (44, 54).
-        let actual = visible_index_window(100, 49, 10);
-
-        assert_eq!((44, 54), actual);
-    }
-
-    #[test]
-    fn should_clamp_window_to_start_of_list_when_cursor_is_near_the_top() {
-        let actual = visible_index_window(100, 1, 10);
-
-        assert_eq!((0, 10), actual);
-    }
-
-    #[test]
-    fn should_clamp_window_to_end_of_list_when_cursor_is_near_the_bottom() {
-        let actual = visible_index_window(100, 98, 10);
-
-        assert_eq!((90, 100), actual);
-    }
-
-    #[test]
-    fn should_keep_cursor_row_inside_the_window_when_jumping_far_from_the_current_position() {
-        // The exact scenario the #61-review finding describes: a cursor
-        // that jumps from near the top of a long list straight to near the
-        // bottom (e.g. a gd/gr jump) must land inside the returned window,
-        // not leave it showing the same rows as before the jump.
-        let (start, end) = visible_index_window(200, 180, 20);
-
-        assert!(
-            start <= 180 && 180 < end,
-            "cursor 180 not in [{start}, {end})"
-        );
-    }
-
-    #[test]
-    fn should_return_no_indicators_when_window_covers_the_whole_list() {
-        let actual = window_overflow_indicators(5, 0, 5);
-
-        assert_eq!((None, None), actual);
-    }
-
-    #[test]
-    fn should_return_above_indicator_only_when_window_starts_past_the_top() {
-        let actual = window_overflow_indicators(100, 10, 20);
-
-        assert_eq!(
-            (
-                Some("… 10 more above".to_string()),
-                Some("… 80 more below".to_string())
-            ),
-            actual
-        );
-    }
-
-    #[test]
-    fn should_return_no_above_indicator_when_window_starts_at_the_top() {
-        let actual = window_overflow_indicators(100, 0, 20);
-
-        assert_eq!((None, Some("… 80 more below".to_string())), actual);
-    }
-
-    #[test]
-    fn should_return_no_below_indicator_when_window_reaches_the_end() {
-        let actual = window_overflow_indicators(100, 80, 100);
-
-        assert_eq!((Some("… 80 more above".to_string()), None), actual);
-    }
-
-    // --- windowed_rows_with_indicators (pure helper) ---
-    //
-    // Regression coverage for the reserved-row bug found while writing
-    // `should_window_candidates_around_cursor_when_popup_has_more_candidates_than_fit`:
-    // naively computing the content window against the full viewport height
-    // and then unconditionally prepending/appending indicator lines
-    // overflows the viewport by up to 2 rows, clipping the cursor row
-    // itself off the bottom in the worst case.
-
-    #[test]
-    fn should_return_whole_list_with_no_indicators_when_it_fits_the_viewport() {
-        let actual = windowed_rows_with_indicators(5, 2, 10);
-
-        assert_eq!((0, 5, None, None), actual);
-    }
-
-    #[test]
-    fn should_reserve_a_row_for_the_below_indicator_when_cursor_is_near_the_top() {
-        // 100 items, cursor at 0, viewport 10: without reservation the
-        // content window alone would be (0, 10), needing a "below"
-        // indicator — reserving 1 row for it must shrink the content
-        // window to (0, 9) so the indicator line has room without pushing
-        // total rows past the viewport.
-        let (start, end, above, below) = windowed_rows_with_indicators(100, 0, 10);
-
-        assert_eq!((0, 9), (start, end));
-        assert_eq!(None, above);
-        assert_eq!(Some("… 91 more below".to_string()), below);
-        // The rendered row count (indicator + content) must never exceed
-        // the viewport.
-        let below_rows = below.is_some() as usize;
-        assert!(end - start + below_rows <= 10);
-    }
-
-    #[test]
-    fn should_reserve_a_row_for_the_above_indicator_when_cursor_is_near_the_bottom() {
-        let (start, end, above, below) = windowed_rows_with_indicators(100, 99, 10);
-
-        assert_eq!((91, 100), (start, end));
-        assert_eq!(Some("… 91 more above".to_string()), above);
-        assert_eq!(None, below);
-        let above_rows = above.is_some() as usize;
-        assert!(end - start + above_rows <= 10);
-    }
-
-    #[test]
-    fn should_reserve_rows_for_both_indicators_when_cursor_is_in_the_middle() {
-        let (start, end, above, below) = windowed_rows_with_indicators(100, 50, 10);
-
-        assert!(above.is_some());
-        assert!(below.is_some());
-        // The cursor must still be inside the (possibly shrunk) content
-        // window — the entire point of this function.
-        assert!(start <= 50 && 50 < end, "cursor 50 not in [{start}, {end})");
-        // Total rendered rows (2 indicators + content) must never exceed
-        // the viewport.
-        assert!(end - start + 2 <= 10);
-    }
-
-    #[test]
-    fn should_keep_cursor_visible_after_reserving_indicator_rows_at_a_small_viewport() {
-        // A tight viewport (3 rows) where reserving rows for indicators
-        // could plausibly starve the content window down to nothing —
-        // pins that the cursor row itself is never sacrificed.
-        let (start, end, _above, below) = windowed_rows_with_indicators(50, 49, 3);
-
-        assert!(start <= 49 && 49 < end, "cursor 49 not in [{start}, {end})");
-        let below_rows = below.is_some() as usize;
-        assert!(end - start + below_rows <= 3);
-    }
-
-    // --- wrap_lines (pure helper) ---
-
-    #[test]
-    fn should_return_lines_unchanged_when_width_is_zero() {
-        let lines = vec![Line::raw("hello world")];
-
-        let actual = wrap_lines(&lines, 0);
-
-        assert_eq!(lines, actual);
-    }
-
-    #[test]
-    fn should_return_one_empty_line_when_input_line_is_blank() {
-        let lines = vec![Line::raw("")];
-
-        let actual = wrap_lines(&lines, 10);
-
-        assert_eq!(vec![Line::raw("")], actual);
-    }
-
-    #[test]
-    fn should_not_wrap_when_line_fits_exactly_within_width() {
-        let lines = vec![Line::raw("abcde")];
-
-        let actual = wrap_lines(&lines, 5);
-
-        assert_eq!(vec![Line::raw("abcde")], actual);
-    }
-
-    #[test]
-    fn should_split_long_ascii_line_into_multiple_lines_at_the_width_boundary() {
-        let lines = vec![Line::raw("abcdefghij")];
-
-        let actual = wrap_lines(&lines, 4);
-
-        assert_eq!(
-            vec![Line::raw("abcd"), Line::raw("efgh"), Line::raw("ij"),],
-            actual
-        );
-    }
-
-    #[test]
-    fn should_wrap_full_width_characters_without_splitting_a_double_width_char_across_lines() {
-        // Each "あ" is 2 columns wide; a width-3 pane can fit "あ" (2) plus
-        // one more column, but the second "あ" would overflow to column 4,
-        // so it wraps onto the next line rather than being sliced in half.
-        let lines = vec![Line::raw("ああa")];
-
-        let actual = wrap_lines(&lines, 3);
-
-        assert_eq!(vec![Line::raw("あ"), Line::raw("あa")], actual);
-    }
-
-    #[test]
-    fn should_preserve_span_style_on_both_fragments_when_a_styled_span_is_split_by_wrapping() {
-        let style = Style::default().fg(Color::Red);
-        let lines = vec![Line::from(vec![Span::styled("abcdef", style)])];
-
-        let actual = wrap_lines(&lines, 4);
-
-        assert_eq!(
-            vec![
-                Line::from(vec![Span::styled("abcd", style)]),
-                Line::from(vec![Span::styled("ef", style)]),
-            ],
-            actual
-        );
-    }
-
-    #[test]
-    fn should_preserve_distinct_span_styles_when_a_multi_span_line_wraps_across_span_boundaries() {
-        // "ab" (unstyled) + "cdef" (red): a width-3 wrap must split after
-        // "abc" (2 unstyled chars + 1 red char) and carry each fragment's
-        // own style into the split, not just the first span's.
-        let red = Style::default().fg(Color::Red);
-        let lines = vec![Line::from(vec![Span::raw("ab"), Span::styled("cdef", red)])];
-
-        let actual = wrap_lines(&lines, 3);
-
-        assert_eq!(
-            vec![
-                Line::from(vec![Span::raw("ab"), Span::styled("c", red)]),
-                Line::from(vec![Span::styled("def", red)]),
-            ],
-            actual
-        );
-    }
-
-    #[test]
-    fn should_wrap_each_logical_line_independently_when_multiple_lines_are_passed() {
-        let lines = vec![Line::raw("abcdef"), Line::raw("xy")];
-
-        let actual = wrap_lines(&lines, 4);
-
-        assert_eq!(
-            vec![Line::raw("abcd"), Line::raw("ef"), Line::raw("xy")],
-            actual
-        );
-    }
-
-    // --- truncate_to_width (pure helper, jump popup one-row-per-candidate fix) ---
-
-    #[test]
-    fn should_return_text_unchanged_when_it_fits_exactly_within_width() {
-        let actual = truncate_to_width("abcde", 5);
-
-        assert_eq!("abcde".to_string(), actual);
-    }
-
-    #[test]
-    fn should_return_text_unchanged_when_it_is_shorter_than_width() {
-        let actual = truncate_to_width("abc", 10);
-
-        assert_eq!("abc".to_string(), actual);
-    }
-
-    #[test]
-    fn should_return_empty_string_when_width_is_zero() {
-        let actual = truncate_to_width("abcdef", 0);
-
-        assert_eq!("".to_string(), actual);
-    }
-
-    #[test]
-    fn should_truncate_long_ascii_text_with_trailing_marker_when_it_overflows_width() {
-        // width=5 -> 4 chars of budget + 1 column for the trailing "…".
-        let actual = truncate_to_width("abcdefgh", 5);
-
-        assert_eq!("abcd…".to_string(), actual);
-    }
-
-    #[test]
-    fn should_not_split_a_double_width_character_when_truncating() {
-        // "あ" is 2 columns; a width-4 budget after reserving 1 column for
-        // "…" leaves 3 columns, which fits "a" (1) + "あ" (2) exactly but
-        // not a second "あ" (would need 5) — so the second "あ" and
-        // everything after it is dropped rather than sliced in half.
-        let actual = truncate_to_width("aああb", 4);
-
-        assert_eq!("aあ…".to_string(), actual);
-    }
-
-    #[test]
-    fn should_truncate_mixed_cjk_and_ascii_label_when_it_overflows_width() {
-        let actual = truncate_to_width("シンボル名 (path/to/very/long/file.rs)", 10);
-
-        assert_eq!("シンボル…".to_string(), actual);
-    }
-
-    #[test]
-    fn should_return_only_the_marker_when_width_is_one() {
-        // width=1 leaves a budget of 0 after reserving 1 column for "…", so
-        // every character of the input is dropped and only the marker
-        // itself remains — the narrowest width at which truncation still
-        // produces non-empty output (width=0 is the separate empty-string
-        // case covered above).
-        let actual = truncate_to_width("abcdef", 1);
-
-        assert_eq!("…".to_string(), actual);
-    }
-
-    #[test]
-    fn should_return_only_the_marker_when_width_is_one_and_first_char_is_double_width() {
-        // Same width=1 boundary, but the first character of the input is a
-        // 2-column CJK character that would not fit in the 0-column budget
-        // either — makes sure the double-width guard and the width=1
-        // budget-exhaustion guard compose correctly instead of one
-        // masking a bug in the other.
-        let actual = truncate_to_width("あいう", 1);
-
-        assert_eq!("…".to_string(), actual);
-    }
-
-    // --- truncate_line_to_width (styled, multi-span counterpart) ---
-
-    #[test]
-    fn should_return_line_unchanged_when_it_fits_within_width() {
-        let line = Line::from(vec![Span::raw("ab"), Span::styled("cde", Style::default())]);
-
-        let actual = truncate_line_to_width(&line, 5);
-
-        assert_eq!(line, actual);
-    }
-
-    #[test]
-    fn should_truncate_single_span_line_with_trailing_marker_when_it_overflows_width() {
-        let line = Line::raw("abcdefgh");
-
-        let actual = truncate_line_to_width(&line, 5);
-
-        assert_eq!(Line::raw("abcd…"), actual);
-    }
-
-    #[test]
-    fn should_preserve_each_surviving_spans_own_style_when_truncating_a_multi_span_line() {
-        let red = Style::default().fg(Color::Red);
-        let line = Line::from(vec![Span::raw("ab"), Span::styled("cdef", red)]);
-
-        let actual = truncate_line_to_width(&line, 4);
-
-        assert_eq!(
-            Line::from(vec![Span::raw("ab"), Span::styled("c…", red)]),
-            actual
-        );
-    }
-
-    #[test]
-    fn should_preserve_line_level_selected_style_when_truncating_an_overflowing_line() {
-        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-        let line = Line::from(vec![Span::raw("abcdefgh")]).style(selected_style);
-
-        let actual = truncate_line_to_width(&line, 5);
-
-        assert_eq!(
-            Line::from(vec![Span::raw("abcd…")]).style(selected_style),
-            actual
-        );
-    }
-
-    #[test]
-    fn should_not_split_a_double_width_character_when_truncating_a_line() {
-        let line = Line::raw("aああb");
-
-        let actual = truncate_line_to_width(&line, 4);
-
-        assert_eq!(Line::raw("aあ…"), actual);
-    }
-
-    #[test]
-    fn should_return_only_the_marker_line_when_width_is_one() {
-        let line = Line::raw("abcdef");
-
-        let actual = truncate_line_to_width(&line, 1);
-
-        assert_eq!(Line::raw("…"), actual);
-    }
-
-    #[test]
-    fn should_return_only_the_marker_line_when_width_is_one_and_first_char_is_double_width() {
-        let line = Line::raw("あいう");
-
-        let actual = truncate_line_to_width(&line, 1);
-
-        assert_eq!(Line::raw("…"), actual);
-    }
-
-    #[test]
-    fn should_return_empty_line_when_width_is_zero() {
-        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-        let line = Line::from(vec![Span::raw("abcdef")]).style(selected_style);
-
-        let actual = truncate_line_to_width(&line, 0);
-
-        assert_eq!(Line::default().style(selected_style), actual);
-    }
-}
+#[path = "scroll_tests/mod.rs"]
+mod tests;

@@ -196,6 +196,7 @@ pub(crate) fn draw_help_overlay(
     let scroll = render_scrollable_pane(
         frame,
         " Help (? to close) ",
+        &[],
         &lines,
         requested_scroll,
         overlay_area,
