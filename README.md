@@ -94,6 +94,9 @@ whichever sinks apply to how you launched the TUI:
   packet (one section per note, with the note's own symbol signature)
   via an OSC 52 terminal escape sequence, so it works over SSH too.
 
+Press `w` from anywhere to open the PR's page in your web browser
+(only when you started with `rinkaku --pr <url or number>`).
+
 ## Install
 
 | Method | Command |
