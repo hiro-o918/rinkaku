@@ -428,6 +428,63 @@ fn should_return_file_diff_target_when_cursor_is_on_a_symbol_row() {
 }
 
 #[test]
+fn should_return_symbol_name_for_diff_title_when_cursor_is_on_a_present_symbol_row() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report).handle_key(InputKey::Down);
+
+    let actual = app.selected_diff_title_name();
+
+    assert_eq!(Some("foo"), actual);
+}
+
+#[test]
+fn should_return_file_path_for_diff_title_when_cursor_is_on_a_file_row() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report);
+
+    let actual = app.selected_diff_title_name();
+
+    assert_eq!(Some("lib.rs"), actual);
+}
+
+#[test]
+fn should_return_none_for_diff_title_when_cursor_is_on_a_directory_row() {
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![symbol("src/lib.rs::foo", "foo")],
+        }],
+        ..empty_report()
+    };
+    let app = App::new(&report);
+
+    let actual = app.selected_diff_title_name();
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_return_none_for_diff_title_when_cursor_is_on_a_removed_symbol_row() {
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        removed: vec![rinkaku_core::extract::RemovedSymbol {
+            name: "old_foo".to_string(),
+            kind: rinkaku_core::extract::SymbolKind::Function,
+            path: "lib.rs".to_string(),
+            signature: "fn old_foo()".to_string(),
+        }],
+        ..empty_report()
+    };
+    // Row 0 is the "lib.rs" file row, row 1 is the removed "old_foo" symbol.
+    let app = App::new(&report).handle_key(InputKey::Down);
+
+    let actual = app.selected_diff_title_name();
+
+    assert_eq!(None, actual);
+}
+
+#[test]
 fn should_return_diff_focus_when_cursor_is_on_a_present_symbol_row() {
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,

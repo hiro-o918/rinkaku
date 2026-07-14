@@ -27,6 +27,18 @@ use rinkaku_core::render::Report;
 pub(crate) const ADDED_BG: Color = Color::Indexed(22);
 pub(crate) const REMOVED_BG: Color = Color::Indexed(52);
 
+/// Builds the Diff pane's base title (before [`super::scroll::scroll_indicator`]'s
+/// suffix is appended): `" Diff: <name> "` when a row is selected, else the
+/// plain `" Diff "` every other pane's placeholder title uses. Extracted so
+/// the narrower tree pane (40% of the entry screen) truncating a long
+/// symbol/file name still leaves the diff pane naming what is on screen.
+pub(crate) fn diff_pane_title(selection_name: Option<&str>) -> String {
+    match selection_name {
+        Some(name) => format!(" Diff: {name} "),
+        None => " Diff ".to_string(),
+    }
+}
+
 /// Draws the diff pane (TUI iteration 2, [`crate::app::RightPane::Diff`]; ADR 0020
 /// reshapes its content): the raw unified-diff hunks touching the row under
 /// the cursor, clipped to a symbol's own line range for a symbol row, or
@@ -65,6 +77,7 @@ pub(crate) fn draw_diff_pane(
         Some(DiffTarget::File { path }) => path.as_str(),
         None => "",
     };
+    let title = diff_pane_title(app.selected_diff_title_name());
 
     let sections: Vec<&crate::diff_shape::DiffSection> = match diff_content {
         DiffPaneContent::Empty => {
@@ -73,7 +86,7 @@ pub(crate) fn draw_diff_pane(
                 Some(_) => format!("(no diff hunks found for {path})"),
             };
             let block = Block::bordered()
-                .title(" Diff ")
+                .title(title)
                 .border_style(pane_border_style(focused));
             let paragraph = Paragraph::new(message)
                 .block(block)
@@ -93,7 +106,7 @@ pub(crate) fn draw_diff_pane(
     let lines = diff_pane_lines(&sections, true, highlighted_file);
     Some(render_scrollable_pane(
         frame,
-        " Diff ",
+        &title,
         &lines,
         app.right_pane_scroll(),
         area,
@@ -249,6 +262,41 @@ mod tests {
     use rinkaku_core::extract::{Classification, ExtractedSymbol, SymbolKind};
     use rinkaku_core::graph::SymbolGraph;
     use rinkaku_core::render::FileReport;
+
+    // --- diff_pane_title (pure helper) ---
+
+    #[test]
+    fn should_return_plain_title_when_no_selection_name() {
+        let actual = diff_pane_title(None);
+
+        assert_eq!(" Diff ".to_string(), actual);
+    }
+
+    #[test]
+    fn should_include_selection_name_in_title_when_present() {
+        let actual = diff_pane_title(Some("foo"));
+
+        assert_eq!(" Diff: foo ".to_string(), actual);
+    }
+
+    #[test]
+    fn should_include_file_path_in_title_when_selection_name_is_a_path() {
+        let actual = diff_pane_title(Some("src/lib.rs"));
+
+        assert_eq!(" Diff: src/lib.rs ".to_string(), actual);
+    }
+
+    #[test]
+    fn should_include_empty_selection_name_verbatim_in_title() {
+        // Defensive: `App::selected_diff_title_name` never actually
+        // returns `Some("")` (a tree row's `name`/`path` is never empty),
+        // but this pins that an empty string is not treated the same as
+        // `None` — the caller decides `Option`-ness, this function only
+        // formats.
+        let actual = diff_pane_title(Some(""));
+
+        assert_eq!(" Diff:  ".to_string(), actual);
+    }
 
     fn symbol(id: &str, name: &str) -> ExtractedSymbol {
         ExtractedSymbol {
