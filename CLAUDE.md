@@ -73,7 +73,8 @@ Design rationale for the choices above is recorded in
 ## Reviewing changes (dogfooding)
 
 When reviewing a branch or PR of this repository (directly or via
-review subagents), always cover **three complementary angles** — see
+review subagents) at the **large** tier of the "Process weight"
+section below, cover **three complementary angles** — see
 [`docs/experiments/0001-map-assisted-llm-review/`](docs/experiments/0001-map-assisted-llm-review/README.md)
 for why:
 
@@ -100,17 +101,32 @@ the code it flags — and none of the three angles may be skipped.
 
 ## Process weight
 
-Match the process to the risk of the change; not every PR needs the
-full pipeline above.
+Match the process to the size and risk of the change; not every PR
+needs the full pipeline above. The fixed cost of the pipeline (review
+passes, dynamic verification, CI round-trips) must stay proportional
+to the diff.
 
 - **Mechanical changes** — renames, label/string substitutions,
   promoting a literal to a named const, doc wording — may be done
   directly: edit, `make test`, `make lint`, PR. The three-angle
   review is not required. An ADR (or amendment) is still required
   when the change breaks an output format, but keep it short.
-- **Logic, behavior, or design changes** get the full treatment:
-  TDD, an ADR where the conventions below require one, and the
-  three-angle dogfooding review.
+- **Small changes** — roughly ≤ 50 changed lines extending an
+  existing pattern, with no new invariant, contract, or coordinate
+  system — go through in one pass: TDD, `make test`, `make lint`,
+  PR. No separate review passes; dynamic verification only when the
+  change adds a new runtime surface.
+- **Medium changes** — a new pure function, keybinding, or rendering
+  rule — add one static (map-assisted) review pass on top of the
+  small-change flow.
+- **Large changes** — a new subsystem, a changed contract or
+  coordinate system, core logic — get the full treatment: TDD, an
+  ADR where the conventions below require one, and the three-angle
+  dogfooding review.
+- **Experiment 0001 rounds** are recorded only when a round produced
+  information worth keeping (novel findings, a map hit or miss worth
+  contrasting). Routine no-finding rounds may skip the record; a
+  small change that ran no review pass produces no round at all.
 
 ## Toolchain
 
