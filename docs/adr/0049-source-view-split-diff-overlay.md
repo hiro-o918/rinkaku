@@ -120,16 +120,18 @@ amendment) — no separate default for this screen.
 **5. Rendering reuses `ui::scroll::{Body::Split, render_scrollable_pane}`
 unchanged**, the same side-by-side layout, wrapping, and shared-scroll-
 offset machinery the diff pane's split view already uses (ADR 0044
-decision 6) — no second split-rendering implementation. Syntax
-highlighting for an unchanged row's *new*-side content reuses the
-already-computed `HighlightedSourceView` token spans for that line
-(content is identical to what the unified overlay already highlights);
-the mirrored *old*-side content of an unchanged row reuses the exact
-same span data, since old and new text are equal by definition on an
-unchanged row. A changed run's `Removed` cells render unhighlighted
-(plain text plus `REMOVED_BG`), matching the unified overlay's existing
-`removed_line` treatment (ADR 0046 decision 6) — there is no parsed
-token data for old-side-only text in any mode, split or unified alike.
+decision 6) — no second split-rendering implementation. Every *new*-side
+cell — an unchanged row's mirrored content or a changed run's `Added`
+line alike — reuses the already-computed `HighlightedSourceView` token
+spans for that line number, the same lookup the unified overlay's `Added`
+row already performs; the gate is "is this the new side," not "is this
+row unchanged." The mirrored *old*-side content of an unchanged row
+reuses the exact same span data, since old and new text are equal by
+definition on an unchanged row. A changed run's `Removed` cells (old-side
+only) render unhighlighted (plain text plus `REMOVED_BG`), matching the
+unified overlay's existing `removed_line` treatment (ADR 0046 decision
+6) — there is no parsed token data for old-side-only text in any mode,
+split or unified alike.
 
 **6. Narrow-pane fallback reuses `MIN_SPLIT_VIEW_WIDTH`
 (`ui::diff_pane`).** Below that width, or when `reconstruct_old_lines`

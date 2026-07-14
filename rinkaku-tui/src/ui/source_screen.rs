@@ -345,7 +345,7 @@ fn source_split_lines(
             row.right.as_ref(),
             DiffLineKind::Added,
             right_bg,
-            (row.kind == SourceSplitRowKind::Unchanged).then_some(token_highlights),
+            Some(token_highlights),
         ));
     }
     (left, right)
@@ -354,14 +354,13 @@ fn source_split_lines(
 /// One [`SourceSplitRow`] side's rendered [`Line`] — a blank line for a
 /// `None` cell (a filler row, or a one-sided insertion/deletion), else a
 /// `{line_number:>5} | ` gutter (matching [`unchanged_line`]'s own gutter
-/// width) plus content. `token_highlights` is `Some` only for an
-/// `Unchanged` row's new-side cell — the one case where the rendered text
-/// is guaranteed identical to a line `crate::highlight::highlight_source_lines`
-/// already parsed and its 0-based `line_number - 1` index into it is
-/// valid; every other cell (a `Changed` row's old/new text, or an
-/// `Unchanged` row's mirrored old-side cell, which has no highlight data
-/// of its own — the unified overlay's [`removed_line`] makes the same call
-/// for old-side-only text) renders as plain gap-styled text plus `bg`.
+/// width) plus content. `token_highlights` is `Some` on the new side
+/// (every new-side cell's `line_number` is a valid index into it
+/// regardless of row kind, since [`crate::source_split::split_source_rows`]
+/// only ever puts real new-side text there) and `None` on the old side,
+/// which has no highlight data of its own — the unified overlay's
+/// [`removed_line`] makes the same call for old-side-only text — and
+/// always renders as plain gap-styled text plus `bg`.
 fn source_split_side_line(
     cell: Option<&crate::source_split::SourceSplitLine>,
     marker_kind: DiffLineKind,

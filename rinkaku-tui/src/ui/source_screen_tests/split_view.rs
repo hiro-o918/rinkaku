@@ -90,6 +90,33 @@ fn should_draw_old_and_new_lines_side_by_side_by_default() {
 }
 
 #[test]
+fn should_apply_token_highlighting_to_the_new_side_of_a_changed_row() {
+    // Regression: a `Changed` row's new-side cell is still new-side
+    // source text with a valid `token_highlights` index, the same as an
+    // `Unchanged` row's — it must not lose that signal just because it's
+    // part of a paired row.
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(dir.path().join("lib.rs"), "fn foo() {}\n").expect("write file");
+    let report = report_with_one_symbol();
+    let diff_hunks = vec![FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![Hunk {
+            header: "@@ -1,1 +1,1 @@".to_string(),
+            new_range: Some((1, 1)),
+            lines: vec![
+                diff_line(DiffLineKind::Removed, "fn old_foo() {}"),
+                diff_line(DiffLineKind::Added, "fn foo() {}"),
+            ],
+        }],
+    }];
+
+    let terminal = draw_source_screen_split_for_test(&report, dir.path(), &diff_hunks, 200);
+
+    let style = find_cell_style(&terminal, "fn foo() {}", "fn");
+    assert_eq!(Some(Color::Magenta), style.fg);
+}
+
+#[test]
 fn should_fall_back_to_unified_when_pane_is_narrower_than_the_split_view_minimum() {
     let dir = tempfile::tempdir().expect("create temp dir");
     std::fs::write(dir.path().join("lib.rs"), "fn foo() {}\n").expect("write file");
