@@ -1,6 +1,10 @@
 # 0043. Risk-oriented visual encoding for the TUI entry tree
 
-- Status: accepted
+- Status: accepted; decision 1's "appended after production symbols"
+  placement superseded (partially) by
+  [ADR 0045](0045-test-group-source-order-placement.md) — the fold
+  itself, its collapsed-by-default state, and the `N tests` label are
+  unchanged
 - Date: 2026-07-14
 - Related: [ADR 0035](0035-tests-sorted-last-in-entry-tree.md) (whole-test-file
   section, per-symbol `test` badge this ADR removes),
