@@ -175,3 +175,21 @@ position ADR 0026 already centers on the symbol.
 - A file edited on disk since the diff was produced silently loses its
   overlay (decision 5) rather than showing a misleading one — visible
   in the pane header, not a silent gap.
+- **`--pr` mode loses the overlay for every file the PR actually
+  changes.** `--pr` resolves a workdir (current directory, an
+  existing `ghq` clone, or a cache clone) and fetches the PR's head
+  ref (`refs/pull/N/head`) into it, but never checks that ref out
+  (`main.rs`'s own module doc comment on the `--pr` read strategy) —
+  the working tree `crate::source::load_symbol_source` reads stays
+  whatever was checked out before rinkaku ran, not the PR's new side.
+  For a file the PR modifies, that means every `Context` line's
+  drift check (decision 5) fails, and the overlay silently disables
+  itself with the pane-title note. This fails safe (the overlay never
+  tints content that doesn't match the diff), but it means the
+  feature is least available exactly where a PR review needs it most.
+  Fixing this requires reading the source view's content from the
+  diff's new-side snapshot (`git show <head SHA>:<path>`) at the IO
+  boundary for `--pr` mode specifically, rather than the working tree
+  — `--base` mode is unaffected, since there the working tree already
+  *is* the new side by construction. Left as a follow-up rather than
+  folded into this ADR's decision.

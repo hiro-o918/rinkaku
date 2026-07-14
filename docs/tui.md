@@ -138,7 +138,9 @@ the changed lines alone. The overlay is always on; there's no key to
 toggle it off. If the file on disk no longer matches the diff (edited
 since it was produced, or diffed against a different revision), the
 pane falls back to its plain, unhighlighted rendering and says so in
-its title.
+its title. In particular, `--pr` shows your local checkout here, not
+a snapshot of the PR's branch, so files the PR changes typically fall
+back to plain rendering too.
 
 ## Combining with `--entry`
 
