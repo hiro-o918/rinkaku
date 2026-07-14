@@ -24,6 +24,7 @@ fn should_show_overflow_indicator_in_detail_pane_title_when_content_exceeds_view
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -55,6 +56,7 @@ fn should_not_show_overflow_indicator_when_content_fits_the_viewport() {
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -88,6 +90,7 @@ fn should_scroll_detail_pane_content_down_when_scroll_down_is_pressed() {
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -127,6 +130,7 @@ fn should_clamp_detail_pane_scroll_at_the_last_page() {
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -167,6 +171,7 @@ fn should_return_the_clamped_scroll_from_draw_when_requested_scroll_overshoots()
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -208,6 +213,7 @@ fn should_reset_scroll_indicator_when_cursor_moves_to_a_different_row() {
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");

@@ -56,6 +56,7 @@ fn should_reach_the_last_wrapped_line_of_content_via_scrolling_when_a_logical_li
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -107,6 +108,7 @@ fn should_report_indicator_total_as_wrapped_row_count_not_logical_line_count_whe
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");

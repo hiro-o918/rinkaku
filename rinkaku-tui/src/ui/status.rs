@@ -224,6 +224,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
