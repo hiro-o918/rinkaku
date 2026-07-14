@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.6](https://github.com/hiro-o918/rinkaku/compare/v0.6.5...v0.6.6) (2026-07-14)
+
+
+### Features
+
+* **tui:** pin a header above the diff pane showing symbol · path, badges, and change ranges ([#150](https://github.com/hiro-o918/rinkaku/issues/150)) ([4de0500](https://github.com/hiro-o918/rinkaku/commit/4de05009033500aab52151dcf4506c016ea7f8ab))
+
+
+### Miscellaneous
+
+* release main ([#148](https://github.com/hiro-o918/rinkaku/issues/148)) ([4fa7321](https://github.com/hiro-o918/rinkaku/commit/4fa7321dbbe8a8863d3bcd72883e8f272a994791))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.5 to 0.6.6
+
 ## [0.6.5](https://github.com/hiro-o918/rinkaku/compare/v0.6.4...v0.6.5) (2026-07-14)
 
 

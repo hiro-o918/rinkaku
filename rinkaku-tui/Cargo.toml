@@ -2,7 +2,7 @@
 name = "rinkaku-tui"
 # See rinkaku-core/Cargo.toml for why this is a literal version instead
 # of `version.workspace = true`.
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -18,7 +18,7 @@ name = "rinkaku_tui"
 path = "src/lib.rs"
 
 [dependencies]
-rinkaku-core = { path = "../rinkaku-core", version = "0.6.5" }
+rinkaku-core = { path = "../rinkaku-core", version = "0.6.6" }
 ratatui = { workspace = true }
 # Declared directly (unlike most crossterm usage, which goes through
 # ratatui's own `ratatui::crossterm` re-export — see that re-export's use
