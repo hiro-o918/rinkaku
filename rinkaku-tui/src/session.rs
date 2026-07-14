@@ -8,6 +8,7 @@
 //! `translate_key`/`dispatch_non_source_key`/etc. helpers it composes —
 //! only the terminal-lifecycle wrapper around that loop moves here.
 
+use crate::ReviewPorts;
 use crate::run_app;
 use crate::source::{SourceReader, WorkingTreeSourceReader};
 use crate::splash;
@@ -95,6 +96,7 @@ pub fn run(
     diff_text: &str,
     entry_path: Option<&str>,
     repo_root: &std::path::Path,
+    review_ports: ReviewPorts<'_>,
 ) -> std::io::Result<()> {
     TuiSession::init()?.run(
         report,
@@ -102,6 +104,7 @@ pub fn run(
         entry_path,
         repo_root,
         &WorkingTreeSourceReader,
+        review_ports,
     )
 }
 
@@ -189,6 +192,14 @@ impl TuiSession {
     /// `--pr`, for which `main.rs` wires in a `git show`-backed reader so
     /// the source view reflects the PR's head snapshot rather than
     /// whatever happens to be checked out locally.
+    ///
+    /// `pr_context`/`submitter` (ADR 0048) are both `Some`/`None`
+    /// together on [`ReviewPorts`]: `main.rs`'s composition root assembles
+    /// a `PrContext` and wires up a `gh`-backed `ReviewSubmitter` only in
+    /// `--pr` mode, so sink A (posting a GitHub PR review) is simply
+    /// absent from the export menu otherwise, per the ADR's "no implicit
+    /// fallback" decision. `ReviewPorts::clipboard` (sink B) is always
+    /// required — it never depends on a PR.
     pub fn run(
         mut self,
         report: &Report,
@@ -196,6 +207,7 @@ impl TuiSession {
         entry_path: Option<&str>,
         repo_root: &std::path::Path,
         source_reader: &dyn SourceReader,
+        review_ports: ReviewPorts<'_>,
     ) -> std::io::Result<()> {
         let result = run_app(
             &mut self.terminal,
@@ -204,6 +216,7 @@ impl TuiSession {
             entry_path,
             repo_root,
             source_reader,
+            review_ports,
         );
         let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
         ratatui::restore();

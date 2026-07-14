@@ -15,6 +15,7 @@ use crate::detail::{
 };
 use crate::nav::Nav;
 use crate::order::{DirRank, OrderMode, rank_directories};
+use crate::review::ReviewState;
 use crate::tree::{NodeKind, Tree, build_tree};
 use rinkaku_core::render::Report;
 use std::collections::HashMap;
@@ -341,6 +342,20 @@ pub struct App {
     /// stale error doesn't linger forever once the user has moved on.
     status: Option<String>,
     should_quit: bool,
+    /// The review-notes feature's own state (ADR 0048) — `App` holds
+    /// exactly this one field of it, per the ADR's Module boundary
+    /// decision; every review-specific transition lives on [`ReviewState`]
+    /// itself, not here.
+    review: ReviewState,
+    /// Whether sink A (posting a GitHub PR review) is on the export menu
+    /// this session — mirrors whether `crate::session::TuiSession::run`
+    /// was given a `PrContext`/submitter port, fixed for the session's
+    /// lifetime (set once via [`Self::with_review_sink_a_available`], never
+    /// by [`Self::handle_key`] itself). Kept on `App` rather than threaded
+    /// as a `handle_key` parameter since `ReviewState::confirm_export`
+    /// needs it and `App` is the only layer that both dispatches keys and
+    /// is told this flag at startup.
+    review_sink_a_available: bool,
 }
 
 impl App {
@@ -376,7 +391,18 @@ impl App {
             jump_forward: Vec::new(),
             status: None,
             should_quit: false,
+            review: ReviewState::default(),
+            review_sink_a_available: false,
         }
+    }
+
+    /// Sets whether sink A (a GitHub PR review) is on the export menu for
+    /// this session — `crate::session::TuiSession::run` calls this once,
+    /// right after [`Self::new`], with whether it was given a `PrContext`/
+    /// submitter port (ADR 0048).
+    pub fn with_review_sink_a_available(mut self, available: bool) -> Self {
+        self.review_sink_a_available = available;
+        self
     }
 
     /// Applies `--entry <path>`'s TUI wiring on top of an already-built
@@ -489,6 +515,24 @@ impl App {
 
     pub fn status(&self) -> Option<&str> {
         self.status.as_deref()
+    }
+
+    /// The review-notes feature's own state (ADR 0048) — see
+    /// [`crate::review::ReviewState`]'s own doc comment.
+    pub fn review(&self) -> &ReviewState {
+        &self.review
+    }
+
+    /// Replaces `App`'s [`ReviewState`] wholesale — used by
+    /// `crate::lib::run_app` for the one review transition that needs data
+    /// (a [`crate::review::SelectionSnapshot`]) `App::handle_key` cannot
+    /// derive itself: opening the compose overlay
+    /// ([`InputKey::NoteCompose`]'s own doc comment on why that key is
+    /// special-cased before dispatch rather than routed through
+    /// `handle_key`).
+    pub fn with_review(mut self, review: ReviewState) -> Self {
+        self.review = review;
+        self
     }
 
     pub fn should_quit(&self) -> bool {

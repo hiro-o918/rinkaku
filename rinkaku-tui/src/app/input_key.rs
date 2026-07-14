@@ -200,4 +200,25 @@ pub enum InputKey {
     /// mode for whichever content the Diff pane already shows, not an
     /// action on the row under the cursor.
     ToggleSplitView,
+    /// `n` on the entry screen (ADR 0048): opens the review-note compose
+    /// overlay over the row under the cursor. Needs a
+    /// [`crate::review::SelectionSnapshot`] derived from `report`/the
+    /// parsed diff hunks, which `App::handle_key` has no access to
+    /// (mirroring [`Self::Source`]'s own "IO/derivation stays outside
+    /// `App`" precedent) — `crate::lib::run_app` special-cases this
+    /// variant before dispatch rather than routing it through
+    /// `App::handle_key` at all, so this variant never reaches that
+    /// method's match.
+    NoteCompose,
+    /// `N`: opens the review-notes list overlay (ADR 0048).
+    NotesList,
+    /// A printable character typed while the compose overlay is open.
+    ComposeChar(char),
+    /// Backspace while the compose overlay is open.
+    ComposeBackspace,
+    /// `d` while the notes list overlay is open: deletes the note under
+    /// the list cursor.
+    NoteDelete,
+    /// `x` while the notes list overlay is open: opens the export menu.
+    NoteExport,
 }

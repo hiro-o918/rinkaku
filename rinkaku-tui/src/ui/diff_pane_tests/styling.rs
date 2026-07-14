@@ -32,6 +32,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -79,6 +80,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -119,6 +121,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -166,6 +169,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -231,6 +235,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");

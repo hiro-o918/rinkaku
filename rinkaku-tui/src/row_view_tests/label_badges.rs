@@ -26,7 +26,13 @@ fn should_color_only_the_number_of_chg_badge_and_leave_label_uncolored() {
         expanded: true,
     };
 
-    let line = entry_row_line(&row, "src", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "src",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("v src chg:299", line_text(&line));
     assert_eq!(Some(Color::Cyan), fg_of_span_with_content(&line, "299"));
@@ -49,7 +55,13 @@ fn should_color_only_the_number_of_fan_in_badge_and_leave_label_uncolored() {
         expanded: true,
     };
 
-    let line = entry_row_line(&row, "src", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "src",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("v src fan-in:1072", line_text(&line));
     assert_eq!(Some(Color::Cyan), fg_of_span_with_content(&line, "1072"));
@@ -75,7 +87,13 @@ fn should_color_only_the_number_of_api_badge_yellow_and_leave_label_uncolored() 
         expanded: true,
     };
 
-    let line = entry_row_line(&row, "src", &HashMap::new(), false);
+    let line = entry_row_line(
+        &row,
+        "src",
+        &HashMap::new(),
+        &crate::note_markers::NoteMarkers::default(),
+        false,
+    );
 
     assert_eq!("v src api:42", line_text(&line));
     assert_eq!(Some(Color::Yellow), fg_of_span_with_content(&line, "42"));

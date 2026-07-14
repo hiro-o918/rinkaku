@@ -36,7 +36,9 @@ pub mod diff_view;
 pub mod help;
 pub mod highlight;
 pub mod nav;
+pub mod note_markers;
 pub mod order;
+pub mod review;
 pub mod row_view;
 mod session;
 pub mod source;
@@ -50,8 +52,23 @@ pub use session::{TuiSession, run};
 
 use app::{App, BlastRadiusSelection, InputKey, Screen};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use review::PrContext;
+use review::ports::{ClipboardSink, ReviewSubmitter};
 use rinkaku_core::render::Report;
 use std::time::Duration;
+
+/// Review-notes export wiring (ADR 0048), assembled once by `main.rs`'s
+/// composition root and threaded through unchanged from
+/// [`crate::session::TuiSession::run`] to [`run_app`]: `pr_context`/
+/// `submitter` are both `Some`/`None` together (sink A's own "absent when
+/// no PR context" rule — [`crate::app::App::with_review_sink_a_available`]'s
+/// own doc comment), `clipboard` is always present since sink B never
+/// depends on a PR.
+pub struct ReviewPorts<'a> {
+    pub pr_context: Option<PrContext>,
+    pub submitter: Option<&'a dyn ReviewSubmitter>,
+    pub clipboard: &'a dyn ClipboardSink,
+}
 
 /// The event loop [`TuiSession::run`] (`crate::session`) drives once it has
 /// taken over the terminal — see [`run`]'s doc comment (re-exported from
@@ -67,8 +84,9 @@ pub(crate) fn run_app(
     entry_path: Option<&str>,
     repo_root: &std::path::Path,
     source_reader: &dyn source::SourceReader,
+    review_ports: ReviewPorts<'_>,
 ) -> std::io::Result<()> {
-    let mut app = App::new(report);
+    let mut app = App::new(report).with_review_sink_a_available(review_ports.pr_context.is_some());
     if let Some(path) = entry_path {
         app = app.with_entry_pivot(path);
     }
@@ -168,6 +186,17 @@ pub(crate) fn run_app(
     // would produce a step that does not match what the reviewer is
     // actually looking at.
     let mut last_help_scroll_viewport_height: Option<usize> = None;
+    // ADR 0048's `NoteMarkers` cache-on-change, mirroring
+    // `blast_radius_selection`/`diff_pane_content`'s own up-front-then-
+    // gated-recompute shape: built once from `App::new`'s initial (empty)
+    // `review` state, then only recomputed when `should_recompute_note_markers`
+    // reports the note set actually changed. `last_note_markers_revision`
+    // starts at `app.review().revision()` itself (0 on a fresh session)
+    // rather than a sentinel, so the first key press that does not touch
+    // `review` correctly skips a redundant recompute of an already-empty
+    // table.
+    let mut note_markers = note_markers::build_note_markers(app.review().notes());
+    let mut last_note_markers_revision = app.review().revision();
 
     loop {
         // `ui::draw`'s return value (`DrawOutcome`, `ui::draw`'s own doc
@@ -186,6 +215,7 @@ pub(crate) fn run_app(
                 &blast_radius_selection,
                 source_content.as_ref(),
                 &diff_hunks,
+                &note_markers,
             );
         })?;
         app = clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll);
@@ -238,7 +268,21 @@ pub(crate) fn run_app(
             // variants, `]c`/`[c`) can all change the scroll offset and this
             // sync applies uniformly to any of them.
             let scroll_before_dispatch = app.right_pane_scroll();
-            if let InputKey::Source = input_key {
+            if let InputKey::NoteCompose = input_key {
+                // ADR 0048: needs a `SelectionSnapshot` derived from
+                // `report`/`diff_hunks`, which `App::handle_key` has no
+                // access to (`InputKey::NoteCompose`'s own doc comment) —
+                // handled here instead, mirroring `InputKey::Source`'s own
+                // "IO/derivation stays outside `App`" precedent just below.
+                // A `None` snapshot (cursor not on a present symbol row, or
+                // on the source screen) leaves `app` untouched — pressing
+                // `n` over a directory/file row is a silent no-op rather
+                // than opening an overlay with nothing to attach a note to.
+                if let Some(snapshot) = derive_selection_snapshot(&app, report, &diff_hunks) {
+                    let review = app.review().clone().begin_compose(snapshot);
+                    app = app.with_review(review);
+                }
+            } else if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id, .. } = app.screen().clone()
                     && should_reload_source_content(
@@ -319,6 +363,24 @@ pub(crate) fn run_app(
                 // `dispatch_non_source_key`'s own doc comment for why this
                 // split exists (ADR 0022's `pending_prefix` regression).
                 app = dispatch_non_source_key(app, report, &diff_pane_content, input_key);
+            }
+
+            // ADR 0048: performs the export this key requested, if any —
+            // the one place `review`'s plain `ExportRequest` data actually
+            // reaches a port (`gh api`/OSC 52), since `review` itself
+            // never calls one. Runs once per handled key, after every
+            // review-state transition above (`begin_compose`/`handle_review_key`)
+            // has already produced the export request via the verdict/
+            // export menu's own confirm step.
+            let mut review = app.review().clone();
+            if let Some(export) = review.take_pending_export() {
+                review = perform_export(review, &review_ports, export);
+                app = app.with_review(review);
+            }
+
+            if should_recompute_note_markers(&app, last_note_markers_revision) {
+                note_markers = note_markers::build_note_markers(app.review().notes());
+                last_note_markers_revision = app.review().revision();
             }
 
             if should_recompute_blast_radius_selection(&app) {
@@ -828,6 +890,20 @@ fn resolve_goto(app: &App, report: &Report, direction: InputKey) -> GotoOutcome 
     }
 }
 
+/// Whether `crate::run_app`'s event loop should recompute [`note_markers::NoteMarkers`]
+/// this key, mirroring `should_recompute_blast_radius_selection`'s/
+/// `should_recompute_diff_pane_content`'s own change-gated-cache contract
+/// (ADR 0048's Rendering boundary decision: this derivation must not run
+/// inside `ui::draw`, since that runs on every ~100ms idle poll tick, not
+/// only on a key press). `true` only when `review`'s note set actually
+/// changed since the last recompute — compares `revision` rather than
+/// gating on screen/pane the way the blast-radius/diff-pane gates do,
+/// since note markers are relevant on every row/pane, not just one right
+/// pane's own active mode.
+fn should_recompute_note_markers(app: &App, last_revision: u64) -> bool {
+    app.review().revision() != last_revision
+}
+
 /// Whether `crate::run_app`'s event loop should recompute the blast-radius
 /// selection this key, rather than keep showing the previously cached one
 /// (this function's own extraction is what makes that decision
@@ -840,6 +916,147 @@ fn resolve_goto(app: &App, report: &Report, direction: InputKey) -> GotoOutcome 
 /// need a wasted recompute on the `d` press that briefly leaves it.
 fn should_recompute_blast_radius_selection(app: &App) -> bool {
     matches!(app.screen(), Screen::Entry) && app.right_pane() == app::RightPane::BlastRadius
+}
+
+/// The summary line posted alongside every GitHub PR review sink A submits
+/// (ADR 0048) — every review is submitted with the same fixed summary,
+/// since the individual notes themselves carry the substantive content as
+/// inline comments; there is no per-session reviewer-authored summary in
+/// v1.
+const REVIEW_SUMMARY: &str = "Review notes posted via rinkaku.";
+
+/// Performs `export` against the matching port in `ports` (ADR 0048's
+/// Output boundary decision: `review` itself never calls a port, only
+/// `crate::lib::run_app` does, once per handled key that produced a
+/// pending export) and folds the result into `review`'s status message.
+///
+/// [`review::ExportRequest::GithubReview`] is only ever produced by
+/// [`review::ReviewState::confirm_verdict`], reachable only through
+/// [`review::ReviewState::confirm_export`]'s own `sink_a_available`-gated
+/// branch (`App::handle_review_key`'s own `ExportMenu` arm passes
+/// `app.review_sink_a_available`) — so `ports.submitter` being `None` here
+/// would mean that gate was bypassed; handled defensively (a status
+/// message, not a panic) rather than trusted blindly, matching this
+/// crate's existing practice of not trusting an invariant across a module
+/// boundary (e.g. `App::jump_to_symbol`'s own doc comment on the same
+/// judgment call).
+fn perform_export(
+    review: review::ReviewState,
+    ports: &ReviewPorts<'_>,
+    export: review::ExportRequest,
+) -> review::ReviewState {
+    match export {
+        review::ExportRequest::GithubReview(verdict) => {
+            let Some(submitter) = ports.submitter else {
+                return review.set_status("error: no PR context available to post a review");
+            };
+            let Some(pr_context) = &ports.pr_context else {
+                return review.set_status("error: no PR context available to post a review");
+            };
+            let comments = review::render_review_comments(review.notes());
+            match submitter.submit_review(pr_context, verdict, REVIEW_SUMMARY, &comments) {
+                Ok(()) => review.set_status(format!(
+                    "posted {} review comment(s) to PR #{}",
+                    comments.len(),
+                    pr_context.number
+                )),
+                Err(message) => review.set_status(format!("error posting review: {message}")),
+            }
+        }
+        review::ExportRequest::Clipboard => {
+            let packet = review::render_agent_packet(review.notes());
+            match ports.clipboard.copy(&packet) {
+                Ok(()) => review.set_status(
+                    "copied review notes to clipboard via OSC 52 (terminal support required)",
+                ),
+                Err(message) => review.set_status(format!("error copying to clipboard: {message}")),
+            }
+        }
+    }
+}
+
+/// Derives a [`review::SelectionSnapshot`] from whatever the tree cursor
+/// currently points at (ADR 0048's Input boundary decision) — the sole
+/// channel by which `review` learns what the reviewer is annotating.
+/// `crate::lib::run_app` calls this when [`InputKey::NoteCompose`] is
+/// pressed, since `App::handle_key` itself has no access to `report`/the
+/// parsed diff hunks (mirroring `InputKey::Source`'s own "IO/derivation
+/// stays outside `App`" precedent).
+///
+/// `None` on [`Screen::Source`] (composing against a source-view line is
+/// out of v1's scope) and on any row that is not a present symbol
+/// (`app::NodeKind::Dir`/`File`/`Section`/`TestGroup`, or a removed
+/// symbol) — v1 only supports symbol-anchored notes (module doc comment on
+/// `crate::review`), matching `App::selected_symbol_id`'s own row-kind
+/// scoping.
+///
+/// The anchor is the first contiguous new-side run where the symbol's own
+/// range intersects a diff hunk touching `path` — GitHub's review API only
+/// accepts inline comments on lines that are part of the PR's diff, so
+/// this is what [`review::render_review_comments`] posts against. `None`
+/// when no hunk intersects the symbol's range at all (e.g. the symbol
+/// itself is unchanged but was pulled into view via dependency
+/// expansion) — the note still gets a location (`range`), just no
+/// GitHub-postable anchor; [`review::render_review_comments`] falls back
+/// to `range` in that case.
+fn derive_selection_snapshot(
+    app: &App,
+    report: &Report,
+    diff_files: &[diff_view::FileHunks],
+) -> Option<review::SelectionSnapshot> {
+    if !matches!(app.screen(), Screen::Entry) {
+        return None;
+    }
+    let symbol_id = app.selected_symbol_id()?;
+    let (path, symbol) = report.files.iter().find_map(|file| {
+        file.symbols
+            .iter()
+            .find(|s| s.id == symbol_id)
+            .map(|s| (file.path.as_str(), s))
+    })?;
+    let range = (symbol.range.start, symbol.range.end);
+    let anchor = diff_view::file_hunks(diff_files, path)
+        .and_then(|file_hunks| first_anchor_run(file_hunks, range));
+
+    Some(review::SelectionSnapshot {
+        path: path.to_string(),
+        symbol_id: Some(symbol.id.clone()),
+        symbol_name: Some(symbol.name.clone()),
+        range: Some(range),
+        anchor,
+        signature: Some(symbol.signature.clone()),
+    })
+}
+
+/// The first contiguous new-side line run where `range` (a symbol's own
+/// 1-based inclusive line range) intersects one of `file_hunks`' hunks —
+/// [`derive_selection_snapshot`]'s own anchor computation, extracted as a
+/// pure function so the "first run" rule is unit-testable in isolation
+/// from `Report`/`App`.
+///
+/// Hunks are walked in file order (already the order `diff_view::parse_diff_hunks`
+/// produces them in) and the *first* intersecting hunk's own clamped
+/// overlap with `range` is returned — not the union of every intersecting
+/// hunk — since ADR 0048 asks for "the first hunk-intersecting contiguous
+/// run", not the full set (a symbol whose range spans several
+/// non-adjacent hunks has no single contiguous GitHub-postable range
+/// anyway; the first run is a deliberately simple v1 choice, not an
+/// attempt at completeness).
+fn first_anchor_run(
+    file_hunks: &diff_view::FileHunks,
+    range: (usize, usize),
+) -> Option<(usize, usize)> {
+    let (range_start, range_end) = range;
+    file_hunks
+        .hunks
+        .iter()
+        .filter_map(|hunk| hunk.new_range)
+        .filter(|&(hunk_start, hunk_end)| hunk_start <= hunk_end)
+        .find_map(|(hunk_start, hunk_end)| {
+            let start = hunk_start.max(range_start);
+            let end = hunk_end.min(range_end);
+            (start <= end).then_some((start, end))
+        })
 }
 
 /// Translates a raw `crossterm` key press into this crate's
@@ -872,6 +1089,36 @@ fn should_recompute_blast_radius_selection(app: &App) -> bool {
 /// (`App::handle_key`'s blanket clear-unless-`PendingGoto` rule) correctly
 /// unwind on any key that is not `d`/`r`.
 fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
+    // The review overlay (ADR 0048) is checked before even the help
+    // overlay: while composing a note, every printable character the
+    // reviewer types (including `?`) must land in the note buffer, not
+    // trigger the help overlay or any other single-key gesture.
+    match app.review().mode() {
+        review::ReviewMode::Compose { .. } => {
+            return match code {
+                KeyCode::Enter => Some(InputKey::PopupConfirm),
+                KeyCode::Esc => Some(InputKey::PopupCancel),
+                KeyCode::Backspace => Some(InputKey::ComposeBackspace),
+                KeyCode::Char(c) => Some(InputKey::ComposeChar(c)),
+                _ => None,
+            };
+        }
+        review::ReviewMode::List { .. }
+        | review::ReviewMode::ExportMenu { .. }
+        | review::ReviewMode::VerdictMenu { .. } => {
+            return match code {
+                KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
+                KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
+                KeyCode::Enter => Some(InputKey::PopupConfirm),
+                KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::PopupCancel),
+                KeyCode::Char('d') => Some(InputKey::NoteDelete),
+                KeyCode::Char('x') => Some(InputKey::NoteExport),
+                _ => None,
+            };
+        }
+        review::ReviewMode::Idle => {}
+    }
+
     if app.help_open() {
         // The overlay's own content can run longer than its box (this
         // feature's whole reason for existing) — `j`/`k`/`Ctrl-d`/`Ctrl-u`/
@@ -1005,6 +1252,15 @@ fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<In
         KeyCode::Char(']') => Some(InputKey::NextHunk),
         KeyCode::Char('[') => Some(InputKey::PrevHunk),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
+        // `n` (ADR 0048): opens the review-note compose overlay over the
+        // row under the cursor. `N`: opens the review-notes list overlay.
+        // Both are only meaningful on the entry screen (Source-screen
+        // rows have no `SelectionSnapshot` to compose against), but
+        // translated context-free here like every other key in this
+        // block — `App::handle_key`'s own `Screen::Source` catch-all arm
+        // already no-ops every non-scroll key there.
+        KeyCode::Char('n') => Some(InputKey::NoteCompose),
+        KeyCode::Char('N') => Some(InputKey::NotesList),
         // `g` (ADR 0022): the first half of the `gd`/`gr` two-key sequence.
         // Checked after the `pending_prefix` resolution above so a second
         // `g` press (`gg`, not a bound sequence today) simply restarts the

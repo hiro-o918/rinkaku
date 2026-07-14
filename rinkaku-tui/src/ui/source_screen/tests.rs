@@ -118,6 +118,7 @@ fn should_draw_source_screen_title_and_error_message_when_file_is_missing() {
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -160,6 +161,7 @@ fn should_wrap_source_error_message_instead_of_truncating_it_in_a_narrow_pane() 
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -230,6 +232,7 @@ fn should_apply_keyword_foreground_and_symbol_range_background_in_source_screen(
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -302,6 +305,7 @@ fn should_fall_back_to_plain_source_style_when_file_extension_is_unrecognized() 
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -355,6 +359,7 @@ fn should_report_none_clamped_scroll_but_source_viewport_height_when_source_scre
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");
@@ -407,6 +412,7 @@ fn draw_source_screen_for_test(
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 diff_hunks,
+                &crate::note_markers::NoteMarkers::default(),
             );
         })
         .expect("draw");

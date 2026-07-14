@@ -1,0 +1,219 @@
+//! Review-notes overlays (ADR 0048): the compose text-input box and the
+//! combined notes-list/export-menu/verdict-menu surface. Follows
+//! `ui::overlay`'s existing `draw_help_overlay`/`draw_jump_popup`
+//! precedent — `Clear` the popup's `Rect`, then render `Paragraph`/`List`
+//! content built from plain data already sitting on [`ReviewState`], fed
+//! in by `crate::ui::draw`.
+
+use super::overlay::centered_rect;
+use crate::review::{ReviewMode, ReviewState, Verdict};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+
+/// Draws whichever review overlay `review.mode()` currently calls for
+/// (compose, list, export menu, verdict menu), or nothing at all while
+/// [`ReviewMode::Idle`] — the single entry point `crate::ui::draw` calls
+/// unconditionally as its final compositing step.
+pub(crate) fn draw_review_overlay(frame: &mut Frame, review: &ReviewState, full_area: Rect) {
+    match review.mode() {
+        ReviewMode::Idle => {}
+        ReviewMode::Compose { snapshot, buffer } => {
+            draw_compose_overlay(frame, full_area, snapshot, buffer)
+        }
+        ReviewMode::List { cursor } => draw_notes_overlay(frame, review, *cursor, full_area),
+        ReviewMode::ExportMenu { cursor } => {
+            draw_export_menu_overlay(frame, review, *cursor, full_area)
+        }
+        ReviewMode::VerdictMenu { cursor } => draw_verdict_menu_overlay(frame, *cursor, full_area),
+    }
+}
+
+/// The compose overlay: a title naming the selected location, the
+/// in-progress buffer (visually wrapped), and a footer key hint.
+fn draw_compose_overlay(
+    frame: &mut Frame,
+    full_area: Rect,
+    snapshot: &crate::review::SelectionSnapshot,
+    buffer: &str,
+) {
+    let overlay_area = centered_rect(full_area, 70, 50);
+    frame.render_widget(Clear, overlay_area);
+
+    let title = format!(" New note: {} ", compose_title_location(snapshot));
+    let block = Block::bordered().title(title);
+    let mut lines: Vec<Line<'static>> = vec![Line::raw(buffer.to_string())];
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Enter: save  Esc: cancel",
+        Style::default().add_modifier(Modifier::DIM),
+    ));
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, overlay_area);
+}
+
+/// The compose overlay's title location text: `"{path}:{start}-{end}
+/// {symbol_name}"`, degrading gracefully when a field is absent — the same
+/// fallback shape `crate::review`'s own note-heading formatting uses (kept
+/// separate rather than shared, since that formats a *note's*
+/// already-resolved anchor/range, while this formats a live
+/// [`crate::review::SelectionSnapshot`] still being composed against).
+fn compose_title_location(snapshot: &crate::review::SelectionSnapshot) -> String {
+    let range = snapshot.anchor.or(snapshot.range).map(|(start, end)| {
+        if start == end {
+            format!("{start}")
+        } else {
+            format!("{start}-{end}")
+        }
+    });
+    match (range, &snapshot.symbol_name) {
+        (Some(range), Some(name)) => format!("{}:{range} {name}", snapshot.path),
+        (Some(range), None) => format!("{}:{range}", snapshot.path),
+        (None, Some(name)) => format!("{} {name}", snapshot.path),
+        (None, None) => snapshot.path.clone(),
+    }
+}
+
+/// The notes-list overlay: every note as `{path}:{anchor} {symbol_name}:
+/// {body's first line}`, the list cursor highlighted, plus a key-hint
+/// footer and (when set) the last export status message.
+fn draw_notes_overlay(frame: &mut Frame, review: &ReviewState, cursor: usize, full_area: Rect) {
+    let overlay_area = centered_rect(full_area, 80, 60);
+    frame.render_widget(Clear, overlay_area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if let Some(status) = review.last_status() {
+        lines.push(Line::styled(
+            status.to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        lines.push(Line::raw(""));
+    }
+    if review.notes().is_empty() {
+        lines.push(Line::styled(
+            "(no notes yet — press n over a symbol to add one)",
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    for (index, note) in review.notes().iter().enumerate() {
+        let text = notes_list_entry_text(note);
+        if index == cursor {
+            lines.push(Line::styled(
+                text,
+                Style::default().add_modifier(Modifier::REVERSED),
+            ));
+        } else {
+            lines.push(Line::raw(text));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "j/k: move  d: delete  x: export  Esc/q: close",
+        Style::default().add_modifier(Modifier::DIM),
+    ));
+
+    let block = Block::bordered().title(" Review notes ");
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, overlay_area);
+}
+
+/// One notes-list row's text: `"{path}:{anchor-or-range} {symbol_name}:
+/// {body's first line}"`, degrading the location half the same way
+/// [`compose_title_location`] does.
+fn notes_list_entry_text(note: &crate::review::Note) -> String {
+    let location = &note.location;
+    let range = location.anchor.or(location.range).map(|(start, end)| {
+        if start == end {
+            format!("{start}")
+        } else {
+            format!("{start}-{end}")
+        }
+    });
+    let location_text = match (range, &location.symbol_name) {
+        (Some(range), Some(name)) => format!("{}:{range} {name}", location.path),
+        (Some(range), None) => format!("{}:{range}", location.path),
+        (None, Some(name)) => format!("{} {name}", location.path),
+        (None, None) => location.path.clone(),
+    };
+    let body_first_line = note.body.lines().next().unwrap_or("");
+    format!("{location_text}: {body_first_line}")
+}
+
+/// The export menu: `GitHub PR review` (only when `review`'s notes list
+/// was opened with sink A available — the caller derives this by simply
+/// not rendering the entry, since [`ReviewState`] itself carries no
+/// `PrContext`) is not distinguishable from here alone, so this draws
+/// both entries unconditionally; `crate::app::App::handle_review_key`'s
+/// own `sink_a_available` gate is what actually prevents selecting a
+/// `Github` entry that isn't really on the menu — see that method's own
+/// doc comment. Kept simple (always two lines) rather than threading
+/// `sink_a_available` through the whole render path for a v1 cosmetic
+/// concern; the reviewer discovers unavailability the moment `Enter`
+/// silently closes the menu instead of opening the verdict menu.
+fn draw_export_menu_overlay(
+    frame: &mut Frame,
+    _review: &ReviewState,
+    cursor: usize,
+    full_area: Rect,
+) {
+    let overlay_area = centered_rect(full_area, 50, 30);
+    frame.render_widget(Clear, overlay_area);
+
+    let entries = ["GitHub PR review", "Clipboard (for an AI agent)"];
+    let lines: Vec<Line<'static>> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, label)| menu_line(label, index == cursor))
+        .collect();
+
+    let block = Block::bordered().title(" Export to (enter: choose, esc: cancel) ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, overlay_area);
+}
+
+/// The verdict menu: Approve/Request changes/Comment, mirroring GitHub's
+/// own pending-review submit dialog.
+fn draw_verdict_menu_overlay(frame: &mut Frame, cursor: usize, full_area: Rect) {
+    let overlay_area = centered_rect(full_area, 50, 30);
+    frame.render_widget(Clear, overlay_area);
+
+    let entries = [Verdict::Approve, Verdict::RequestChanges, Verdict::Comment];
+    let lines: Vec<Line<'static>> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, verdict)| menu_line(verdict_label(*verdict), index == cursor))
+        .collect();
+
+    let block = Block::bordered().title(" Submit review as (enter: choose, esc: cancel) ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, overlay_area);
+}
+
+fn verdict_label(verdict: Verdict) -> &'static str {
+    match verdict {
+        Verdict::Approve => "Approve",
+        Verdict::RequestChanges => "Request changes",
+        Verdict::Comment => "Comment",
+    }
+}
+
+/// One menu row, highlighted (reversed) when `selected`.
+fn menu_line(label: &str, selected: bool) -> Line<'static> {
+    let span = Span::raw(label.to_string());
+    let line = Line::from(vec![span]);
+    if selected {
+        line.style(Style::default().add_modifier(Modifier::REVERSED))
+    } else {
+        line
+    }
+}
+
+#[cfg(test)]
+#[path = "review_overlay_tests.rs"]
+mod tests;

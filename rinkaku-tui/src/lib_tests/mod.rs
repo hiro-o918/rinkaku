@@ -27,6 +27,7 @@ use rinkaku_core::render::Report;
 mod diff_scroll_sync;
 mod goto_dispatch;
 mod hunk_jump;
+mod note_snapshot;
 mod recompute_and_reload;
 mod scroll_clamp;
 mod translate_key;
