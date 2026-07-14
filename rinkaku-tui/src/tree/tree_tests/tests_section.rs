@@ -390,6 +390,151 @@ fn should_append_test_group_last_when_every_test_symbol_trails_every_production_
 }
 
 #[test]
+fn should_not_let_a_removed_symbol_be_mistaken_for_a_later_production_symbol() {
+    // ADR 0045 regression: a removed symbol carries no line of its own
+    // (`RemovedSymbol` has no `range`), so it must never be treated as
+    // "positioned after the test block" — TestGroup still appends last,
+    // the removed symbol keeps its own insertion-order position ahead of it.
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/mixed.rs".to_string(),
+            symbols: vec![
+                ExtractedSymbol {
+                    range: LineRange { start: 1, end: 5 },
+                    ..symbol("src/mixed.rs::real_fn", "real_fn", SymbolKind::Function)
+                },
+                ExtractedSymbol {
+                    range: LineRange { start: 10, end: 15 },
+                    is_test: true,
+                    ..symbol("src/mixed.rs::test_it", "test_it", SymbolKind::Function)
+                },
+            ],
+        }],
+        removed: vec![RemovedSymbol {
+            name: "removed_fn".to_string(),
+            kind: SymbolKind::Function,
+            path: "src/mixed.rs".to_string(),
+            signature: "fn removed_fn()".to_string(),
+        }],
+        ..empty_report()
+    };
+
+    let badges = Badges {
+        changed_symbols: 2,
+        contract_changes: 1,
+        fan_in: 0,
+        ..Badges::default()
+    };
+    let expected = Tree {
+        roots: vec![dir_wrapping(
+            "src",
+            badges,
+            vec![TreeNode {
+                kind: NodeKind::File,
+                path: "src/mixed.rs".to_string(),
+                badges,
+                children: vec![
+                    symbol_leaf("src/mixed.rs", "real_fn"),
+                    TreeNode {
+                        kind: NodeKind::Symbol(SymbolRef {
+                            id: "src/mixed.rs::removed_fn".to_string(),
+                            name: "removed_fn".to_string(),
+                            kind: SymbolKind::Function,
+                            classification: None,
+                            removed: true,
+                            is_test: false,
+                        }),
+                        path: "src/mixed.rs".to_string(),
+                        badges: Badges {
+                            changed_symbols: 0,
+                            contract_changes: 1,
+                            fan_in: 0,
+                            ..Badges::default()
+                        },
+                        children: vec![],
+                        skip_reason: None,
+                        test_symbol_count: None,
+                    },
+                    TreeNode {
+                        kind: NodeKind::TestGroup { count: 1 },
+                        path: "src/mixed.rs::tests".to_string(),
+                        badges: one_symbol_badges(),
+                        children: vec![TreeNode {
+                            kind: NodeKind::Symbol(SymbolRef {
+                                is_test: true,
+                                ..symbol_ref("src/mixed.rs::test_it", "test_it")
+                            }),
+                            path: "src/mixed.rs".to_string(),
+                            badges: one_symbol_badges(),
+                            children: vec![],
+                            skip_reason: None,
+                            test_symbol_count: None,
+                        }],
+                        skip_reason: None,
+                        test_symbol_count: None,
+                    },
+                ],
+                skip_reason: None,
+                test_symbol_count: None,
+            }],
+        )],
+    };
+    let actual = build_tree(&report);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_break_ties_toward_production_when_a_test_symbol_shares_its_start_line() {
+    // Strict `>` comparison: a production symbol sharing the test block's
+    // exact start line is not treated as "after" it, so it stays before
+    // TestGroup in the fixed insertion-order tie case.
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/mixed.rs".to_string(),
+            symbols: vec![
+                ExtractedSymbol {
+                    range: LineRange { start: 10, end: 15 },
+                    ..symbol(
+                        "src/mixed.rs::same_line_fn",
+                        "same_line_fn",
+                        SymbolKind::Function,
+                    )
+                },
+                ExtractedSymbol {
+                    range: LineRange { start: 10, end: 15 },
+                    is_test: true,
+                    ..symbol("src/mixed.rs::test_it", "test_it", SymbolKind::Function)
+                },
+            ],
+        }],
+        ..empty_report()
+    };
+
+    let tree = build_tree(&report);
+    let src = &tree.roots[0];
+    let file = &src.children[0];
+    let child_kinds: Vec<&str> = file
+        .children
+        .iter()
+        .map(|child| match &child.kind {
+            NodeKind::Symbol(symbol_ref) => symbol_ref.name.as_str(),
+            NodeKind::TestGroup { .. } => "TestGroup",
+            _ => "other",
+        })
+        .collect();
+
+    // NOTE: partial assert (child kind sequence only) — the full node
+    // shape for a single production symbol plus a one-member TestGroup is
+    // already pinned by
+    // `should_append_test_group_last_when_every_test_symbol_trails_every_production_symbol`;
+    // this test's only concern is the tie-break order itself.
+    assert_eq!(vec!["same_line_fn", "TestGroup"], child_kinds);
+}
+
+#[test]
 fn should_group_scattered_test_symbols_at_the_earliest_ones_line() {
     // Multiple, non-contiguous test symbols still fold into one
     // TestGroup (ADR 0045 rejected per-block splitting) positioned at

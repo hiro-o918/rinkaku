@@ -365,8 +365,9 @@ struct FileBuilder {
     /// Each symbol alongside its new-side `ExtractedSymbol::range.start`,
     /// kept only long enough for `build_file_node` to place a `TestGroup`
     /// child at its source position (ADR 0045) — `SymbolRef` itself carries
-    /// no line number.
-    symbols: Vec<(SymbolRef, usize)>,
+    /// no line number. `None` for a removed symbol (`insert_removed`), which
+    /// has no range to report and must not participate in that placement.
+    symbols: Vec<(SymbolRef, Option<usize>)>,
     /// Set by `insert_skipped` — see `TreeNode::skip_reason`'s doc comment.
     skip_reason: Option<SkipReason>,
     /// Set by `insert_test_file` — see `TreeNode::test_symbol_count`'s doc
@@ -422,7 +423,7 @@ impl<'a> TreeBuilder<'a> {
                     removed: false,
                     is_test: symbol.is_test,
                 },
-                symbol.range.start,
+                Some(symbol.range.start),
             ));
         }
     }
@@ -441,10 +442,7 @@ impl<'a> TreeBuilder<'a> {
                 // `SymbolRef::is_test`'s doc comment.
                 is_test: false,
             },
-            // No range to report; harmless since a removed symbol is never
-            // `is_test` (`SymbolRef::is_test`'s doc comment), so it never
-            // enters the comparison this line feeds (ADR 0045).
-            usize::MAX,
+            None,
         ));
     }
 
@@ -712,16 +710,23 @@ fn build_file_node(
 /// `#[cfg(test)] mod tests` block" case. `test_symbols` empty returns 0
 /// (unused by the caller in that case, since `build_test_group_node` returns
 /// `None` for an empty list and no insertion happens at all).
+///
+/// A `None` line (a removed symbol, which is never `is_test` so it can only
+/// appear in `production_symbols`) is excluded from the position search
+/// entirely rather than treated as "after every test symbol" — otherwise a
+/// removed symbol trailing a test block would itself be mistaken for the
+/// first later-positioned production symbol and get the group inserted
+/// ahead of it.
 fn test_group_insert_index(
-    test_symbols: &[(SymbolRef, usize)],
-    production_symbols: &[(SymbolRef, usize)],
+    test_symbols: &[(SymbolRef, Option<usize>)],
+    production_symbols: &[(SymbolRef, Option<usize>)],
 ) -> usize {
-    let Some(earliest_test_line) = test_symbols.iter().map(|(_, line)| *line).min() else {
+    let Some(earliest_test_line) = test_symbols.iter().filter_map(|(_, line)| *line).min() else {
         return 0;
     };
     production_symbols
         .iter()
-        .position(|(_, line)| *line > earliest_test_line)
+        .position(|(_, line)| matches!(line, Some(line) if *line > earliest_test_line))
         .unwrap_or(production_symbols.len())
 }
 
