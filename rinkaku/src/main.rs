@@ -40,6 +40,7 @@
 //!   may not line up with the actual file content.
 
 mod cli;
+mod clipboard;
 mod display;
 mod generated_paths;
 mod git;
@@ -57,6 +58,7 @@ mod test_util;
 
 use clap::Parser;
 use cli::{Cli, Command};
+use clipboard::Osc52Clipboard;
 use display::{DisplayMode, resolve_display_mode};
 use generated_paths::check_generated_paths_batch;
 use git::commands::{list_repo_files_for_outline, resolve_repo_root};
@@ -64,8 +66,10 @@ use git::file_read::read_working_tree_file;
 use github::base_sha::{
     fetch_branch_head, fetch_oid, fetch_pr_head, object_exists_locally, resolve_pr_base_sha,
 };
-use github::pr_arg::parse_pr_arg;
+use github::pr_arg::{PrArg, parse_pr_arg};
 use github::pr_info::fetch_pr_info;
+use github::remote::{git_remote_origin_url, parse_github_remote};
+use github::review::GhReviewSubmitter;
 use github::workdir::resolve_pr_workdir;
 use log_writer::DeferredLogSink;
 use notes::{
@@ -77,6 +81,7 @@ use pipeline::{
 use progress::AnalysisProgress;
 use rinkaku_core::render::{Report, render};
 use rinkaku_tui::TuiSession;
+use rinkaku_tui::review::PrContext;
 use spinner::{AnalysisPhase, Spinner};
 use splash_progress::SplashProgress;
 use std::io::IsTerminal;
@@ -169,10 +174,11 @@ fn main() -> anyhow::Result<()> {
                     analyzed.diff_text,
                     analyzed.resolved_workdir,
                     analyzed.pr_head_sha,
+                    analyzed.pr_context,
                 )
             });
             let (session, buffered_notes) = progress.into_session_and_notes();
-            let (report, diff_text, resolved_workdir, pr_head_sha) = match outcome {
+            let (report, diff_text, resolved_workdir, pr_head_sha, pr_context) = match outcome {
                 Ok(analyzed) => analyzed,
                 Err(err) => {
                     // `session` (and with it, `TuiSession`'s `Drop` impl)
@@ -213,6 +219,18 @@ fn main() -> anyhow::Result<()> {
                 Some(reader) => reader,
                 None => &rinkaku_tui::source::WorkingTreeSourceReader,
             };
+            // ADR 0048: sink A (GitHub PR review) is wired up only when
+            // `pr_context` resolved; sink B (clipboard) is always
+            // available. `GhReviewSubmitter`/`Osc52Clipboard` are the
+            // composition root's only concrete port implementations —
+            // `rinkaku-tui` depends on the `ReviewSubmitter`/`ClipboardSink`
+            // trait definitions alone.
+            let submitter = pr_context.is_some().then_some(&GhReviewSubmitter as _);
+            let review_ports = rinkaku_tui::ReviewPorts {
+                pr_context,
+                submitter,
+                clipboard: &Osc52Clipboard,
+            };
             let result = session
                 .run(
                     &report,
@@ -220,6 +238,7 @@ fn main() -> anyhow::Result<()> {
                     cli.entry.as_deref(),
                     &repo_root,
                     source_reader,
+                    review_ports,
                 )
                 .map_err(anyhow::Error::from);
             // Flushed after `TuiSession::run` has already restored the
@@ -312,6 +331,12 @@ struct AnalyzedReport {
     diff_text: String,
     resolved_workdir: Option<PathBuf>,
     pr_head_sha: Option<String>,
+    /// The PR's identity, for `--tui`'s review-notes sink A (ADR 0048) —
+    /// `Some` only in `--pr` mode, and only when owner/repo could be
+    /// resolved (see [`resolve_pr_context`]'s own doc comment on why that
+    /// resolution can fail even in `--pr` mode without failing the whole
+    /// run). `None` for every other input mode.
+    pr_context: Option<PrContext>,
 }
 
 /// Runs the same `--pr`/`--base`/stdin/whole-repo input-mode chain
@@ -340,7 +365,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
     // input mode, the same way `resolved_workdir` above already carries
     // out `--pr`'s resolved clone directory.
     let mut pr_head_sha: Option<String> = None;
-    let (report, diff_text) = if let Some(pr_arg) = &cli.pr {
+    let (report, diff_text, pr_context) = if let Some(pr_arg) = &cli.pr {
         // Validate the arg and derive the fetch refspec's PR number, but
         // pass the original (trimmed) value — not the parsed number — to
         // `gh pr view` (see that function's doc comment for why).
@@ -391,9 +416,17 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
                 base_branch = pr_info.base_ref_name,
             ));
         }
-        run_base_pipeline(cli, &base_sha, &head_sha, cwd, progress)?
+        let (report, diff_text) = run_base_pipeline(cli, &base_sha, &head_sha, cwd, progress)?;
+        // ADR 0048: `PrContext` for `--tui`'s review-notes sink A, `None`
+        // when owner/repo can't be resolved (`resolve_pr_context`'s own
+        // doc comment on why that is a soft failure, not a hard error —
+        // the analysis above has already succeeded by this point, and
+        // losing sink A is strictly less bad than losing the whole run).
+        let pr_context = resolve_pr_context(&parsed, cwd, number, head_sha);
+        (report, diff_text, pr_context)
     } else if let Some(base) = &cli.base {
-        run_base_pipeline(cli, base, &cli.head, None, progress)?
+        let (report, diff_text) = run_base_pipeline(cli, base, &cli.head, None, progress)?;
+        (report, diff_text, None)
     } else if std::io::stdin().is_terminal() {
         // ADR 0017: this is the third arm of an `if let Some(pr) ... else if
         // let Some(base) ... else if <here>` chain, so reaching it already
@@ -447,7 +480,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         if let Some(note) = repo_outline_empty_note(&report) {
             progress.note(note.to_string());
         }
-        (report, String::new())
+        (report, String::new(), None)
     } else {
         let diff_text = read_stdin_diff()?;
         if diff_text.trim().is_empty() {
@@ -493,7 +526,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         if let Some(note) = garbage_input_note(&diff_text, &report) {
             progress.note(note.to_string());
         }
-        (report, diff_text)
+        (report, diff_text, None)
     };
 
     Ok(AnalyzedReport {
@@ -501,6 +534,44 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         diff_text,
         resolved_workdir,
         pr_head_sha,
+        pr_context,
+    })
+}
+
+/// Resolves a [`PrContext`] for `--tui`'s review-notes sink A (ADR 0048),
+/// given the already-validated `parsed` PR arg, the `cwd` `--pr` mode
+/// resolved (`resolve_pr_workdir`'s own doc comment), the PR `number`, and
+/// its `head_sha` (already fetched and verified against `gh`'s own report
+/// by this function's only caller). Owner/repo come straight off `parsed`
+/// for [`PrArg::Url`]; for [`PrArg::Number`] (no repository information of
+/// its own) they are resolved the same way `--pr` URL mode itself decides
+/// which clone to use — `git remote get-url origin` in `cwd`, parsed via
+/// [`parse_github_remote`].
+///
+/// `None` (rather than a hard error) when owner/repo cannot be resolved —
+/// a bare `--pr <number>` run inside a clone whose `origin` isn't a GitHub
+/// remote at all (or has none) can still analyze and render/render-TUI
+/// successfully; only sink A (posting a GitHub PR review) needs this, and
+/// losing just that sink is strictly better than failing the whole run
+/// over a feature the reviewer may not even reach.
+fn resolve_pr_context(
+    parsed: &PrArg,
+    cwd: Option<&std::path::Path>,
+    number: u64,
+    head_sha: String,
+) -> Option<PrContext> {
+    let (owner, repo) = match parsed {
+        PrArg::Url { owner, repo, .. } => (owner.clone(), repo.clone()),
+        PrArg::Number(_) => {
+            let origin = git_remote_origin_url(cwd).ok().flatten()?;
+            parse_github_remote(&origin)?
+        }
+    };
+    Some(PrContext {
+        owner,
+        repo,
+        number,
+        head_sha,
     })
 }
 
