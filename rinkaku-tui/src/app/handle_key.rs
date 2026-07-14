@@ -266,6 +266,19 @@ impl App {
                 | InputKey::ScrollToTop
                 | InputKey::ScrollToBottom,
             ) => {}
+            // ADR 0049: `v`/`V` is a genuinely global toggle, not scoped to
+            // `Screen::Entry`'s diff pane — it flips the same
+            // `diff_view_mode` field `Screen::Entry`'s own arm flips below,
+            // so toggling here and returning to the entry view keeps
+            // showing whichever mode was last chosen either place. Must
+            // come before the catch-all arm just below, which would
+            // otherwise swallow this key as a silent no-op.
+            (Screen::Source { .. }, _, InputKey::ToggleSplitView) => {
+                self.diff_view_mode = match self.diff_view_mode {
+                    DiffViewMode::Unified => DiffViewMode::Split,
+                    DiffViewMode::Split => DiffViewMode::Unified,
+                };
+            }
             // Every other key is a no-op while the source view is open —
             // navigation/reordering only make sense against the entry
             // view's tree, and re-dispatching them would silently move

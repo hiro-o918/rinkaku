@@ -1,13 +1,17 @@
 //! Source drill-down screen (ADR 0026 for the reviewer-driven scroll,
 //! ADR 0018/0020 for the shared "token foreground + line-level background
 //! tint" composition with the diff pane, ADR 0046 for the diff overlay
-//! composited on top of that).
+//! composited on top of that, ADR 0049 for the split (side-by-side)
+//! rendering of that overlay).
 
-use super::diff_pane::{ADDED_BG, REMOVED_BG, marker_span};
+use super::diff_pane::{ADDED_BG, MIN_SPLIT_VIEW_WIDTH, REMOVED_BG, marker_span};
+use super::scroll::{Body, render_scrollable_pane};
 use super::style::{gap_span, pane_border_style, styled_content_spans};
+use crate::app::DiffViewMode;
 use crate::diff_view::{DiffLineKind, FileHunks};
 use crate::source::{HighlightedSourceView, SourceView};
 use crate::source_diff::{OverlayRow, overlay_source_lines, rows_in_source_range};
+use crate::source_split::{SourceSplitRow, SourceSplitRowKind, split_source_rows};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -15,7 +19,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Wrap};
 
 #[cfg(test)]
-#[path = "source_screen/tests.rs"]
+#[path = "source_screen_tests/mod.rs"]
 mod tests;
 
 /// Background tint for a source-screen line inside the drilled-into symbol's
@@ -61,12 +65,23 @@ pub(crate) const SOURCE_HIGHLIGHT_BG: Color = Color::DarkGray;
 /// (`crate::source_diff::overlay_source_lines`), unless the file has
 /// drifted from the diff on disk, in which case the pane falls back to its
 /// plain rendering with a one-line note in the title (ADR 0046 decision 5).
+///
+/// `diff_view_mode` (ADR 0049) is the same `App::diff_view_mode` the diff
+/// pane reads: `Split` renders the overlay side-by-side (old left, new
+/// right) via [`split_source_rows`], falling back to this function's
+/// unified rendering — with its own title note — whenever `area`'s width
+/// is below [`MIN_SPLIT_VIEW_WIDTH`] (the diff pane's own narrow-terminal
+/// threshold, ADR 0044 decision 7, reused rather than a second constant)
+/// or `split_source_rows` itself returns `None` (the same drift that
+/// disables the unified overlay disables reconstructing an old side to
+/// split against, ADR 0049 decision 6).
 pub(crate) fn draw_source_screen(
     frame: &mut Frame,
     symbol_id: &str,
     scroll_top: usize,
     source_content: Option<&Result<HighlightedSourceView, String>>,
     diff_hunks: &[FileHunks],
+    diff_view_mode: DiffViewMode,
     area: Rect,
 ) {
     let highlighted = match source_content {
@@ -102,33 +117,62 @@ pub(crate) fn draw_source_screen(
 
     let file_hunks = crate::diff_view::file_hunks(diff_hunks, &source.path);
     let overlay = file_hunks.and_then(|file_hunks| overlay_source_lines(&source.lines, file_hunks));
-    let title = if file_hunks.is_some() && overlay.is_none() {
+
+    let split_requested = diff_view_mode == DiffViewMode::Split;
+    let split_fits = area.width >= MIN_SPLIT_VIEW_WIDTH;
+    let split_rows = if split_requested && split_fits {
+        file_hunks.and_then(|file_hunks| split_source_rows(&source.lines, file_hunks))
+    } else {
+        None
+    };
+
+    let mut title = if file_hunks.is_some() && overlay.is_none() {
         format!(
             " Source: {symbol_id} (diff overlay unavailable — file on disk doesn't match the diff) "
         )
     } else {
         format!(" Source: {symbol_id} ")
     };
+    if split_requested && !split_fits {
+        title = format!("{} (split view needs a wider pane) ", title.trim_end());
+    }
     // Always drawn as focused: this screen replaces the whole entry view
     // (tree + right pane) while open, so there is no sibling pane it needs
     // to be visually distinguished from (`render_scrollable_pane`'s own doc
     // comment makes the same call for the `?` help overlay).
-    let block = Block::bordered()
-        .title(title)
-        .border_style(pane_border_style(true));
 
-    let viewport_height = area.height.saturating_sub(2) as usize; // borders
-    let (start, end) = clamped_window(source.lines.len(), scroll_top, viewport_height);
+    match split_rows {
+        Some(split_rows) => {
+            let (left, right) = source_split_lines(&highlighted.token_highlights, &split_rows);
+            render_scrollable_pane(
+                frame,
+                &title,
+                &[],
+                Body::Split(&left, &right),
+                scroll_top,
+                area,
+                true,
+            );
+        }
+        None => {
+            let block = Block::bordered()
+                .title(title)
+                .border_style(pane_border_style(true));
 
-    let lines = source_lines(
-        source,
-        &highlighted.token_highlights,
-        overlay.as_deref(),
-        start,
-        end,
-    );
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+            let viewport_height = area.height.saturating_sub(2) as usize; // borders
+            let (start, end) = clamped_window(source.lines.len(), scroll_top, viewport_height);
+
+            let lines = source_lines(
+                source,
+                &highlighted.token_highlights,
+                overlay.as_deref(),
+                start,
+                end,
+            );
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+    }
 }
 
 /// Clamps a reviewer-requested `scroll_top` (ADR 0026) against a file of
@@ -271,4 +315,79 @@ fn removed_line(content: &str) -> Line<'static> {
         gap_span("| ", bg),
         gap_span(content, bg),
     ])
+}
+
+/// Builds the `(left, right)` column lines for the source view's split
+/// (side-by-side) diff overlay (ADR 0049) from `split_rows`
+/// (`crate::source_split::split_source_rows`'s output). Each
+/// [`SourceSplitRow`] becomes one line on each side — a `None` cell renders
+/// as a blank filler line, matching the diff pane's own split-view filler
+/// convention (`crate::ui::diff_pane::split_side_line`).
+fn source_split_lines(
+    token_highlights: &[crate::highlight::LineHighlight],
+    split_rows: &[SourceSplitRow],
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let mut left = Vec::with_capacity(split_rows.len());
+    let mut right = Vec::with_capacity(split_rows.len());
+    for row in split_rows {
+        let (left_bg, right_bg) = match row.kind {
+            SourceSplitRowKind::Unchanged => (None, None),
+            SourceSplitRowKind::Changed => (Some(REMOVED_BG), Some(ADDED_BG)),
+            SourceSplitRowKind::Filler => (None, None),
+        };
+        left.push(source_split_side_line(
+            row.left.as_ref(),
+            DiffLineKind::Removed,
+            left_bg,
+            None,
+        ));
+        right.push(source_split_side_line(
+            row.right.as_ref(),
+            DiffLineKind::Added,
+            right_bg,
+            (row.kind == SourceSplitRowKind::Unchanged).then_some(token_highlights),
+        ));
+    }
+    (left, right)
+}
+
+/// One [`SourceSplitRow`] side's rendered [`Line`] — a blank line for a
+/// `None` cell (a filler row, or a one-sided insertion/deletion), else a
+/// `{line_number:>5} | ` gutter (matching [`unchanged_line`]'s own gutter
+/// width) plus content. `token_highlights` is `Some` only for an
+/// `Unchanged` row's new-side cell — the one case where the rendered text
+/// is guaranteed identical to a line `crate::highlight::highlight_source_lines`
+/// already parsed and its 0-based `line_number - 1` index into it is
+/// valid; every other cell (a `Changed` row's old/new text, or an
+/// `Unchanged` row's mirrored old-side cell, which has no highlight data
+/// of its own — the unified overlay's [`removed_line`] makes the same call
+/// for old-side-only text) renders as plain gap-styled text plus `bg`.
+fn source_split_side_line(
+    cell: Option<&crate::source_split::SourceSplitLine>,
+    marker_kind: DiffLineKind,
+    bg: Option<Color>,
+    token_highlights: Option<&[crate::highlight::LineHighlight]>,
+) -> Line<'static> {
+    let Some(cell) = cell else {
+        return Line::raw("");
+    };
+
+    let marker = bg.is_some();
+    let mut spans = vec![gap_span(&format!("{:>5}", cell.line_number), bg)];
+    spans.push(if marker {
+        marker_span(marker_kind, bg)
+    } else {
+        gap_span(" ", bg)
+    });
+    spans.push(gap_span("| ", bg));
+    match token_highlights.and_then(|token_highlights| {
+        token_highlights
+            .get(cell.line_number - 1)
+            .cloned()
+            .flatten()
+    }) {
+        Some(token_spans) => spans.extend(styled_content_spans(&cell.content, &token_spans, bg)),
+        None => spans.push(gap_span(&cell.content, bg)),
+    }
+    Line::from(spans)
 }

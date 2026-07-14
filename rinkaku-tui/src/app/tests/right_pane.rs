@@ -145,7 +145,12 @@ fn should_preserve_diff_view_mode_when_cursor_moves_to_a_different_row() {
 }
 
 #[test]
-fn should_ignore_toggle_split_view_while_source_screen_is_open() {
+fn should_toggle_diff_view_mode_while_source_screen_is_open() {
+    // ADR 0049: `v`/`V` is a genuinely global toggle, not scoped to
+    // `Screen::Entry`'s diff pane — it flips the same shared
+    // `diff_view_mode` field while `Screen::Source` is open, and the
+    // screen itself is left untouched (unlike the fully no-op keys the
+    // catch-all arm below this one swallows).
     let report = report_with_one_symbol();
     let app = App::new(&report)
         .handle_key(InputKey::Down)
@@ -154,7 +159,7 @@ fn should_ignore_toggle_split_view_while_source_screen_is_open() {
 
     let app = app.handle_key(InputKey::ToggleSplitView);
 
-    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
     assert_eq!(
         Screen::Source {
             symbol_id: "lib.rs::foo".to_string(),
