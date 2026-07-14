@@ -84,6 +84,18 @@ pub struct PrContext {
     pub head_sha: String,
 }
 
+/// The PR's own page on github.com (ADR 0049) — the URL `w` opens in the
+/// reviewer's default browser. Scoped to the PR page itself, not a
+/// cursor-relative deep link into the diff (ADR 0049's Alternatives).
+pub fn pr_url(ctx: &PrContext) -> String {
+    format!(
+        "https://github.com/{owner}/{repo}/pull/{number}",
+        owner = ctx.owner,
+        repo = ctx.repo,
+        number = ctx.number,
+    )
+}
+
 /// The verdict a reviewer picks when exporting to sink A (GitHub PR
 /// review), mirroring GitHub's own pending-review submit dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

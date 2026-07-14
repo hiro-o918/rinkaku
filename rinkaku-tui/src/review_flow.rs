@@ -13,6 +13,27 @@ use crate::app::{App, InputKey, Screen};
 use crate::{ReviewPorts, diff_view, review};
 use rinkaku_core::render::Report;
 
+/// Applies [`InputKey::OpenPrInBrowser`] (ADR 0049): opens `ports.pr_context`'s
+/// PR page via `ports.browser`, given `App` has no `PrContext` of its own
+/// (mirroring [`dispatch_note_compose_key`]'s own "needs data `handle_key`
+/// doesn't have" precedent). Sets a status-line message either way — success
+/// is silent otherwise (the browser opening is the reviewer's own
+/// confirmation), a missing `PrContext` or a spawn failure is reported so `w`
+/// pressed outside `--pr` mode is distinguishable from an unbound key.
+pub(crate) fn open_pr_in_browser(mut app: App, ports: &ReviewPorts<'_>) -> App {
+    let Some(pr_context) = &ports.pr_context else {
+        app.set_status(
+            "note: no PR context available to open a browser (not running in --pr mode)",
+        );
+        return app;
+    };
+    let url = review::pr_url(pr_context);
+    if let Err(message) = ports.browser.open_url(&url) {
+        app.set_status(format!("error opening browser: {message}"));
+    }
+    app
+}
+
 /// Applies [`InputKey::NoteCompose`] given the [`review::SelectionSnapshot`]
 /// `crate::run_app` already derived from the cursor (that derivation needs
 /// `report`/the parsed diff hunks, which `App::handle_key` has no access

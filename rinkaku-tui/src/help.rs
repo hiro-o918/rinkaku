@@ -178,6 +178,10 @@ const GLOBAL_BINDINGS: &[KeyBinding] = &[
         description: "Jump forward to the next location in the jumplist",
     },
     KeyBinding {
+        keys: "w / W",
+        description: "Open the current PR's page in a web browser (--pr mode only)",
+    },
+    KeyBinding {
         keys: "?",
         description: "Toggle this help overlay",
     },
@@ -491,6 +495,19 @@ mod tests {
         assert!(keys.contains(&"n"));
         assert!(keys.contains(&"N"));
         assert!(keys.contains(&"j/k, Enter, Esc, d"));
+    }
+
+    #[test]
+    fn should_document_open_pr_in_browser_binding_in_the_global_group() {
+        let global = HELP_CONTENT
+            .keymap_groups
+            .iter()
+            .find(|group| group.title == "Global")
+            .expect("Global group present");
+
+        let keys: Vec<&str> = global.bindings.iter().map(|binding| binding.keys).collect();
+
+        assert!(keys.contains(&"w / W"));
     }
 
     #[test]

@@ -391,3 +391,22 @@ mod revision_tests {
         assert_eq!(0, state.revision());
     }
 }
+
+mod pr_url_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn should_build_the_pr_page_url_from_owner_repo_and_number() {
+        let ctx = PrContext {
+            owner: "hiro-o918".to_string(),
+            repo: "rinkaku".to_string(),
+            number: 42,
+            head_sha: "deadbeef".to_string(),
+        };
+
+        let actual = pr_url(&ctx);
+
+        assert_eq!("https://github.com/hiro-o918/rinkaku/pull/42", actual);
+    }
+}

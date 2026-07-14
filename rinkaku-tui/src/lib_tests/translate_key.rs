@@ -541,6 +541,26 @@ fn should_translate_fullwidth_question_mark_to_toggle_help() {
 }
 
 #[test]
+fn should_translate_lowercase_w_to_open_pr_in_browser() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('w'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::OpenPrInBrowser), actual);
+}
+
+#[test]
+fn should_translate_uppercase_w_to_open_pr_in_browser() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('W'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::OpenPrInBrowser), actual);
+}
+
+#[test]
 fn should_not_normalize_fullwidth_characters_while_composing_a_note() {
     // The compose buffer is free text (ADR 0048) — a full-width character
     // typed there must land in the note body verbatim, not get folded to

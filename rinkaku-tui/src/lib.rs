@@ -61,9 +61,9 @@ use app::{App, BlastRadiusSelection, InputKey, Screen};
 use input_translate::{translate_key, translate_mouse_event};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use review::PrContext;
-use review::ports::{ClipboardSink, ReviewSubmitter};
+use review::ports::{BrowserOpener, ClipboardSink, ReviewSubmitter};
 use review_flow::{
-    derive_selection_snapshot, dispatch_note_compose_key, perform_export,
+    derive_selection_snapshot, dispatch_note_compose_key, open_pr_in_browser, perform_export,
     should_recompute_note_markers,
 };
 use rinkaku_core::render::Report;
@@ -81,11 +81,14 @@ pub(crate) use review_flow::first_anchor_run;
 /// `submitter` are both `Some`/`None` together (sink A's own "absent when
 /// no PR context" rule — [`crate::app::App::with_review_sink_a_available`]'s
 /// own doc comment), `clipboard` is always present since sink B never
-/// depends on a PR.
+/// depends on a PR. `browser` (ADR 0049) is likewise always present — `w` is
+/// a global key regardless of `pr_context`, so the port itself always
+/// exists; only the `PrContext` it needs to build a URL may be absent.
 pub struct ReviewPorts<'a> {
     pub pr_context: Option<PrContext>,
     pub submitter: Option<&'a dyn ReviewSubmitter>,
     pub clipboard: &'a dyn ClipboardSink,
+    pub browser: &'a dyn BrowserOpener,
 }
 
 /// The event loop [`TuiSession::run`] (`crate::session`) drives once it has
@@ -302,6 +305,16 @@ pub(crate) fn run_app(
                 // documents did).
                 let snapshot = derive_selection_snapshot(&app, report, &diff_hunks);
                 app = dispatch_note_compose_key(app, snapshot);
+            } else if let InputKey::OpenPrInBrowser = input_key {
+                // ADR 0049: needs `review_ports.pr_context`/`.browser`,
+                // neither of which `App::handle_key` has access to (mirrors
+                // `InputKey::NoteCompose`'s own precedent just above).
+                // `app.handle_key(input_key)` still runs first for the
+                // blanket `status`/`pending_prefix` reset every key needs
+                // (`App::handle_key`'s own doc comment) — its own arm for
+                // this variant is a no-op stub, same as `NoteCompose`'s.
+                app = app.handle_key(input_key);
+                app = open_pr_in_browser(app, &review_ports);
             } else if let InputKey::Source = input_key {
                 app = app.handle_key(input_key);
                 if let Screen::Source { symbol_id, .. } = app.screen().clone()

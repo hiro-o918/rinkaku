@@ -20,8 +20,11 @@
 //!   auto-sync in the reverse direction of ADR 0027's tree → diff scroll
 //! - `perform_export` — `clipboard_export_status`'s OSC 52 size-guard
 //!   warning and error-message passthrough (ADR 0048)
+//! - `open_pr_in_browser` — the no-`PrContext`/spawn-failure status-line
+//!   messages and the URL built from a `PrContext` (ADR 0049)
 
 use crate::app::JumpCandidate;
+use crate::review::ports::BrowserOpener;
 use crate::source;
 use rinkaku_core::graph::SymbolGraph;
 use rinkaku_core::render::Report;
@@ -30,11 +33,39 @@ mod diff_scroll_sync;
 mod goto_dispatch;
 mod hunk_jump;
 mod note_snapshot;
+mod open_pr_in_browser;
 mod perform_export;
 mod recompute_and_reload;
 mod scroll_clamp;
 mod translate_key;
 mod translate_mouse;
+
+/// A [`BrowserOpener`] fake shared by [`perform_export`]/[`open_pr_in_browser`]'s
+/// tests — `ReviewPorts::browser` is always present (ADR 0049), so every
+/// `ReviewPorts` fixture needs one even when the test itself is not
+/// exercising `w`. `opened_url` records the last URL passed to
+/// [`BrowserOpener::open_url`] so a test can assert the exact URL built from
+/// a [`crate::review::PrContext`], not just the resulting status message.
+pub(super) struct FakeBrowserOpener {
+    pub(super) result: Result<(), String>,
+    pub(super) opened_url: std::cell::RefCell<Option<String>>,
+}
+
+impl FakeBrowserOpener {
+    pub(super) fn new(result: Result<(), String>) -> Self {
+        Self {
+            result,
+            opened_url: std::cell::RefCell::new(None),
+        }
+    }
+}
+
+impl BrowserOpener for FakeBrowserOpener {
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        *self.opened_url.borrow_mut() = Some(url.to_string());
+        self.result.clone()
+    }
+}
 
 pub(super) fn empty_report() -> Report {
     Report {
