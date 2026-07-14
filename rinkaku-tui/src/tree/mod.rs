@@ -362,7 +362,11 @@ struct DirBuilder {
 
 #[derive(Default)]
 struct FileBuilder {
-    symbols: Vec<SymbolRef>,
+    /// Each symbol alongside its new-side `ExtractedSymbol::range.start`,
+    /// kept only long enough for `build_file_node` to place a `TestGroup`
+    /// child at its source position (ADR 0045) — `SymbolRef` itself carries
+    /// no line number.
+    symbols: Vec<(SymbolRef, usize)>,
     /// Set by `insert_skipped` — see `TreeNode::skip_reason`'s doc comment.
     skip_reason: Option<SkipReason>,
     /// Set by `insert_test_file` — see `TreeNode::test_symbol_count`'s doc
@@ -409,30 +413,39 @@ impl<'a> TreeBuilder<'a> {
              report.files/report.skipped must not overlap on the same path"
         );
         for symbol in symbols {
-            file_builder.symbols.push(SymbolRef {
-                id: symbol.id.clone(),
-                name: symbol.name.clone(),
-                kind: symbol.kind,
-                classification: symbol.classification,
-                removed: false,
-                is_test: symbol.is_test,
-            });
+            file_builder.symbols.push((
+                SymbolRef {
+                    id: symbol.id.clone(),
+                    name: symbol.name.clone(),
+                    kind: symbol.kind,
+                    classification: symbol.classification,
+                    removed: false,
+                    is_test: symbol.is_test,
+                },
+                symbol.range.start,
+            ));
         }
     }
 
     fn insert_removed(&mut self, path: &str, removed: &rinkaku_core::extract::RemovedSymbol) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
-        file_builder.symbols.push(SymbolRef {
-            id: format!("{path}::{}", removed.name),
-            name: removed.name.clone(),
-            kind: removed.kind,
-            classification: None,
-            removed: true,
-            // `RemovedSymbol` carries no `is_test` flag of its own — see
-            // `SymbolRef::is_test`'s doc comment.
-            is_test: false,
-        });
+        file_builder.symbols.push((
+            SymbolRef {
+                id: format!("{path}::{}", removed.name),
+                name: removed.name.clone(),
+                kind: removed.kind,
+                classification: None,
+                removed: true,
+                // `RemovedSymbol` carries no `is_test` flag of its own — see
+                // `SymbolRef::is_test`'s doc comment.
+                is_test: false,
+            },
+            // No range to report; harmless since a removed symbol is never
+            // `is_test` (`SymbolRef::is_test`'s doc comment), so it never
+            // enters the comparison this line feeds (ADR 0045).
+            usize::MAX,
+        ));
     }
 
     /// Inserts a whole- or mixed-test-file summary (`report.tests`, see
@@ -652,14 +665,17 @@ fn build_file_node(
     // `Section::Tests`, so its symbols stay flat, ungrouped children here
     // (`TreeBuilder::group_test_symbols`'s doc comment).
     let (test_symbols, production_symbols): (Vec<_>, Vec<_>) = if group_test_symbols {
-        file.symbols.into_iter().partition(|s| s.is_test)
+        file.symbols.into_iter().partition(|(s, _)| s.is_test)
     } else {
         (Vec::new(), file.symbols)
     };
+    // ADR 0045: the group's position among its production siblings is
+    // decided before either list loses its line numbers below.
+    let test_group_insert_at = test_group_insert_index(&test_symbols, &production_symbols);
 
     let mut children: Vec<TreeNode> = production_symbols
         .into_iter()
-        .map(|symbol_ref| {
+        .map(|(symbol_ref, _)| {
             let symbol_badges = symbol_badges(&symbol_ref, fan_in_by_id);
             badges.merge(symbol_badges);
             TreeNode {
@@ -673,9 +689,10 @@ fn build_file_node(
         })
         .collect();
 
+    let test_symbols: Vec<SymbolRef> = test_symbols.into_iter().map(|(s, _)| s).collect();
     if let Some(test_group) = build_test_group_node(&path, test_symbols, fan_in_by_id) {
         badges.merge(test_group.badges);
-        children.push(test_group);
+        children.insert(test_group_insert_at, test_group);
     }
 
     TreeNode {
@@ -686,6 +703,26 @@ fn build_file_node(
         skip_reason: file.skip_reason,
         test_symbol_count: file.test_symbol_count,
     }
+}
+
+/// Where a mixed file's `TestGroup` child belongs among `production_symbols`
+/// (ADR 0045): immediately before the first production symbol whose line
+/// starts after the earliest test symbol's line, or after every production
+/// symbol (`production_symbols.len()`) when none does — the common "trailing
+/// `#[cfg(test)] mod tests` block" case. `test_symbols` empty returns 0
+/// (unused by the caller in that case, since `build_test_group_node` returns
+/// `None` for an empty list and no insertion happens at all).
+fn test_group_insert_index(
+    test_symbols: &[(SymbolRef, usize)],
+    production_symbols: &[(SymbolRef, usize)],
+) -> usize {
+    let Some(earliest_test_line) = test_symbols.iter().map(|(_, line)| *line).min() else {
+        return 0;
+    };
+    production_symbols
+        .iter()
+        .position(|(_, line)| *line > earliest_test_line)
+        .unwrap_or(production_symbols.len())
 }
 
 /// A single symbol's own (non-aggregated) badge contribution.
