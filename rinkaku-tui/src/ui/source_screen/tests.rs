@@ -429,8 +429,12 @@ fn should_apply_added_background_and_marker_when_line_was_added_by_the_diff() {
 
     let terminal = draw_source_screen_for_test(&report, dir.path(), &diff_hunks);
 
-    let style = find_cell_style(&terminal, "1 |", "fn a");
+    let text = buffer_text(&terminal);
+    assert!(text.contains("1+|"));
+    let style = find_cell_style(&terminal, "1+|", "fn a");
     assert_eq!(Some(ADDED_BG), style.bg);
+    let marker_style = find_cell_style(&terminal, "1+|", "+");
+    assert_eq!(Some(Color::Green), marker_style.fg);
 }
 
 #[test]
@@ -480,13 +484,9 @@ fn should_render_plainly_with_no_diff_entry_for_the_file() {
 
 #[test]
 fn should_fall_back_to_plain_rendering_with_a_title_note_when_file_has_drifted() {
-    // The hunk's `Context` line claims line 2 is `fn foo() {}`, but the
-    // file on disk (written below) has since diverged at that exact line —
-    // `overlay_source_lines` must detect this and drop the overlay (ADR
-    // 0046 decision 5) rather than compositing a wrong mapping. `Added`
-    // lines are never drift-checked (nothing in the working tree for them
-    // to match against), so the corruption must land on a `Context` line
-    // specifically to exercise the check.
+    // Corruption must land on the `Context` line (line 2): `Added` lines
+    // are never drift-checked, so only a mismatched `Context` line exercises
+    // the detection this test targets.
     let dir = tempfile::tempdir().expect("create temp dir");
     std::fs::write(
         dir.path().join("lib.rs"),

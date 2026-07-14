@@ -3,9 +3,9 @@
 //! tint" composition with the diff pane, ADR 0046 for the diff overlay
 //! composited on top of that).
 
-use super::diff_pane::{ADDED_BG, REMOVED_BG};
+use super::diff_pane::{ADDED_BG, REMOVED_BG, marker_span};
 use super::style::{gap_span, pane_border_style, styled_content_spans};
-use crate::diff_view::FileHunks;
+use crate::diff_view::{DiffLineKind, FileHunks};
 use crate::source::{HighlightedSourceView, SourceView};
 use crate::source_diff::{OverlayRow, overlay_source_lines, rows_in_source_range};
 use ratatui::Frame;
@@ -202,15 +202,17 @@ pub(crate) fn source_lines(
             OverlayRow::Unchanged {
                 line_number,
                 content,
-            }
-            | OverlayRow::Added {
+            } => unchanged_line(source, token_highlights, line_number - 1, content, None),
+            OverlayRow::Added {
                 line_number,
                 content,
-            } => {
-                let line_index = line_number - 1;
-                let added_bg = matches!(row, OverlayRow::Added { .. }).then_some(ADDED_BG);
-                unchanged_line(source, token_highlights, line_index, content, added_bg)
-            }
+            } => unchanged_line(
+                source,
+                token_highlights,
+                line_number - 1,
+                content,
+                Some(ADDED_BG),
+            ),
             OverlayRow::Removed { content } => removed_line(content),
         })
         .collect()
@@ -221,7 +223,10 @@ pub(crate) fn source_lines(
 /// step [`source_lines`] uses for both an unmodified line and a diff-added
 /// line, which differ only in `diff_bg` (ADR 0046 decision 6: an added
 /// line's tint wins over the symbol-range tint when both would apply,
-/// achieved simply by `diff_bg` taking priority in the `or` below).
+/// achieved simply by `diff_bg` taking priority in the `or` below). A
+/// `diff_bg` of `Some(ADDED_BG)` also swaps the gutter's usual blank space
+/// for [`marker_span`]'s `+` glyph, pairing this line's gutter with
+/// [`removed_line`]'s own `-` gutter for the same diff signal.
 fn unchanged_line(
     source: &SourceView,
     token_highlights: &[crate::highlight::LineHighlight],
@@ -233,9 +238,15 @@ fn unchanged_line(
     let is_highlighted =
         line_number >= source.highlight_start && line_number <= source.highlight_end;
     let bg = diff_bg.or(is_highlighted.then_some(SOURCE_HIGHLIGHT_BG));
+    let is_added = diff_bg == Some(ADDED_BG);
 
-    let gutter = format!("{line_number:>5} | ");
-    let mut spans = vec![gap_span(&gutter, bg)];
+    let mut spans = vec![gap_span(&format!("{line_number:>5}"), bg)];
+    spans.push(if is_added {
+        marker_span(DiffLineKind::Added, bg)
+    } else {
+        gap_span(" ", bg)
+    });
+    spans.push(gap_span("| ", bg));
     match token_highlights.get(line_index).cloned().flatten() {
         Some(token_spans) => {
             spans.extend(styled_content_spans(text, &token_spans, bg));
@@ -247,12 +258,17 @@ fn unchanged_line(
 
 /// Renders a diff-removed line with no source line number of its own
 /// (`OverlayRow::Removed`'s own doc comment) — a `-` gutter matching the
-/// `{line_number:>5} | ` width of an ordinary line, [`REMOVED_BG`] applied
-/// uniformly, and no token highlighting (the text is the diff's recorded
-/// old-side content, not a line `crate::highlight::highlight_source_lines`
-/// ever parsed).
+/// width of an ordinary line's `{line_number:>5} | ` gutter,
+/// [`marker_span`] for the same bold-red `-` glyph the diff pane uses,
+/// [`REMOVED_BG`] applied uniformly, and no token highlighting (the text is
+/// the diff's recorded old-side content, not a line
+/// `crate::highlight::highlight_source_lines` ever parsed).
 fn removed_line(content: &str) -> Line<'static> {
-    let gutter = format!("{:>5} | ", "-");
     let bg = Some(REMOVED_BG);
-    Line::from(vec![gap_span(&gutter, bg), gap_span(content, bg)])
+    Line::from(vec![
+        gap_span("     ", bg),
+        marker_span(DiffLineKind::Removed, bg),
+        gap_span("| ", bg),
+        gap_span(content, bg),
+    ])
 }
