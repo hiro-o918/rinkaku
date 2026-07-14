@@ -365,3 +365,152 @@ fn should_report_none_clamped_scroll_but_source_viewport_height_when_source_scre
     // `right_pane_viewport_height` shares with `draw_entry_screen`.
     assert_eq!(Some(17), actual.scroll_viewport_height);
 }
+
+// --- diff overlay (ADR 0046) ---
+
+use crate::diff_view::{DiffLine, DiffLineKind, FileHunks, Hunk};
+
+fn diff_line(kind: DiffLineKind, content: &str) -> DiffLine {
+    DiffLine {
+        kind,
+        content: content.to_string(),
+    }
+}
+
+fn draw_source_screen_for_test(
+    report: &Report,
+    repo_root: &std::path::Path,
+    diff_hunks: &[FileHunks],
+) -> Terminal<TestBackend> {
+    let app = App::new(report)
+        .handle_key(crate::app::InputKey::Down)
+        .handle_key(crate::app::InputKey::Source);
+    let source_content = Some(crate::source::load_highlighted_symbol_source(
+        report,
+        "lib.rs::foo",
+        repo_root,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                report,
+                &crate::diff_shape::DiffPaneContent::Empty,
+                &[],
+                &BlastRadiusSelection::NotApplicable,
+                source_content.as_ref(),
+                diff_hunks,
+            );
+        })
+        .expect("draw");
+
+    terminal
+}
+
+#[test]
+fn should_apply_added_background_and_marker_when_line_was_added_by_the_diff() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(dir.path().join("lib.rs"), "fn a() {}\nfn foo() {}\n").expect("write file");
+    let report = report_with_one_symbol();
+    let diff_hunks = vec![FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![Hunk {
+            header: "@@ -1,1 +1,2 @@".to_string(),
+            new_range: Some((1, 2)),
+            lines: vec![
+                diff_line(DiffLineKind::Added, "fn a() {}"),
+                diff_line(DiffLineKind::Context, "fn foo() {}"),
+            ],
+        }],
+    }];
+
+    let terminal = draw_source_screen_for_test(&report, dir.path(), &diff_hunks);
+
+    let style = find_cell_style(&terminal, "1 |", "fn a");
+    assert_eq!(Some(ADDED_BG), style.bg);
+}
+
+#[test]
+fn should_render_removed_row_with_dash_gutter_and_removed_background() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(dir.path().join("lib.rs"), "fn foo() {}\n").expect("write file");
+    let report = report_with_one_symbol();
+    let diff_hunks = vec![FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![Hunk {
+            header: "@@ -1,2 +1,1 @@".to_string(),
+            new_range: Some((1, 1)),
+            lines: vec![
+                diff_line(DiffLineKind::Removed, "fn old() {}"),
+                diff_line(DiffLineKind::Context, "fn foo() {}"),
+            ],
+        }],
+    }];
+
+    let terminal = draw_source_screen_for_test(&report, dir.path(), &diff_hunks);
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("fn old() {}"));
+    let style = find_cell_style(&terminal, "-", "fn old");
+    assert_eq!(Some(REMOVED_BG), style.bg);
+}
+
+#[test]
+fn should_render_plainly_with_no_diff_entry_for_the_file() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    // Two lines so line 2 falls outside `report_with_one_symbol`'s symbol
+    // range (`LineRange { start: 1, end: 1 }`) — line 1 always carries
+    // `SOURCE_HIGHLIGHT_BG` regardless of any diff overlay, so asserting
+    // "no diff background" needs a line the symbol-range tint doesn't
+    // already touch.
+    std::fs::write(dir.path().join("lib.rs"), "fn foo() {}\nfn bar() {}\n").expect("write file");
+    let report = report_with_one_symbol();
+
+    let terminal = draw_source_screen_for_test(&report, dir.path(), &[]);
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("fn bar() {}"));
+    assert!(!text.contains("diff overlay unavailable"));
+    let style = find_cell_style(&terminal, "2 |", "fn bar");
+    assert_eq!(Some(Color::Reset), style.bg);
+}
+
+#[test]
+fn should_fall_back_to_plain_rendering_with_a_title_note_when_file_has_drifted() {
+    // The hunk's `Context` line claims line 2 is `fn foo() {}`, but the
+    // file on disk (written below) has since diverged at that exact line —
+    // `overlay_source_lines` must detect this and drop the overlay (ADR
+    // 0046 decision 5) rather than compositing a wrong mapping. `Added`
+    // lines are never drift-checked (nothing in the working tree for them
+    // to match against), so the corruption must land on a `Context` line
+    // specifically to exercise the check.
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::write(
+        dir.path().join("lib.rs"),
+        "fn a() {}\nfn edited_since_diff() {}\n",
+    )
+    .expect("write file");
+    let report = report_with_one_symbol();
+    let diff_hunks = vec![FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![Hunk {
+            header: "@@ -1,1 +1,2 @@".to_string(),
+            new_range: Some((1, 2)),
+            lines: vec![
+                diff_line(DiffLineKind::Added, "fn a() {}"),
+                diff_line(DiffLineKind::Context, "fn foo() {}"),
+            ],
+        }],
+    }];
+
+    let terminal = draw_source_screen_for_test(&report, dir.path(), &diff_hunks);
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("diff overlay unavailable"));
+    assert!(text.contains("fn edited_since_diff() {}"));
+    let style = find_cell_style(&terminal, "1 |", "fn a");
+    assert_eq!(Some(SOURCE_HIGHLIGHT_BG), style.bg);
+}
