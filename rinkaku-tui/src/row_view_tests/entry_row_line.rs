@@ -845,3 +845,55 @@ fn should_render_test_group_row_with_singular_count() {
 
     assert_eq!("> 1 test", line_text(&line));
 }
+
+#[test]
+fn should_show_note_badge_on_a_symbol_row_with_a_matching_note_count() {
+    let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+    let mut note_markers = crate::note_markers::NoteMarkers::default();
+    note_markers
+        .symbol_counts
+        .insert("lib.rs::foo".to_string(), 2);
+
+    let line = entry_row_line(&row, "", &HashMap::new(), &note_markers, false);
+
+    assert_eq!("    fn foo n:2", line_text(&line));
+}
+
+#[test]
+fn should_omit_note_badge_on_a_symbol_row_with_no_matching_note_count() {
+    let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+    let mut note_markers = crate::note_markers::NoteMarkers::default();
+    note_markers
+        .symbol_counts
+        .insert("lib.rs::bar".to_string(), 1);
+
+    let line = entry_row_line(&row, "", &HashMap::new(), &note_markers, false);
+
+    assert_eq!("    fn foo", line_text(&line));
+}
+
+#[test]
+fn should_show_note_badge_on_a_file_row_with_a_matching_note_count() {
+    let node = file_node("lib.rs", Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+    let mut note_markers = crate::note_markers::NoteMarkers::default();
+    note_markers.file_counts.insert("lib.rs".to_string(), 3);
+
+    let line = entry_row_line(&row, "lib.rs", &HashMap::new(), &note_markers, false);
+
+    assert_eq!("  lib.rs  n:3", line_text(&line));
+}

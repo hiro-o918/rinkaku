@@ -20,6 +20,10 @@ pub fn render_review_comments(notes: &[Note]) -> Vec<RenderedComment> {
     notes
         .iter()
         .map(|note| {
+            // The `(1, 1)` fallback is reachable only if rinkaku-core's
+            // changed-range computation and this crate's own hunk parser
+            // ever disagree about what counts as changed; GitHub's review
+            // API may then reject the comment with a 422.
             let (start, end) = note
                 .location
                 .anchor
