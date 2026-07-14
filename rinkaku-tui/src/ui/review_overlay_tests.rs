@@ -82,6 +82,7 @@ fn draw_app(app: &App, report: &Report) -> String {
                 &[],
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
                 &crate::note_markers::NoteMarkers::default(),
             );
         })
