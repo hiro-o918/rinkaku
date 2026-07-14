@@ -327,6 +327,14 @@ pub(crate) fn run_app(
                 app = effects.app;
                 diff_pane_content = effects.diff_pane_content;
                 last_diff_focus = effects.last_diff_focus;
+            } else {
+                // Without this, toggling away from RightPane::Diff and back
+                // with the cursor unchanged left `last_diff_focus` equal to
+                // the still-current symbol, so re-entry skipped both ADR
+                // 0027's auto-scroll and ADR 0030's sync-back branch and
+                // redrew at a stale `right_pane_scroll`. Resetting to `None`
+                // makes re-entry look like a fresh selection.
+                last_diff_focus = None;
             }
         }
     }

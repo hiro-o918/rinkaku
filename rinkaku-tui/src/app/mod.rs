@@ -538,6 +538,22 @@ impl App {
         }
     }
 
+    /// The name [`crate::ui::diff_pane`] should show in the Diff pane's
+    /// title for the row currently under the cursor: a present symbol's own
+    /// name, or a file/skipped-file row's path — mirrors
+    /// [`Self::selected_diff_target`]'s row-kind scoping (present symbol or
+    /// file only) so the title never names a row the pane would not
+    /// actually render a diff for.
+    pub fn selected_diff_title_name(&self) -> Option<&str> {
+        let rows = self.nav.rows(&self.tree);
+        let row = rows.get(self.nav.cursor())?;
+        match &row.node.kind {
+            NodeKind::Symbol(symbol_ref) if !symbol_ref.removed => Some(symbol_ref.name.as_str()),
+            NodeKind::File => Some(row.node.path.as_str()),
+            _ => None,
+        }
+    }
+
     /// Which symbol the tree cursor currently focuses for the diff pane's
     /// auto-scroll (ADR 0027 decision 2 + Consequences): [`DiffFocus`] on a
     /// present symbol row, `None` on file/directory rows, on removed symbol
