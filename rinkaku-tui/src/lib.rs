@@ -41,6 +41,7 @@ pub mod row_view;
 mod session;
 pub mod source;
 pub mod source_diff;
+pub mod source_split;
 pub mod splash;
 mod split_pairing;
 pub mod tree;
