@@ -5,7 +5,7 @@
 use super::scroll::{render_scrollable_pane, truncate_to_width, windowed_rows_with_indicators};
 use crate::row_view::{
     band_style, cyan_badge_style, risk_marker_style, split_badge_style, symbol_marker_span,
-    symbol_name_style, warning_badge_style,
+    symbol_name_style, test_badge_style, warning_badge_style,
 };
 use crate::tree::SymbolRef;
 use ratatui::Frame;
@@ -142,6 +142,7 @@ fn marker_swatch_spans(swatch: &'static str) -> Vec<Span<'static>> {
         "fan-in:N" => badge_swatch_spans("fan-in:", cyan_badge_style()),
         "warn:N" => badge_swatch_spans("warn:", warning_badge_style()),
         "split:N" => badge_swatch_spans("split:", split_badge_style()),
+        "[test] (N symbols)" => vec![Span::styled(swatch, test_badge_style())],
         "N tests" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],
         "(skipped: ...)" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],
         _ => vec![Span::raw(swatch)],
@@ -515,6 +516,23 @@ mod tests {
             crate::row_view::band_style(FileSizeBand::Watch),
             swatch_span.style
         );
+    }
+
+    #[test]
+    fn should_render_test_badge_swatch_with_magenta_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "[test] (N symbols)")
+            })
+            .expect("[test] (N symbols) line present");
+
+        let swatch_span = line_span(line, "[test] (N symbols)");
+        assert_eq!(Style::default().fg(Color::Magenta), swatch_span.style);
     }
 
     #[test]

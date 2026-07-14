@@ -415,8 +415,15 @@ fn test_badge_span(symbol_count: usize) -> Span<'static> {
     };
     Span::styled(
         format!("[test] ({symbol_count} {noun})"),
-        Style::default().fg(Color::Magenta),
+        test_badge_style(),
     )
+}
+
+/// Style for the `[test] (N symbols)` whole-test-file badge (magenta).
+///
+/// `pub(crate)`: also reused by `crate::ui::overlay`'s Markers legend.
+pub(crate) fn test_badge_style() -> Style {
+    Style::default().fg(Color::Magenta)
 }
 
 /// A symbol row's leading classification marker: `+` added, `~`
