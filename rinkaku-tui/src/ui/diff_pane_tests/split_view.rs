@@ -4,11 +4,11 @@ use crate::diff_shape::{ContractHeader, DiffSection};
 use pretty_assertions::assert_eq;
 
 #[test]
-fn should_draw_old_and_new_lines_side_by_side_when_split_view_is_toggled_on() {
+fn should_draw_old_and_new_lines_side_by_side_by_default() {
+    // ADR 0044 amendment: split is now the default `DiffViewMode`, so no
+    // `ToggleSplitView` press is needed to reach it here.
     let report = report_with_one_symbol();
-    let app = App::new(&report)
-        .handle_key(InputKey::Down)
-        .handle_key(InputKey::ToggleSplitView);
+    let app = App::new(&report).handle_key(InputKey::Down);
     let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -53,10 +53,11 @@ index e69de29..4b825dc 100644
 
 #[test]
 fn should_fall_back_to_unified_when_pane_is_narrower_than_the_split_view_minimum() {
+    // ADR 0044 amendment: split is now the default `DiffViewMode`, so no
+    // `ToggleSplitView` press is needed to have `diff_view_mode` be `Split`
+    // here.
     let report = report_with_one_symbol();
-    let app = App::new(&report)
-        .handle_key(InputKey::Down)
-        .handle_key(InputKey::ToggleSplitView);
+    let app = App::new(&report).handle_key(InputKey::Down);
     let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -172,10 +173,10 @@ fn should_draw_old_and_new_signature_side_by_side_when_symbol_signature_changed(
         file_size_bands: vec![],
         removed: vec![],
     };
-    // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol.
-    let app = App::new(&report)
-        .handle_key(InputKey::Down)
-        .handle_key(InputKey::ToggleSplitView);
+    // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol. ADR 0044
+    // amendment: split is now the default `DiffViewMode`, so no
+    // `ToggleSplitView` press is needed to reach it here.
+    let app = App::new(&report).handle_key(InputKey::Down);
     let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644
@@ -214,9 +215,14 @@ index e69de29..4b825dc 100644
 }
 
 #[test]
-fn should_render_unified_when_split_view_is_not_toggled_on() {
+fn should_render_unified_when_split_view_is_toggled_off() {
+    // ADR 0044 amendment: split is now the default `DiffViewMode`, so
+    // reaching unified rendering here needs an explicit `ToggleSplitView`
+    // press (the opposite of this test's pre-amendment setup).
     let report = report_with_one_symbol();
-    let app = App::new(&report).handle_key(InputKey::Down);
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::ToggleSplitView);
     let diff_text = "\
 diff --git a/lib.rs b/lib.rs
 index e69de29..4b825dc 100644

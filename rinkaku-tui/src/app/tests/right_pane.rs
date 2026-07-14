@@ -109,24 +109,26 @@ fn should_return_to_detail_when_blast_radius_is_toggled_off_after_entering_from_
 }
 
 #[test]
-fn should_default_diff_view_mode_to_unified() {
+fn should_default_diff_view_mode_to_split() {
+    // ADR 0044 amendment: dogfooding found split the more useful opening
+    // state for the pane's typical case (a signature or small block edit).
     let report = empty_report();
     let app = App::new(&report);
 
-    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
 }
 
 #[test]
-fn should_toggle_diff_view_mode_between_unified_and_split() {
+fn should_toggle_diff_view_mode_between_split_and_unified() {
     let report = empty_report();
     let app = App::new(&report);
-    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
-
-    let app = app.handle_key(InputKey::ToggleSplitView);
     assert_eq!(DiffViewMode::Split, app.diff_view_mode());
 
     let app = app.handle_key(InputKey::ToggleSplitView);
     assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+
+    let app = app.handle_key(InputKey::ToggleSplitView);
+    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
 }
 
 #[test]
@@ -135,11 +137,11 @@ fn should_preserve_diff_view_mode_when_cursor_moves_to_a_different_row() {
     // `RightPane`'s own persistence across cursor moves.
     let report = report_with_two_directories_and_graph();
     let app = App::new(&report).handle_key(InputKey::ToggleSplitView);
-    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
 
     let app = app.handle_key(InputKey::Down);
 
-    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
+    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
 }
 
 #[test]
@@ -148,11 +150,11 @@ fn should_ignore_toggle_split_view_while_source_screen_is_open() {
     let app = App::new(&report)
         .handle_key(InputKey::Down)
         .handle_key(InputKey::Source);
-    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
 
     let app = app.handle_key(InputKey::ToggleSplitView);
 
-    assert_eq!(DiffViewMode::Unified, app.diff_view_mode());
+    assert_eq!(DiffViewMode::Split, app.diff_view_mode());
     assert_eq!(
         Screen::Source {
             symbol_id: "lib.rs::foo".to_string(),
