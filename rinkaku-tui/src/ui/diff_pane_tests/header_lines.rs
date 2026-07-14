@@ -140,3 +140,16 @@ fn should_truncate_range_list_from_the_head_when_the_joined_list_overflows_width
     // — the ones the reviewer scrolled to see — visible at the tail.
     assert_eq!(vec![bold("lib.rs"), range_line("…200, 300-400")], actual);
 }
+
+#[test]
+fn should_omit_range_line_when_width_cannot_fit_the_range_prefix() {
+    let badges = Badges::default();
+    let ranges = [(1, 5)];
+
+    // Width narrower than `"range: "` (7 chars) — dropping the whole
+    // line avoids rendering a bare `range: ` prefix that overflows the
+    // requested width and reads as if the range list itself were empty.
+    let actual = diff_pane_header_lines(None, "lib.rs", &badges, &ranges, 5);
+
+    assert_eq!(vec![bold("…b.rs")], actual);
+}

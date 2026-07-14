@@ -22,8 +22,9 @@ use rinkaku_core::render::Report;
 /// implementation's own choice (ADR 0015/0016 left the exact ratio open):
 /// the right pane's Diff/Detail/BlastRadius content is code and prose that
 /// needs width to read comfortably, while the tree's rows stay legible
-/// truncated (the Diff pane's own 2-line header names the truncated row's
-/// symbol/file in full, `diff_pane::diff_pane_header_lines`). The right
+/// truncated (the Diff pane's own pinned header — up to 3 lines — names
+/// the truncated row's symbol/file in full,
+/// `diff_pane::diff_pane_header_lines`). The right
 /// pane itself shows either the detail view or the diff view depending on
 /// `app.right_pane()` (`d`/`D` toggles between them, TUI iteration 2).
 ///

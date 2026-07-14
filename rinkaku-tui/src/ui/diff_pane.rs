@@ -88,28 +88,35 @@ pub(crate) fn diff_pane_header_lines(
     }
 
     if !ranges.is_empty() {
-        let range_list = ranges
-            .iter()
-            .map(|(start, end)| {
-                if start == end {
-                    start.to_string()
-                } else {
-                    format!("{start}-{end}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
         let prefix = "range: ";
-        let range_budget = width.saturating_sub(prefix.chars().count());
-        let truncated_range_list = truncate_to_width_keeping_tail(&range_list, range_budget);
-        let range_line = Line::from(vec![
-            Span::raw(prefix),
-            Span::styled(
-                truncated_range_list,
-                Style::default().add_modifier(Modifier::DIM),
-            ),
-        ]);
-        lines.push(range_line);
+        // Drop the whole line rather than push a `range: ` prefix with
+        // nothing after it — a truncated tail is meaningful, an empty tail
+        // is not, and letting the prefix render alone would overflow
+        // `width` (ratatui clips silently, so the overflow reads as
+        // "range: " being the whole message).
+        if width > prefix.chars().count() {
+            let range_list = ranges
+                .iter()
+                .map(|(start, end)| {
+                    if start == end {
+                        start.to_string()
+                    } else {
+                        format!("{start}-{end}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let range_budget = width - prefix.chars().count();
+            let truncated_range_list = truncate_to_width_keeping_tail(&range_list, range_budget);
+            let range_line = Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(
+                    truncated_range_list,
+                    Style::default().add_modifier(Modifier::DIM),
+                ),
+            ]);
+            lines.push(range_line);
+        }
     }
 
     lines
