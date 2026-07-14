@@ -101,21 +101,30 @@ sync when the view mode is toggled mid-session.
 **5. Rendering.** `crate::ui::diff_pane::draw_diff_pane` branches on
 `app.diff_view_mode()`: unified keeps calling `diff_pane_lines` exactly
 as today; split calls a new `diff_pane_split_rows`, which produces the
-same section/header/hunk-header scaffolding as `diff_pane_lines` (one
-`SplitRow`-equivalent per scaffold line, `left`/`right` holding the same
-text on both sides for a title/contract-header/hunk-header line, so
-scaffold lines don't need their own special case) and renders it inside
-a horizontal 50/50 `Layout::horizontal` split of the pane's body area
-(inside `render_scrollable_pane`'s existing body — see Decision 6 on
-why `render_scrollable_pane` itself needs one small extension, not a
-parallel implementation). Old-side lines keep the `-`/red styling,
-new-side lines keep `+`/green, a filler cell renders as a blank styled
-line — no new color semantics, reusing `diff_line`/`marker_span`/
+same section/header/hunk-header scaffolding as `diff_pane_lines` and
+renders it inside a horizontal 50/50 `Layout::horizontal` split of the
+pane's body area (inside `render_scrollable_pane`'s existing body — see
+Decision 6 on why `render_scrollable_pane` itself needs one small
+extension, not a parallel implementation). A title/hunk-header scaffold
+line renders identically on both sides (`left`/`right` share it,
+needing no special case), but the contract header's 2-line old/new
+signature pair is the one scaffold element split view treats
+differently from unified: both signatures render on the *same* row
+(`left` = old, `right` = new) rather than unified's two separate
+`-`/`+` lines, with a blank filler row below to keep the section's
+2-line contract-header budget intact for the shared line-counting
+Decision 4 relies on — putting the two signatures on separate rows
+(mirroring unified's own line order) would reintroduce the exact
+"scan past an interleaved line to compare" problem this whole ADR
+exists to fix, this time inside the one scaffold element a reviewer
+most wants aligned. Old-side lines keep the `-`/red styling, new-side
+lines keep `+`/green, a filler cell renders as a blank styled line —
+no new color semantics, reusing `diff_line`/`marker_span`/
 `plain_diff_line`'s existing per-`DiffLineKind` styling and ADR 0018's
 highlighting lookup (by `source_index`, unchanged) on whichever side has
 real content.
 
-**6. `render_scrollable_pane` gains a `Column` enum parameter
+**6. `render_scrollable_pane` gains a `Body` enum parameter
 (`Single` | `Split`) rather than a second function.** `Single` is
 today's exact behavior (one `Paragraph`, unchanged). `Split` lays the
 already-wrapped body out as two side-by-side `Paragraph`s sharing one
@@ -150,7 +159,7 @@ direct payoff of decisions 3–4: `App::right_pane_scroll`,
 `symbol_id_for_scroll_line`, and `highlight::lookup_hunk_highlight_by_index`
 are all called exactly as they are today regardless of
 `diff_view_mode`; only `diff_pane_lines` vs. `diff_pane_split_rows` (and
-`render_scrollable_pane`'s new `Column` parameter) differ between the
+`render_scrollable_pane`'s new `Body` parameter) differ between the
 two modes.
 
 ## Alternatives
@@ -212,10 +221,10 @@ two modes.
 - `crate::ui::diff_pane` gains a second line-building function
   (`diff_pane_split_rows`) alongside `diff_pane_lines`, and
   `crate::ui::scroll::render_scrollable_pane` gains one new parameter
-  (`Column`) — every existing call site (Detail pane, Blast-radius pane,
-  help overlay, jump popup) passes `Column::Single`, matching today's
+  (`Body`) — every existing call site (Detail pane, Blast-radius pane,
+  help overlay, jump popup) passes `Body::Single`, matching today's
   behavior exactly; only the Diff pane's split-mode call site uses
-  `Column::Split`.
+  `Body::Split`.
 - Split mode's rendered row count for a replaced run can include blank
   filler rows the unified view never showed (decision 4) — a visible,
   deliberate trade for keeping every prior ADR's scroll-sync code

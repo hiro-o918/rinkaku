@@ -381,17 +381,22 @@ pub(crate) fn diff_pane_lines(
 }
 
 /// Split-view (ADR 0044) counterpart of [`diff_pane_lines`]: the same
-/// section/contract-header/hunk-header scaffold (a scaffold line renders
-/// identically on both sides, so `left`/`right` share it), but each hunk's
-/// body is paired via [`crate::diff_shape::pair_hunk_lines`] into old-side/
-/// new-side columns instead of one interleaved column. Returns `(left,
-/// right)`, each the same length — [`crate::diff_shape::SplitRow`]'s own
-/// invariant (one row per source [`DiffLine`]) means every hunk contributes
-/// the same row count here as it does to [`diff_pane_lines`], so this
-/// function's total line count always matches `diff_pane_lines`'s for the
-/// same `sections`/`show_section_headers` — required for `walk_sections`'
-/// shared line-counting (ADR 0044 decision 4) to stay correct regardless of
-/// which of the two this pane actually renders.
+/// section/contract-header/hunk-header scaffold, but each hunk's body is
+/// paired via [`crate::diff_shape::pair_hunk_lines`] into old-side/new-side
+/// columns instead of one interleaved column. A title/hunk-header line
+/// renders identically on both sides (`left`/`right` share it); the
+/// contract header's old/new signatures render side by side on one row
+/// instead — the whole point of a split view is comparing them without
+/// scanning past an interleaved line in between. Returns `(left, right)`,
+/// each the same length — [`crate::diff_shape::SplitRow`]'s own invariant
+/// (one row per source [`DiffLine`]) means every hunk contributes the same
+/// row count here as it does to [`diff_pane_lines`], and the contract
+/// header's own filler row below the paired signatures keeps its 2-line
+/// scaffold budget intact — so this function's total line count always
+/// matches `diff_pane_lines`'s for the same `sections`/`show_section_headers`,
+/// required for `walk_sections`' shared line-counting (ADR 0044 decision 4)
+/// to stay correct regardless of which of the two this pane actually
+/// renders.
 pub(crate) fn diff_pane_split_rows(
     sections: &[&DiffSection],
     show_section_headers: bool,
@@ -417,12 +422,12 @@ pub(crate) fn diff_pane_split_rows(
                 format!("- {}", contract.previous_signature),
                 Style::default().fg(Color::Red),
             ));
-            right.push(Line::raw(""));
-            left.push(Line::raw(""));
             right.push(Line::styled(
                 format!("+ {}", contract.signature),
                 Style::default().fg(Color::Green),
             ));
+            left.push(Line::raw(""));
+            right.push(Line::raw(""));
         }
 
         for (hunk_index, attributed) in section.hunks.iter().enumerate() {
