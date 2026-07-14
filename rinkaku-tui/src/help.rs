@@ -199,6 +199,10 @@ const MARKER_LEGEND: &[MarkerLegendEntry] = &[
         explanation: "Expand marker: children shown / hidden (blank = leaf, nothing to expand)",
     },
     MarkerLegendEntry {
+        swatch: "fn struct enum trait class iface type",
+        explanation: "Symbol row's kind prefix, abbreviated from the language's own keyword",
+    },
+    MarkerLegendEntry {
         swatch: "+",
         explanation: "Added symbol",
     },
@@ -233,6 +237,10 @@ const MARKER_LEGEND: &[MarkerLegendEntry] = &[
     MarkerLegendEntry {
         swatch: "N tests",
         explanation: "Collapsed group of a file's test symbols",
+    },
+    MarkerLegendEntry {
+        swatch: "(skipped: ...)",
+        explanation: "Reason a file was not analyzed (parse failure, unsupported language, ...)",
     },
     MarkerLegendEntry {
         swatch: "chg:N",
@@ -280,18 +288,6 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "jumplist",
         explanation: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it",
-    },
-    GlossaryEntry {
-        term: "chg: / api: / fan-in:",
-        explanation: "Tree row badges: changed symbols, contract changes (signature-changed or deleted, shown in yellow), and fan-in (symbols referenced by 2+ other changed production symbols — tests exercising a symbol don't count toward its fan-in)",
-    },
-    GlossaryEntry {
-        term: "!",
-        explanation: "Risk marker: this row has both a contract change and a high-fan-in symbol in the same subtree — a change that is both hard to miss and wide-reaching",
-    },
-    GlossaryEntry {
-        term: "N tests",
-        explanation: "A collapsed group of a file's test symbols — expand it to see them individually, dimmed to show they carry less review weight than production code",
     },
 ];
 
@@ -368,6 +364,7 @@ mod tests {
         assert_eq!(
             vec![
                 "v / >",
+                "fn struct enum trait class iface type",
                 "+",
                 "~",
                 "(dimmed name)",
@@ -377,6 +374,7 @@ mod tests {
                 "!",
                 "[test] (N symbols)",
                 "N tests",
+                "(skipped: ...)",
                 "chg:N",
                 "api:N",
                 "fan-in:N",
@@ -433,29 +431,6 @@ mod tests {
             .collect();
 
         assert!(terms.contains(&"jumplist"));
-    }
-
-    #[test]
-    fn should_include_a_glossary_entry_for_tree_row_badges() {
-        let terms: Vec<&str> = HELP_CONTENT
-            .glossary
-            .iter()
-            .map(|entry| entry.term)
-            .collect();
-
-        assert!(terms.contains(&"chg: / api: / fan-in:"));
-    }
-
-    #[test]
-    fn should_include_a_glossary_entry_for_the_risk_marker_and_test_group() {
-        let terms: Vec<&str> = HELP_CONTENT
-            .glossary
-            .iter()
-            .map(|entry| entry.term)
-            .collect();
-
-        assert!(terms.contains(&"!"));
-        assert!(terms.contains(&"N tests"));
     }
 
     #[test]

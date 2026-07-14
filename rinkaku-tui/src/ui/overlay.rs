@@ -74,10 +74,7 @@ fn legend_symbol(
     }
 }
 
-/// Column width the swatch is padded to before the explanation starts —
-/// wide enough for the longest swatch text (`"(dimmed + struck-through
-/// name)"`, 31 chars) plus at least one separating space.
-const MARKER_SWATCH_COLUMN_WIDTH: usize = 32;
+const MARKER_SWATCH_COLUMN_WIDTH: usize = 40;
 
 /// Builds the Markers section's lines: one row per
 /// [`crate::help::HELP_CONTENT`]'s `markers` legend entry, its swatch
@@ -110,11 +107,7 @@ fn markers_legend_lines() -> Vec<Line<'static>> {
 
 /// Looks up the real style(s) for one [`crate::help::MarkerLegendEntry::swatch`]
 /// value, reusing `crate::row_view`'s own style producers so the legend can
-/// never drift from what the tree pane actually renders. A `chg:`/`api:`/
-/// `fan-in:`/`warn:`/`split:` swatch splits into a plain label span plus a
-/// colored number span, mirroring `row_view::push_badge_spans`'s own
-/// label/number split. Falls back to a single unstyled span for the
-/// remaining swatches, which are plain text on the tree row itself.
+/// never drift from what the tree pane actually renders.
 fn marker_swatch_spans(swatch: &'static str) -> Vec<Span<'static>> {
     match swatch {
         "+" => vec![symbol_marker_span(&legend_symbol(
@@ -136,6 +129,12 @@ fn marker_swatch_spans(swatch: &'static str) -> Vec<Span<'static>> {
             swatch,
             symbol_name_style(&legend_symbol(None, true, false)),
         )],
+        "(cycle)" => vec![Span::styled(
+            swatch,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )],
         "!" => vec![Span::styled(swatch, risk_marker_style())],
         "lines:N" => vec![Span::styled(swatch, band_style(FileSizeBand::Watch))],
         "chg:N" => badge_swatch_spans("chg:", cyan_badge_style()),
@@ -144,6 +143,7 @@ fn marker_swatch_spans(swatch: &'static str) -> Vec<Span<'static>> {
         "warn:N" => badge_swatch_spans("warn:", warning_badge_style()),
         "split:N" => badge_swatch_spans("split:", split_badge_style()),
         "N tests" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],
+        "(skipped: ...)" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],
         _ => vec![Span::raw(swatch)],
     }
 }
@@ -361,6 +361,76 @@ mod tests {
 
         let number_span = line_span(fan_in_line, "N");
         assert_eq!(Style::default().fg(Color::Cyan), number_span.style);
+    }
+
+    #[test]
+    fn should_render_warn_badge_swatch_with_yellow_number_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let warn_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "warn:")
+            })
+            .expect("warn: line present");
+
+        let number_span = line_span(warn_line, "N");
+        assert_eq!(Style::default().fg(Color::Yellow), number_span.style);
+    }
+
+    #[test]
+    fn should_render_split_badge_swatch_with_red_number_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let split_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "split:")
+            })
+            .expect("split: line present");
+
+        let number_span = line_span(split_line, "N");
+        assert_eq!(Style::default().fg(Color::Red), number_span.style);
+    }
+
+    #[test]
+    fn should_render_signature_changed_marker_swatch_with_yellow_tilde_when_building_markers_legend()
+     {
+        let lines = markers_legend_lines();
+
+        let changed_line = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "~"))
+            .expect("~ line present");
+
+        let swatch_span = line_span(changed_line, "~");
+        assert_eq!(Style::default().fg(Color::Yellow), swatch_span.style);
+    }
+
+    #[test]
+    fn should_render_cycle_marker_swatch_bold_yellow_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let cycle_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "(cycle)")
+            })
+            .expect("(cycle) line present");
+
+        let swatch_span = line_span(cycle_line, "(cycle)");
+        assert_eq!(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            swatch_span.style
+        );
     }
 
     #[test]
