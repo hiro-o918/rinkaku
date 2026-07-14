@@ -193,3 +193,19 @@ position ADR 0026 already centers on the symbol.
   — `--base` mode is unaffected, since there the working tree already
   *is* the new side by construction. Left as a follow-up rather than
   folded into this ADR's decision.
+
+## Amendment: `--pr` mode now reads the source view from the head snapshot (ADR 0047)
+
+The `--pr` follow-up above is now fixed. `rinkaku-tui/src/source.rs`
+gained a `SourceReader` port (one method,
+`read(repo_root, relative_path) -> Result<String, String>`) that
+`load_symbol_source`/`load_highlighted_symbol_source` read through
+instead of calling `std::fs::read_to_string` directly.
+`WorkingTreeSourceReader` is the default, used by every input mode
+exactly as before. `main.rs` (the composition root) wires in a
+`git show <head SHA>:<path>`-backed reader
+(`rinkaku::git::file_read::PrHeadSourceReader`) only for `--pr` mode,
+using the PR head SHA and resolved workdir it already has in hand
+from `fetch_pr_head`/`resolve_pr_workdir`. See ADR 0047 for the
+rationale behind introducing the port itself (why this is a shared
+abstraction rather than a one-off branch).

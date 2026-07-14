@@ -57,15 +57,16 @@ use std::time::Duration;
 /// taken over the terminal — see [`run`]'s doc comment (re-exported from
 /// `crate::session`, which retains the full terminal-lifecycle rationale
 /// that used to live here) for what `report`, `diff_text`, `entry_path`,
-/// and `repo_root` mean. `pub(crate)` rather than private: `crate::session`
-/// is a sibling module, not a submodule, so it needs this visibility to
-/// call in.
+/// `repo_root`, and `source_reader` mean. `pub(crate)` rather than private:
+/// `crate::session` is a sibling module, not a submodule, so it needs this
+/// visibility to call in.
 pub(crate) fn run_app(
     terminal: &mut ratatui::DefaultTerminal,
     report: &Report,
     diff_text: &str,
     entry_path: Option<&str>,
     repo_root: &std::path::Path,
+    source_reader: &dyn source::SourceReader,
 ) -> std::io::Result<()> {
     let mut app = App::new(report);
     if let Some(path) = entry_path {
@@ -246,8 +247,12 @@ pub(crate) fn run_app(
                         &symbol_id,
                     )
                 {
-                    let loaded =
-                        source::load_highlighted_symbol_source(report, &symbol_id, repo_root);
+                    let loaded = source::load_highlighted_symbol_source(
+                        report,
+                        &symbol_id,
+                        repo_root,
+                        source_reader,
+                    );
                     // A failure is surfaced on the status line right away
                     // (rather than only discovered on the next redraw)
                     // *and* cached into `source_content` below so

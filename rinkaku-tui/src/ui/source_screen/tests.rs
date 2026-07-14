@@ -94,6 +94,7 @@ fn missing_file_source_content(
         report,
         symbol_id,
         std::path::Path::new("/repo"),
+        &crate::source::WorkingTreeSourceReader,
     ))
 }
 
@@ -214,6 +215,7 @@ fn should_apply_keyword_foreground_and_symbol_range_background_in_source_screen(
         &report,
         "lib.rs::foo",
         dir.path(),
+        &crate::source::WorkingTreeSourceReader,
     ));
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
@@ -285,6 +287,7 @@ fn should_fall_back_to_plain_source_style_when_file_extension_is_unrecognized() 
         &report,
         "config.yaml::foo",
         dir.path(),
+        &crate::source::WorkingTreeSourceReader,
     ));
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
@@ -389,6 +392,7 @@ fn draw_source_screen_for_test(
         report,
         "lib.rs::foo",
         repo_root,
+        &crate::source::WorkingTreeSourceReader,
     ));
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 

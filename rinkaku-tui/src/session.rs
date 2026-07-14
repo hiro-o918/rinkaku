@@ -9,6 +9,7 @@
 //! only the terminal-lifecycle wrapper around that loop moves here.
 
 use crate::run_app;
+use crate::source::{SourceReader, WorkingTreeSourceReader};
 use crate::splash;
 use ratatui::crossterm::event;
 use ratatui::crossterm::execute;
@@ -79,6 +80,11 @@ use rinkaku_core::render::Report;
 /// (ADR 0016). Without it, the source view would only work when `rinkaku`
 /// happens to be invoked from the repository root.
 ///
+/// Uses [`WorkingTreeSourceReader`] for the source drill-down's file reads
+/// (ADR 0047's default) — callers that need `--pr` mode's head-snapshot
+/// reader go through [`TuiSession::run`] directly instead, passing their
+/// own [`SourceReader`].
+///
 /// A thin convenience wrapper around [`TuiSession::init`] +
 /// [`TuiSession::run`] for callers that have no splash screen to draw
 /// in between (ADR 0033) — every terminal-lifecycle detail this doc
@@ -90,7 +96,13 @@ pub fn run(
     entry_path: Option<&str>,
     repo_root: &std::path::Path,
 ) -> std::io::Result<()> {
-    TuiSession::init()?.run(report, diff_text, entry_path, repo_root)
+    TuiSession::init()?.run(
+        report,
+        diff_text,
+        entry_path,
+        repo_root,
+        &WorkingTreeSourceReader,
+    )
 }
 
 /// Owns the terminal's raw-mode/alternate-screen/mouse-capture lifecycle
@@ -171,14 +183,28 @@ impl TuiSession {
     /// matching the postamble the pre-ADR-0033 [`run`] function always ran.
     /// See [`run`]'s own doc comment (preserved there) for what `report`,
     /// `diff_text`, `entry_path`, and `repo_root` mean.
+    ///
+    /// `source_reader` is the source drill-down's file-content port (ADR
+    /// 0047): [`WorkingTreeSourceReader`] for every input mode except
+    /// `--pr`, for which `main.rs` wires in a `git show`-backed reader so
+    /// the source view reflects the PR's head snapshot rather than
+    /// whatever happens to be checked out locally.
     pub fn run(
         mut self,
         report: &Report,
         diff_text: &str,
         entry_path: Option<&str>,
         repo_root: &std::path::Path,
+        source_reader: &dyn SourceReader,
     ) -> std::io::Result<()> {
-        let result = run_app(&mut self.terminal, report, diff_text, entry_path, repo_root);
+        let result = run_app(
+            &mut self.terminal,
+            report,
+            diff_text,
+            entry_path,
+            repo_root,
+            source_reader,
+        );
         let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
         ratatui::restore();
         result

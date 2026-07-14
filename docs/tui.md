@@ -125,9 +125,12 @@ entries — same behavior as neovim's jumplist.
 ## Source view
 
 `s` on a symbol row opens the file scrolled to and highlighting its
-line range. Reads the working tree (not the historical commit
-`--base`/`--pr` compared against), so the highlighted range can drift
-if you edit the file after opening the TUI. `esc`/`q` returns.
+line range. In `--base` and stdin mode, this reads the working tree
+(not the historical commit compared against), so the highlighted
+range can drift if you edit the file after opening the TUI. In `--pr`
+mode, this reads the PR's head snapshot instead (`git show <head
+SHA>:<path>`), so it stays consistent with the diff regardless of
+what's checked out locally. `esc`/`q` returns.
 
 When the open file has diff hunks, they're overlaid directly onto the
 full file: added lines get a green background and a `+` gutter,
@@ -135,12 +138,10 @@ removed lines appear as extra red-background rows with a `-` gutter
 inserted at the position they used to occupy — the diff pane's
 signal, but in the context of the whole file rather than clipped to
 the changed lines alone. The overlay is always on; there's no key to
-toggle it off. If the file on disk no longer matches the diff (edited
-since it was produced, or diffed against a different revision), the
-pane falls back to its plain, unhighlighted rendering and says so in
-its title. In particular, `--pr` shows your local checkout here, not
-a snapshot of the PR's branch, so files the PR changes typically fall
-back to plain rendering too.
+toggle it off. If the file's content doesn't match the diff (in
+`--base`/stdin mode, edited since the diff was produced or diffed
+against a different revision), the pane falls back to its plain,
+unhighlighted rendering and says so in its title.
 
 ## Combining with `--entry`
 
