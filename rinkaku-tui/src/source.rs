@@ -16,6 +16,14 @@
 //! reading them off disk needs the repository root joined in first rather
 //! than treating them as relative to wherever `rinkaku` happens to be
 //! invoked from (e.g. a subdirectory) — see [`resolve_source_path`].
+//!
+//! **File content itself comes from a [`SourceReader`] (ADR 0047), not a
+//! hardcoded `std::fs::read_to_string` call.** `rinkaku-tui` never shells
+//! out to `git` (ADR 0016), so `--pr` mode's IO — reading a file as it
+//! existed at the PR's head commit, via `git show <sha>:<path>` — is
+//! implemented in `rinkaku`'s own adapter layer and injected in through
+//! this trait; [`WorkingTreeSourceReader`] is the default every other
+//! input mode uses.
 
 /// A symbol's location in `Report`, resolved from its id — enough for
 /// [`load_symbol_source`] to know which file to read and
@@ -53,52 +61,69 @@ pub struct HighlightedSourceView {
     pub token_highlights: Vec<crate::highlight::LineHighlight>,
 }
 
-/// Reads `id`'s file off the working tree and builds a [`SourceView`] for
-/// it, or an error message suitable for the status line on failure (no
-/// such symbol in `report`, or the file read itself failing — a moved/
-/// deleted file since the diff was analyzed, a permissions error, etc.).
-///
-/// Always reads from the working tree, regardless of which input mode
-/// (`--base`, `--pr`, stdin) produced `report` — unlike `main.rs`'s
-/// `--base`/`--pr` pipelines, which read historical content via
-/// `git show <rev>:<path>` to stay pinned to the exact diffed commit, the
-/// TUI's source view is a live "look at the file now" drill-down, so
-/// reading the working tree is the right behavior even when `report` was
-/// built from a historical diff (the alternative — plumbing the resolved
-/// head SHA all the way from `main.rs` into `rinkaku_tui::run` just for
-/// this one view — is deferred until a real user need for it shows up).
+/// A source of file content for the source drill-down (ADR 0047),
+/// injected so this crate's only IO stays behind a small port rather than
+/// a hardcoded `std::fs` call — `rinkaku-tui` never shells out to `git`
+/// itself (ADR 0016), so a reader backed by `git show` lives in `rinkaku`'s
+/// adapter layer and is wired in from there.
+pub trait SourceReader {
+    /// Reads `relative_path` (repository-root-relative, see this module's
+    /// doc comment) and returns its content, or an error message suitable
+    /// for the status line on failure.
+    fn read(&self, repo_root: &std::path::Path, relative_path: &str) -> Result<String, String>;
+}
+
+/// The default [`SourceReader`]: reads `relative_path` off the working
+/// tree, joined onto `repo_root` via [`resolve_source_path`]. Used by
+/// every input mode except `--pr` (ADR 0047), for which `main.rs` wires in
+/// a `git show <head SHA>:<path>`-backed reader instead so the source view
+/// reflects the PR's actual head snapshot rather than whatever happens to
+/// be checked out locally.
+pub struct WorkingTreeSourceReader;
+
+impl SourceReader for WorkingTreeSourceReader {
+    fn read(&self, repo_root: &std::path::Path, relative_path: &str) -> Result<String, String> {
+        let full_path = resolve_source_path(repo_root, relative_path);
+        std::fs::read_to_string(&full_path).map_err(|source| {
+            format!(
+                "failed to read {}: {source} (not present in the working tree — expected for a \
+                 file diffed from a PR or historical commit not checked out locally)",
+                full_path.display()
+            )
+        })
+    }
+}
+
+/// Reads `id`'s file via `reader` and builds a [`SourceView`] for it, or an
+/// error message suitable for the status line on failure (no such symbol
+/// in `report`, or the file read itself failing).
 ///
 /// `repo_root` anchors `location.path` (always repository-root-relative,
-/// see this module's doc comment) via [`resolve_source_path`] — callers
-/// pass the repository root `main.rs` resolves once at startup
-/// (`rinkaku_tui::run`'s own `repo_root` parameter), not the process's
-/// current directory, so this still works when `rinkaku` is invoked from a
-/// subdirectory of the repository.
+/// see this module's doc comment) — callers pass the repository root
+/// `main.rs` resolves once at startup (`rinkaku_tui::run`'s own
+/// `repo_root` parameter), not the process's current directory, so this
+/// still works when `rinkaku` is invoked from a subdirectory of the
+/// repository.
 ///
-/// A consequence of reading live: a symbol's `range` in `report` reflects
-/// the file's content *at analysis time*. If the file is edited on disk
-/// afterward (including between opening the TUI and pressing `s` on a
-/// given row), the highlighted lines can drift from the symbol's actual
-/// current location, or — if the file shrank — extend past its current
-/// end entirely. [`visible_window`] clamps to the file's current length
-/// either way rather than producing an out-of-bounds window, but it makes
-/// no attempt to re-locate the symbol in the changed content.
+/// With [`WorkingTreeSourceReader`] (every input mode except `--pr`), a
+/// symbol's `range` in `report` reflects the file's content *at analysis
+/// time*. If the file is edited on disk afterward (including between
+/// opening the TUI and pressing `s` on a given row), the highlighted lines
+/// can drift from the symbol's actual current location, or — if the file
+/// shrank — extend past its current end entirely. [`visible_window`]
+/// clamps to the file's current length either way rather than producing
+/// an out-of-bounds window, but it makes no attempt to re-locate the
+/// symbol in the changed content.
 pub fn load_symbol_source(
     report: &rinkaku_core::render::Report,
     id: &str,
     repo_root: &std::path::Path,
+    reader: &dyn SourceReader,
 ) -> Result<SourceView, String> {
     let location = find_symbol_location(report, id)
         .ok_or_else(|| format!("symbol not found in report: {id}"))?;
 
-    let full_path = resolve_source_path(repo_root, &location.path);
-    let content = std::fs::read_to_string(&full_path).map_err(|source| {
-        format!(
-            "failed to read {}: {source} (not present in the working tree — expected for a \
-             file diffed from a PR or historical commit not checked out locally)",
-            full_path.display()
-        )
-    })?;
+    let content = reader.read(repo_root, &location.path)?;
 
     Ok(SourceView {
         path: location.path,
@@ -127,8 +152,9 @@ pub fn load_highlighted_symbol_source(
     report: &rinkaku_core::render::Report,
     id: &str,
     repo_root: &std::path::Path,
+    reader: &dyn SourceReader,
 ) -> Result<HighlightedSourceView, String> {
-    let view = load_symbol_source(report, id, repo_root)?;
+    let view = load_symbol_source(report, id, repo_root, reader)?;
     let token_highlights = crate::highlight::highlight_source_lines(&view.path, &view.lines);
     Ok(HighlightedSourceView {
         view,
@@ -369,7 +395,12 @@ mod tests {
     fn should_return_error_message_when_load_symbol_source_finds_no_such_symbol() {
         let report = empty_report();
 
-        let actual = load_symbol_source(&report, "missing::id", std::path::Path::new("/repo"));
+        let actual = load_symbol_source(
+            &report,
+            "missing::id",
+            std::path::Path::new("/repo"),
+            &WorkingTreeSourceReader,
+        );
 
         assert_eq!(
             Err("symbol not found in report: missing::id".to_string()),
@@ -428,7 +459,12 @@ mod tests {
             highlight_start: 1,
             highlight_end: 1,
         });
-        let actual = load_symbol_source(&report, "src/lib.rs::foo", dir.path());
+        let actual = load_symbol_source(
+            &report,
+            "src/lib.rs::foo",
+            dir.path(),
+            &WorkingTreeSourceReader,
+        );
 
         assert_eq!(expected, actual);
     }
@@ -450,12 +486,102 @@ mod tests {
             ..empty_report()
         };
 
-        let actual = load_symbol_source(&report, "src/missing.rs::foo", dir.path());
+        let actual = load_symbol_source(
+            &report,
+            "src/missing.rs::foo",
+            dir.path(),
+            &WorkingTreeSourceReader,
+        );
 
         let error = actual.expect_err("a missing file must fail rather than silently succeed");
         assert!(
             error.contains("not present in the working tree"),
             "error message should explain the file may not be checked out locally, got: {error}"
+        );
+    }
+
+    /// A [`SourceReader`] that always returns fixed content, ignoring both
+    /// arguments — used to prove [`load_symbol_source`] actually reads
+    /// through the injected reader rather than reaching for the working
+    /// tree directly.
+    struct FakeSourceReader {
+        content: Result<String, String>,
+    }
+
+    impl SourceReader for FakeSourceReader {
+        fn read(
+            &self,
+            _repo_root: &std::path::Path,
+            _relative_path: &str,
+        ) -> Result<String, String> {
+            self.content.clone()
+        }
+    }
+
+    #[test]
+    fn should_read_via_injected_reader_when_loading_symbol_source() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    LineRange { start: 1, end: 1 },
+                )],
+            }],
+            ..empty_report()
+        };
+        let reader = FakeSourceReader {
+            content: Ok("fn foo() { /* head snapshot */ }".to_string()),
+        };
+
+        let actual = load_symbol_source(
+            &report,
+            "src/lib.rs::foo",
+            std::path::Path::new("/unused"),
+            &reader,
+        );
+
+        assert_eq!(
+            Ok(SourceView {
+                path: "src/lib.rs".to_string(),
+                lines: vec!["fn foo() { /* head snapshot */ }".to_string()],
+                highlight_start: 1,
+                highlight_end: 1,
+            }),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_propagate_reader_error_when_loading_symbol_source() {
+        let report = Report {
+            origin: rinkaku_core::render::ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    LineRange { start: 1, end: 1 },
+                )],
+            }],
+            ..empty_report()
+        };
+        let reader = FakeSourceReader {
+            content: Err("git show origin/pr-head:src/lib.rs failed".to_string()),
+        };
+
+        let actual = load_symbol_source(
+            &report,
+            "src/lib.rs::foo",
+            std::path::Path::new("/unused"),
+            &reader,
+        );
+
+        assert_eq!(
+            Err("git show origin/pr-head:src/lib.rs failed".to_string()),
+            actual
         );
     }
 
@@ -480,8 +606,13 @@ mod tests {
             ..empty_report()
         };
 
-        let actual = load_highlighted_symbol_source(&report, "src/lib.rs::foo", dir.path())
-            .expect("expected a successful load for an existing .rs file");
+        let actual = load_highlighted_symbol_source(
+            &report,
+            "src/lib.rs::foo",
+            dir.path(),
+            &WorkingTreeSourceReader,
+        )
+        .expect("expected a successful load for an existing .rs file");
 
         assert_eq!(
             SourceView {
@@ -525,8 +656,13 @@ mod tests {
             ..empty_report()
         };
 
-        let actual = load_highlighted_symbol_source(&report, "config.yaml::root", dir.path())
-            .expect("expected a successful load for an existing file");
+        let actual = load_highlighted_symbol_source(
+            &report,
+            "config.yaml::root",
+            dir.path(),
+            &WorkingTreeSourceReader,
+        )
+        .expect("expected a successful load for an existing file");
 
         assert_eq!(vec![None], actual.token_highlights);
     }
@@ -548,7 +684,12 @@ mod tests {
             ..empty_report()
         };
 
-        let actual = load_highlighted_symbol_source(&report, "src/missing.rs::foo", dir.path());
+        let actual = load_highlighted_symbol_source(
+            &report,
+            "src/missing.rs::foo",
+            dir.path(),
+            &WorkingTreeSourceReader,
+        );
 
         let error = actual.expect_err("a missing file must fail rather than silently succeed");
         assert!(

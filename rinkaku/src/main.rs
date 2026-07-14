@@ -164,10 +164,15 @@ fn main() -> anyhow::Result<()> {
                 // reintroduce exactly the raw-bytes-mid-redraw bug this ADR
                 // amendment fixes, just for one more call site.
                 let report = finish_report(&cli, &progress, analyzed.report);
-                (report, analyzed.diff_text, analyzed.resolved_workdir)
+                (
+                    report,
+                    analyzed.diff_text,
+                    analyzed.resolved_workdir,
+                    analyzed.pr_head_sha,
+                )
             });
             let (session, buffered_notes) = progress.into_session_and_notes();
-            let (report, diff_text, resolved_workdir) = match outcome {
+            let (report, diff_text, resolved_workdir, pr_head_sha) = match outcome {
                 Ok(analyzed) => analyzed,
                 Err(err) => {
                     // `session` (and with it, `TuiSession`'s `Drop` impl)
@@ -193,8 +198,29 @@ fn main() -> anyhow::Result<()> {
                 }
             };
             let repo_root = resolve_repo_root(resolved_workdir.as_deref());
+            // `--pr` mode never checks the fetched head ref out (this
+            // module's own doc comment on the `--pr` read strategy), so the
+            // working tree is not a reliable source for the source view's
+            // file content there — a `git show <head>:<path>` reader keeps
+            // it pinned to the PR's actual head snapshot instead (ADR
+            // 0047). Every other input mode keeps reading the working tree,
+            // unchanged.
+            let pr_source_reader = pr_head_sha.map(|head| git::file_read::PrHeadSourceReader {
+                head,
+                cwd: resolved_workdir.clone(),
+            });
+            let source_reader: &dyn rinkaku_tui::source::SourceReader = match &pr_source_reader {
+                Some(reader) => reader,
+                None => &rinkaku_tui::source::WorkingTreeSourceReader,
+            };
             let result = session
-                .run(&report, &diff_text, cli.entry.as_deref(), &repo_root)
+                .run(
+                    &report,
+                    &diff_text,
+                    cli.entry.as_deref(),
+                    &repo_root,
+                    source_reader,
+                )
                 .map_err(anyhow::Error::from);
             // Flushed after `TuiSession::run` has already restored the
             // terminal (its own postamble, unconditional on both the `Ok`
@@ -273,17 +299,19 @@ fn release_log_sink(sink: &DeferredLogSink<std::io::Stderr>) {
 }
 
 /// The result of [`run_analysis`]: a built [`Report`], the raw diff text
-/// (empty for the whole-repo-outline branch, ADR 0017), and the resolved
+/// (empty for the whole-repo-outline branch, ADR 0017), the resolved
 /// working directory (`--pr`'s own clone/cache directory, `None` for every
-/// other input mode) — grouped into a named struct rather than a tuple so
-/// each field keeps its name at the one call site that destructures all
-/// three (a positional tuple invites a field-order mix-up the first time
-/// this return shape is touched, the same reasoning
+/// other input mode), and the resolved PR head SHA (`--pr` only, `None`
+/// otherwise) — grouped into a named struct rather than a tuple so each
+/// field keeps its name at the one call site that destructures all four (a
+/// positional tuple invites a field-order mix-up the first time this
+/// return shape is touched, the same reasoning
 /// `rinkaku_tui::DiffPaneSelectionEffects` documents for itself).
 struct AnalyzedReport {
     report: Report,
     diff_text: String,
     resolved_workdir: Option<PathBuf>,
+    pr_head_sha: Option<String>,
 }
 
 /// Runs the same `--pr`/`--base`/stdin/whole-repo input-mode chain
@@ -306,6 +334,12 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
     // instead, showing an unrelated file if one happens to exist at the
     // same relative path there.
     let mut resolved_workdir: Option<std::path::PathBuf> = None;
+    // Populated only in the `--pr` branch below; carried out to
+    // `AnalyzedReport::pr_head_sha` so `main`'s `DisplayMode::Tui` arm can
+    // wire a `git show`-backed `SourceReader` (ADR 0047) for exactly this
+    // input mode, the same way `resolved_workdir` above already carries
+    // out `--pr`'s resolved clone directory.
+    let mut pr_head_sha: Option<String> = None;
     let (report, diff_text) = if let Some(pr_arg) = &cli.pr {
         // Validate the arg and derive the fetch refspec's PR number, but
         // pass the original (trimmed) value — not the parsed number — to
@@ -325,6 +359,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         let cwd = workdir.as_deref();
         log::debug!("fetching PR #{number} head");
         let head_sha = fetch_pr_head(number, cwd)?;
+        pr_head_sha = Some(head_sha.clone());
         if head_sha != pr_info.head_ref_oid {
             anyhow::bail!(
                 "fetched PR #{number} head ({head_sha}) does not match `gh`'s reported head \
@@ -465,6 +500,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         report,
         diff_text,
         resolved_workdir,
+        pr_head_sha,
     })
 }
 
