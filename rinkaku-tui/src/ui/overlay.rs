@@ -637,6 +637,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -679,6 +680,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -713,6 +715,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -753,6 +756,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -777,6 +781,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -812,6 +817,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -854,6 +860,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -912,6 +919,7 @@ mod tests {
                         &[],
                         &BlastRadiusSelection::NotApplicable,
                         None,
+                        &[],
                     );
                 })
                 .expect("draw");
@@ -942,6 +950,7 @@ mod tests {
                     &[],
                     &BlastRadiusSelection::NotApplicable,
                     None,
+                    &[],
                 );
             })
             .expect("draw");

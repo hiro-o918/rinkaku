@@ -30,6 +30,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -93,6 +94,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -162,6 +164,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -229,6 +232,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -291,6 +295,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");

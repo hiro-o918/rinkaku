@@ -35,6 +35,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -86,6 +87,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -201,6 +203,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");
@@ -249,6 +252,7 @@ index e69de29..4b825dc 100644
                 &diff_highlights,
                 &BlastRadiusSelection::NotApplicable,
                 None,
+                &[],
             );
         })
         .expect("draw");

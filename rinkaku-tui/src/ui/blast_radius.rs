@@ -215,6 +215,7 @@ mod tests {
                     &[],
                     &blast_radius_selection,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -243,6 +244,7 @@ mod tests {
                     &[],
                     &blast_radius_selection,
                     None,
+                    &[],
                 );
             })
             .expect("draw");
@@ -286,6 +288,7 @@ mod tests {
                     &[],
                     &blast_radius_selection,
                     None,
+                    &[],
                 );
             })
             .expect("draw");

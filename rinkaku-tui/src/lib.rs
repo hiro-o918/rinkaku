@@ -183,6 +183,7 @@ pub(crate) fn run_app(
                 &diff_highlights,
                 &blast_radius_selection,
                 source_content.as_ref(),
+                &diff_hunks,
             );
         })?;
         app = clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll);

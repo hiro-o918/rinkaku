@@ -20,6 +20,7 @@ mod status;
 mod style;
 
 use crate::app::{App, BlastRadiusSelection, Screen};
+use crate::diff_view::FileHunks;
 use crate::highlight::HighlightedFile;
 use crate::source::HighlightedSourceView;
 use entry::draw_entry_screen;
@@ -120,6 +121,15 @@ pub struct DrawOutcome {
 /// is underneath — `outcome`'s `clamped_right_pane_scroll`/
 /// `scroll_viewport_height` pair (whichever screen set it) is left
 /// untouched by this step.
+///
+/// `diff_hunks` (ADR 0046) is the same `diff_view::parse_diff_hunks` output
+/// that already seeds `diff_highlights` above, passed through unchanged so
+/// the source screen can composite it onto the drilled-into symbol's file
+/// as an added/removed overlay.
+// Each parameter is a distinct once-per-session/once-per-key computation a
+// prior ADR deliberately keeps outside this render loop; grouping them into
+// a struct is a bigger refactor than this ADR's own scope.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     app: &App,
@@ -128,6 +138,7 @@ pub fn draw(
     diff_highlights: &[HighlightedFile],
     blast_radius_selection: &BlastRadiusSelection,
     source_content: Option<&Result<HighlightedSourceView, String>>,
+    diff_hunks: &[FileHunks],
 ) -> DrawOutcome {
     let area = frame.area();
     let [body, status_area] =
@@ -168,7 +179,14 @@ pub fn draw(
             scroll_top,
         } => {
             let inner_height = body.height.saturating_sub(2) as usize;
-            draw_source_screen(frame, symbol_id, *scroll_top, source_content, body);
+            draw_source_screen(
+                frame,
+                symbol_id,
+                *scroll_top,
+                source_content,
+                diff_hunks,
+                body,
+            );
             DrawOutcome {
                 clamped_right_pane_scroll: None,
                 scroll_viewport_height: Some(inner_height),
