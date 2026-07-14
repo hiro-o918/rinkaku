@@ -3,11 +3,18 @@
 //! after the pane split has drawn everything else.
 
 use super::scroll::{render_scrollable_pane, truncate_to_width, windowed_rows_with_indicators};
+use crate::row_view::{
+    band_style, cyan_badge_style, risk_marker_style, split_badge_style, symbol_marker_span,
+    symbol_name_style, test_badge_style, warning_badge_style,
+};
+use crate::tree::SymbolRef;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
+use rinkaku_core::extract::{Classification, SymbolKind};
+use rinkaku_core::file_size::FileSizeBand;
 
 /// The `?` help overlay's content laid out once, independent of the pane's
 /// rendered size — extracted from [`draw_help_overlay`] so tests can pin
@@ -29,6 +36,12 @@ fn help_overlay_lines() -> Vec<Line<'static>> {
         lines.push(Line::raw(""));
     }
     lines.push(Line::styled(
+        "Markers",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    lines.extend(markers_legend_lines());
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
         "Glossary",
         Style::default().add_modifier(Modifier::BOLD),
     ));
@@ -39,6 +52,108 @@ fn help_overlay_lines() -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+/// One [`SymbolRef`] per marker case the Markers legend needs a real
+/// [`crate::row_view::symbol_marker_span`]/[`crate::row_view::symbol_name_style`]
+/// swatch for — fields left at their "no signal" default except the one
+/// this case is about, mirroring the minimal fixtures `row_view`'s own
+/// tests already build (`row_view_tests::plain_symbol`).
+fn legend_symbol(
+    classification: Option<Classification>,
+    removed: bool,
+    is_test: bool,
+) -> SymbolRef {
+    SymbolRef {
+        id: "legend".to_string(),
+        name: "legend".to_string(),
+        kind: SymbolKind::Function,
+        classification,
+        removed,
+        is_test,
+    }
+}
+
+const MARKER_SWATCH_COLUMN_WIDTH: usize = 40;
+
+/// Builds the Markers section's lines: one row per
+/// [`crate::help::HELP_CONTENT`]'s `markers` legend entry, its swatch
+/// rendered with the exact [`ratatui::style::Style`]
+/// `crate::row_view::entry_row_line` itself would use — a real style, not a
+/// prose color name — followed by the entry's explanation. Extracted as its
+/// own pure function, mirroring [`help_overlay_lines`]'s own split, so a
+/// test can assert on the built `Vec<Line>` without a live `Frame`.
+fn markers_legend_lines() -> Vec<Line<'static>> {
+    crate::help::HELP_CONTENT
+        .markers
+        .iter()
+        .map(|entry| {
+            let swatch = marker_swatch_spans(entry.swatch);
+            let swatch_width: usize = swatch.iter().map(|span| span.content.len()).sum();
+            let padding = MARKER_SWATCH_COLUMN_WIDTH
+                .saturating_sub(swatch_width)
+                .max(1);
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(swatch);
+            spans.push(Span::raw(format!(
+                "{}{}",
+                " ".repeat(padding),
+                entry.explanation
+            )));
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// Looks up the real style(s) for one [`crate::help::MarkerLegendEntry::swatch`]
+/// value, reusing `crate::row_view`'s own style producers so the legend can
+/// never drift from what the tree pane actually renders.
+fn marker_swatch_spans(swatch: &'static str) -> Vec<Span<'static>> {
+    match swatch {
+        "+" => vec![symbol_marker_span(&legend_symbol(
+            Some(Classification::Added),
+            false,
+            false,
+        ))],
+        "~" => vec![symbol_marker_span(&legend_symbol(
+            Some(Classification::SignatureChanged),
+            false,
+            false,
+        ))],
+        "x" => vec![symbol_marker_span(&legend_symbol(None, true, false))],
+        "(dimmed name)" => vec![Span::styled(
+            swatch,
+            symbol_name_style(&legend_symbol(Some(Classification::BodyOnly), false, false)),
+        )],
+        "(dimmed + struck-through name)" => vec![Span::styled(
+            swatch,
+            symbol_name_style(&legend_symbol(None, true, false)),
+        )],
+        "(cycle)" => vec![Span::styled(
+            swatch,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )],
+        "!" => vec![Span::styled(swatch, risk_marker_style())],
+        "lines:N" => vec![Span::styled(swatch, band_style(FileSizeBand::Watch))],
+        "chg:N" => badge_swatch_spans("chg:", cyan_badge_style()),
+        "api:N" => badge_swatch_spans("api:", warning_badge_style()),
+        "fan-in:N" => badge_swatch_spans("fan-in:", cyan_badge_style()),
+        "warn:N" => badge_swatch_spans("warn:", warning_badge_style()),
+        "split:N" => badge_swatch_spans("split:", split_badge_style()),
+        "[test] (N symbols)" => vec![Span::styled(swatch, test_badge_style())],
+        "N tests" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],
+        "(skipped: ...)" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],
+        _ => vec![Span::raw(swatch)],
+    }
+}
+
+/// A `label:N` badge swatch split into a plain label span and an `N`
+/// numeral span styled with `number_style` — the same label/number split
+/// [`crate::row_view::push_badge_spans`] renders on the real tree row.
+fn badge_swatch_spans(label: &'static str, number_style: Style) -> Vec<Span<'static>> {
+    vec![Span::raw(label), Span::styled("N", number_style)]
 }
 
 /// Draws the `?` help overlay (ADR 0020, scrolling added post-hoc once the
@@ -196,14 +311,253 @@ pub(crate) fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, 
 
 #[cfg(test)]
 mod tests {
+    use super::{FileSizeBand, markers_legend_lines};
     use crate::app::{App, BlastRadiusSelection};
     use crate::ui::draw;
+    use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::Span;
     use rinkaku_core::diff::LineRange;
     use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
     use rinkaku_core::graph::SymbolGraph;
     use rinkaku_core::render::{FileReport, Report};
+
+    #[test]
+    fn should_render_api_badge_swatch_with_yellow_number_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let api_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "api:")
+            })
+            .expect("api: line present");
+
+        // NOTE: partial assert — a `Line` built from `format!` interpolation
+        // doesn't have one clean expected `Line` value to compare as a
+        // whole (the explanation half is plain, unstyled text pulled
+        // straight from `help::MARKER_LEGEND`), so this only pins the
+        // swatch's number span style, which is the thing this test exists
+        // to guard.
+        let number_span = line_span(api_line, "N");
+        assert_eq!(Style::default().fg(Color::Yellow), number_span.style);
+    }
+
+    #[test]
+    fn should_render_fan_in_badge_swatch_with_cyan_number_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let fan_in_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "fan-in:")
+            })
+            .expect("fan-in: line present");
+
+        let number_span = line_span(fan_in_line, "N");
+        assert_eq!(Style::default().fg(Color::Cyan), number_span.style);
+    }
+
+    #[test]
+    fn should_render_warn_badge_swatch_with_yellow_number_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let warn_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "warn:")
+            })
+            .expect("warn: line present");
+
+        let number_span = line_span(warn_line, "N");
+        assert_eq!(Style::default().fg(Color::Yellow), number_span.style);
+    }
+
+    #[test]
+    fn should_render_split_badge_swatch_with_red_number_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let split_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "split:")
+            })
+            .expect("split: line present");
+
+        let number_span = line_span(split_line, "N");
+        assert_eq!(Style::default().fg(Color::Red), number_span.style);
+    }
+
+    #[test]
+    fn should_render_signature_changed_marker_swatch_with_yellow_tilde_when_building_markers_legend()
+     {
+        let lines = markers_legend_lines();
+
+        let changed_line = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "~"))
+            .expect("~ line present");
+
+        let swatch_span = line_span(changed_line, "~");
+        assert_eq!(Style::default().fg(Color::Yellow), swatch_span.style);
+    }
+
+    #[test]
+    fn should_render_cycle_marker_swatch_bold_yellow_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let cycle_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "(cycle)")
+            })
+            .expect("(cycle) line present");
+
+        let swatch_span = line_span(cycle_line, "(cycle)");
+        assert_eq!(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            swatch_span.style
+        );
+    }
+
+    #[test]
+    fn should_render_added_marker_swatch_with_green_plus_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let added_line = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "+"))
+            .expect("+ line present");
+
+        let swatch_span = line_span(added_line, "+");
+        assert_eq!(Style::default().fg(Color::Green), swatch_span.style);
+    }
+
+    #[test]
+    fn should_render_removed_marker_swatch_with_red_x_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let removed_line = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "x"))
+            .expect("x line present");
+
+        let swatch_span = line_span(removed_line, "x");
+        assert_eq!(Style::default().fg(Color::Red), swatch_span.style);
+    }
+
+    #[test]
+    fn should_render_risk_marker_swatch_bold_red_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let risk_line = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "!"))
+            .expect("! line present");
+
+        let swatch_span = line_span(risk_line, "!");
+        assert_eq!(
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            swatch_span.style
+        );
+    }
+
+    #[test]
+    fn should_render_dimmed_and_crossed_out_removed_name_swatch_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "(dimmed + struck-through name)")
+            })
+            .expect("removed-name swatch line present");
+
+        let swatch_span = line_span(line, "(dimmed + struck-through name)");
+        assert_eq!(
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::CROSSED_OUT),
+            swatch_span.style
+        );
+    }
+
+    #[test]
+    fn should_reuse_row_view_band_style_for_lines_swatch_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "lines:N")
+            })
+            .expect("lines:N line present");
+
+        let swatch_span = line_span(line, "lines:N");
+        assert_eq!(
+            crate::row_view::band_style(FileSizeBand::Watch),
+            swatch_span.style
+        );
+    }
+
+    #[test]
+    fn should_render_test_badge_swatch_with_magenta_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "[test] (N symbols)")
+            })
+            .expect("[test] (N symbols) line present");
+
+        let swatch_span = line_span(line, "[test] (N symbols)");
+        assert_eq!(Style::default().fg(Color::Magenta), swatch_span.style);
+    }
+
+    #[test]
+    fn should_render_test_group_swatch_dark_gray_when_building_markers_legend() {
+        let lines = markers_legend_lines();
+
+        let line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == "N tests")
+            })
+            .expect("N tests line present");
+
+        let swatch_span = line_span(line, "N tests");
+        assert_eq!(Style::default().fg(Color::DarkGray), swatch_span.style);
+    }
+
+    fn line_span<'a>(line: &'a ratatui::text::Line<'static>, content: &str) -> &'a Span<'static> {
+        line.spans
+            .iter()
+            .find(|span| span.content.as_ref() == content)
+            .unwrap_or_else(|| panic!("span {content:?} not found in line"))
+    }
 
     fn symbol(id: &str, name: &str) -> ExtractedSymbol {
         ExtractedSymbol {
@@ -257,20 +611,18 @@ mod tests {
     }
 
     #[test]
-    fn should_draw_help_overlay_with_keymap_and_glossary_when_help_is_open() {
+    fn should_draw_help_overlay_with_keymap_markers_and_glossary_when_help_is_open() {
         let report = report_with_one_symbol();
         let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
-        // A 100x50 terminal (up from 100x40 before ADR 0026) so the
-        // overlay's 80% x 90% area (about 80x45 inner) fits every keymap
-        // group *and* the trailing Glossary section without the last
-        // section being pushed off the bottom. ADR 0026 added the
-        // "Source view" group and three extra "Right focus" entries
-        // (gg/G, Ctrl-d/u), which grew the pre-glossary content past
-        // the old 36-row overlay ceiling. Grown here rather than
-        // narrowing the keymap itself since discoverability of the new
-        // bindings is the whole point of adding them to the overlay in
-        // the first place.
-        let mut terminal = Terminal::new(TestBackend::new(100, 50)).expect("terminal");
+        // A 150x70 terminal (up from 100x50): wider so the Markers
+        // section's longest explanation line doesn't wrap onto a second
+        // row, taller so the overlay's 80% x 90% area fits every keymap
+        // group, the Markers legend, *and* the trailing Glossary section
+        // without the last section being pushed off the bottom. Grown here
+        // rather than narrowing the content itself, same rationale as the
+        // 100x40 -> 100x50 growth this test already went through for ADR
+        // 0026's keymap additions.
+        let mut terminal = Terminal::new(TestBackend::new(150, 70)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -292,6 +644,8 @@ mod tests {
         assert!(text.contains("Right focus"));
         assert!(text.contains("Source view"));
         assert!(text.contains("Global"));
+        assert!(text.contains("Markers"));
+        assert!(text.contains("fan-in:N"));
         assert!(text.contains("Glossary"));
         assert!(text.contains("blast radius"));
     }
