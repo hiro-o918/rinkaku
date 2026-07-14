@@ -193,6 +193,7 @@ pub fn draw(
                 *scroll_top,
                 source_content,
                 diff_hunks,
+                app.diff_view_mode(),
                 body,
             );
             DrawOutcome {

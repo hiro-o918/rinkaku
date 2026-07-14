@@ -151,7 +151,7 @@ const GLOBAL_BINDINGS: &[KeyBinding] = &[
     },
     KeyBinding {
         keys: "v / V",
-        description: "Toggle the Diff pane between unified and split (side-by-side) rendering",
+        description: "Toggle unified/split (side-by-side) rendering — Diff pane and source view diff overlay alike",
     },
     KeyBinding {
         keys: "o / O",

@@ -28,9 +28,10 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, ar
 /// Tree-focused hints are navigation-oriented, Right-focused hints are
 /// scroll/hunk-jump-oriented, and both end with a `?` mention so the fuller
 /// keymap/glossary overlay is always one keypress away. [`Screen::Source`]
-/// keeps its own short "esc/q: back" hint, unaffected by focus (drilling
-/// into source is reached only via `Focus::Right` already, so a focus
-/// distinction there would be redundant).
+/// keeps its own short hint, unaffected by focus (drilling into source is
+/// reached only via `Focus::Right` already, so a focus distinction there
+/// would be redundant); it now also advertises `v: split` (ADR 0049),
+/// since the same toggle applies to the source view's diff overlay.
 ///
 /// The `]/[: next/prev hunk` hint only appears while Right-focused *and*
 /// [`crate::app::RightPane::Diff`] is showing — `crate::run_app` only wires up the
@@ -38,9 +39,9 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, ar
 /// shaped hunk-offset table, which Detail/BlastRadius have no equivalent
 /// of), so advertising the key while Detail/BlastRadius is showing would
 /// describe a binding that does nothing there. `v: split`
-/// ([`crate::app::InputKey::ToggleSplitView`], ADR 0044) is scoped the
-/// same way: the toggle is global, but it only has a visible effect while
-/// the Diff pane is on screen.
+/// ([`crate::app::InputKey::ToggleSplitView`], ADR 0044/0049) is scoped
+/// the same way on [`Screen::Entry`]: the toggle is global, but it only
+/// has a visible effect while the Diff pane is on screen there.
 ///
 /// Extracted as its own pure function (no `ratatui` types) so the text
 /// itself — not just that *something* renders — is unit-testable, mirroring
@@ -80,7 +81,7 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
             format!("order: {order}  |  {keys}")
         }
         Screen::Source { .. } => {
-            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  esc/q: back".to_string()
+            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  esc/q: back".to_string()
         }
     };
 
@@ -316,7 +317,7 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  esc/q: back".to_string(),
+            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  esc/q: back".to_string(),
             actual
         );
     }
