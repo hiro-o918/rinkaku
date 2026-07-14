@@ -11,9 +11,10 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 OS=$(uname -s)
 ARCH=$(uname -m)
 
-# Determine target triple
+# Determine target triple. Linux uses the statically linked musl build so
+# the binary runs regardless of the host's glibc version.
 case $OS in
-  Linux)  OS_SUFFIX="unknown-linux-gnu" ;;
+  Linux)  OS_SUFFIX="unknown-linux-musl" ;;
   Darwin) OS_SUFFIX="apple-darwin" ;;
   *) echo "Error: Unsupported OS: $OS"; exit 1 ;;
 esac
