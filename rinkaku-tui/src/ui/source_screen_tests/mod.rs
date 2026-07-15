@@ -8,6 +8,8 @@
 //! - `overlay` — ADR 0046's unified added/removed diff overlay, including
 //!   the working-tree-drift fallback
 //! - `split_view` — ADR 0049's side-by-side rendering of that overlay
+//! - `search` — ADR 0057's search match highlighting (current vs.
+//!   non-current match background tint)
 
 use super::*;
 use crate::app::{App, BlastRadiusSelection};
@@ -24,6 +26,7 @@ use rinkaku_core::render::{FileReport, Report};
 mod error_handling;
 mod highlighting;
 mod overlay;
+mod search;
 mod split_view;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {

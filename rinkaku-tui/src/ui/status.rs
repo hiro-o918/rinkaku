@@ -3,6 +3,7 @@
 //! showing above it.
 
 use crate::app::{App, Screen};
+use crate::search::SearchMode;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -61,6 +62,17 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, ar
 /// is dropped when the vec is empty (mirrors ADR 0013's "High fan-in
 /// symbols is skipped when empty" rule, named per ADR 0034).
 pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
+    // ADR 0057: while composing a Source-view search query, the status
+    // line becomes the query's own minibuffer — takes precedence over
+    // every other segment below (including `app.status()`'s transient
+    // message slot) the same way a real minibuffer replaces the status
+    // area rather than sharing it, since a reviewer typing a query needs
+    // to see exactly what they have typed with nothing else competing for
+    // the line.
+    if let SearchMode::Composing { buffer } = app.search().mode() {
+        return format!("/{buffer}");
+    }
+
     let help = match app.screen() {
         Screen::Entry => {
             let order = match app.order_mode() {
@@ -81,8 +93,25 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
             format!("order: {order}  |  {keys}")
         }
         Screen::Source { .. } => {
-            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  esc/q: back".to_string()
+            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  /: search  n/N: next/prev match  esc/q: back".to_string()
         }
+    };
+
+    // ADR 0057 decision 7: once a query is confirmed, its match position
+    // (or the zero-match case) prefixes the help segment, mirroring how
+    // `app.status()`'s transient message is prefixed just below — both are
+    // "something the reviewer needs to see right now" ahead of the fixed
+    // key-hint reference.
+    let help = match app.search().match_position() {
+        Some((0, 0)) => format!(
+            "{query} — no matches  |  {help}",
+            query = search_query_label(app)
+        ),
+        Some((current, total)) => format!(
+            "{query} — {current}/{total}  |  {help}",
+            query = search_query_label(app)
+        ),
+        None => help,
     };
 
     let help = match file_size_warning_suffix(report) {
@@ -98,6 +127,17 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
     match app.status() {
         Some(status) => format!("{status}  |  {help}"),
         None => help,
+    }
+}
+
+/// Formats `app.search()`'s confirmed query as `/query` for the status
+/// line's match-position segment — `""` (never actually reached, guarded
+/// by the `Some` match arms at this function's only call site) when no
+/// query was confirmed.
+fn search_query_label(app: &App) -> String {
+    match app.search().query() {
+        Some(query) => format!("/{query}"),
+        None => String::new(),
     }
 }
 
@@ -315,7 +355,8 @@ mod tests {
         // `InputKey::Open`'s own arm (see its doc comment in `crate::app`).
         // ADR 0026 adds this screen's own scroll bindings to the status
         // line so the reviewer can discover them without opening the
-        // help overlay first.
+        // help overlay first; ADR 0057 adds the `/`/`n`/`N` search
+        // bindings the same way.
         let report = report_with_one_symbol();
         let app = App::new(&report)
             .handle_key(crate::app::InputKey::Down)
@@ -324,7 +365,8 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  esc/q: back".to_string(),
+            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  /: search  n/N: next/prev match  esc/q: back"
+                .to_string(),
             actual
         );
     }

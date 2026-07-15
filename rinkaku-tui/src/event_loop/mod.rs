@@ -301,6 +301,40 @@ pub(crate) fn run_app(
                 // documents did).
                 let snapshot = derive_selection_snapshot(&app, report, &diff_hunks);
                 app = dispatch_note_compose_key(app, snapshot);
+            } else if let InputKey::SearchConfirm = input_key {
+                // ADR 0057: needs the Source view's own lines to compute
+                // matches, which `App::handle_key` has no access to
+                // (mirrors `InputKey::NoteCompose`'s own "IO/derivation
+                // stays outside `App`" precedent just above). A no-op when
+                // `source_content` is not a loaded `Ok` view (defensive —
+                // `SearchConfirm` is only reachable while composing, which
+                // in turn is only reachable via `/` on an already-open
+                // `Screen::Source`, so a loaded view should always be
+                // present by then).
+                if let Some(Ok(highlighted)) = source_content.as_ref() {
+                    let from_line = match app.screen() {
+                        Screen::Source { scroll_top, .. } => *scroll_top,
+                        Screen::Entry => 0,
+                    };
+                    let search = app
+                        .search()
+                        .clone()
+                        .confirm(&highlighted.view.lines, from_line);
+                    app = app.with_search(search);
+                    app = jump_source_scroll_to_current_match(app);
+                } else {
+                    app = app.handle_key(input_key);
+                }
+            } else if matches!(input_key, InputKey::SearchNext | InputKey::SearchPrev) {
+                // ADR 0057: `App::handle_key` already advances/retreats
+                // `SearchState`'s current match (no external data needed
+                // for that step); this loop's own job is folding the
+                // resulting match line into `Screen::Source::scroll_top`,
+                // the same split `InputKey::Source`'s own back-fill above
+                // uses between "what changed" (`App`) and "how that maps
+                // onto the viewport" (`run_app`).
+                app = app.handle_key(input_key);
+                app = jump_source_scroll_to_current_match(app);
             } else if let InputKey::OpenPrInBrowser = input_key {
                 // ADR 0050: needs `review_ports.pr_context`/`.browser`,
                 // neither of which `App::handle_key` has access to (mirrors
@@ -570,6 +604,22 @@ fn dispatch_non_source_key(
 /// [`RightPane::Diff`]: crate::app::RightPane::Diff
 fn should_recompute_diff_pane_content(app: &App) -> bool {
     matches!(app.screen(), Screen::Entry) && app.right_pane() == crate::app::RightPane::Diff
+}
+
+/// Moves `Screen::Source::scroll_top` to `app.search()`'s current match
+/// line, if any — a no-op (returning `app` unchanged) when there is no
+/// current match ([`crate::search::SearchState::current_match`] is `None`,
+/// e.g. a confirmed query with zero matches) or the screen is not
+/// [`Screen::Source`]. Kept as a small wrapper around
+/// [`App::with_source_scroll_top`] (already a no-op on [`Screen::Entry`],
+/// per that method's own doc comment) rather than inlined at each of this
+/// module's three call sites (`SearchConfirm`, `SearchNext`, `SearchPrev`)
+/// sharing the exact same "match line -> scroll target" mapping.
+fn jump_source_scroll_to_current_match(app: App) -> App {
+    match app.search().current_match() {
+        Some(line) => app.with_source_scroll_top(line),
+        None => app,
+    }
 }
 
 /// Whether `crate::event_loop::run_app`'s [`InputKey::Source`] arm should

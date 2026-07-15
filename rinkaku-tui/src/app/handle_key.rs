@@ -98,6 +98,36 @@ impl App {
             return self;
         }
 
+        // Source-view search composing (ADR 0057) takes over the key space
+        // next, mirroring the review overlay's own priority just above —
+        // checked ahead of the help overlay for the identical reason: a
+        // reviewer mid-query must never have a stray `?` yank focus away
+        // into the help overlay instead of typing a literal `?` into their
+        // search. Only reachable while composing (`crate::input_translate::
+        // translate_key` only emits `SearchChar`/`SearchBackspace`/
+        // `SearchCancel` for other keys while composing, and only on
+        // `Screen::Source`), so every other key this function processes is
+        // unaffected by this branch existing.
+        if matches!(
+            self.search.mode(),
+            crate::search::SearchMode::Composing { .. }
+        ) {
+            self.search = match key {
+                InputKey::SearchChar(c) => self.search.clone().push_char(c),
+                InputKey::SearchBackspace => self.search.clone().backspace(),
+                InputKey::SearchCancel => self.search.clone().cancel(),
+                // `SearchConfirm` needs the Source view's lines, which this
+                // function has no access to — `crate::event_loop::run_app`
+                // special-cases it before dispatch and never routes it
+                // through `handle_key` at all (mirroring
+                // `InputKey::NoteCompose`'s identical "IO/derivation stays
+                // outside `App`" precedent), so this arm is unreachable in
+                // practice; kept only so the match stays exhaustive.
+                _ => self.search.clone(),
+            };
+            return self;
+        }
+
         if self.help_open {
             match key {
                 InputKey::ToggleHelp => {
@@ -321,6 +351,32 @@ impl App {
                     DiffViewMode::Unified => DiffViewMode::Split,
                     DiffViewMode::Split => DiffViewMode::Unified,
                 };
+            }
+            // ADR 0057: `/` starts composing a search query — the
+            // composing-mode branch above this match takes over from the
+            // next key onward, so this arm only needs to flip the mode on.
+            (Screen::Source { .. }, _, InputKey::SearchStart) => {
+                self.search = self.search.clone().start();
+            }
+            // `n`/`N` jump the confirmed query's current match, wrapping —
+            // a no-op with no confirmed matches (`SearchState::next`/`prev`'s
+            // own doc comment). Applying the jump to `scroll_top` itself
+            // happens in `crate::event_loop::run_app`, the same "App has no
+            // notion of the pane's rendered height/content" split ADR 0026's
+            // hunk-jump arms already use — this arm only advances which
+            // match is current.
+            (Screen::Source { .. }, _, InputKey::SearchNext) => {
+                self.search = self.search.clone().next();
+            }
+            (Screen::Source { .. }, _, InputKey::SearchPrev) => {
+                self.search = self.search.clone().prev();
+            }
+            // Esc while a confirmed search is active (`crate::input_translate::
+            // translate_key`'s own doc comment on why this arrives as
+            // `SearchCancel` rather than `Back` in that case): clears the
+            // search without leaving the screen.
+            (Screen::Source { .. }, _, InputKey::SearchCancel) => {
+                self.search = self.search.clone().cancel();
             }
             // Every other key is a no-op while the source view is open —
             // navigation/reordering only make sense against the entry
@@ -653,6 +709,22 @@ impl App {
             // above this match already intercepts it and opens the popup
             // otherwise. A no-op either way: nothing to confirm yet.
             (Screen::Entry, _, InputKey::OpenUpdatePrompt) => {}
+            // ADR 0057: search is Source-screen-only —
+            // `crate::input_translate::translate_key` never emits any of
+            // these six variants while `Screen::Entry`, so this arm is a
+            // no-op stub kept only for match exhaustiveness, mirroring
+            // `OpenPrInBrowser`'s own precedent just above.
+            (
+                Screen::Entry,
+                _,
+                InputKey::SearchStart
+                | InputKey::SearchChar(_)
+                | InputKey::SearchBackspace
+                | InputKey::SearchConfirm
+                | InputKey::SearchCancel
+                | InputKey::SearchNext
+                | InputKey::SearchPrev,
+            ) => {}
         }
 
         if !preserve_scroll && !preserve_scroll_after_jump {

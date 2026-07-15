@@ -9,6 +9,7 @@
 
 use crate::app::{self, App, InputKey, Screen};
 use crate::review;
+use crate::search::SearchMode;
 use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 
 /// Translates a raw `crossterm` key press into this crate's
@@ -79,6 +80,27 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         review::ReviewMode::Idle => {}
     }
 
+    // Search composing (ADR 0057) is checked next, mirroring the review
+    // overlay's own early-return shape just above: while composing a
+    // query, every printable character (including keys that would
+    // otherwise mean something else, like `?`) must land in the query
+    // buffer. Only reachable on `Screen::Source` — `InputKey::SearchStart`
+    // is likewise only ever emitted there (below), so this branch is
+    // unreachable on `Screen::Entry` in practice, but gated on
+    // `on_source_screen` defensively rather than relying on that
+    // invariant, the same defensive style `FocusLeft`'s Esc arm below
+    // already uses.
+    let on_source_screen = matches!(app.screen(), Screen::Source { .. });
+    if on_source_screen && matches!(app.search().mode(), SearchMode::Composing { .. }) {
+        return match code {
+            KeyCode::Enter => Some(InputKey::SearchConfirm),
+            KeyCode::Esc => Some(InputKey::SearchCancel),
+            KeyCode::Backspace => Some(InputKey::SearchBackspace),
+            KeyCode::Char(c) => Some(InputKey::SearchChar(c)),
+            _ => None,
+        };
+    }
+
     if app.help_open() {
         // The overlay's own content can run longer than its box (this
         // feature's whole reason for existing) — `j`/`k`/`Ctrl-d`/`Ctrl-u`/
@@ -132,7 +154,6 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         };
     }
 
-    let on_source_screen = matches!(app.screen(), Screen::Source { .. });
     let right_focused = app.focus() == app::Focus::Right;
 
     if app.pending_prefix() == Some(app::PendingPrefix::G) {
@@ -223,13 +244,23 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         KeyCode::Char(']') => Some(InputKey::NextHunk),
         KeyCode::Char('[') => Some(InputKey::PrevHunk),
         KeyCode::Char('s') => Some(InputKey::Source),
+        // `/` (ADR 0057): starts composing a Source-view search query.
+        // Source-screen-only — unbound on the entry screen, where a diff
+        // pane search is future work (ADR 0057's own Alternatives).
+        KeyCode::Char('/') if on_source_screen => Some(InputKey::SearchStart),
+        // `n`/`N` (ADR 0057): jump to the next/previous search match.
+        // Source-screen-only, checked ahead of the entry-screen `n`/`N`
+        // arms just below so the two never collide — a search never has
+        // more than [`SearchState::matches`] to navigate on this screen,
+        // and the entry screen's review-note `n`/`N` (ADR 0048) are
+        // unaffected since this arm never matches there.
+        KeyCode::Char('n') if on_source_screen => Some(InputKey::SearchNext),
+        KeyCode::Char('N') if on_source_screen => Some(InputKey::SearchPrev),
         // `n` (ADR 0048): opens the review-note compose overlay over the
         // row under the cursor. `N`: opens the review-notes list overlay.
         // Both are only meaningful on the entry screen (Source-screen
-        // rows have no `SelectionSnapshot` to compose against), but
-        // translated context-free here like every other key in this
-        // block — `App::handle_key`'s own `Screen::Source` catch-all arm
-        // already no-ops every non-scroll key there.
+        // rows have no `SelectionSnapshot` to compose against, and are
+        // shadowed by the search bindings just above there anyway).
         KeyCode::Char('n') => Some(InputKey::NoteCompose),
         KeyCode::Char('N') => Some(InputKey::NotesList),
         // `w` (ADR 0050): opens the current PR's page in a web browser —
@@ -249,6 +280,15 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // sets `pending_prefix` from this variant unconditionally.
         KeyCode::Char('g') => Some(InputKey::PendingGoto),
         KeyCode::Char('?') => Some(InputKey::ToggleHelp),
+        // ADR 0057: Esc's first press clears an active confirmed search
+        // (matching vim's own `/`-then-Esc convention of dismissing the
+        // highlight before leaving) rather than immediately returning to
+        // the entry view — checked ahead of the plain `Back` arm just
+        // below so a reviewer backing out of a search does not also lose
+        // their place in the file.
+        KeyCode::Esc if on_source_screen && app.search().query().is_some() => {
+            Some(InputKey::SearchCancel)
+        }
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') if on_source_screen => Some(InputKey::Back),
         KeyCode::Char('q') => Some(InputKey::Quit),

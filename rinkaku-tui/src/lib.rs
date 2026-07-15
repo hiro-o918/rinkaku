@@ -55,6 +55,7 @@ pub mod order;
 pub mod review;
 mod review_flow;
 pub mod row_view;
+pub mod search;
 mod session;
 pub mod source;
 pub mod source_diff;

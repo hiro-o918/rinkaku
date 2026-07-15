@@ -233,4 +233,38 @@ pub enum InputKey {
     /// unprompted modal stealing keystrokes mid-review would be worse than
     /// a quiet, persistent status-line hint.
     OpenUpdatePrompt,
+    /// `/` on the Source screen (ADR 0057): starts composing a search
+    /// query. Source-screen-only — `crate::input_translate::translate_key`
+    /// never emits this variant while [`Screen::Entry`], so `/` has no
+    /// meaning there.
+    SearchStart,
+    /// A printable character typed while composing a search query —
+    /// mirrors [`Self::ComposeChar`]'s identical role for the review
+    /// overlay, kept as a distinct variant (rather than reusing
+    /// `ComposeChar`) so a reviewer cannot end up composing a search query
+    /// into a review note or vice versa through a shared variant both
+    /// modes happen to interpret.
+    SearchChar(char),
+    /// Backspace while composing a search query — mirrors
+    /// [`Self::ComposeBackspace`].
+    SearchBackspace,
+    /// Enter while composing a search query: confirms it, computing its
+    /// matches against the Source view's lines (data `App::handle_key`
+    /// has no access to, mirroring [`Self::NoteCompose`]'s own "IO/
+    /// derivation stays outside `App`" precedent) — `crate::event_loop::run_app`
+    /// special-cases this variant before dispatch rather than routing it
+    /// through `App::handle_key` at all.
+    SearchConfirm,
+    /// Esc while composing a search query, or while a confirmed search is
+    /// still active: cancels/clears it (ADR 0057 decision 2).
+    SearchCancel,
+    /// `n` on the Source screen (ADR 0057): jumps to the next match of the
+    /// last confirmed query, wrapping. Source-screen-only, so it does not
+    /// collide with [`Self::NoteCompose`]'s own `n` binding on the entry
+    /// screen.
+    SearchNext,
+    /// `N` on the Source screen: the reverse of [`Self::SearchNext`].
+    /// Source-screen-only, so it does not collide with [`Self::NotesList`]'s
+    /// own `N` binding on the entry screen.
+    SearchPrev,
 }
