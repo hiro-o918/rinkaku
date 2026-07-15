@@ -12,8 +12,10 @@
 //! the symbol whose section it falls inside, so `crate::run_app` can sync
 //! the tree cursor when the reviewer scrolls the pane manually.
 //!
-//! Each section whose symbol's contract changed gets a 2-line old/new
-//! signature header up front.
+//! Each section whose symbol's contract changed carries a
+//! [`ContractHeader`], rendered by `crate::ui::diff_pane` in place of the
+//! section's own title line (the anchor row(s) a reviewer lands on when
+//! jumping to that symbol) rather than as a separate header.
 //!
 //! Pure and free of `ratatui` types, mirroring every other view-model in
 //! this crate (`crate::tree`/`crate::nav`/`crate::detail`/`crate::blast_radius`):
@@ -25,7 +27,7 @@
 //! `crate::ui::draw` must not call it, for the identical reason
 //! `ui::draw` must not call `App::selected_blast_radius_view` either.
 
-use crate::app::DiffTarget;
+use crate::app::{DiffTarget, DiffViewMode};
 use crate::diff_view::{FileHunks, Hunk, file_hunks};
 pub use crate::split_pairing::{SplitRow, pair_hunk_lines};
 use rinkaku_core::extract::Classification;
@@ -112,18 +114,24 @@ pub const MODULE_LEVEL_TITLE: &str = "(module level)";
 /// already operates in) where each hunk in `content` starts, in the exact
 /// order `crate::ui::draw_diff_pane`/`diff_pane_lines` renders them — used
 /// by `crate::run_app`'s `]c`/`[c` (`InputKey::NextHunk`/`PrevHunk`)
-/// handling to jump the scroll offset to a hunk boundary. Mirrors
-/// `diff_pane_lines`'s own line-counting exactly (section separator blank
-/// lines, an optional bold section header, an optional 2-line contract
-/// header, a blank line before each hunk's own header when anything
-/// precedes it) rather than reusing that function directly, since this
-/// module must stay free of `ratatui` types (module doc comment) — a
-/// change to `diff_pane_lines`'s layout must be mirrored here by hand, the
-/// same trade `crate::order`'s own doc comment already accepts for its
-/// deliberately duplicated Tarjan SCC implementation.
-pub fn hunk_start_lines(content: &DiffPaneContent) -> Vec<usize> {
+/// handling to jump the scroll offset to a hunk boundary. `view_mode` picks
+/// which of the two anchor-row shapes [`walk_sections`] counts (unified's
+/// title-or-2-line-signature-pair vs. split's always-one-row anchor —
+/// [`walk_sections`]'s own doc comment); callers pass the *effective* mode
+/// last drawn ([`crate::ui::DrawOutcome::effective_diff_view_mode`], folded
+/// back into `crate::run_app`'s loop between frames), not the requested
+/// `App::diff_view_mode()`, so the count matches what a reviewer actually
+/// sees when ADR 0044 decision 7's [`crate::ui::diff_pane::MIN_SPLIT_VIEW_WIDTH`]
+/// fallback silently renders `Split` as `Unified`.
+/// Mirrors `diff_pane_lines`/`diff_pane_split_rows`'s own line-counting
+/// exactly rather than reusing either function directly, since this module
+/// must stay free of `ratatui` types (module doc comment) — a change to
+/// either function's layout must be mirrored here by hand, the same trade
+/// `crate::order`'s own doc comment already accepts for its deliberately
+/// duplicated Tarjan SCC implementation.
+pub fn hunk_start_lines(content: &DiffPaneContent, view_mode: DiffViewMode) -> Vec<usize> {
     let mut starts = Vec::new();
-    for (_, _, _, hunk_starts) in walk_sections(content) {
+    for (_, _, _, hunk_starts) in walk_sections(content, view_mode) {
         starts.extend(hunk_starts);
     }
     starts
@@ -138,16 +146,21 @@ pub fn hunk_start_lines(content: &DiffPaneContent) -> Vec<usize> {
 /// diff lines all fell inside another symbol's range — same rule as
 /// [`build_diff_pane_content`]'s "drop empty sections" step).
 ///
-/// Points at the *start of the section*, including its title line — not at
-/// the first hunk's `@@` header (ADR 0027 decision 3): a reviewer moving
-/// between symbols wants to see the section title (and its contract header,
-/// when present) first, before the hunks that follow.
+/// Points at the *start of the section*, including its anchor row(s) — not
+/// at the first hunk's `@@` header (ADR 0027 decision 3): a reviewer moving
+/// between symbols wants to see the section's title or changed-signature
+/// pair first, before the hunks that follow. `view_mode` has the same
+/// meaning as [`hunk_start_lines`]'s own parameter.
 ///
 /// Used by `crate::run_app` to write the auto-scroll target into
 /// `App::right_pane_scroll` right after `build_diff_pane_content` rebuilds
 /// the shaped content for a new selection.
-pub fn section_start_line_for_symbol(content: &DiffPaneContent, symbol_id: &str) -> Option<usize> {
-    walk_sections(content)
+pub fn section_start_line_for_symbol(
+    content: &DiffPaneContent,
+    symbol_id: &str,
+    view_mode: DiffViewMode,
+) -> Option<usize> {
+    walk_sections(content, view_mode)
         .find(|(_, section, _, _)| section.symbol_id.as_deref() == Some(symbol_id))
         .map(|(_, _, section_start, _)| section_start)
 }
@@ -159,8 +172,9 @@ pub fn section_start_line_for_symbol(content: &DiffPaneContent, symbol_id: &str)
 /// and returns that section's `symbol_id`. A section's span runs from its
 /// own start line (inclusive) up to the next section's start line
 /// (exclusive), or through the end of the content for the last section —
-/// so scrolling anywhere within a symbol's title/contract-header/hunks
-/// resolves to that symbol, not just its exact first line.
+/// so scrolling anywhere within a symbol's anchor row(s)/hunks resolves to
+/// that symbol, not just its exact first line. `view_mode` has the same
+/// meaning as [`hunk_start_lines`]'s own parameter.
 ///
 /// Returns `None` in two cases `crate::run_app`'s caller treats
 /// identically (ADR 0030 decision 3 — leave the tree cursor untouched
@@ -170,8 +184,13 @@ pub fn section_start_line_for_symbol(content: &DiffPaneContent, symbol_id: &str)
 /// module-level exclusion), or `scroll_line` is past the end of every
 /// section (an overscroll about to be clamped by `crate::ui::clamp_scroll`
 /// next frame) — also `None` on [`DiffPaneContent::Empty`].
-pub fn symbol_id_for_scroll_line(content: &DiffPaneContent, scroll_line: usize) -> Option<&str> {
-    let sections: Vec<(usize, &DiffSection, usize, Vec<usize>)> = walk_sections(content).collect();
+pub fn symbol_id_for_scroll_line(
+    content: &DiffPaneContent,
+    scroll_line: usize,
+    view_mode: DiffViewMode,
+) -> Option<&str> {
+    let sections: Vec<(usize, &DiffSection, usize, Vec<usize>)> =
+        walk_sections(content, view_mode).collect();
     let (_, (_, section, _, _)) =
         sections
             .iter()
@@ -191,14 +210,22 @@ pub fn symbol_id_for_scroll_line(content: &DiffPaneContent, scroll_line: usize) 
 /// One entry per section for line-counting consumers ([`hunk_start_lines`]
 /// and [`section_start_line_for_symbol`] both need the exact same layout
 /// walk, kept in one place so a change to
-/// [`crate::ui::diff_pane_lines`]'s rendered layout only has to be mirrored
-/// once here — the same trade [`hunk_start_lines`]'s own doc comment already
-/// accepts for the mirroring itself). Yields `(section_index, &section,
-/// section_start_line, hunk_start_lines)` — `section_start_line` is where
-/// the section's title (or its very first line, when nothing precedes it)
-/// begins.
+/// [`crate::ui::diff_pane_lines`]/[`crate::ui::diff_pane_split_rows`]'s
+/// rendered layout only has to be mirrored once here — the same trade
+/// [`hunk_start_lines`]'s own doc comment already accepts for the
+/// mirroring itself). Yields `(section_index, &section, section_start_line,
+/// hunk_start_lines)` — `section_start_line` is where the section's anchor
+/// row (or its very first line, when nothing precedes it) begins.
+///
+/// `view_mode` picks the anchor's row count: unified
+/// ([`DiffViewMode::Unified`]) renders a changed signature as 2 stacked
+/// rows but an unchanged title as 1; split ([`DiffViewMode::Split`]) always
+/// pairs the anchor onto exactly 1 row since old/new sit side by side
+/// rather than stacked — the two modes' row counts only diverge on a
+/// section whose signature changed, and only there.
 fn walk_sections(
     content: &DiffPaneContent,
+    view_mode: DiffViewMode,
 ) -> impl Iterator<Item = (usize, &DiffSection, usize, Vec<usize>)> {
     let sections: &[DiffSection] = match content {
         DiffPaneContent::Empty => &[],
@@ -212,14 +239,15 @@ fn walk_sections(
             line += 1; // blank line between sections
         }
         let section_start = line;
-        line += 1; // section title line (always shown now — ADR 0027)
-        if section.contract_header.is_some() {
-            line += 2; // "- previous" / "+ current" lines
-        }
+        line += match (view_mode, section.contract_header.is_some()) {
+            (DiffViewMode::Split, _) => 1,
+            (DiffViewMode::Unified, true) => 2,
+            (DiffViewMode::Unified, false) => 1,
+        };
 
         let mut hunk_starts = Vec::with_capacity(section.hunks.len());
         for attributed in &section.hunks {
-            // Blank line before every hunk header: the section title is
+            // Blank line before every hunk header: the section anchor is
             // always shown (ADR 0027 collapsed the two former
             // `show_section_headers` cases into one), so every hunk —
             // including a section's first — has *something* on the line

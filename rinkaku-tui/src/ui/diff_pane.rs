@@ -303,16 +303,13 @@ fn selected_row_badges(app: &App) -> Badges {
 }
 
 /// Formats every [`DiffSection`] in `sections` into styled lines (ADR
-/// 0020): a section header (a symbol's own signature, styled bold, or the
-/// fixed "(module level)" label) only when `show_section_headers` is set —
-/// a single-section symbol selection has nothing to disambiguate a header
-/// would add value to, so it is omitted there and the pane opens straight
-/// on the (optional) contract header/hunks, matching this pane's pre-ADR-
-/// 0020 layout for a symbol row. A file selection (multiple sections, or
-/// one section that still benefits from being named) always shows headers.
-/// Each section's own `contract_header` (when present) renders as a 2-line
-/// red/green old/new pair before that section's hunks — the outline-before-
-/// implementation disclosure order ADR 0020 asks for.
+/// 0020): a section anchor (via [`section_anchor_lines`]) only when
+/// `show_section_headers` is set — a single-section symbol selection has
+/// nothing to disambiguate a header would add value to, so it is omitted
+/// there and the pane opens straight on the hunks, matching this pane's
+/// pre-ADR-0020 layout for a symbol row. A file selection (multiple
+/// sections, or one section that still benefits from being named) always
+/// shows headers.
 ///
 /// Within each section, hunk headers stay dim, `+`/`-` marker glyphs keep
 /// their existing bold green/red foreground, and each line's own code
@@ -335,24 +332,11 @@ pub(crate) fn diff_pane_lines(
             lines.push(Line::raw(""));
         }
         if show_section_headers {
-            lines.push(Line::styled(
-                section.title.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
-        }
-        if let Some(contract) = &section.contract_header {
-            lines.push(Line::styled(
-                format!("- {}", contract.previous_signature),
-                Style::default().fg(Color::Red),
-            ));
-            lines.push(Line::styled(
-                format!("+ {}", contract.signature),
-                Style::default().fg(Color::Green),
-            ));
+            lines.extend(section_anchor_lines(section));
         }
 
         for (hunk_index, attributed) in section.hunks.iter().enumerate() {
-            if hunk_index > 0 || show_section_headers || section.contract_header.is_some() {
+            if hunk_index > 0 || show_section_headers {
                 lines.push(Line::raw(""));
             }
             lines.push(Line::styled(
@@ -385,6 +369,31 @@ pub(crate) fn diff_pane_lines(
         }
     }
     lines
+}
+
+/// A section's anchor line(s) in unified view: the plain bold title when
+/// [`DiffSection::contract_header`] is `None`, or a bold 2-line `- {old}` /
+/// `+ {new}` pair carrying the same `ADDED_BG`/`REMOVED_BG` background tint
+/// as a hunk body line when it is `Some` — the changed-signature case
+/// replaces the title outright rather than showing both, since the title
+/// *is* the old signature's replacement.
+fn section_anchor_lines(section: &DiffSection) -> Vec<Line<'static>> {
+    match &section.contract_header {
+        None => vec![Line::styled(
+            section.title.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )],
+        Some(contract) => vec![
+            Line::styled(
+                format!("- {}", contract.previous_signature),
+                added_removed_style(DiffLineKind::Removed).add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                format!("+ {}", contract.signature),
+                added_removed_style(DiffLineKind::Added).add_modifier(Modifier::BOLD),
+            ),
+        ],
+    }
 }
 
 /// This hunk's own new-side line number for each of `hunk.lines`, `None`
@@ -439,19 +448,19 @@ fn prefix_note_marker(line: Line<'static>, has_note: bool) -> Line<'static> {
 }
 
 /// Split-view (ADR 0044) counterpart of [`diff_pane_lines`]: the same
-/// section/contract-header/hunk-header scaffold, but each hunk's body is
-/// paired via [`crate::diff_shape::pair_hunk_lines`] into old-side/new-side
-/// columns instead of one interleaved column. A title/hunk-header line
-/// renders identically on both sides (`left`/`right` share it); the
-/// contract header's old/new signatures render side by side on one row
-/// instead — the whole point of a split view is comparing them without
-/// scanning past an interleaved line in between. Returns `(left, right)`,
-/// each the same length — [`crate::diff_shape::SplitRow`]'s own invariant
-/// (one row per source [`DiffLine`]) means every hunk contributes the same
-/// row count here as it does to [`diff_pane_lines`], and the contract
-/// header's own filler row below the paired signatures keeps its 2-line
-/// scaffold budget intact — so this function's total line count always
-/// matches `diff_pane_lines`'s for the same `sections`/`show_section_headers`,
+/// section/hunk-header scaffold, but each hunk's body is paired via
+/// [`crate::diff_shape::pair_hunk_lines`] into old-side/new-side columns
+/// instead of one interleaved column. A plain title renders identically on
+/// both sides (`left`/`right` share it); a changed signature instead pairs
+/// its old/new [`DiffSection::contract_header`] on that same one row
+/// (`left` = previous, `right` = current) — the whole point of a split view
+/// is comparing them without scanning past an interleaved row in between.
+/// Returns `(left, right)`, each the same length — [`crate::diff_shape::SplitRow`]'s
+/// own invariant (one row per source [`DiffLine`]) means every hunk
+/// contributes the same row count here as it does to [`diff_pane_lines`],
+/// and the anchor is always exactly one row regardless of which of the two
+/// arms below fires — so this function's total line count always matches
+/// `diff_pane_lines`'s for the same `sections`/`show_section_headers`,
 /// required for `walk_sections`' shared line-counting (ADR 0044 decision 4)
 /// to stay correct regardless of which of the two this pane actually
 /// renders.
@@ -470,28 +479,13 @@ pub(crate) fn diff_pane_split_rows(
             right.push(Line::raw(""));
         }
         if show_section_headers {
-            let title = Line::styled(
-                section.title.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            );
-            left.push(title.clone());
-            right.push(title);
-        }
-        if let Some(contract) = &section.contract_header {
-            left.push(Line::styled(
-                format!("- {}", contract.previous_signature),
-                Style::default().fg(Color::Red),
-            ));
-            right.push(Line::styled(
-                format!("+ {}", contract.signature),
-                Style::default().fg(Color::Green),
-            ));
-            left.push(Line::raw(""));
-            right.push(Line::raw(""));
+            let (anchor_left, anchor_right) = section_anchor_split_row(section);
+            left.push(anchor_left);
+            right.push(anchor_right);
         }
 
         for (hunk_index, attributed) in section.hunks.iter().enumerate() {
-            if hunk_index > 0 || show_section_headers || section.contract_header.is_some() {
+            if hunk_index > 0 || show_section_headers {
                 left.push(Line::raw(""));
                 right.push(Line::raw(""));
             }
@@ -532,6 +526,35 @@ pub(crate) fn diff_pane_split_rows(
         }
     }
     (left, right)
+}
+
+/// A section's anchor row in split view, paired as `(left, right)`: the
+/// same bold plain title on both sides when [`DiffSection::contract_header`]
+/// is `None`, or the old/new signatures side by side (left = previous,
+/// right = current) with the matching `ADDED_BG`/`REMOVED_BG` tint when it
+/// is `Some` — mirrors [`section_anchor_lines`]'s unified-view choice
+/// between the two, but as one paired row instead of two stacked lines
+/// since split view compares old/new positionally rather than sequentially.
+fn section_anchor_split_row(section: &DiffSection) -> (Line<'static>, Line<'static>) {
+    match &section.contract_header {
+        None => {
+            let title = Line::styled(
+                section.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+            (title.clone(), title)
+        }
+        Some(contract) => (
+            Line::styled(
+                format!("- {}", contract.previous_signature),
+                added_removed_style(DiffLineKind::Removed).add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                format!("+ {}", contract.signature),
+                added_removed_style(DiffLineKind::Added).add_modifier(Modifier::BOLD),
+            ),
+        ),
+    }
 }
 
 /// One [`SplitRow`](crate::diff_shape::SplitRow) side's rendered [`Line`] —
@@ -601,13 +624,31 @@ pub(crate) fn plain_diff_line(line: &DiffLine) -> Line<'static> {
     match line.kind {
         DiffLineKind::Added => Line::styled(
             format!("+{}", line.content),
-            Style::default().fg(Color::Green).bg(ADDED_BG),
+            added_removed_style(DiffLineKind::Added),
         ),
         DiffLineKind::Removed => Line::styled(
             format!("-{}", line.content),
-            Style::default().fg(Color::Red).bg(REMOVED_BG),
+            added_removed_style(DiffLineKind::Removed),
         ),
         DiffLineKind::Context => Line::raw(format!(" {}", line.content)),
+    }
+}
+
+/// The fg/bg pair for an `Added`/`Removed` line (ADR 0018: diff signal lives
+/// in the background, not just the foreground), shared by [`plain_diff_line`]
+/// and a section's changed-signature anchor row(s) — the anchor is a
+/// synthetic old/new pair rather than an actual hunk body line, but it
+/// still needs to read as a diff at a glance.
+///
+/// Panics on `DiffLineKind::Context`: no caller here ever has a
+/// context-kind line to style.
+fn added_removed_style(kind: DiffLineKind) -> Style {
+    match kind {
+        DiffLineKind::Added => Style::default().fg(Color::Green).bg(ADDED_BG),
+        DiffLineKind::Removed => Style::default().fg(Color::Red).bg(REMOVED_BG),
+        DiffLineKind::Context => {
+            unreachable!("contract headers and plain diff lines are never Context-kind")
+        }
     }
 }
 

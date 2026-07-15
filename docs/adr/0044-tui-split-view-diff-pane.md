@@ -83,7 +83,13 @@ the unified view's. Concretely:
 **4. The shared line-index space is preserved by making `SplitRow`
 itself the thing both views render per logical line — including a
 `None`/`None` filler row for a unified line `walk_sections`
-already counted but a merged split pair consumed.** Concretely,
+already counted but a merged split pair consumed.** (Amended below:
+"mode-aware row counts for the section anchor" — a changed-signature
+section anchor now legitimately renders a different row count in
+unified vs. split, so `walk_sections` and its three consumers take a
+`DiffViewMode` parameter; every other line in a section, including
+every hunk body line, is still governed by this decision unchanged.)
+Concretely,
 `pair_hunk_lines` returns exactly `hunk.lines.len()` `SplitRow`s, one
 per original `DiffLine`, not `max(removed, added)`: when a paired-off
 `Removed`/`Added` pair merges onto one *rendered* split row, the
@@ -98,7 +104,13 @@ replaced run in split mode, in exchange for zero changes to
 desyncing ADR 0027's tree→diff auto-scroll or ADR 0030's diff→tree
 sync when the view mode is toggled mid-session.
 
-**5. Rendering.** `crate::ui::diff_pane::draw_diff_pane` branches on
+**5. Rendering.** (Amended below: "mode-aware row counts for the
+section anchor" replaces this decision's contract-header/filler-row
+layout — the section title and the contract header are no longer
+separate scaffold elements, so there is no filler row to keep a
+2-line budget intact. The rest of this decision, the plain
+title/hunk-header scaffold and the highlighting lookup, is unchanged.)
+`crate::ui::diff_pane::draw_diff_pane` branches on
 `app.diff_view_mode()`: unified keeps calling `diff_pane_lines` exactly
 as today; split calls a new `diff_pane_split_rows`, which produces the
 same section/header/hunk-header scaffolding as `diff_pane_lines` and
@@ -313,3 +325,61 @@ reindentation or a single changed argument does not swamp the score,
 and order-insensitive token-set overlap (not a positional token
 comparison) so a reordered clause still scores high — both suit
 comparing source lines, whose meaningful unit of change is the token.
+
+## Amendment: mode-aware row counts for the section anchor
+
+Decision 4's shared line-index space assumed every rendered element —
+including the section title and, separately, a changed symbol's
+2-line contract header below it — has the same row count in unified
+and split. A follow-up dogfooding pass found the contract header's own
+styling (plain foreground-only red/green text, no background) didn't
+read as a diff at a glance, unlike every other `+`/`-` line in the
+pane (ADR 0018's background-tint convention). Fixing that surfaced a
+better layout: the section anchor a reviewer lands on when jumping to
+a symbol should show the diff itself, not a plain title with a diff
+summary bolted on below it. So a changed signature's contract header
+now *replaces* the section title outright, and unified/split render
+that replacement differently:
+
+- **Unified** shows a 2-line `- {old}` / `+ {new}` pair standing in
+  for the title, each carrying the same `ADDED_BG`/`REMOVED_BG` tint
+  ordinary diff lines use.
+- **Split** pairs `{old}` (left) and `{new}` (right) onto the title's
+  own single row — split view already had no use for the extra filler
+  row decision 5's old contract-header layout budgeted for, since old
+  and new sit side by side rather than stacked.
+
+An unchanged section's title is unaffected in both modes (still one
+plain bold row). So a changed-signature section's anchor is 2 rows in
+unified but 1 row in split — the first case in this ADR where the two
+modes legitimately disagree on a row count for the same section,
+something decision 4 did not anticipate and could not, by
+construction, absorb: there is no unified-side line for split's single
+paired row to correspond to.
+
+**`crate::diff_shape::walk_sections` and its three public consumers
+(`hunk_start_lines`, `section_start_line_for_symbol`,
+`symbol_id_for_scroll_line`) now take a `DiffViewMode` parameter.**
+Each computes the section-anchor row count as 2 (unified, changed
+signature), 1 (unified, unchanged title), or 1 (split, either case),
+before continuing with decision 3/4's unchanged per-hunk counting.
+Callers pass the *effective* mode last drawn (the pane's actually-rendered
+mode this frame, threaded through
+[`crate::ui::DrawOutcome::effective_diff_view_mode`] and folded back into
+`crate::run_app`'s loop between frames), not the requested
+`App::diff_view_mode()` — so decision 7's `MIN_SPLIT_VIEW_WIDTH` narrow-
+terminal fallback (`Split` requested but `Unified` rendered) still keeps
+the scroll math aligned with what the reviewer actually sees. The startup
+init and any frame that did not draw the diff pane (source screen, a
+different right pane) fall back to the requested mode — the effective
+mode simply is the requested mode there.
+
+Decision 4's shared line-index invariant is narrowed, not fully
+superseded: every element a section renders other than its anchor row
+(hunk headers, hunk body lines, blank separators) still has one shared
+row count across both modes, unchanged.
+
+This supersedes an earlier "accepted trade-off" phrasing (now removed)
+that acknowledged a narrow-terminal wrong-symbol sync hazard as
+unavoidable — threading the effective mode into the scroll math closes
+that hazard, it is not merely documented.

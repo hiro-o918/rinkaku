@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn should_return_none_for_scroll_line_when_content_is_empty() {
-    let actual = symbol_id_for_scroll_line(&DiffPaneContent::Empty, 0);
+    let actual = symbol_id_for_scroll_line(&DiffPaneContent::Empty, 0, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -25,7 +25,7 @@ fn should_return_the_only_symbol_when_scroll_line_is_its_title_line() {
         )],
     }]);
 
-    let actual = symbol_id_for_scroll_line(&content, 0);
+    let actual = symbol_id_for_scroll_line(&content, 0, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::foo"), actual);
 }
@@ -45,7 +45,7 @@ fn should_return_the_only_symbol_when_scroll_line_is_inside_its_hunk_body_not_ju
         )],
     }]);
 
-    let actual = symbol_id_for_scroll_line(&content, 3);
+    let actual = symbol_id_for_scroll_line(&content, 3, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::foo"), actual);
 }
@@ -77,11 +77,20 @@ fn should_return_the_second_symbol_when_scroll_line_falls_inside_its_section() {
         },
     ]);
 
-    assert_eq!(Some("lib.rs::bar"), symbol_id_for_scroll_line(&content, 5));
-    assert_eq!(Some("lib.rs::bar"), symbol_id_for_scroll_line(&content, 7));
+    assert_eq!(
+        Some("lib.rs::bar"),
+        symbol_id_for_scroll_line(&content, 5, DiffViewMode::Unified)
+    );
+    assert_eq!(
+        Some("lib.rs::bar"),
+        symbol_id_for_scroll_line(&content, 7, DiffViewMode::Unified)
+    );
     // The boundary immediately before section 1 still belongs to
     // section 0.
-    assert_eq!(Some("lib.rs::foo"), symbol_id_for_scroll_line(&content, 4));
+    assert_eq!(
+        Some("lib.rs::foo"),
+        symbol_id_for_scroll_line(&content, 4, DiffViewMode::Unified)
+    );
 }
 
 #[test]
@@ -112,7 +121,7 @@ fn should_return_none_when_scroll_line_falls_inside_the_module_level_bucket() {
 
     // Module-level section starts at line 5 (same layout math as the
     // two-symbol test above).
-    let actual = symbol_id_for_scroll_line(&content, 5);
+    let actual = symbol_id_for_scroll_line(&content, 5, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -135,7 +144,7 @@ fn should_return_the_last_symbol_when_scroll_line_is_past_every_section_start_bu
     // section's span is open-ended, matching an overscroll that is
     // about to be clamped by `crate::ui::clamp_scroll` next frame
     // rather than a position inside some other symbol.
-    let actual = symbol_id_for_scroll_line(&content, 100);
+    let actual = symbol_id_for_scroll_line(&content, 100, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::foo"), actual);
 }

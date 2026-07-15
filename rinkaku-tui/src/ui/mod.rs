@@ -88,6 +88,19 @@ pub struct DrawOutcome {
     /// half-page press while the overlay is open sizes its step against the
     /// overlay's own box, not whatever pane happens to be underneath it.
     pub help_scroll_viewport_height: Option<usize>,
+    /// The diff pane's *effective* view mode as actually rendered this
+    /// frame — [`crate::app::DiffViewMode::Split`] only when the pane is
+    /// wide enough to honor a `Split` request (ADR 0044 decision 7's
+    /// [`crate::ui::diff_pane::MIN_SPLIT_VIEW_WIDTH`] threshold), else
+    /// [`crate::app::DiffViewMode::Unified`]. `None` when the diff pane
+    /// did not render at all this frame (source screen, or a different
+    /// right pane). `crate::run_app` remembers this between frames and
+    /// passes it into `diff_shape::hunk_start_lines`/
+    /// `section_start_line_for_symbol`/`symbol_id_for_scroll_line`, so
+    /// their scroll math matches the mode actually on screen rather than
+    /// the requested one — decision 4 amendment's "narrow-terminal
+    /// fallback wrong-symbol sync" hazard, closed.
+    pub effective_diff_view_mode: Option<crate::app::DiffViewMode>,
 }
 
 /// Draws one full frame: the entry view (tree + right pane split) or the
@@ -175,11 +188,20 @@ pub fn draw(
             } else {
                 None
             };
+            let effective_diff_view_mode = if app.right_pane() == crate::app::RightPane::Diff {
+                Some(effective_diff_view_mode_for_body(
+                    body,
+                    app.diff_view_mode(),
+                ))
+            } else {
+                None
+            };
             DrawOutcome {
                 clamped_right_pane_scroll: clamped,
                 scroll_viewport_height,
                 clamped_help_scroll: None,
                 help_scroll_viewport_height: None,
+                effective_diff_view_mode,
             }
         }
         Screen::Source {
@@ -201,6 +223,7 @@ pub fn draw(
                 scroll_viewport_height: Some(inner_height),
                 clamped_help_scroll: None,
                 help_scroll_viewport_height: None,
+                effective_diff_view_mode: None,
             }
         }
     };
@@ -241,6 +264,32 @@ fn right_pane_viewport_height(body: Rect) -> usize {
     ])
     .areas(body);
     right.height.saturating_sub(2) as usize
+}
+
+/// The diff pane's effective view mode given `body` and the requested
+/// mode — mirrors [`crate::ui::diff_pane::draw_diff_pane`]'s own
+/// `split_requested && split_fits` gate so `DrawOutcome` can report the
+/// mode a reviewer actually saw without depending on `draw_diff_pane`'s
+/// return value (kept `Option<usize>` for the clamp fold-back, shared
+/// with the other right-pane variants).
+fn effective_diff_view_mode_for_body(
+    body: Rect,
+    requested: crate::app::DiffViewMode,
+) -> crate::app::DiffViewMode {
+    let [_, right] = Layout::horizontal([
+        Constraint::Percentage(ENTRY_TREE_WIDTH_PERCENT),
+        Constraint::Percentage(ENTRY_RIGHT_WIDTH_PERCENT),
+    ])
+    .areas(body);
+    match requested {
+        crate::app::DiffViewMode::Split
+            if right.width >= crate::ui::diff_pane::MIN_SPLIT_VIEW_WIDTH =>
+        {
+            crate::app::DiffViewMode::Split
+        }
+        crate::app::DiffViewMode::Split => crate::app::DiffViewMode::Unified,
+        crate::app::DiffViewMode::Unified => crate::app::DiffViewMode::Unified,
+    }
 }
 
 /// Tree-pane / right-pane horizontal split percentages for [`Screen::Entry`],

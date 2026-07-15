@@ -3,7 +3,7 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn should_return_empty_hunk_starts_when_content_is_empty() {
-    let actual = hunk_start_lines(&DiffPaneContent::Empty);
+    let actual = hunk_start_lines(&DiffPaneContent::Empty, DiffViewMode::Unified);
 
     assert_eq!(Vec::<usize>::new(), actual);
 }
@@ -29,15 +29,16 @@ fn should_offset_first_hunk_start_by_title_and_blank_when_file_has_a_single_sect
         )],
     }]);
 
-    let actual = hunk_start_lines(&content);
+    let actual = hunk_start_lines(&content, DiffViewMode::Unified);
 
     assert_eq!(vec![2], actual);
 }
 
 #[test]
-fn should_offset_hunk_start_by_contract_header_lines_when_section_has_one() {
-    // Title(0), 2 contract-header lines (1, 2), blank before the hunk (3),
-    // hunk header (4) — hunk starts at line 4.
+fn should_offset_hunk_start_by_contract_header_lines_in_unified_view_when_section_has_one() {
+    // The contract header replaces the section's plain title (not an
+    // addition to it): 2 signature lines (0, 1), blank before the hunk
+    // (2), hunk header (3) — hunk starts at line 3.
     let content = DiffPaneContent::File(vec![DiffSection {
         title: "fn foo(a, b)".to_string(),
         symbol_id: Some("lib.rs::foo".to_string()),
@@ -51,9 +52,34 @@ fn should_offset_hunk_start_by_contract_header_lines_when_section_has_one() {
         )],
     }]);
 
-    let actual = hunk_start_lines(&content);
+    let actual = hunk_start_lines(&content, DiffViewMode::Unified);
 
-    assert_eq!(vec![4], actual);
+    assert_eq!(vec![3], actual);
+}
+
+#[test]
+fn should_offset_hunk_start_by_a_single_anchor_row_in_split_view_when_section_has_a_contract_header()
+ {
+    // Split view always pairs the anchor onto exactly 1 row regardless of
+    // whether the signature changed: signature row(0), blank before the
+    // hunk(1), hunk header(2) — hunk starts at line 2 (one line earlier
+    // than the unified-view case above).
+    let content = DiffPaneContent::File(vec![DiffSection {
+        title: "fn foo(a, b)".to_string(),
+        symbol_id: Some("lib.rs::foo".to_string()),
+        contract_header: Some(ContractHeader {
+            previous_signature: "fn foo(a)".to_string(),
+            signature: "fn foo(a, b)".to_string(),
+        }),
+        hunks: vec![attributed(
+            0,
+            hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo(a, b) {}"]),
+        )],
+    }]);
+
+    let actual = hunk_start_lines(&content, DiffViewMode::Split);
+
+    assert_eq!(vec![2], actual);
 }
 
 #[test]
@@ -80,7 +106,7 @@ fn should_offset_second_hunk_start_by_first_hunk_header_and_body_length() {
         ],
     }]);
 
-    let actual = hunk_start_lines(&content);
+    let actual = hunk_start_lines(&content, DiffViewMode::Unified);
 
     assert_eq!(vec![2, 6], actual);
 }
@@ -111,7 +137,7 @@ fn should_offset_hunk_start_by_section_header_and_separator_lines_for_a_file_sel
         },
     ]);
 
-    let actual = hunk_start_lines(&content);
+    let actual = hunk_start_lines(&content, DiffViewMode::Unified);
 
     assert_eq!(vec![2, 7], actual);
 }
@@ -145,7 +171,7 @@ fn should_emit_one_hunk_jump_stop_per_section_when_a_hunk_is_shared_by_two_symbo
     };
     let content = build_diff_pane_content(&report, &diff_files, Some(&target));
 
-    let actual = hunk_start_lines(&content);
+    let actual = hunk_start_lines(&content, DiffViewMode::Unified);
 
     // Section 0 (`foo`): title(0), blank(1), hunk header(2), 1 body
     // line(3) — 4 lines. Blank separator(4), section 1 (`bar`)
