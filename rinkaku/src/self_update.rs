@@ -77,6 +77,31 @@ fn is_affirmative(answer: &str) -> bool {
     matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
+/// Builds the same `self_update::backends::github::Update` configuration
+/// [`run_self_update`] and [`check_update_available`] both need, so the two
+/// entry points (the `self-update` subcommand and the TUI's background
+/// version check) cannot drift apart on target/identifier/archive-path
+/// wiring. See [`run_self_update`]'s own doc comment for why
+/// `no_confirm(true)`/`show_output(false)` are always on.
+fn build_updater(
+    current_version: &str,
+    target: &str,
+) -> Result<Box<dyn self_update::update::ReleaseUpdate>> {
+    self_update::backends::github::Update::configure()
+        .repo_owner(REPO_OWNER)
+        .repo_name(REPO_NAME)
+        .bin_name(BIN_NAME)
+        .target(target)
+        .current_version(current_version)
+        .identifier(&release_asset_name(BIN_NAME, target))
+        .bin_path_in_archive(&archive_bin_path(BIN_NAME, target))
+        .no_confirm(true)
+        .show_output(false)
+        .show_download_progress(true)
+        .build()
+        .map_err(anyhow::Error::from)
+}
+
 /// Runs `self-update`: downloads and installs the latest GitHub release
 /// asset matching the running binary's target triple, replacing the
 /// current executable in place.
@@ -113,19 +138,7 @@ pub fn run_self_update(yes: bool) -> Result<()> {
 
     let current_version = env!("CARGO_PKG_VERSION");
     let target = self_update::get_target();
-
-    let updater = self_update::backends::github::Update::configure()
-        .repo_owner(REPO_OWNER)
-        .repo_name(REPO_NAME)
-        .bin_name(BIN_NAME)
-        .target(target)
-        .current_version(current_version)
-        .identifier(&release_asset_name(BIN_NAME, target))
-        .bin_path_in_archive(&archive_bin_path(BIN_NAME, target))
-        .no_confirm(true)
-        .show_output(false)
-        .show_download_progress(true)
-        .build()?;
+    let updater = build_updater(current_version, target)?;
 
     let latest = updater
         .get_latest_release()
@@ -176,6 +189,24 @@ pub fn run_self_update(yes: bool) -> Result<()> {
     Ok(())
 }
 
+/// Checks GitHub for a newer released version than the running binary,
+/// returning `Some(latest_version)` only when one is actually newer
+/// (`self_update::version::bump_is_greater`). Any failure along the way —
+/// network error, GitHub API error, an unparsable version — silently
+/// yields `None` rather than propagating an error: this is a background,
+/// best-effort check for the TUI's update hint (`rinkaku-tui`'s own
+/// `App::notify_update_available`), not a user-initiated action like
+/// [`run_self_update`], so there is no confirmation prompt or terminal
+/// output to fail loudly against.
+pub fn check_update_available() -> Option<String> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let target = self_update::get_target();
+    let updater = build_updater(current_version, target).ok()?;
+    let latest = updater.get_latest_release().ok()?;
+    let is_newer = self_update::version::bump_is_greater(current_version, &latest.version).ok()?;
+    is_newer.then_some(latest.version)
+}
+
 /// Builds the release asset filename for `bin` on `target`, matching the
 /// `build-and-publish.yaml` packaging convention:
 /// `{bin}-{target}.tar.gz` (e.g. `rinkaku-aarch64-apple-darwin.tar.gz`).
@@ -221,38 +252,26 @@ mod tests {
     }
 
     // NOTE: partial assertion (`is_ok()` rather than a fully qualified
-    // comparison of the built `Update`) because `self_update::backends::
-    // github::Update`'s fields are private and it derives neither `Debug`
-    // nor `PartialEq` — there is nothing to compare it against. `is_ok()`
-    // is the strongest assertion available: it proves the builder accepts
-    // this exact configuration (owner/repo/bin/target/version/identifier/
-    // archive path/no_confirm/show_output/show_download_progress) without
-    // error.
+    // comparison of the built updater) because the boxed
+    // `dyn ReleaseUpdate` this returns has no `Debug`/`PartialEq` to
+    // compare against. `is_ok()` is the strongest assertion available: it
+    // proves the builder accepts this exact configuration (owner/repo/
+    // bin/target/version/identifier/archive path/no_confirm/show_output/
+    // show_download_progress) without error. Both `run_self_update` and
+    // `check_update_available` share this one builder now
+    // (`build_updater`), so this single test covers both call sites'
+    // configuration.
     #[test]
     fn should_configure_update_builder_without_error() {
         let target = self_update::get_target();
         let current_version = env!("CARGO_PKG_VERSION");
 
         // Verifies the builder itself accepts this configuration (no
-        // network IO — `.build()` only validates configuration,
+        // network IO — `build_updater` only validates configuration,
         // `.get_latest_release()`/`.update()` are what would actually hit
         // the network and are intentionally not exercised here per this
         // project's "no mocking external processes" test convention).
-        // `no_confirm(true)` and `show_output(false)` are always-on now
-        // (see `run_self_update`'s doc comment for why), so this is the
-        // one configuration the builder is ever actually built with.
-        let result = self_update::backends::github::Update::configure()
-            .repo_owner(REPO_OWNER)
-            .repo_name(REPO_NAME)
-            .bin_name(BIN_NAME)
-            .target(target)
-            .current_version(current_version)
-            .identifier(&release_asset_name(BIN_NAME, target))
-            .bin_path_in_archive(&archive_bin_path(BIN_NAME, target))
-            .no_confirm(true)
-            .show_output(false)
-            .show_download_progress(true)
-            .build();
+        let result = build_updater(current_version, target);
 
         assert!(
             result.is_ok(),
