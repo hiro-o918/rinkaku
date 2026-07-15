@@ -225,6 +225,8 @@ pub fn draw(
                 source_content,
                 diff_hunks,
                 app.diff_view_mode(),
+                app.search().matches(),
+                app.search().current_match(),
                 body,
             );
             DrawOutcome {

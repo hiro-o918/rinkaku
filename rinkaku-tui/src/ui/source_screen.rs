@@ -9,6 +9,7 @@ use super::scroll::{Body, render_scrollable_pane};
 use super::style::{gap_span, pane_border_style, styled_content_spans};
 use crate::app::DiffViewMode;
 use crate::diff_view::{DiffLineKind, FileHunks};
+use crate::search::MatchLine;
 use crate::source::{HighlightedSourceView, SourceView};
 use crate::source_diff::{OverlayRow, overlay_source_lines, rows_in_source_range};
 use crate::source_split::{SourceSplitRow, SourceSplitRowKind, split_source_rows};
@@ -17,6 +18,18 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Wrap};
+
+/// Background tint for a Source-view search match (ADR 0057 decision 6),
+/// layered into the same `Option<Color>` composition
+/// [`unchanged_line`]/[`ADDED_BG`]/[`SOURCE_HIGHLIGHT_BG`] already share —
+/// dim indexed yellow, distinct from both the diff overlay's green/red and
+/// the drilled-into symbol's gray so a match reads as its own signal.
+pub(crate) const SEARCH_MATCH_BG: Color = Color::Indexed(58);
+/// Background tint for the *current* search match — brighter/more
+/// saturated than [`SEARCH_MATCH_BG`] so a reviewer scanning a screen with
+/// several matches can see which one the cursor actually landed on
+/// without counting (ADR 0057 decision 6).
+pub(crate) const SEARCH_CURRENT_MATCH_BG: Color = Color::Indexed(100);
 
 #[cfg(test)]
 #[path = "source_screen_tests/mod.rs"]
@@ -75,6 +88,21 @@ pub(crate) const SOURCE_HIGHLIGHT_BG: Color = Color::DarkGray;
 /// or `split_source_rows` itself returns `None` (the same drift that
 /// disables the unified overlay disables reconstructing an old side to
 /// split against, ADR 0049 decision 6).
+///
+/// `search_matches`/`search_current` (ADR 0057) are `App::search()`'s
+/// already-computed match line indices and current-match line, threaded in
+/// unchanged rather than recomputed here — the same "no content derived
+/// from selection state is computed inside the render path" invariant ADR
+/// 0020 already established for the diff pane's shaped content, extended
+/// to this screen's search highlighting.
+// This function's parameter list already sat at clippy's 7-argument
+// threshold before ADR 0057 added `search_matches`/`search_current`;
+// every existing parameter is an independently-computed piece of content
+// `crate::event_loop::run_app` must not recompute inside the draw path
+// (this function's own doc comment), mirroring `crate::ui::draw`'s
+// identical `#[allow]` and its own comment on why bundling into a struct
+// would not reduce the actual coupling.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_source_screen(
     frame: &mut Frame,
     symbol_id: &str,
@@ -82,6 +110,8 @@ pub(crate) fn draw_source_screen(
     source_content: Option<&Result<HighlightedSourceView, String>>,
     diff_hunks: &[FileHunks],
     diff_view_mode: DiffViewMode,
+    search_matches: &[MatchLine],
+    search_current: Option<MatchLine>,
     area: Rect,
 ) {
     let highlighted = match source_content {
@@ -143,7 +173,12 @@ pub(crate) fn draw_source_screen(
 
     match split_rows {
         Some(split_rows) => {
-            let (left, right) = source_split_lines(&highlighted.token_highlights, &split_rows);
+            let (left, right) = source_split_lines(
+                &highlighted.token_highlights,
+                &split_rows,
+                search_matches,
+                search_current,
+            );
             render_scrollable_pane(
                 frame,
                 &title,
@@ -168,6 +203,8 @@ pub(crate) fn draw_source_screen(
                 overlay.as_deref(),
                 start,
                 end,
+                search_matches,
+                search_current,
             );
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -228,6 +265,8 @@ pub(crate) fn source_lines(
     overlay: Option<&[OverlayRow]>,
     start: usize,
     end: usize,
+    search_matches: &[MatchLine],
+    search_current: Option<MatchLine>,
 ) -> Vec<Line<'static>> {
     let Some(overlay) = overlay else {
         return source.lines[start..end]
@@ -235,7 +274,8 @@ pub(crate) fn source_lines(
             .enumerate()
             .map(|(offset, text)| {
                 let line_index = start + offset;
-                unchanged_line(source, token_highlights, line_index, text, None)
+                let search_bg = search_match_bg(line_index, search_matches, search_current);
+                unchanged_line(source, token_highlights, line_index, text, None, search_bg)
             })
             .collect();
     };
@@ -246,20 +286,53 @@ pub(crate) fn source_lines(
             OverlayRow::Unchanged {
                 line_number,
                 content,
-            } => unchanged_line(source, token_highlights, line_number - 1, content, None),
+            } => {
+                let line_index = line_number - 1;
+                let search_bg = search_match_bg(line_index, search_matches, search_current);
+                unchanged_line(
+                    source,
+                    token_highlights,
+                    line_index,
+                    content,
+                    None,
+                    search_bg,
+                )
+            }
             OverlayRow::Added {
                 line_number,
                 content,
-            } => unchanged_line(
-                source,
-                token_highlights,
-                line_number - 1,
-                content,
-                Some(ADDED_BG),
-            ),
+            } => {
+                let line_index = line_number - 1;
+                let search_bg = search_match_bg(line_index, search_matches, search_current);
+                unchanged_line(
+                    source,
+                    token_highlights,
+                    line_index,
+                    content,
+                    Some(ADDED_BG),
+                    search_bg,
+                )
+            }
             OverlayRow::Removed { content } => removed_line(content),
         })
         .collect()
+}
+
+/// Extracted so [`source_lines`]'s three call sites share one definition of
+/// "is this line a match" (ADR 0057 decision 6) rather than repeating the
+/// check inline at each.
+fn search_match_bg(
+    line_index: usize,
+    search_matches: &[MatchLine],
+    search_current: Option<MatchLine>,
+) -> Option<Color> {
+    if search_current == Some(line_index) {
+        Some(SEARCH_CURRENT_MATCH_BG)
+    } else if search_matches.contains(&line_index) {
+        Some(SEARCH_MATCH_BG)
+    } else {
+        None
+    }
 }
 
 /// Renders one source-file line (`text`, at 0-based `line_index`) with its
@@ -271,17 +344,25 @@ pub(crate) fn source_lines(
 /// `diff_bg` of `Some(ADDED_BG)` also swaps the gutter's usual blank space
 /// for [`marker_span`]'s `+` glyph, pairing this line's gutter with
 /// [`removed_line`]'s own `-` gutter for the same diff signal.
+///
+/// `search_bg` (ADR 0057 decision 6) layers into the same `.or()` chain,
+/// below `diff_bg`: the diff signal is what a reviewer drilled into this
+/// symbol's file to see in the first place, so it wins when a line is both
+/// diff-added and a search match.
 fn unchanged_line(
     source: &SourceView,
     token_highlights: &[crate::highlight::LineHighlight],
     line_index: usize,
     text: &str,
     diff_bg: Option<Color>,
+    search_bg: Option<Color>,
 ) -> Line<'static> {
     let line_number = line_index + 1;
     let is_highlighted =
         line_number >= source.highlight_start && line_number <= source.highlight_end;
-    let bg = diff_bg.or(is_highlighted.then_some(SOURCE_HIGHLIGHT_BG));
+    let bg = diff_bg
+        .or(search_bg)
+        .or(is_highlighted.then_some(SOURCE_HIGHLIGHT_BG));
     let is_added = diff_bg == Some(ADDED_BG);
 
     let mut spans = vec![gap_span(&format!("{line_number:>5}"), bg)];
@@ -323,9 +404,18 @@ fn removed_line(content: &str) -> Line<'static> {
 /// [`SourceSplitRow`] becomes one line on each side — a `None` cell renders
 /// as a blank filler line, matching the diff pane's own split-view filler
 /// convention (`crate::ui::diff_pane::split_side_line`).
+///
+/// `search_matches`/`search_current` (ADR 0057) only apply to the right
+/// (new-side) column: a match is found against `source.lines`, which are
+/// the file's *current* content — the left (old-side) column has no
+/// corresponding source line of its own to match against, the same reason
+/// [`source_split_side_line`] already gives `token_highlights` only to the
+/// new side.
 fn source_split_lines(
     token_highlights: &[crate::highlight::LineHighlight],
     split_rows: &[SourceSplitRow],
+    search_matches: &[MatchLine],
+    search_current: Option<MatchLine>,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
     let mut left = Vec::with_capacity(split_rows.len());
     let mut right = Vec::with_capacity(split_rows.len());
@@ -340,12 +430,18 @@ fn source_split_lines(
             DiffLineKind::Removed,
             left_bg,
             None,
+            None,
         ));
+        let right_search_bg = row
+            .right
+            .as_ref()
+            .and_then(|cell| search_match_bg(cell.line_number - 1, search_matches, search_current));
         right.push(source_split_side_line(
             row.right.as_ref(),
             DiffLineKind::Added,
-            right_bg,
+            right_bg.or(right_search_bg),
             Some(token_highlights),
+            right_search_bg,
         ));
     }
     (left, right)
@@ -361,17 +457,25 @@ fn source_split_lines(
 /// which has no highlight data of its own — the unified overlay's
 /// [`removed_line`] makes the same call for old-side-only text — and
 /// always renders as plain gap-styled text plus `bg`.
+///
+/// `search_bg` (ADR 0057) only ever arrives `Some` on the new side (see
+/// [`source_split_lines`]'s own doc comment) — passed separately from `bg`
+/// (which already carries `search_bg` folded in when no diff tint applies)
+/// so this function can tell "a bare search match" apart from "a changed
+/// row" when deciding whether to draw the `+`/`-` marker glyph: a search
+/// match alone is not a diff change and must not gain one.
 fn source_split_side_line(
     cell: Option<&crate::source_split::SourceSplitLine>,
     marker_kind: DiffLineKind,
     bg: Option<Color>,
     token_highlights: Option<&[crate::highlight::LineHighlight]>,
+    search_bg: Option<Color>,
 ) -> Line<'static> {
     let Some(cell) = cell else {
         return Line::raw("");
     };
 
-    let marker = bg.is_some();
+    let marker = bg.is_some() && bg != search_bg;
     let mut spans = vec![gap_span(&format!("{:>5}", cell.line_number), bg)];
     spans.push(if marker {
         marker_span(marker_kind, bg)

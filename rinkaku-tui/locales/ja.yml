@@ -9,6 +9,7 @@ help:
     source_view: "ソースビュー"
     review: "レビュー"
     global: "グローバル"
+    entry_only: "エントリー画面のみ"
   binding:
     move_cursor: "カーソルを移動"
     expand_collapse_open: "ディレクトリ行を開閉、またはファイル/シンボル行を開く（フォーカスが右に移動）"
@@ -24,6 +25,8 @@ help:
     scroll_source_pane_line: "ソースペインを1行スクロール"
     scroll_source_pane_half_page: "ソースペインを半ページ分スクロール"
     jump_file_top_bottom: "ファイルの先頭/末尾へジャンプ"
+    start_search: "検索を開始"
+    jump_next_prev_match: "次/前の検索結果へジャンプ"
     return_to_entry_view: "エントリービューに戻る"
     compose_review_note: "カーソル位置のシンボルにレビューノートを作成"
     open_review_notes_list: "レビューノート一覧を開く"

@@ -6,7 +6,13 @@ fn should_draw_source_screen_title_and_error_message_when_file_is_missing() {
     let app = App::new(&report)
         .handle_key(crate::app::InputKey::Down)
         .handle_key(crate::app::InputKey::Source);
-    let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+    // Wider than the default 80 columns used elsewhere in this test
+    // module: the Source screen's status-line hint text grew past 80
+    // columns once ADR 0057 added the `/`/`n`/`N` search bindings, and
+    // the status line intentionally does not wrap (mirrors
+    // `should_draw_status_line_help_text_on_entry_screen`'s identical
+    // widening for the same reason).
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
     let source_content = missing_file_source_content(&report, "lib.rs::foo");
 
     terminal

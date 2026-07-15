@@ -16,7 +16,8 @@ fn should_list_keymap_groups_in_tree_right_source_review_global_order() {
             "Right focus",
             "Source view",
             "Review",
-            "Global"
+            "Global",
+            "Entry screen only",
         ],
         titles
     );
@@ -46,6 +47,27 @@ fn should_document_source_view_scroll_bindings_in_the_source_view_group() {
     assert!(keys.contains(&"ctrl-d / ctrl-u"));
     assert!(keys.contains(&"gg / G"));
     assert!(keys.contains(&"esc / q"));
+}
+
+#[test]
+fn should_document_search_bindings_in_the_source_view_group() {
+    // ADR 0057: `/`/`n`/`N` are added to the Source view group alongside
+    // the other Source-screen-only motion bindings.
+    let content = help_content(Locale::English);
+    let source_view = content
+        .keymap_groups
+        .iter()
+        .find(|group| group.title == "Source view")
+        .expect("Source view group present");
+
+    let keys: Vec<&str> = source_view
+        .bindings
+        .iter()
+        .map(|binding| binding.keys)
+        .collect();
+
+    assert!(keys.contains(&"/"));
+    assert!(keys.contains(&"n / N"));
 }
 
 #[test]
@@ -134,7 +156,11 @@ fn should_include_a_glossary_entry_for_jumplist() {
 }
 
 #[test]
-fn should_document_gd_gr_and_jumplist_bindings_in_the_global_group() {
+fn should_document_gd_and_gr_bindings_in_the_global_group() {
+    // ADR 0057: gd/gr are the truly-global half of what PR #177's Global
+    // group originally listed — jumplist navigation (ctrl-o/ctrl-i) moved
+    // to the new Entry-only group, since a jumplist is only ever
+    // populated by Entry-screen navigation.
     let content = help_content(Locale::English);
     let global = content
         .keymap_groups
@@ -146,8 +172,29 @@ fn should_document_gd_gr_and_jumplist_bindings_in_the_global_group() {
 
     assert!(keys.contains(&"gd"));
     assert!(keys.contains(&"gr"));
+}
+
+#[test]
+fn should_document_jumplist_bindings_in_the_entry_only_group() {
+    let content = help_content(Locale::English);
+    let entry_only = content
+        .keymap_groups
+        .iter()
+        .find(|group| group.title == "Entry screen only")
+        .expect("Entry screen only group present");
+
+    let keys: Vec<&str> = entry_only
+        .bindings
+        .iter()
+        .map(|binding| binding.keys)
+        .collect();
+
     assert!(keys.contains(&"ctrl-o"));
     assert!(keys.contains(&"ctrl-i"));
+    assert!(keys.contains(&"d"));
+    assert!(keys.contains(&"r"));
+    assert!(keys.contains(&"o"));
+    assert!(keys.contains(&"s"));
 }
 
 #[test]
@@ -205,23 +252,33 @@ fn source_screen() -> Screen {
 }
 
 #[test]
-fn should_show_tree_focus_review_and_global_groups_when_tree_focused_on_entry_screen() {
+fn should_show_tree_focus_review_global_and_entry_only_groups_when_tree_focused_on_entry_screen() {
     let groups = applicable_help_groups(Locale::English, &Screen::Entry, Focus::Tree);
     let titles: Vec<&str> = groups.iter().map(|group| group.title.as_str()).collect();
 
-    assert_eq!(vec!["Tree focus", "Review", "Global"], titles);
+    assert_eq!(
+        vec!["Tree focus", "Review", "Global", "Entry screen only"],
+        titles
+    );
 }
 
 #[test]
-fn should_show_right_focus_review_and_global_groups_when_right_focused_on_entry_screen() {
+fn should_show_right_focus_review_global_and_entry_only_groups_when_right_focused_on_entry_screen()
+{
     let groups = applicable_help_groups(Locale::English, &Screen::Entry, Focus::Right);
     let titles: Vec<&str> = groups.iter().map(|group| group.title.as_str()).collect();
 
-    assert_eq!(vec!["Right focus", "Review", "Global"], titles);
+    assert_eq!(
+        vec!["Right focus", "Review", "Global", "Entry screen only"],
+        titles
+    );
 }
 
 #[test]
 fn should_show_only_source_view_and_global_groups_on_source_screen_regardless_of_focus() {
+    // ADR 0057: the Entry-only group (d/r/o/s/ctrl-o/ctrl-i) must not
+    // appear here — those bindings are no-ops on the Source screen, the
+    // exact PR #177 "known limitation" this ADR resolves.
     let groups = applicable_help_groups(Locale::English, &source_screen(), Focus::Tree);
     let titles: Vec<&str> = groups.iter().map(|group| group.title.as_str()).collect();
 

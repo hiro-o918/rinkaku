@@ -16,6 +16,7 @@ use crate::detail::{
 use crate::nav::Nav;
 use crate::order::{DirRank, OrderMode, rank_directories};
 use crate::review::ReviewState;
+use crate::search::SearchState;
 use crate::tree::{NodeKind, Tree, build_tree};
 use rinkaku_core::render::Report;
 use std::collections::HashMap;
@@ -347,6 +348,10 @@ pub struct App {
     /// decision; every review-specific transition lives on [`ReviewState`]
     /// itself, not here.
     review: ReviewState,
+    /// The Source-view search feature's own state (ADR 0057), following
+    /// [`Self::review`]'s identical "one field, own module" precedent —
+    /// every search-specific transition lives on [`SearchState`] itself.
+    search: SearchState,
     /// Whether sink A (posting a GitHub PR review) is on the export menu
     /// this session — mirrors whether `crate::session::TuiSession::run`
     /// was given a `PrContext`/submitter port, fixed for the session's
@@ -415,6 +420,7 @@ impl App {
             status: None,
             should_quit: false,
             review: ReviewState::default(),
+            search: SearchState::default(),
             review_sink_a_available: false,
             update_available: None,
             update_prompt_open: false,
@@ -550,6 +556,12 @@ impl App {
         &self.review
     }
 
+    /// The Source-view search feature's own state (ADR 0057) — see
+    /// [`crate::search::SearchState`]'s own doc comment.
+    pub fn search(&self) -> &SearchState {
+        &self.search
+    }
+
     /// Whether sink A (posting a GitHub PR review) is on the export menu
     /// this session — see [`Self::with_review_sink_a_available`]'s own doc
     /// comment. `crate::ui::review_overlay` reads this to keep the export
@@ -570,6 +582,19 @@ impl App {
     /// `handle_key`).
     pub fn with_review(mut self, review: ReviewState) -> Self {
         self.review = review;
+        self
+    }
+
+    /// Replaces `App`'s [`SearchState`] wholesale — used by
+    /// `crate::event_loop::run_app` for the one search transition that
+    /// needs data (the Source view's own source lines) `App::handle_key`
+    /// cannot derive itself: confirming a query
+    /// ([`InputKey::SearchConfirm`]'s own doc comment on why that key is
+    /// special-cased before dispatch rather than routed through
+    /// `handle_key`, mirroring [`Self::with_review`]'s identical precedent
+    /// for [`InputKey::NoteCompose`]).
+    pub fn with_search(mut self, search: SearchState) -> Self {
+        self.search = search;
         self
     }
 

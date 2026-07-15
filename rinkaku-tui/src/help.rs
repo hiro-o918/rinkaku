@@ -62,6 +62,12 @@ pub enum HelpGroup {
     SourceView,
     Review,
     Global,
+    /// Bindings that only do something on [`Screen::Entry`] (ADR 0057):
+    /// `d`/`r`/`o`/`s`/`ctrl-o`/`ctrl-i` are swallowed as no-ops by
+    /// `App::handle_key`'s `Screen::Source` catch-all arm, so listing them
+    /// under [`Self::Global`] (as PR #177 originally did) was misleading —
+    /// see this ADR's own Context for the exact fault line.
+    EntryOnly,
 }
 
 /// One named group of [`KeyBinding`]s — "Tree focus", "Right focus", or
@@ -164,6 +170,15 @@ fn source_screen_bindings(locale: Locale) -> Vec<KeyBinding> {
                 .into_owned(),
         },
         KeyBinding {
+            keys: "/",
+            description: rust_i18n::t!("help.binding.start_search", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "n / N",
+            description: rust_i18n::t!("help.binding.jump_next_prev_match", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
             keys: "esc / q",
             description: rust_i18n::t!("help.binding.return_to_entry_view", locale = tag)
                 .into_owned(),
@@ -192,31 +207,17 @@ fn review_bindings(locale: Locale) -> Vec<KeyBinding> {
     ]
 }
 
+/// Bindings valid on *every* screen (ADR 0057 decision 8) — the literal
+/// truth of "global" the group's name already claimed, narrowed from PR
+/// #177's original (broader, but inaccurate) set by moving the
+/// Entry-screen-only bindings out to [`entry_only_bindings`].
 fn global_bindings(locale: Locale) -> Vec<KeyBinding> {
     let tag = locale.tag();
     vec![
         KeyBinding {
-            keys: "d",
-            description: rust_i18n::t!("help.binding.toggle_detail_diff", locale = tag)
-                .into_owned(),
-        },
-        KeyBinding {
-            keys: "r",
-            description: rust_i18n::t!("help.binding.toggle_blast_radius", locale = tag)
-                .into_owned(),
-        },
-        KeyBinding {
             keys: "v",
             description: rust_i18n::t!("help.binding.toggle_unified_split", locale = tag)
                 .into_owned(),
-        },
-        KeyBinding {
-            keys: "o",
-            description: rust_i18n::t!("help.binding.toggle_order_mode", locale = tag).into_owned(),
-        },
-        KeyBinding {
-            keys: "s",
-            description: rust_i18n::t!("help.binding.open_source_view", locale = tag).into_owned(),
         },
         KeyBinding {
             keys: "gd",
@@ -225,14 +226,6 @@ fn global_bindings(locale: Locale) -> Vec<KeyBinding> {
         KeyBinding {
             keys: "gr",
             description: rust_i18n::t!("help.binding.jump_to_caller", locale = tag).into_owned(),
-        },
-        KeyBinding {
-            keys: "ctrl-o",
-            description: rust_i18n::t!("help.binding.jump_back", locale = tag).into_owned(),
-        },
-        KeyBinding {
-            keys: "ctrl-i",
-            description: rust_i18n::t!("help.binding.jump_forward", locale = tag).into_owned(),
         },
         KeyBinding {
             keys: "w",
@@ -252,6 +245,42 @@ fn global_bindings(locale: Locale) -> Vec<KeyBinding> {
         KeyBinding {
             keys: "q / ctrl-c",
             description: rust_i18n::t!("help.binding.quit", locale = tag).into_owned(),
+        },
+    ]
+}
+
+/// Bindings that only do something on [`Screen::Entry`] (ADR 0057 decision
+/// 8) — `d`/`r`/`o`/`s` toggle Entry-only panes/screens, and `ctrl-o`/
+/// `ctrl-i` walk the jumplist, which only Entry-screen navigation ever
+/// populates.
+fn entry_only_bindings(locale: Locale) -> Vec<KeyBinding> {
+    let tag = locale.tag();
+    vec![
+        KeyBinding {
+            keys: "d",
+            description: rust_i18n::t!("help.binding.toggle_detail_diff", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "r",
+            description: rust_i18n::t!("help.binding.toggle_blast_radius", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "o",
+            description: rust_i18n::t!("help.binding.toggle_order_mode", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "s",
+            description: rust_i18n::t!("help.binding.open_source_view", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "ctrl-o",
+            description: rust_i18n::t!("help.binding.jump_back", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "ctrl-i",
+            description: rust_i18n::t!("help.binding.jump_forward", locale = tag).into_owned(),
         },
     ]
 }
@@ -284,6 +313,11 @@ fn keymap_groups(locale: Locale) -> Vec<KeyBindingGroup> {
             title: rust_i18n::t!("help.group.global", locale = tag).into_owned(),
             bindings: global_bindings(locale),
         },
+        KeyBindingGroup {
+            id: HelpGroup::EntryOnly,
+            title: rust_i18n::t!("help.group.entry_only", locale = tag).into_owned(),
+            bindings: entry_only_bindings(locale),
+        },
     ]
 }
 
@@ -296,7 +330,10 @@ fn keymap_groups(locale: Locale) -> Vec<KeyBindingGroup> {
 /// [`HelpGroup::SourceView`] only under [`Screen::Source`];
 /// [`HelpGroup::Review`]'s `n`/`N` only under [`Screen::Entry`] (regardless
 /// of `Focus`, per `review_flow::derive_selection_snapshot` and
-/// `App::handle_key`'s own `NotesList` arm); [`HelpGroup::Global`] always.
+/// `App::handle_key`'s own `NotesList` arm); [`HelpGroup::Global`] always;
+/// [`HelpGroup::EntryOnly`] (ADR 0057) only under [`Screen::Entry`] —
+/// `d`/`r`/`o`/`s`/`ctrl-o`/`ctrl-i` are no-ops on [`Screen::Source`]
+/// (`App::handle_key`'s own Source-screen catch-all arm).
 fn is_group_applicable(group: HelpGroup, screen: &Screen, focus: Focus) -> bool {
     let on_source_screen = matches!(screen, Screen::Source { .. });
     match group {
@@ -305,6 +342,7 @@ fn is_group_applicable(group: HelpGroup, screen: &Screen, focus: Focus) -> bool 
         HelpGroup::SourceView => on_source_screen,
         HelpGroup::Review => !on_source_screen,
         HelpGroup::Global => true,
+        HelpGroup::EntryOnly => !on_source_screen,
     }
 }
 
