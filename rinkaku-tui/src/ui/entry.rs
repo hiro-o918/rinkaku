@@ -150,6 +150,7 @@ pub(crate) fn draw_tree_pane(
 #[cfg(test)]
 mod tests {
     use crate::app::{App, BlastRadiusSelection};
+    use crate::locale::Locale;
     use crate::ui::draw;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -253,6 +254,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -302,6 +304,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -333,6 +336,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -374,6 +378,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -430,6 +435,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -492,6 +498,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -525,6 +532,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -559,6 +567,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");

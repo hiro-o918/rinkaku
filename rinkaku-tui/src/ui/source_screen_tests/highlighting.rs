@@ -50,6 +50,7 @@ fn should_apply_keyword_foreground_and_symbol_range_background_in_source_screen(
                 source_content.as_ref(),
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -123,6 +124,7 @@ fn should_fall_back_to_plain_source_style_when_file_extension_is_unrecognized() 
                 source_content.as_ref(),
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");

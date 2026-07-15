@@ -1,5 +1,5 @@
 //! The `?` help overlay's content (ADR 0020, glossary wording per ADR
-//! 0023): a static keymap plus a short glossary, assembled as plain data so
+//! 0023): a keymap plus a short glossary, assembled as plain data so
 //! `crate::ui` only has to lay it out, not decide what belongs in it.
 //!
 //! The keymap itself is fixed (not derived from `crate::app::InputKey` or
@@ -9,12 +9,20 @@
 //! it into "Tree focus" / "Right focus" / "Global" groups mirrors ADR
 //! 0020's own focus split, so the overlay reads as a direct answer to
 //! "what does j/k do right now" rather than one flat undifferentiated list.
+//!
+//! [`help_content`] is a function, not a `const`, because its description/
+//! explanation strings are looked up per [`crate::locale::Locale`] via
+//! `rust_i18n::t!` (ADR 0055), which allocates and so cannot run in const
+//! context. Key labels (`keys`, `swatch`, `term`) stay `&'static str` —
+//! ADR 0055 scopes translation to prose, not key labels or term names.
+
+use crate::locale::Locale;
 
 /// One row of the keymap: the key(s) as displayed text, and what they do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBinding {
     pub keys: &'static str,
-    pub description: &'static str,
+    pub description: String,
 }
 
 /// One glossary entry: a term used elsewhere in the UI (an order mode name,
@@ -23,7 +31,7 @@ pub struct KeyBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlossaryEntry {
     pub term: &'static str,
-    pub explanation: &'static str,
+    pub explanation: String,
 }
 
 /// One marker-legend entry: a tree row marker/badge's display text paired
@@ -35,188 +43,225 @@ pub struct GlossaryEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerLegendEntry {
     pub swatch: &'static str,
-    pub explanation: &'static str,
+    pub explanation: String,
 }
 
 /// One named group of [`KeyBinding`]s — "Tree focus", "Right focus", or
 /// "Global" (ADR 0020's own focus/global split).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindingGroup {
-    pub title: &'static str,
-    pub bindings: &'static [KeyBinding],
+    pub title: String,
+    pub bindings: Vec<KeyBinding>,
 }
 
 /// The whole help overlay's content: every keymap group in display order,
-/// then the markers legend, then the glossary. A `const`, not a function —
-/// the content is fixed at compile time, so there is nothing to compute per
-/// call.
+/// then the markers legend, then the glossary — see [`help_content`].
 pub struct HelpContent {
-    pub keymap_groups: &'static [KeyBindingGroup],
-    pub markers: &'static [MarkerLegendEntry],
-    pub glossary: &'static [GlossaryEntry],
+    pub keymap_groups: Vec<KeyBindingGroup>,
+    pub markers: Vec<MarkerLegendEntry>,
+    pub glossary: Vec<GlossaryEntry>,
 }
 
-const TREE_FOCUS_BINDINGS: &[KeyBinding] = &[
-    KeyBinding {
-        keys: "j / k / ↓ / ↑",
-        description: "Move the cursor",
-    },
-    KeyBinding {
-        keys: "enter",
-        description: "Expand/collapse a directory row, or open a file/symbol row (moves focus right)",
-    },
-    KeyBinding {
-        keys: "space",
-        description: "Expand/collapse a directory/file row (never moves focus)",
-    },
-    KeyBinding {
-        keys: "e / E",
-        description: "Expand every row",
-    },
-    KeyBinding {
-        keys: "c / C",
-        description: "Collapse every row",
-    },
-];
+fn tree_focus_bindings(locale: Locale) -> Vec<KeyBinding> {
+    let tag = locale.tag();
+    vec![
+        KeyBinding {
+            keys: "j / k / ↓ / ↑",
+            description: rust_i18n::t!("help.binding.move_cursor", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "enter",
+            description: rust_i18n::t!("help.binding.expand_collapse_open", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "space",
+            description: rust_i18n::t!("help.binding.expand_collapse_row", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "e / E",
+            description: rust_i18n::t!("help.binding.expand_every_row", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "c / C",
+            description: rust_i18n::t!("help.binding.collapse_every_row", locale = tag)
+                .into_owned(),
+        },
+    ]
+}
 
-const RIGHT_FOCUS_BINDINGS: &[KeyBinding] = &[
-    KeyBinding {
-        keys: "j / k / ↓ / ↑",
-        description: "Scroll the right pane by one line",
-    },
-    KeyBinding {
-        keys: "ctrl-d / ctrl-u",
-        description: "Scroll the right pane by half a page",
-    },
-    KeyBinding {
-        keys: "gg / G",
-        description: "Jump to the top / bottom of the right pane",
-    },
-    KeyBinding {
-        keys: "h / esc",
-        description: "Return focus to the tree",
-    },
-    KeyBinding {
-        keys: "]",
-        description: "Jump to the next hunk (Diff pane only)",
-    },
-    KeyBinding {
-        keys: "[",
-        description: "Jump to the previous hunk (Diff pane only)",
-    },
-];
+fn right_focus_bindings(locale: Locale) -> Vec<KeyBinding> {
+    let tag = locale.tag();
+    vec![
+        KeyBinding {
+            keys: "j / k / ↓ / ↑",
+            description: rust_i18n::t!("help.binding.scroll_right_pane_line", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "ctrl-d / ctrl-u",
+            description: rust_i18n::t!("help.binding.scroll_right_pane_half_page", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "gg / G",
+            description: rust_i18n::t!("help.binding.jump_right_pane_top_bottom", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "h / esc",
+            description: rust_i18n::t!("help.binding.return_focus_to_tree", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "]",
+            description: rust_i18n::t!("help.binding.jump_next_hunk", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "[",
+            description: rust_i18n::t!("help.binding.jump_previous_hunk", locale = tag)
+                .into_owned(),
+        },
+    ]
+}
 
-const SOURCE_SCREEN_BINDINGS: &[KeyBinding] = &[
-    KeyBinding {
-        keys: "j / k / ↓ / ↑",
-        description: "Scroll the source pane by one line",
-    },
-    KeyBinding {
-        keys: "ctrl-d / ctrl-u",
-        description: "Scroll the source pane by half a page",
-    },
-    KeyBinding {
-        keys: "gg / G",
-        description: "Jump to the top / bottom of the file",
-    },
-    KeyBinding {
-        keys: "esc / q",
-        description: "Return to the entry view",
-    },
-];
+fn source_screen_bindings(locale: Locale) -> Vec<KeyBinding> {
+    let tag = locale.tag();
+    vec![
+        KeyBinding {
+            keys: "j / k / ↓ / ↑",
+            description: rust_i18n::t!("help.binding.scroll_source_pane_line", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "ctrl-d / ctrl-u",
+            description: rust_i18n::t!("help.binding.scroll_source_pane_half_page", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "gg / G",
+            description: rust_i18n::t!("help.binding.jump_file_top_bottom", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "esc / q",
+            description: rust_i18n::t!("help.binding.return_to_entry_view", locale = tag)
+                .into_owned(),
+        },
+    ]
+}
 
-const REVIEW_BINDINGS: &[KeyBinding] = &[
-    KeyBinding {
-        keys: "n",
-        description: "Compose a review note over the symbol under the cursor",
-    },
-    KeyBinding {
-        keys: "N",
-        description: "Open the review notes list",
-    },
-    KeyBinding {
-        keys: "j/k, Enter, Esc, d",
-        description: "Notes list: move, export, close, delete",
-    },
-];
+fn review_bindings(locale: Locale) -> Vec<KeyBinding> {
+    let tag = locale.tag();
+    vec![
+        KeyBinding {
+            keys: "n",
+            description: rust_i18n::t!("help.binding.compose_review_note", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "N",
+            description: rust_i18n::t!("help.binding.open_review_notes_list", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "j/k, Enter, Esc, d",
+            description: rust_i18n::t!("help.binding.notes_list_actions", locale = tag)
+                .into_owned(),
+        },
+    ]
+}
 
-const GLOBAL_BINDINGS: &[KeyBinding] = &[
-    KeyBinding {
-        keys: "d / D",
-        description: "Toggle the right pane between Detail and Diff",
-    },
-    KeyBinding {
-        keys: "r / R",
-        description: "Toggle the right pane to the blast radius of the selected row",
-    },
-    KeyBinding {
-        keys: "v / V",
-        description: "Toggle unified/split (side-by-side) rendering — Diff pane and source view diff overlay alike",
-    },
-    KeyBinding {
-        keys: "o / O",
-        description: "Toggle topological/alphabetical ordering",
-    },
-    KeyBinding {
-        keys: "s / S",
-        description: "Open the source view for the symbol under the cursor",
-    },
-    KeyBinding {
-        keys: "gd",
-        description: "Jump to a callee of the symbol under the cursor",
-    },
-    KeyBinding {
-        keys: "gr",
-        description: "Jump to a caller of the symbol under the cursor",
-    },
-    KeyBinding {
-        keys: "ctrl-o",
-        description: "Jump back to the previous location in the jumplist",
-    },
-    KeyBinding {
-        keys: "ctrl-i",
-        description: "Jump forward to the next location in the jumplist",
-    },
-    KeyBinding {
-        keys: "w / W",
-        description: "Open the current PR's page in a web browser (--pr mode only)",
-    },
-    KeyBinding {
-        keys: "U",
-        description: "Prompt to self-update (only shown when a newer release is available)",
-    },
-    KeyBinding {
-        keys: "?",
-        description: "Toggle this help overlay",
-    },
-    KeyBinding {
-        keys: "q / ctrl-c",
-        description: "Quit (esc/q return to the entry view from the source view)",
-    },
-];
+fn global_bindings(locale: Locale) -> Vec<KeyBinding> {
+    let tag = locale.tag();
+    vec![
+        KeyBinding {
+            keys: "d / D",
+            description: rust_i18n::t!("help.binding.toggle_detail_diff", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "r / R",
+            description: rust_i18n::t!("help.binding.toggle_blast_radius", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "v / V",
+            description: rust_i18n::t!("help.binding.toggle_unified_split", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "o / O",
+            description: rust_i18n::t!("help.binding.toggle_order_mode", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "s / S",
+            description: rust_i18n::t!("help.binding.open_source_view", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "gd",
+            description: rust_i18n::t!("help.binding.jump_to_callee", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "gr",
+            description: rust_i18n::t!("help.binding.jump_to_caller", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "ctrl-o",
+            description: rust_i18n::t!("help.binding.jump_back", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "ctrl-i",
+            description: rust_i18n::t!("help.binding.jump_forward", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "w / W",
+            description: rust_i18n::t!("help.binding.open_pr_in_browser", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "U",
+            description: rust_i18n::t!("help.binding.prompt_self_update", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "?",
+            description: rust_i18n::t!("help.binding.toggle_help_overlay", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
+            keys: "q / ctrl-c",
+            description: rust_i18n::t!("help.binding.quit", locale = tag).into_owned(),
+        },
+    ]
+}
 
-const KEYMAP_GROUPS: &[KeyBindingGroup] = &[
-    KeyBindingGroup {
-        title: "Tree focus",
-        bindings: TREE_FOCUS_BINDINGS,
-    },
-    KeyBindingGroup {
-        title: "Right focus",
-        bindings: RIGHT_FOCUS_BINDINGS,
-    },
-    KeyBindingGroup {
-        title: "Source view",
-        bindings: SOURCE_SCREEN_BINDINGS,
-    },
-    KeyBindingGroup {
-        title: "Review",
-        bindings: REVIEW_BINDINGS,
-    },
-    KeyBindingGroup {
-        title: "Global",
-        bindings: GLOBAL_BINDINGS,
-    },
-];
+fn keymap_groups(locale: Locale) -> Vec<KeyBindingGroup> {
+    let tag = locale.tag();
+    vec![
+        KeyBindingGroup {
+            title: rust_i18n::t!("help.group.tree_focus", locale = tag).into_owned(),
+            bindings: tree_focus_bindings(locale),
+        },
+        KeyBindingGroup {
+            title: rust_i18n::t!("help.group.right_focus", locale = tag).into_owned(),
+            bindings: right_focus_bindings(locale),
+        },
+        KeyBindingGroup {
+            title: rust_i18n::t!("help.group.source_view", locale = tag).into_owned(),
+            bindings: source_screen_bindings(locale),
+        },
+        KeyBindingGroup {
+            title: rust_i18n::t!("help.group.review", locale = tag).into_owned(),
+            bindings: review_bindings(locale),
+        },
+        KeyBindingGroup {
+            title: rust_i18n::t!("help.group.global", locale = tag).into_owned(),
+            bindings: global_bindings(locale),
+        },
+    ]
+}
 
 /// The tree pane's marker/badge legend, in the same added-like →
 /// changed-like → removed-like → aggregates reading order as the mermaid
@@ -224,309 +269,126 @@ const KEYMAP_GROUPS: &[KeyBindingGroup] = &[
 /// `crate::row_view::entry_row_line` can draw. `swatch` is the display text
 /// only; `crate::ui::overlay` pairs each with its real style from
 /// `crate::row_view`.
-const MARKER_LEGEND: &[MarkerLegendEntry] = &[
-    MarkerLegendEntry {
-        swatch: "v / >",
-        explanation: "Expand marker: children shown / hidden (blank = leaf, nothing to expand)",
-    },
-    MarkerLegendEntry {
-        swatch: "fn struct enum trait class iface type",
-        explanation: "Symbol row's kind prefix, abbreviated from the language's own keyword",
-    },
-    MarkerLegendEntry {
-        swatch: "+",
-        explanation: "Added symbol",
-    },
-    MarkerLegendEntry {
-        swatch: "~",
-        explanation: "Signature-changed symbol",
-    },
-    MarkerLegendEntry {
-        swatch: "(dimmed name)",
-        explanation: "Body-only, unclassified, or test symbol — exists, but carries less review weight",
-    },
-    MarkerLegendEntry {
-        swatch: "x",
-        explanation: "Removed symbol",
-    },
-    MarkerLegendEntry {
-        swatch: "(dimmed + struck-through name)",
-        explanation: "Removed symbol's name",
-    },
-    MarkerLegendEntry {
-        swatch: "(cycle)",
-        explanation: "Directory contains a dependency cycle",
-    },
-    MarkerLegendEntry {
-        swatch: "!",
-        explanation: "Risk marker: a contract change and a high-fan-in symbol in the same subtree",
-    },
-    MarkerLegendEntry {
-        swatch: "[test] (N symbols)",
-        explanation: "Whole-test-file badge",
-    },
-    MarkerLegendEntry {
-        swatch: "N tests",
-        explanation: "Collapsed group of a file's test symbols",
-    },
-    MarkerLegendEntry {
-        swatch: "(skipped: ...)",
-        explanation: "Reason a file was not analyzed (parse failure, unsupported language, ...)",
-    },
-    MarkerLegendEntry {
-        swatch: "chg:N",
-        explanation: "Changed, non-removed symbols in this subtree",
-    },
-    MarkerLegendEntry {
-        swatch: "api:N",
-        explanation: "Contract changes in this subtree: signature-changed symbols plus removed symbols",
-    },
-    MarkerLegendEntry {
-        swatch: "fan-in:N",
-        explanation: "Sum of used_by counts over every high-fan-in symbol in this subtree",
-    },
-    MarkerLegendEntry {
-        swatch: "lines:N",
-        explanation: "This file's own line count, colored by file-size band (normal/watch/warn/split)",
-    },
-    MarkerLegendEntry {
-        swatch: "warn:N",
-        explanation: "Directory rows: count of Warn-band files in this subtree",
-    },
-    MarkerLegendEntry {
-        swatch: "split:N",
-        explanation: "Directory rows: count of Split-band files in this subtree",
-    },
-];
+fn marker_legend(locale: Locale) -> Vec<MarkerLegendEntry> {
+    let tag = locale.tag();
+    vec![
+        MarkerLegendEntry {
+            swatch: "v / >",
+            explanation: rust_i18n::t!("help.marker.expand_marker", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "fn struct enum trait class iface type",
+            explanation: rust_i18n::t!("help.marker.symbol_kind_prefix", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "+",
+            explanation: rust_i18n::t!("help.marker.added_symbol", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "~",
+            explanation: rust_i18n::t!("help.marker.signature_changed_symbol", locale = tag)
+                .into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "(dimmed name)",
+            explanation: rust_i18n::t!("help.marker.body_only_symbol", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "x",
+            explanation: rust_i18n::t!("help.marker.removed_symbol", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "(dimmed + struck-through name)",
+            explanation: rust_i18n::t!("help.marker.removed_symbol_name", locale = tag)
+                .into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "(cycle)",
+            explanation: rust_i18n::t!("help.marker.dependency_cycle", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "!",
+            explanation: rust_i18n::t!("help.marker.risk_marker", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "[test] (N symbols)",
+            explanation: rust_i18n::t!("help.marker.whole_test_file_badge", locale = tag)
+                .into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "N tests",
+            explanation: rust_i18n::t!("help.marker.collapsed_test_group", locale = tag)
+                .into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "(skipped: ...)",
+            explanation: rust_i18n::t!("help.marker.skipped_reason", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "chg:N",
+            explanation: rust_i18n::t!("help.marker.changed_count", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "api:N",
+            explanation: rust_i18n::t!("help.marker.api_count", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "fan-in:N",
+            explanation: rust_i18n::t!("help.marker.fan_in_count", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "lines:N",
+            explanation: rust_i18n::t!("help.marker.lines_count", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "warn:N",
+            explanation: rust_i18n::t!("help.marker.warn_count", locale = tag).into_owned(),
+        },
+        MarkerLegendEntry {
+            swatch: "split:N",
+            explanation: rust_i18n::t!("help.marker.split_count", locale = tag).into_owned(),
+        },
+    ]
+}
 
-const GLOSSARY: &[GlossaryEntry] = &[
-    GlossaryEntry {
-        term: "topological order",
-        explanation: "Directories ordered least-depended-on first, foundations last",
-    },
-    GlossaryEntry {
-        term: "alphabetical order",
-        explanation: "Directories ordered A-Z, ignoring dependency direction",
-    },
-    GlossaryEntry {
-        term: "blast radius",
-        explanation: "The dependency tree rooted at a selected directory or file, showing what would be affected if it changed",
-    },
-    GlossaryEntry {
-        term: "cycle",
-        explanation: "A dependency loop: two or more symbols depend on each other, so the tree stops and points back to where it first appeared",
-    },
-    GlossaryEntry {
-        term: "jumplist",
-        explanation: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it",
-    },
-];
+fn glossary(locale: Locale) -> Vec<GlossaryEntry> {
+    let tag = locale.tag();
+    vec![
+        GlossaryEntry {
+            term: "topological order",
+            explanation: rust_i18n::t!("help.glossary.topological_order", locale = tag)
+                .into_owned(),
+        },
+        GlossaryEntry {
+            term: "alphabetical order",
+            explanation: rust_i18n::t!("help.glossary.alphabetical_order", locale = tag)
+                .into_owned(),
+        },
+        GlossaryEntry {
+            term: "blast radius",
+            explanation: rust_i18n::t!("help.glossary.blast_radius", locale = tag).into_owned(),
+        },
+        GlossaryEntry {
+            term: "cycle",
+            explanation: rust_i18n::t!("help.glossary.cycle", locale = tag).into_owned(),
+        },
+        GlossaryEntry {
+            term: "jumplist",
+            explanation: rust_i18n::t!("help.glossary.jumplist", locale = tag).into_owned(),
+        },
+    ]
+}
 
-/// The whole help overlay's content (module doc comment).
-pub const HELP_CONTENT: HelpContent = HelpContent {
-    keymap_groups: KEYMAP_GROUPS,
-    markers: MARKER_LEGEND,
-    glossary: GLOSSARY,
-};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn should_list_keymap_groups_in_tree_right_source_review_global_order() {
-        let titles: Vec<&str> = HELP_CONTENT
-            .keymap_groups
-            .iter()
-            .map(|group| group.title)
-            .collect();
-
-        assert_eq!(
-            vec![
-                "Tree focus",
-                "Right focus",
-                "Source view",
-                "Review",
-                "Global"
-            ],
-            titles
-        );
-    }
-
-    #[test]
-    fn should_document_source_view_scroll_bindings_in_the_source_view_group() {
-        // ADR 0026: the source view has its own scroll bindings (j/k,
-        // Ctrl-d/Ctrl-u, gg/G) plus esc/q to return to the entry view.
-        // Pinned so a future rename/typo/omission of any of them is
-        // caught, and so the group's own presence is not silently
-        // dropped by a keymap refactor.
-        let source_view = HELP_CONTENT
-            .keymap_groups
-            .iter()
-            .find(|group| group.title == "Source view")
-            .expect("Source view group present");
-
-        let keys: Vec<&str> = source_view
-            .bindings
-            .iter()
-            .map(|binding| binding.keys)
-            .collect();
-
-        assert!(keys.contains(&"j / k / ↓ / ↑"));
-        assert!(keys.contains(&"ctrl-d / ctrl-u"));
-        assert!(keys.contains(&"gg / G"));
-        assert!(keys.contains(&"esc / q"));
-    }
-
-    #[test]
-    fn should_have_no_empty_keymap_group() {
-        for group in HELP_CONTENT.keymap_groups {
-            assert!(
-                !group.bindings.is_empty(),
-                "group {:?} has no bindings",
-                group.title
-            );
-        }
-    }
-
-    #[test]
-    fn should_order_marker_legend_added_changed_removed_then_aggregates() {
-        let swatches: Vec<&str> = HELP_CONTENT
-            .markers
-            .iter()
-            .map(|entry| entry.swatch)
-            .collect();
-
-        assert_eq!(
-            vec![
-                "v / >",
-                "fn struct enum trait class iface type",
-                "+",
-                "~",
-                "(dimmed name)",
-                "x",
-                "(dimmed + struck-through name)",
-                "(cycle)",
-                "!",
-                "[test] (N symbols)",
-                "N tests",
-                "(skipped: ...)",
-                "chg:N",
-                "api:N",
-                "fan-in:N",
-                "lines:N",
-                "warn:N",
-                "split:N",
-            ],
-            swatches
-        );
-    }
-
-    #[test]
-    fn should_describe_api_badge_as_signature_changed_plus_removed_symbols() {
-        let entry = HELP_CONTENT
-            .markers
-            .iter()
-            .find(|entry| entry.swatch == "api:N")
-            .expect("api:N entry present");
-
-        assert!(entry.explanation.contains("removed"));
-        assert!(entry.explanation.contains("signature-changed"));
-    }
-
-    #[test]
-    fn should_describe_fan_in_badge_as_a_sum_over_high_fan_in_symbols() {
-        let entry = HELP_CONTENT
-            .markers
-            .iter()
-            .find(|entry| entry.swatch == "fan-in:N")
-            .expect("fan-in:N entry present");
-
-        assert!(entry.explanation.contains("Sum"));
-        assert!(entry.explanation.contains("high-fan-in"));
-    }
-
-    #[test]
-    fn should_include_a_glossary_entry_for_blast_radius_and_cycle() {
-        let terms: Vec<&str> = HELP_CONTENT
-            .glossary
-            .iter()
-            .map(|entry| entry.term)
-            .collect();
-
-        assert!(terms.contains(&"blast radius"));
-        assert!(terms.contains(&"cycle"));
-    }
-
-    #[test]
-    fn should_include_a_glossary_entry_for_jumplist() {
-        let terms: Vec<&str> = HELP_CONTENT
-            .glossary
-            .iter()
-            .map(|entry| entry.term)
-            .collect();
-
-        assert!(terms.contains(&"jumplist"));
-    }
-
-    #[test]
-    fn should_document_gd_gr_and_jumplist_bindings_in_the_global_group() {
-        let global = HELP_CONTENT
-            .keymap_groups
-            .iter()
-            .find(|group| group.title == "Global")
-            .expect("Global group present");
-
-        let keys: Vec<&str> = global.bindings.iter().map(|binding| binding.keys).collect();
-
-        assert!(keys.contains(&"gd"));
-        assert!(keys.contains(&"gr"));
-        assert!(keys.contains(&"ctrl-o"));
-        assert!(keys.contains(&"ctrl-i"));
-    }
-
-    #[test]
-    fn should_document_review_notes_bindings_in_a_review_group() {
-        let review = HELP_CONTENT
-            .keymap_groups
-            .iter()
-            .find(|group| group.title == "Review")
-            .expect("Review group present");
-
-        let keys: Vec<&str> = review.bindings.iter().map(|binding| binding.keys).collect();
-
-        assert!(keys.contains(&"n"));
-        assert!(keys.contains(&"N"));
-        assert!(keys.contains(&"j/k, Enter, Esc, d"));
-    }
-
-    #[test]
-    fn should_document_open_pr_in_browser_binding_in_the_global_group() {
-        let global = HELP_CONTENT
-            .keymap_groups
-            .iter()
-            .find(|group| group.title == "Global")
-            .expect("Global group present");
-
-        let keys: Vec<&str> = global.bindings.iter().map(|binding| binding.keys).collect();
-
-        assert!(keys.contains(&"w / W"));
-    }
-
-    #[test]
-    fn should_document_h_and_esc_as_the_return_to_tree_binding_in_right_focus_group() {
-        let right_focus = HELP_CONTENT
-            .keymap_groups
-            .iter()
-            .find(|group| group.title == "Right focus")
-            .expect("Right focus group present");
-
-        let has_return_binding = right_focus
-            .bindings
-            .iter()
-            .any(|binding| binding.keys == "h / esc");
-
-        assert!(has_return_binding);
+/// Builds the whole help overlay's content for `locale` (module doc comment
+/// on why this is a function rather than the `const` it used to be).
+pub fn help_content(locale: Locale) -> HelpContent {
+    HelpContent {
+        keymap_groups: keymap_groups(locale),
+        markers: marker_legend(locale),
+        glossary: glossary(locale),
     }
 }
+
+#[cfg(test)]
+#[path = "help/tests.rs"]
+mod tests;

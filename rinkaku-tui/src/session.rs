@@ -9,6 +9,7 @@
 //! only the terminal-lifecycle wrapper around that loop moves here.
 
 use crate::ReviewPorts;
+use crate::locale::Locale;
 use crate::run_app;
 use crate::source::{SourceReader, WorkingTreeSourceReader};
 use crate::splash;
@@ -94,7 +95,11 @@ use rinkaku_core::render::Report;
 /// [`TuiSession::run`]'s update-check receiver (ADR 0054) — this
 /// convenience wrapper has no version-check thread of its own to hand
 /// one in from; callers that want the update prompt use `TuiSession::run`
-/// directly, as `rinkaku`'s `main.rs` does.
+/// directly, as `rinkaku`'s `main.rs` does. Passes [`Locale::English`]
+/// for the `?` help overlay (ADR 0055) — this wrapper has no locale
+/// detection of its own; callers that want the reviewer's own locale use
+/// `TuiSession::run` directly with a value detected at their own
+/// composition root.
 pub fn run(
     report: &Report,
     diff_text: &str,
@@ -111,6 +116,7 @@ pub fn run(
             &WorkingTreeSourceReader,
             review_ports,
             None,
+            Locale::English,
         )
         .map(|_update_requested| ())
 }
@@ -216,15 +222,20 @@ impl TuiSession {
     /// [`run_app`]'s event loop, which owns the actual non-blocking
     /// `try_recv` poll.
     ///
+    /// `locale` (ADR 0055) governs only the `?` help overlay's own prose —
+    /// `main.rs` detects it from `LC_ALL`/`LC_MESSAGES`/`LANG` at its own
+    /// composition root and passes the result in unchanged; this crate
+    /// never reads an environment variable itself.
+    ///
     /// Returns whether the reviewer confirmed the update popup before
     /// quitting (`App::update_requested`) alongside the ordinary
     /// `std::io::Result` — `main.rs` uses this to decide whether to run
     /// `self-update` after this call's terminal-restoring postamble below
     /// has already completed, exactly the "update runs after TUI teardown"
     /// ordering ADR 0054 requires.
-    // `update_check` pushed this past clippy's 7-argument threshold — see
-    // `run_app`'s own `#[allow]` (this method's sole caller) for why a
-    // struct wrapper is not worth it here.
+    // `update_check`/`locale` pushed this past clippy's 7-argument
+    // threshold — see `run_app`'s own `#[allow]` (this method's sole
+    // caller) for why a struct wrapper is not worth it here.
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         mut self,
@@ -235,6 +246,7 @@ impl TuiSession {
         source_reader: &dyn SourceReader,
         review_ports: ReviewPorts<'_>,
         update_check: Option<std::sync::mpsc::Receiver<String>>,
+        locale: Locale,
     ) -> std::io::Result<bool> {
         let result = run_app(
             &mut self.terminal,
@@ -245,6 +257,7 @@ impl TuiSession {
             source_reader,
             review_ports,
             update_check,
+            locale,
         );
         let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
         ratatui::restore();

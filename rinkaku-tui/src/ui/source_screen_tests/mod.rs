@@ -11,6 +11,7 @@
 
 use super::*;
 use crate::app::{App, BlastRadiusSelection};
+use crate::locale::Locale;
 use crate::ui::{DrawOutcome, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -146,6 +147,7 @@ pub(super) fn draw_source_screen_for_test(
                 source_content.as_ref(),
                 diff_hunks,
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");

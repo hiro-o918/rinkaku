@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::app::{App, BlastRadiusSelection};
+use crate::locale::Locale;
 use crate::ui::draw;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

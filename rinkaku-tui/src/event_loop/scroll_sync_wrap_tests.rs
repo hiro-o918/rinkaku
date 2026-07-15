@@ -26,6 +26,7 @@
 use super::{apply_diff_pane_selection_effects, clamp_right_pane_scroll_after_draw};
 use crate::app::{self, App, InputKey};
 use crate::event_loop::tests::empty_report;
+use crate::locale::Locale;
 use crate::{diff_shape, diff_view};
 use pretty_assertions::assert_eq;
 use rinkaku_core::diff::LineRange;
@@ -159,6 +160,7 @@ fn dispatch_draw_and_fold(
                 None,
                 diff_hunks,
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -226,6 +228,7 @@ fn render_diff_pane_rows(
                 None,
                 diff_hunks,
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -475,6 +478,7 @@ fn should_resolve_the_correct_symbol_when_scroll_position_lands_inside_a_precedi
                 None,
                 &diff_hunks,
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -634,6 +638,7 @@ fn scroll_positions_after_repeated_down(
                     None,
                     diff_hunks,
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -792,6 +797,7 @@ fn should_not_oscillate_when_alternating_down_and_up_past_a_huge_wrapped_leading
                     None,
                     &diff_hunks,
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");

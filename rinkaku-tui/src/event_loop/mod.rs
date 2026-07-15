@@ -12,6 +12,7 @@ mod goto;
 mod scroll_sync;
 
 use crate::app::{App, BlastRadiusSelection, InputKey, Screen};
+use crate::locale::Locale;
 use crate::review::PrContext;
 use crate::review::ports::{BrowserOpener, ClipboardSink, ReviewSubmitter};
 use crate::review_flow::{
@@ -52,6 +53,10 @@ pub struct ReviewPorts<'a> {
 /// than private: `crate::session` is a sibling module, not a submodule, so
 /// it needs this visibility to call in.
 ///
+/// `locale` (ADR 0055) governs only the `?` help overlay's own prose,
+/// threaded straight through to [`ui::draw`] on every frame — see that
+/// function's own doc comment.
+///
 /// [`TuiSession::run`]: crate::session::TuiSession::run
 // `update_check` (ADR 0054) pushed this past clippy's 7-argument
 // threshold; every parameter is already independently load-bearing (see
@@ -68,6 +73,7 @@ pub(crate) fn run_app(
     source_reader: &dyn source::SourceReader,
     review_ports: ReviewPorts<'_>,
     update_check: Option<std::sync::mpsc::Receiver<String>>,
+    locale: Locale,
 ) -> std::io::Result<bool> {
     let mut app = App::new(report).with_review_sink_a_available(review_ports.pr_context.is_some());
     if let Some(path) = entry_path {
@@ -211,6 +217,7 @@ pub(crate) fn run_app(
                 source_content.as_ref(),
                 &diff_hunks,
                 &note_markers,
+                locale,
             );
         })?;
         app = clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll);

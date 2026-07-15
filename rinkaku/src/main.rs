@@ -83,6 +83,7 @@ use pipeline::{
 use progress::AnalysisProgress;
 use rinkaku_core::render::{Report, render};
 use rinkaku_tui::TuiSession;
+use rinkaku_tui::locale::detect_locale;
 use rinkaku_tui::review::PrContext;
 use spinner::{AnalysisPhase, Spinner};
 use splash_progress::SplashProgress;
@@ -257,6 +258,16 @@ fn main() -> anyhow::Result<()> {
                 clipboard: &system_clipboard,
                 browser: &system_browser,
             };
+            // ADR 0055: `?` help overlay locale, detected here (the
+            // composition root) from the same POSIX `LC_ALL > LC_MESSAGES
+            // > LANG` precedence env reads every other IO in this module
+            // is isolated to — `rinkaku_tui::locale::detect_locale` itself
+            // is a pure function taking the already-read values.
+            let locale = detect_locale(
+                std::env::var("LC_ALL").ok().as_deref(),
+                std::env::var("LC_MESSAGES").ok().as_deref(),
+                std::env::var("LANG").ok().as_deref(),
+            );
             let run_result = session.run(
                 &report,
                 &diff_text,
@@ -265,6 +276,7 @@ fn main() -> anyhow::Result<()> {
                 source_reader,
                 review_ports,
                 update_check,
+                locale,
             );
             // Flushed after `TuiSession::run` has already restored the
             // terminal (its own postamble, unconditional on both the `Ok`

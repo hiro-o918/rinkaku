@@ -117,6 +117,7 @@ pub(crate) fn blast_radius_pane_lines(
 #[cfg(test)]
 mod tests {
     use crate::app::App;
+    use crate::locale::Locale;
     use crate::ui::draw;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -217,6 +218,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -247,6 +249,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
@@ -292,6 +295,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");

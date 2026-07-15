@@ -132,6 +132,7 @@ fn file_size_warning_suffix(report: &Report) -> Option<String> {
 mod tests {
     use super::*;
     use crate::app::{App, BlastRadiusSelection};
+    use crate::locale::Locale;
     use crate::ui::draw;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -232,6 +233,7 @@ mod tests {
                     None,
                     &[],
                     &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
                 );
             })
             .expect("draw");
