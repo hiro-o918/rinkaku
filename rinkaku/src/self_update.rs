@@ -12,6 +12,7 @@
 //! See README's Release section for how `rinkaku` and `rinkaku-core` are
 //! versioned and tagged independently.
 
+use crate::spinner::Spinner;
 use anyhow::{Context, Result};
 use std::io::IsTerminal;
 
@@ -171,11 +172,17 @@ pub fn run_self_update(yes: bool) -> Result<()> {
         }
     }
 
+    // `update()` runs silently under `show_output(false)` (`build_updater`'s
+    // doc comment) for as long as its network calls take, which otherwise
+    // reads as a hang (ADR 0056).
+    let spinner = Spinner::start("Updating...");
     let status = updater.update().context(
         "self-update failed; if this is a permission error, try again with sudo, \
          or update via the package manager you installed rinkaku with \
          (e.g. `brew upgrade` or `cargo install rinkaku`)",
-    )?;
+    );
+    spinner.finish_and_clear();
+    let status = status?;
 
     if status.updated() {
         println!(
