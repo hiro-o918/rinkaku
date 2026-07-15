@@ -229,13 +229,10 @@ pub(crate) fn run_app(
             return Ok(app.update_requested());
         }
 
-        // ADR 0054: a non-blocking check of the background version-check
-        // thread's channel, once per loop iteration alongside the poll
-        // timeout below — `try_recv` never blocks, so this cannot delay
-        // input handling the way waiting on the thread itself would.
-        // `recv()`'s `Err` (the sender dropped without ever sending, e.g.
-        // the check found nothing newer) is silently ignored, same as
-        // `check_update_available`'s own "silent on failure" contract.
+        // ADR 0054: `try_recv` never blocks, so polling the version-check
+        // channel here cannot delay input handling. `Err` (sender dropped
+        // without sending) is silently ignored, matching
+        // `check_update_available`'s silent-on-failure contract.
         if let Some(receiver) = &update_check
             && let Ok(version) = receiver.try_recv()
         {

@@ -228,13 +228,9 @@ pub enum InputKey {
     /// through `App::handle_key`.
     OpenPrInBrowser,
     /// `U` (ADR 0054): opens the update confirmation popup once a newer
-    /// released version has been found (`App::update_available`). A no-op
-    /// while no update is available — there is nothing to confirm yet.
-    /// Global regardless of screen/focus, like `w`/`d`/`r`/`s`. Deliberately
-    /// key-gated rather than auto-opening the moment the background
-    /// version-check thread reports a version: an unprompted modal
-    /// stealing keystrokes mid-review would be a worse experience than a
-    /// quiet, persistent status-line hint the reviewer can act on when
-    /// ready.
+    /// released version has been found. Deliberately key-gated rather than
+    /// auto-opening when the background version-check thread reports: an
+    /// unprompted modal stealing keystrokes mid-review would be worse than
+    /// a quiet, persistent status-line hint.
     OpenUpdatePrompt,
 }
