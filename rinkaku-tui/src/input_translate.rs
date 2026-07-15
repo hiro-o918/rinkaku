@@ -121,8 +121,8 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
 
     if app.pending_prefix() == Some(app::PendingPrefix::G) {
         match code {
-            KeyCode::Char('d') | KeyCode::Char('D') => return Some(InputKey::GotoDefinition),
-            KeyCode::Char('r') | KeyCode::Char('R') => return Some(InputKey::GotoReferences),
+            KeyCode::Char('d') => return Some(InputKey::GotoDefinition),
+            KeyCode::Char('r') => return Some(InputKey::GotoReferences),
             // `gg` (ADR 0026): scroll the reading pane to the top —
             // resolved here the same way `gd`/`gr` are, piggybacking on
             // the existing `g`-prefix state machine (ADR 0022) rather
@@ -149,9 +149,9 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // certain conditions elsewhere).
         KeyCode::Char(' ') => Some(InputKey::Select),
         KeyCode::Enter => Some(InputKey::Open),
-        KeyCode::Char('e') | KeyCode::Char('E') => Some(InputKey::ExpandAll),
+        KeyCode::Char('e') => Some(InputKey::ExpandAll),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::Quit),
-        KeyCode::Char('c') | KeyCode::Char('C') => Some(InputKey::CollapseAll),
+        KeyCode::Char('c') => Some(InputKey::CollapseAll),
         KeyCode::Char('o') if modifiers.contains(KeyModifiers::CONTROL) => Some(InputKey::JumpBack),
         // Ctrl-I and Tab share the same control code (0x09) at the terminal
         // protocol level — without Kitty's keyboard-enhancement protocol
@@ -167,7 +167,7 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         KeyCode::Char('i') if modifiers.contains(KeyModifiers::CONTROL) => {
             Some(InputKey::JumpForward)
         }
-        KeyCode::Char('o') | KeyCode::Char('O') => Some(InputKey::ToggleOrder),
+        KeyCode::Char('o') => Some(InputKey::ToggleOrder),
         // `Ctrl-d`/`Ctrl-u` (ADR 0026): half-page scroll on the reading
         // pane (`Screen::Source`, or `Screen::Entry` + `Focus::Right`).
         // Must come *before* the plain `Char('d')`/`Char('u')` arms —
@@ -182,9 +182,9 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
             Some(InputKey::ScrollHalfPageUp)
         }
-        KeyCode::Char('d') | KeyCode::Char('D') => Some(InputKey::ToggleDiff),
-        KeyCode::Char('r') | KeyCode::Char('R') => Some(InputKey::ToggleBlastRadius),
-        KeyCode::Char('v') | KeyCode::Char('V') => Some(InputKey::ToggleSplitView),
+        KeyCode::Char('d') => Some(InputKey::ToggleDiff),
+        KeyCode::Char('r') => Some(InputKey::ToggleBlastRadius),
+        KeyCode::Char('v') => Some(InputKey::ToggleSplitView),
         // `G` (`Shift-g`, ADR 0026): scroll to the bottom. Distinct from
         // single-key lowercase `g` (`PendingGoto` below), which is the
         // leading key of the `gd`/`gr`/`gg` two-key sequences resolved
@@ -206,7 +206,7 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // so no existing gesture is lost by this simplification.
         KeyCode::Char(']') => Some(InputKey::NextHunk),
         KeyCode::Char('[') => Some(InputKey::PrevHunk),
-        KeyCode::Char('s') | KeyCode::Char('S') => Some(InputKey::Source),
+        KeyCode::Char('s') => Some(InputKey::Source),
         // `n` (ADR 0048): opens the review-note compose overlay over the
         // row under the cursor. `N`: opens the review-notes list overlay.
         // Both are only meaningful on the entry screen (Source-screen
@@ -216,16 +216,16 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // already no-ops every non-scroll key there.
         KeyCode::Char('n') => Some(InputKey::NoteCompose),
         KeyCode::Char('N') => Some(InputKey::NotesList),
-        // `w`/`W` (ADR 0050): opens the current PR's page in a web browser —
+        // `w` (ADR 0050): opens the current PR's page in a web browser —
         // matches `gh` CLI's own `-w`/`--web` convention. Global regardless
         // of screen/focus, like `d`/`r`/`s`; `crate::lib::run_app`
         // special-cases the actual dispatch (it needs the session's
         // `PrContext`, which `App` doesn't hold).
-        KeyCode::Char('w') | KeyCode::Char('W') => Some(InputKey::OpenPrInBrowser),
-        // `U` (ADR 0054): opens the update confirmation popup. Global,
+        KeyCode::Char('w') => Some(InputKey::OpenPrInBrowser),
+        // `u` (ADR 0054): opens the update confirmation popup. Global,
         // like `w`/`d`/`r`/`s`; `App::handle_key`'s own arm no-ops unless
         // `App::update_available` is `Some`.
-        KeyCode::Char('u') | KeyCode::Char('U') => Some(InputKey::OpenUpdatePrompt),
+        KeyCode::Char('u') => Some(InputKey::OpenUpdatePrompt),
         // `g` (ADR 0022): the first half of the `gd`/`gr` two-key sequence.
         // Checked after the `pending_prefix` resolution above so a second
         // `g` press (`gg`, not a bound sequence today) simply restarts the

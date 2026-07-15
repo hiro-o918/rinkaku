@@ -177,7 +177,7 @@ fn should_document_open_pr_in_browser_binding_in_the_global_group() {
 
     let keys: Vec<&str> = global.bindings.iter().map(|binding| binding.keys).collect();
 
-    assert!(keys.contains(&"w / W"));
+    assert!(keys.contains(&"w"));
 }
 
 #[test]

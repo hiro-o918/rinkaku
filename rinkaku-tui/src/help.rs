@@ -80,11 +80,11 @@ fn tree_focus_bindings(locale: Locale) -> Vec<KeyBinding> {
                 .into_owned(),
         },
         KeyBinding {
-            keys: "e / E",
+            keys: "e",
             description: rust_i18n::t!("help.binding.expand_every_row", locale = tag).into_owned(),
         },
         KeyBinding {
-            keys: "c / C",
+            keys: "c",
             description: rust_i18n::t!("help.binding.collapse_every_row", locale = tag)
                 .into_owned(),
         },
@@ -177,26 +177,26 @@ fn global_bindings(locale: Locale) -> Vec<KeyBinding> {
     let tag = locale.tag();
     vec![
         KeyBinding {
-            keys: "d / D",
+            keys: "d",
             description: rust_i18n::t!("help.binding.toggle_detail_diff", locale = tag)
                 .into_owned(),
         },
         KeyBinding {
-            keys: "r / R",
+            keys: "r",
             description: rust_i18n::t!("help.binding.toggle_blast_radius", locale = tag)
                 .into_owned(),
         },
         KeyBinding {
-            keys: "v / V",
+            keys: "v",
             description: rust_i18n::t!("help.binding.toggle_unified_split", locale = tag)
                 .into_owned(),
         },
         KeyBinding {
-            keys: "o / O",
+            keys: "o",
             description: rust_i18n::t!("help.binding.toggle_order_mode", locale = tag).into_owned(),
         },
         KeyBinding {
-            keys: "s / S",
+            keys: "s",
             description: rust_i18n::t!("help.binding.open_source_view", locale = tag).into_owned(),
         },
         KeyBinding {
@@ -216,12 +216,12 @@ fn global_bindings(locale: Locale) -> Vec<KeyBinding> {
             description: rust_i18n::t!("help.binding.jump_forward", locale = tag).into_owned(),
         },
         KeyBinding {
-            keys: "w / W",
+            keys: "w",
             description: rust_i18n::t!("help.binding.open_pr_in_browser", locale = tag)
                 .into_owned(),
         },
         KeyBinding {
-            keys: "U",
+            keys: "u",
             description: rust_i18n::t!("help.binding.prompt_self_update", locale = tag)
                 .into_owned(),
         },
