@@ -216,6 +216,12 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // already no-ops every non-scroll key there.
         KeyCode::Char('n') => Some(InputKey::NoteCompose),
         KeyCode::Char('N') => Some(InputKey::NotesList),
+        // `w`/`W` (ADR 0050): opens the current PR's page in a web browser —
+        // matches `gh` CLI's own `-w`/`--web` convention. Global regardless
+        // of screen/focus, like `d`/`r`/`s`; `crate::lib::run_app`
+        // special-cases the actual dispatch (it needs the session's
+        // `PrContext`, which `App` doesn't hold).
+        KeyCode::Char('w') | KeyCode::Char('W') => Some(InputKey::OpenPrInBrowser),
         // `g` (ADR 0022): the first half of the `gd`/`gr` two-key sequence.
         // Checked after the `pending_prefix` resolution above so a second
         // `g` press (`gg`, not a bound sequence today) simply restarts the

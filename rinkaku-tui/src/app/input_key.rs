@@ -219,4 +219,12 @@ pub enum InputKey {
     /// `d` while the notes list overlay is open: deletes the note under
     /// the list cursor.
     NoteDelete,
+    /// `w`/`W` (ADR 0050): opens the current PR's page in the reviewer's
+    /// default web browser. Global, like `d`/`r`/`s` — translated
+    /// regardless of screen/focus. Needs the session's `PrContext`, which
+    /// `App` does not hold (mirroring [`Self::NoteCompose`]'s own "IO/
+    /// derivation stays outside `App`" precedent) — `crate::lib::run_app`
+    /// special-cases this variant before dispatch rather than routing it
+    /// through `App::handle_key`.
+    OpenPrInBrowser,
 }

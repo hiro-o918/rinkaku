@@ -39,6 +39,7 @@
 //!   that assumption doesn't hold, line numbers in the extracted symbols
 //!   may not line up with the actual file content.
 
+mod browser;
 mod cli;
 mod clipboard;
 mod display;
@@ -56,6 +57,7 @@ mod splash_progress;
 #[cfg(test)]
 mod test_util;
 
+use browser::SystemBrowserOpener;
 use clap::Parser;
 use cli::{Cli, Command};
 use clipboard::SystemClipboard;
@@ -227,10 +229,12 @@ fn main() -> anyhow::Result<()> {
             // trait definitions alone.
             let submitter = pr_context.is_some().then_some(&GhReviewSubmitter as _);
             let system_clipboard = SystemClipboard::detect();
+            let system_browser = SystemBrowserOpener;
             let review_ports = rinkaku_tui::ReviewPorts {
                 pr_context,
                 submitter,
                 clipboard: &system_clipboard,
+                browser: &system_browser,
             };
             let result = session
                 .run(

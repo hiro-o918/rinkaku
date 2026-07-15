@@ -18,11 +18,15 @@ impl ClipboardSink for FakeClipboard {
     }
 }
 
-fn ports_with(clipboard: &FakeClipboard) -> ReviewPorts<'_> {
+fn ports_with<'a>(
+    clipboard: &'a FakeClipboard,
+    browser: &'a super::FakeBrowserOpener,
+) -> ReviewPorts<'a> {
     ReviewPorts {
         pr_context: None,
         submitter: None,
         clipboard,
+        browser,
     }
 }
 
@@ -31,10 +35,11 @@ fn should_surface_the_ports_status_line_when_copy_succeeds() {
     let clipboard = FakeClipboard {
         result: Ok("copied review notes to clipboard via pbcopy".to_string()),
     };
+    let browser = super::FakeBrowserOpener::new(Ok(()));
 
     let actual = perform_export(
         ReviewState::default(),
-        &ports_with(&clipboard),
+        &ports_with(&clipboard, &browser),
         ExportRequest::Clipboard,
     );
 
@@ -49,10 +54,11 @@ fn should_wrap_the_ports_error_in_the_error_prefix_when_copy_fails() {
     let clipboard = FakeClipboard {
         result: Err("no tty".to_string()),
     };
+    let browser = super::FakeBrowserOpener::new(Ok(()));
 
     let actual = perform_export(
         ReviewState::default(),
-        &ports_with(&clipboard),
+        &ports_with(&clipboard, &browser),
         ExportRequest::Clipboard,
     );
 

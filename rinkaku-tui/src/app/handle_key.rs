@@ -616,6 +616,12 @@ impl App {
                 | InputKey::ComposeBackspace
                 | InputKey::NoteDelete,
             ) => {}
+            // `w` (ADR 0050) needs the session's `PrContext`, which `App`
+            // does not hold — `crate::lib::run_app` special-cases this
+            // variant before dispatch (mirroring `NoteCompose`'s own
+            // precedent just above), so this arm is a no-op stub kept only
+            // for match exhaustiveness.
+            (Screen::Entry, _, InputKey::OpenPrInBrowser) => {}
         }
 
         if !preserve_scroll && !preserve_scroll_after_jump {
