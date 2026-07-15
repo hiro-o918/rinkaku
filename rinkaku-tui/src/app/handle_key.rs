@@ -117,12 +117,11 @@ impl App {
                 InputKey::SearchBackspace => self.search.clone().backspace(),
                 InputKey::SearchCancel => self.search.clone().cancel(),
                 // `SearchConfirm` needs the Source view's lines, which this
-                // function has no access to — `crate::event_loop::run_app`
-                // special-cases it before dispatch and never routes it
-                // through `handle_key` at all (mirroring
+                // function has no access to — `crate::event_loop::
+                // dispatch_search_confirm` handles it instead (mirroring
                 // `InputKey::NoteCompose`'s identical "IO/derivation stays
-                // outside `App`" precedent), so this arm is unreachable in
-                // practice; kept only so the match stays exhaustive.
+                // outside `App`" precedent), so this arm only needs to keep
+                // the match exhaustive.
                 _ => self.search.clone(),
             };
             return self;
@@ -280,8 +279,14 @@ impl App {
         let mut preserve_scroll_after_jump = false;
 
         match (&self.screen, self.focus, key) {
+            // Leaving Source (`q` or `Esc`) always clears `search` — ADR
+            // 0057 decision 2's "cancel means stop searching altogether"
+            // applies to every path out of this screen, not just the
+            // dedicated `SearchCancel` key, so a confirmed query cannot
+            // survive into a different symbol's Source view.
             (Screen::Source { .. }, _, InputKey::Back) => {
                 self.screen = Screen::Entry;
+                self.search = self.search.clone().cancel();
             }
             // ADR 0026: `j`/`k` scroll the source pane by one line — the
             // same "j/k scrolls the reading pane" rule ADR 0020 already

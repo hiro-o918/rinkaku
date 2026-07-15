@@ -71,7 +71,17 @@ new pattern:
   checks `app.search().query().is_some()` and emits `SearchCancel` before
   falling through to the screen's ordinary `Back` meaning, so a reviewer
   backing out of a search does not also lose their place by leaving the
-  screen in the same keypress.
+  screen in the same keypress. Leaving Source by *any* path — `Esc` above,
+  or `q`/`InputKey::Back` — clears search the same way: `App::handle_key`'s
+  `(Screen::Source, _, InputKey::Back)` arm cancels `search`
+  unconditionally, so re-entering Source on a different symbol never shows
+  a stale query/match count against unrelated content.
+- Enter confirming against a Source screen whose file failed to load (no
+  `Ok` `source_content` — a deleted file, a permission error) cancels the
+  search rather than leaving it composing: neither `/` nor Enter is gated
+  on load success, so this is reachable, not just defensive, and leaving
+  Enter a no-op would trap the reviewer in the minibuffer with only Esc as
+  a way out.
 
 **3. The status line doubles as a minibuffer.** While composing,
 `crate::ui::status::draw_status_line` renders `/` followed by the

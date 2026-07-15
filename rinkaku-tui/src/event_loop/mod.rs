@@ -305,26 +305,13 @@ pub(crate) fn run_app(
                 // ADR 0057: needs the Source view's own lines to compute
                 // matches, which `App::handle_key` has no access to
                 // (mirrors `InputKey::NoteCompose`'s own "IO/derivation
-                // stays outside `App`" precedent just above). A no-op when
-                // `source_content` is not a loaded `Ok` view (defensive —
-                // `SearchConfirm` is only reachable while composing, which
-                // in turn is only reachable via `/` on an already-open
-                // `Screen::Source`, so a loaded view should always be
-                // present by then).
-                if let Some(Ok(highlighted)) = source_content.as_ref() {
-                    let from_line = match app.screen() {
-                        Screen::Source { scroll_top, .. } => *scroll_top,
-                        Screen::Entry => 0,
-                    };
-                    let search = app
-                        .search()
-                        .clone()
-                        .confirm(&highlighted.view.lines, from_line);
-                    app = app.with_search(search);
-                    app = jump_source_scroll_to_current_match(app);
-                } else {
-                    app = app.handle_key(input_key);
-                }
+                // stays outside `App`" precedent just above). See
+                // `dispatch_search_confirm`'s own doc comment for what
+                // happens when `source_content` is not a loaded `Ok` view —
+                // reachable whenever the Source screen is open against a
+                // file that failed to load, since neither `/` nor Enter is
+                // gated on load success.
+                app = dispatch_search_confirm(app, source_content.as_ref());
             } else if matches!(input_key, InputKey::SearchNext | InputKey::SearchPrev) {
                 // ADR 0057: `App::handle_key` already advances/retreats
                 // `SearchState`'s current match (no external data needed
@@ -619,6 +606,38 @@ fn jump_source_scroll_to_current_match(app: App) -> App {
     match app.search().current_match() {
         Some(line) => app.with_source_scroll_top(line),
         None => app,
+    }
+}
+
+/// Applies [`InputKey::SearchConfirm`] against `source_content` — extracted
+/// from `run_app`'s inline dispatch so this branch is unit-testable without
+/// a live terminal (mirrors `jump_source_scroll_to_current_match`'s own
+/// "small wrapper, pulled out for the shared/testable step" precedent).
+///
+/// When `source_content` is not a loaded `Ok` view (the Source screen open
+/// against a file that failed to read — e.g. deleted mid-review, or a
+/// permission error), confirming cancels the search instead of leaving it
+/// composing: `App::handle_key`'s own `SearchConfirm` arm is a documented
+/// no-op (it has no lines to match against), and letting Enter do nothing
+/// here trapped the reviewer in the minibuffer with no way out except Esc.
+fn dispatch_search_confirm(
+    app: App,
+    source_content: Option<&Result<source::HighlightedSourceView, String>>,
+) -> App {
+    if let Some(Ok(highlighted)) = source_content {
+        let from_line = match app.screen() {
+            Screen::Source { scroll_top, .. } => *scroll_top,
+            Screen::Entry => 0,
+        };
+        let search = app
+            .search()
+            .clone()
+            .confirm(&highlighted.view.lines, from_line);
+        let app = app.with_search(search);
+        jump_source_scroll_to_current_match(app)
+    } else {
+        let search = app.search().clone().cancel();
+        app.with_search(search)
     }
 }
 

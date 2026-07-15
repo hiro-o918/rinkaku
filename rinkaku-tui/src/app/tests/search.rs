@@ -153,6 +153,31 @@ fn should_swallow_unrelated_keys_while_composing_a_search_query() {
 }
 
 #[test]
+fn should_clear_a_confirmed_search_when_leaving_source_via_back() {
+    // Regression: `q` (translated to `InputKey::Back`, same as `Esc` once
+    // no confirmed search is active) used to leave `search` untouched,
+    // so re-entering Source on a different symbol still showed the old
+    // query/matches/highlighting against unrelated content.
+    let report = report_with_one_symbol();
+    let search = SearchState::default()
+        .start()
+        .push_char('f')
+        .push_char('o')
+        .confirm(&["fn foo() {}".to_string()], 0);
+    let app = opened_source_screen(&report).with_search(search);
+    assert!(app.search().query().is_some());
+
+    let actual = app.handle_key(InputKey::Back);
+
+    assert_eq!(&SearchMode::Inactive, actual.search().mode());
+    assert_eq!(None, actual.search().query());
+    assert_eq!(
+        &[] as &[crate::search::MatchLine],
+        actual.search().matches()
+    );
+}
+
+#[test]
 fn should_not_start_composing_on_the_entry_screen() {
     // ADR 0057: search is Source-screen-only — `SearchStart` reaching
     // `handle_key` while `Screen::Entry` (defensively, since

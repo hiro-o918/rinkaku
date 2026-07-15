@@ -2,15 +2,16 @@
 //! recompute gates (`should_recompute_diff_pane_content`,
 //! `should_recompute_blast_radius_selection`), the source-cache reload gate
 //! (`should_reload_source_content`), the scroll-key classifier
-//! (`is_scroll_input_key`), and `dispatch_non_source_key`'s `gd`/`gr`
-//! pending-prefix/jumplist regression coverage. `resolve_goto` and
+//! (`is_scroll_input_key`), `dispatch_non_source_key`'s `gd`/`gr`
+//! pending-prefix/jumplist regression coverage, and `dispatch_search_confirm`'s
+//! loaded-vs-failed source content branching. `resolve_goto` and
 //! `apply_diff_pane_selection_effects`/`sync_target_for_scroll`/
 //! `should_apply_hunk_jump`/`jump_scroll_target` have their own test trees
 //! in the sibling `goto`/`scroll_sync` submodules.
 
-use crate::app::{self, App, InputKey};
+use crate::app::{self, App, InputKey, Screen};
 use crate::diff_shape;
-use crate::event_loop::{dispatch_non_source_key, is_scroll_input_key};
+use crate::event_loop::{dispatch_non_source_key, dispatch_search_confirm, is_scroll_input_key};
 use pretty_assertions::assert_eq;
 use rinkaku_core::graph::SymbolGraph;
 use rinkaku_core::render::Report;
@@ -126,10 +127,17 @@ pub(super) fn report_with_symbols_and_edges(
 }
 
 pub(super) fn dummy_view(path: &str) -> crate::source::HighlightedSourceView {
+    dummy_view_with_lines(path, vec![])
+}
+
+pub(super) fn dummy_view_with_lines(
+    path: &str,
+    lines: Vec<String>,
+) -> crate::source::HighlightedSourceView {
     crate::source::HighlightedSourceView {
         view: crate::source::SourceView {
             path: path.to_string(),
-            lines: vec![],
+            lines,
             highlight_start: 1,
             highlight_end: 1,
         },
@@ -566,4 +574,78 @@ fn should_restore_the_scroll_offset_the_reviewer_was_at_when_jumping_back_after_
         app.right_pane_scroll(),
         "jumping back must restore the scroll offset recorded when gd was pressed, not 0"
     );
+}
+
+// --- dispatch_search_confirm ---
+
+#[test]
+fn should_confirm_and_jump_to_first_match_when_source_content_loaded_ok() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Source)
+        .handle_key(InputKey::SearchStart)
+        .handle_key(InputKey::SearchChar('f'))
+        .handle_key(InputKey::SearchChar('o'))
+        .handle_key(InputKey::SearchChar('o'));
+    let loaded: Result<crate::source::HighlightedSourceView, String> = Ok(dummy_view_with_lines(
+        "lib.rs",
+        vec!["fn foo() {}".to_string()],
+    ));
+
+    let actual = dispatch_search_confirm(app, Some(&loaded));
+
+    assert_eq!(
+        Some("foo".to_string()),
+        actual.search().query().map(str::to_string)
+    );
+    assert_eq!(&[0], actual.search().matches());
+    assert_eq!(
+        Screen::Source {
+            symbol_id: "lib.rs::foo".to_string(),
+            scroll_top: 0,
+        },
+        actual.screen().clone()
+    );
+}
+
+#[test]
+fn should_cancel_the_search_when_source_content_failed_to_load() {
+    // Regression: the Source screen can be open with `source_content` as
+    // `Some(Err(_))` (file deleted, permission error, ...) — `/` is not
+    // gated on load success, so composing a query and pressing Enter here
+    // used to fall through to `App::handle_key`'s own `SearchConfirm` arm,
+    // a documented no-op, trapping the reviewer in the minibuffer with no
+    // way out except Esc.
+    let report = report_with_one_symbol();
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Source)
+        .handle_key(InputKey::SearchStart)
+        .handle_key(InputKey::SearchChar('f'))
+        .handle_key(InputKey::SearchChar('o'));
+    let failed: Result<crate::source::HighlightedSourceView, String> =
+        Err("failed to read".to_string());
+
+    let actual = dispatch_search_confirm(app, Some(&failed));
+
+    assert_eq!(&crate::search::SearchMode::Inactive, actual.search().mode());
+    assert_eq!(None, actual.search().query());
+}
+
+#[test]
+fn should_cancel_the_search_when_source_content_is_absent() {
+    // Same defensive case as the failed-load test above, for the
+    // `source_content == None` half of "not a loaded `Ok` view".
+    let report = report_with_one_symbol();
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::Source)
+        .handle_key(InputKey::SearchStart)
+        .handle_key(InputKey::SearchChar('f'));
+
+    let actual = dispatch_search_confirm(app, None);
+
+    assert_eq!(&crate::search::SearchMode::Inactive, actual.search().mode());
+    assert_eq!(None, actual.search().query());
 }
