@@ -1,13 +1,208 @@
-//! `sync_target_for_scroll` and `apply_diff_pane_selection_effects` tests
-//! (ADR 0030): diff-scroll → tree-cursor auto-sync, and the run_app-level
-//! dispatch step that applies it plus prevents the feedback loop back
-//! into ADR 0027's tree → diff auto-scroll.
+//! Tests for `crate::event_loop::scroll_sync`: `should_apply_hunk_jump`/
+//! `jump_scroll_target` (the `]`/`[` hunk-jump dispatch), `clamp_*_after_draw`
+//! (post-draw scroll fold-back), and `sync_target_for_scroll`/
+//! `apply_diff_pane_selection_effects` (ADR 0030's diff-scroll -> tree-cursor
+//! auto-sync and the feedback-loop guard between it and ADR 0027's
+//! tree -> diff auto-scroll).
 
-use super::empty_report;
+use super::{
+    apply_diff_pane_selection_effects, clamp_help_scroll_after_draw,
+    clamp_right_pane_scroll_after_draw, jump_scroll_target, should_apply_hunk_jump,
+    sync_target_for_scroll,
+};
 use crate::app::{self, App, InputKey};
-use crate::{apply_diff_pane_selection_effects, sync_target_for_scroll};
+use crate::event_loop::tests::{empty_report, report_with_one_symbol};
 use crate::{diff_shape, diff_view};
+use pretty_assertions::assert_eq;
 use rinkaku_core::render::Report;
+
+// --- should_apply_hunk_jump ---
+//
+// Regression coverage for the cross-pane key-leak this gate was added
+// to fix: `]`/`[` used to fire (scrolling `diff_pane_content`'s cached
+// hunk-offset table) whenever `Focus::Right` held, regardless of which
+// right pane was actually showing — so opening a file (Focus::Right,
+// RightPane::Diff by default), pressing `d` to switch to Detail, then
+// pressing `]`, silently jumped the Detail pane's scroll to a Diff-pane
+// offset that has no meaning there. `should_recompute_blast_radius_selection`'s
+// own existing tests only pin cache-staleness for the blast-radius pane's
+// *recompute* trigger; none of them cover this key's *application* gate,
+// which is a separate condition (`run_app` applies the jump only when
+// this returns true, independent of whether anything gets recomputed).
+#[test]
+fn should_apply_hunk_jump_when_right_focused_on_diff_pane() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report).handle_key(InputKey::Open);
+    assert_eq!(app::Focus::Right, app.focus());
+    assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+    let actual = should_apply_hunk_jump(&app);
+
+    assert!(actual);
+}
+
+#[test]
+fn should_not_apply_hunk_jump_when_right_focused_on_detail_pane() {
+    let report = report_with_one_symbol();
+    // Open reaches Focus::Right on RightPane::Diff (its default), then
+    // ToggleDiff ('d') switches to RightPane::Detail without touching
+    // focus — exactly the sequence (Enter -> d -> ]) the bug report
+    // describes.
+    let app = App::new(&report)
+        .handle_key(InputKey::Open)
+        .handle_key(InputKey::ToggleDiff);
+    assert_eq!(app::Focus::Right, app.focus());
+    assert_eq!(app::RightPane::Detail, app.right_pane());
+
+    let actual = should_apply_hunk_jump(&app);
+
+    assert!(!actual);
+}
+
+#[test]
+fn should_not_apply_hunk_jump_when_right_focused_on_blast_radius_pane() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report)
+        .handle_key(InputKey::Open)
+        .handle_key(InputKey::ToggleBlastRadius);
+    assert_eq!(app::Focus::Right, app.focus());
+    assert_eq!(app::RightPane::BlastRadius, app.right_pane());
+
+    let actual = should_apply_hunk_jump(&app);
+
+    assert!(!actual);
+}
+
+#[test]
+fn should_not_apply_hunk_jump_when_tree_focused_even_if_right_pane_is_diff() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report);
+    assert_eq!(app::Focus::Tree, app.focus());
+    assert_eq!(app::RightPane::Diff, app.right_pane()); // ADR 0020 default
+
+    let actual = should_apply_hunk_jump(&app);
+
+    assert!(!actual);
+}
+
+// --- jump_scroll_target ---
+
+#[test]
+fn should_jump_to_the_next_hunk_start_strictly_after_current_scroll() {
+    let hunk_starts = vec![0, 5, 12];
+
+    let actual = jump_scroll_target(&hunk_starts, 5, InputKey::NextHunk);
+
+    assert_eq!(Some(12), actual);
+}
+
+#[test]
+fn should_return_none_when_next_hunk_is_pressed_at_the_last_hunk() {
+    let hunk_starts = vec![0, 5, 12];
+
+    let actual = jump_scroll_target(&hunk_starts, 12, InputKey::NextHunk);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_jump_to_the_previous_hunk_start_strictly_before_current_scroll() {
+    let hunk_starts = vec![0, 5, 12];
+
+    let actual = jump_scroll_target(&hunk_starts, 12, InputKey::PrevHunk);
+
+    assert_eq!(Some(5), actual);
+}
+
+#[test]
+fn should_return_none_when_prev_hunk_is_pressed_at_the_first_hunk() {
+    let hunk_starts = vec![0, 5, 12];
+
+    let actual = jump_scroll_target(&hunk_starts, 0, InputKey::PrevHunk);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_return_none_when_hunk_starts_is_empty() {
+    let hunk_starts: Vec<usize> = vec![];
+
+    let actual = jump_scroll_target(&hunk_starts, 0, InputKey::NextHunk);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_jump_to_the_first_hunk_after_scroll_lands_between_two_hunks() {
+    // Scroll sitting mid-hunk (not exactly on a hunk boundary) still
+    // finds the next hunk strictly after it, not the one it's inside.
+    let hunk_starts = vec![0, 10];
+
+    let actual = jump_scroll_target(&hunk_starts, 3, InputKey::NextHunk);
+
+    assert_eq!(Some(10), actual);
+}
+
+// --- clamp_right_pane_scroll_after_draw ---
+//
+// Dogfooding fix: `render_scrollable_pane`'s clamp only ever affected
+// what was drawn, never `App`'s own `right_pane_scroll` — so an
+// overshot scroll request stayed recorded in `App` even once the pane
+// visibly stopped moving, and winding it back down took as many `k`
+// presses as it took to overshoot in the first place. These tests pin
+// the fold-back that keeps `App`'s state in sync with the frame that
+// was actually drawn.
+
+#[test]
+fn should_overwrite_right_pane_scroll_with_the_clamped_value_when_some() {
+    let report = empty_report();
+    let app = App::new(&report).with_right_pane_scroll(999);
+
+    let app = clamp_right_pane_scroll_after_draw(app, Some(7));
+
+    assert_eq!(7, app.right_pane_scroll());
+}
+
+#[test]
+fn should_leave_right_pane_scroll_untouched_when_none() {
+    // `None` means the drawn pane had nothing scrollable this frame
+    // (`ui::draw`'s own doc comment: the source screen, or a
+    // placeholder) — `App`'s own requested scroll must survive
+    // unchanged rather than being zeroed or otherwise disturbed by a
+    // frame that never consulted it.
+    let report = empty_report();
+    let app = App::new(&report).with_right_pane_scroll(3);
+
+    let app = clamp_right_pane_scroll_after_draw(app, None);
+
+    assert_eq!(3, app.right_pane_scroll());
+}
+
+// --- clamp_help_scroll_after_draw ---
+//
+// Same fold-back discipline as `clamp_right_pane_scroll_after_draw`
+// above, applied to the `?` help overlay's own independent scroll
+// state (this feature).
+
+#[test]
+fn should_overwrite_help_scroll_with_the_clamped_value_when_some() {
+    let report = empty_report();
+    let app = App::new(&report).with_help_scroll(999);
+
+    let app = clamp_help_scroll_after_draw(app, Some(4));
+
+    assert_eq!(4, app.help_scroll());
+}
+
+#[test]
+fn should_leave_help_scroll_untouched_when_none() {
+    let report = empty_report();
+    let app = App::new(&report).with_help_scroll(2);
+
+    let app = clamp_help_scroll_after_draw(app, None);
+
+    assert_eq!(2, app.help_scroll());
+}
 
 // --- sync_target_for_scroll (ADR 0030) ---
 
@@ -356,8 +551,8 @@ fn should_leave_cursor_untouched_when_syncing_to_a_symbol_id_with_no_matching_ro
 /// `diff_pane_content_with_two_symbol_sections` hand-builds for the
 /// standalone `sync_target_for_scroll` tests above — this fixture feeds
 /// the *real* pipeline instead, since this test exercises the actual
-/// sequencing `crate::run_app`'s loop performs, not a hand-shaped
-/// content value.
+/// sequencing `crate::event_loop::run_app`'s loop performs, not a
+/// hand-shaped content value.
 fn diff_hunks_with_two_symbol_sections() -> Vec<diff_view::FileHunks> {
     use diff_view::{DiffLine, DiffLineKind, Hunk};
 
@@ -648,7 +843,7 @@ fn dispatch_draw_and_fold(
             );
         })
         .expect("draw");
-    crate::clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll)
+    clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll)
 }
 
 #[test]

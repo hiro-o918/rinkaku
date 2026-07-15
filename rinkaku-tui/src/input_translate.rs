@@ -282,3 +282,7 @@ pub(crate) fn translate_mouse_event(kind: event::MouseEventKind) -> Option<Input
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "input_translate_tests/mod.rs"]
+mod tests;
