@@ -105,13 +105,20 @@ failure mode (silently ignored for weeks). A new `App` field,
 `update_prompt_dismissed`, tracks whether `PopupCancel` has already
 closed the popup this session; a free function,
 `should_auto_open_update_prompt(update_available: bool,
-update_prompt_dismissed: bool) -> bool`, decides this and is
-deliberately not a method on `App` — a backlogged startup splash screen
+update_prompt_dismissed: bool, no_other_modal_active: bool) -> bool`,
+decides this and is deliberately not a method on `App` — a backlogged startup splash screen
 is expected to want the identical "show once, don't reopen after an
 explicit dismissal" decision, and a free function taking plain `bool`s
 can be reused there without depending on `App`'s internals. The
 status-line hint and `u`-to-reopen both keep working unchanged after a
-dismissal — only the very first appearance is now automatic.
+dismissal — only the very first appearance is now automatic. An
+already-open modal (the help overlay or the jump popup) takes priority:
+`notify_update_available` will not auto-open the update prompt over
+one, since the renderer draws the update prompt topmost while
+`translate_key` still routes keys to whichever modal it checks first,
+and the two would otherwise disagree about what is actually receiving
+input. The reviewer still reaches the popup via `u` after closing the
+other modal.
 
 ## Alternatives
 
@@ -153,10 +160,10 @@ dismissal — only the very first appearance is now automatic.
   (`update_prompt_dismissed`) and one new free function
   (`should_auto_open_update_prompt`); `notify_update_available`'s
   behavior changes from "never opens the popup" to "opens it once,
-  unless already dismissed this session" — every existing test that
-  asserted the old "does not auto-open" behavior was updated to dismiss
-  the popup first where that state is still what the test needs to
-  reach.
+  unless already dismissed this session or another modal is currently
+  open" — every existing test that asserted the old "does not
+  auto-open" behavior was updated to dismiss the popup first where that
+  state is still what the test needs to reach.
 - `rinkaku/src/self_update.rs`'s `run_self_update` gains a `Spinner`
   around `updater.update()`; behavior is otherwise unchanged (same
   network calls, same final messages).
