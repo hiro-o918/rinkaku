@@ -379,11 +379,14 @@ mod tests {
     }
 
     #[test]
-    fn should_draw_update_prompt_with_version_when_update_prompt_is_open() {
+    fn should_draw_update_prompt_with_version_as_soon_as_notified() {
+        // No `OpenUpdatePrompt` key press here — this pins the
+        // auto-open-at-startup behavior: `notify_update_available` alone
+        // must be enough for the prompt to already be on screen the very
+        // next frame, not only after an explicit `u` press.
         let report = report_with_one_symbol();
         let mut app = App::new(&report);
         app.notify_update_available("1.2.3");
-        let app = app.handle_key(crate::app::InputKey::OpenUpdatePrompt);
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
 
         terminal
@@ -414,6 +417,9 @@ mod tests {
         let report = report_with_one_symbol();
         let mut app = App::new(&report);
         app.notify_update_available("1.2.3");
+        // `notify_update_available` auto-opens the prompt; dismiss it here
+        // to reach the "notified but closed" state this test covers.
+        let app = app.handle_key(crate::app::InputKey::PopupCancel);
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
 
         terminal
@@ -435,5 +441,37 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(!text.contains("Update available"));
+    }
+
+    #[test]
+    fn should_redraw_update_prompt_when_reopened_after_dismissal() {
+        let report = report_with_one_symbol();
+        let mut app = App::new(&report);
+        app.notify_update_available("1.2.3");
+        let app = app
+            .handle_key(crate::app::InputKey::PopupCancel)
+            .handle_key(crate::app::InputKey::OpenUpdatePrompt);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                    &[],
+                    &crate::note_markers::NoteMarkers::default(),
+                    Locale::English,
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Update available"));
+        assert!(text.contains("Update rinkaku to v1.2.3?"));
     }
 }

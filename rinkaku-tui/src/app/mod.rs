@@ -368,6 +368,12 @@ pub struct App {
     /// it sits on top of whatever was already showing and must not disturb
     /// that state.
     update_prompt_open: bool,
+    /// Whether the reviewer has already closed the update prompt once this
+    /// session (`PopupCancel` while it was open) — kept separate from
+    /// [`Self::update_prompt_open`] so [`should_auto_open_update_prompt`]
+    /// can tell "never shown yet" from "shown and dismissed" and not
+    /// reopen the popup out from under a reviewer who just closed it.
+    update_prompt_dismissed: bool,
     /// Whether the reviewer confirmed the update popup — `run_app`/
     /// `TuiSession::run` read this once [`Self::should_quit`] is set to
     /// decide whether to run `self-update` after the terminal is restored.
@@ -411,6 +417,7 @@ impl App {
             review_sink_a_available: false,
             update_available: None,
             update_prompt_open: false,
+            update_prompt_dismissed: false,
             update_requested: false,
         }
     }
@@ -592,13 +599,19 @@ impl App {
     /// version-check thread's `mpsc::Receiver` yields a version string
     /// (`main.rs`'s composition root spawns that thread; this method is
     /// the only seam through which its result reaches `App`, keeping this
-    /// module free of the thread/channel itself). Deliberately does not
-    /// open [`Self::update_prompt_open`] on its own — the popup is only
-    /// ever opened by an explicit `U` press
-    /// ([`InputKey::OpenUpdatePrompt`]'s own doc comment on why an
-    /// unprompted popup would be a bad surprise mid-review).
+    /// module free of the thread/channel itself). Auto-opens
+    /// [`Self::update_prompt_open`] via [`should_auto_open_update_prompt`]
+    /// (ADR 0056, superseding ADR 0054's original "never auto-opens"
+    /// decision) unless the reviewer already dismissed the prompt once
+    /// this session.
     pub fn notify_update_available(&mut self, version: impl Into<String>) {
         self.update_available = Some(version.into());
+        if should_auto_open_update_prompt(
+            self.update_available.is_some(),
+            self.update_prompt_dismissed,
+        ) {
+            self.update_prompt_open = true;
+        }
     }
 
     /// The detail-pane content for the row currently under the cursor
@@ -950,4 +963,13 @@ impl App {
         }
         self
     }
+}
+
+/// Whether the update prompt should auto-open now that an update is known
+/// to be available, given whether the reviewer has already dismissed it
+/// once this session. Extracted as a free function (rather than inlined in
+/// [`App::notify_update_available`]) so a future startup splash screen can
+/// reuse this exact decision without depending on `App`'s internals.
+fn should_auto_open_update_prompt(update_available: bool, update_prompt_dismissed: bool) -> bool {
+    update_available && !update_prompt_dismissed
 }
