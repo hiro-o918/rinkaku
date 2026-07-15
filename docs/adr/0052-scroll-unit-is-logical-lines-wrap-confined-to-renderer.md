@@ -141,3 +141,33 @@ computes positions against the same field.
   and multi-row-wrapping signatures specifically to exercise the
   logical/display-row gap `926876e`'s wide-pane fixtures could not
   reach.
+
+## Amendment: fold-back must not undo the request (dynamic verification follow-up)
+
+Dynamic verification of the fix above found a second-order regression it
+introduced: `display_row_to_logical_line` alone is not a safe fold-back once
+a *single* logical line is long enough to occupy the whole viewport. When
+`clamp_scroll`'s display-row clamp lands inside that line's own wrapped
+span (rather than exactly at its first row), the fold-back reports that
+line's own index — silently undoing a request for a *later* logical line.
+The next `Down` re-requests the same target, resolves to the same clamped
+display row, and folds back to the same value: a stable fixed point well
+short of the content's end (reproduced with a huge wrapped leading line
+followed by short lines; `right_pane_scroll` never advanced past it).
+
+`render_scrollable_pane`'s write-back now goes through
+`resolve_folded_back_logical_line(origins, display_row, requested_scroll)`
+instead of calling `display_row_to_logical_line` directly: it floors the
+folded-back value at `requested_scroll` itself (capped at the last
+available logical line, so an overscrolled request cannot be reported as
+unclamped). The on-screen `display_row` passed to `Paragraph::scroll` is
+unchanged — this only corrects the logical-line value written back into
+`App`.
+
+Regression coverage:
+`rinkaku-tui/src/event_loop/scroll_sync_wrap_tests.rs`'s
+`should_advance_scroll_monotonically_past_a_huge_wrapped_leading_line_*`
+and `should_not_oscillate_when_alternating_down_and_up_past_a_huge_wrapped_leading_line`
+drive repeated `Down`/`Up` against a huge-then-short fixture at several
+viewport heights; `rinkaku-tui/src/ui/scroll_tests/wrap_origins.rs` covers
+`resolve_folded_back_logical_line` directly.

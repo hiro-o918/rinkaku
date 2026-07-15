@@ -116,7 +116,8 @@ pub(crate) fn render_scrollable_pane(
             let display_row = clamp_scroll(wrapped.len(), viewport_height, requested_display_row);
             let paragraph = Paragraph::new(wrapped.clone()).scroll((display_row as u16, 0));
             frame.render_widget(paragraph, body_area);
-            let logical_scroll = display_row_to_logical_line(&origins, display_row);
+            let logical_scroll =
+                resolve_folded_back_logical_line(&origins, display_row, requested_scroll);
             (wrapped.len(), display_row, logical_scroll)
         }
         Body::Split(left, right) => {
@@ -151,7 +152,8 @@ pub(crate) fn render_scrollable_pane(
                 Paragraph::new(right_rows.clone()).scroll((display_row as u16, 0)),
                 right_area,
             );
-            let logical_scroll = display_row_to_logical_line(&origins, display_row);
+            let logical_scroll =
+                resolve_folded_back_logical_line(&origins, display_row, requested_scroll);
             (left_rows.len(), display_row, logical_scroll)
         }
     };
@@ -309,6 +311,35 @@ pub(crate) fn display_row_to_logical_line(origins: &[usize], display_row: usize)
         .or_else(|| origins.last())
         .copied()
         .unwrap_or(0)
+}
+
+/// The logical-line value [`render_scrollable_pane`] should write back to
+/// its caller, given `origins`, the just-clamped `display_row`, and the
+/// `requested_logical_line` that produced it before clamping.
+///
+/// Plain [`display_row_to_logical_line`] is not enough here: when
+/// `display_row` lands *inside* a preceding logical line's wrapped span
+/// (rather than exactly at its first row) — which happens whenever
+/// `clamp_scroll` pulls the display row back into a span that started
+/// before the requested logical line — folding back reports that earlier
+/// line's own index, silently undoing the request. The next `Down` then
+/// asks for `requested_logical_line + 1` again, [`logical_line_to_display_row`]
+/// resolves it to the same clamped `display_row`, and the value never
+/// advances. Flooring the fold-back at `requested_logical_line` (itself
+/// capped to the last available logical line, so an overscrolled request
+/// cannot be reported as unclamped) keeps every request's floor intact
+/// without touching the display-row clamp `Paragraph::scroll` actually
+/// consumes.
+pub(crate) fn resolve_folded_back_logical_line(
+    origins: &[usize],
+    display_row: usize,
+    requested_logical_line: usize,
+) -> usize {
+    let Some(&last_logical_line) = origins.last() else {
+        return 0;
+    };
+    let capped_request = requested_logical_line.min(last_logical_line);
+    display_row_to_logical_line(origins, display_row).max(capped_request)
 }
 
 /// Wraps a single logical [`Line`] into one or more output lines, per

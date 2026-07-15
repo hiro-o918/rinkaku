@@ -125,3 +125,60 @@ fn should_round_trip_a_logical_line_through_display_row_conversion_when_it_wraps
 
     assert_eq!(2, actual);
 }
+
+// --- resolve_folded_back_logical_line: fold-back that never undoes a
+// request that landed inside a preceding wrapped span ---
+
+// 48 display rows of logical line 0 (a huge wrapped signature), followed
+// by three unwrapped short lines.
+fn origins_with_one_huge_wrapped_line_then_three_short_lines() -> Vec<usize> {
+    let mut origins = vec![0; 48];
+    origins.extend([1, 2, 3]);
+    origins
+}
+
+#[test]
+fn should_return_the_requested_logical_line_when_the_clamped_display_row_lands_inside_its_own_wrapped_span()
+ {
+    let origins = origins_with_one_huge_wrapped_line_then_three_short_lines();
+
+    let actual = resolve_folded_back_logical_line(&origins, 0, 0);
+
+    assert_eq!(0, actual);
+}
+
+#[test]
+fn should_return_the_requested_logical_line_when_it_resolves_past_the_wrapped_span_into_a_short_line()
+ {
+    let origins = origins_with_one_huge_wrapped_line_then_three_short_lines();
+
+    let actual = resolve_folded_back_logical_line(&origins, 0, 1);
+
+    assert_eq!(1, actual);
+}
+
+#[test]
+fn should_return_the_last_logical_line_when_the_clamped_display_row_lands_on_its_last_wrapped_row()
+{
+    let origins = origins_with_one_huge_wrapped_line_then_three_short_lines();
+
+    let actual = resolve_folded_back_logical_line(&origins, 47, 3);
+
+    assert_eq!(3, actual);
+}
+
+#[test]
+fn should_cap_an_overscrolled_request_at_the_last_logical_line() {
+    let origins = origins_with_one_huge_wrapped_line_then_three_short_lines();
+
+    let actual = resolve_folded_back_logical_line(&origins, 47, 9);
+
+    assert_eq!(3, actual);
+}
+
+#[test]
+fn should_fall_back_to_zero_when_origins_is_empty() {
+    let actual = resolve_folded_back_logical_line(&[], 0, 5);
+
+    assert_eq!(0, actual);
+}
