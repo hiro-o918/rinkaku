@@ -382,3 +382,63 @@ fn should_emit_one_sub_hunk_per_symbol_when_symbol_ranges_overlap() {
     let expected = vec![(Some(0), expected_sub.clone()), (Some(1), expected_sub)];
     assert_eq!(expected, actual);
 }
+
+#[test]
+fn should_attribute_pure_deletion_hunk_to_the_symbol_its_zero_width_position_falls_inside() {
+    // A hunk with no Added/Context line at all (every line Removed) has no
+    // anchor line for `line_owners`' normal forward/back-fill passes to
+    // seed from — this is the everyday case of deleting a few lines out of
+    // the middle of an existing function, not just the brand-new-file or
+    // whole-symbol-removal edge cases. `foo` spans new-file lines 1-3; the
+    // deletion's zero-width position (new_start 2, `Hunk::new_range`'s own
+    // convention) falls inside it.
+    let original = hunk(
+        "@@ -2,1 +1,0 @@",
+        2,
+        &[(DiffLineKind::Removed, "    old_body();")],
+    );
+    let symbols = [(0, LineRange { start: 1, end: 3 })];
+
+    let actual = split_hunk(&original, &symbols);
+
+    assert_eq!(
+        vec![(
+            Some(0),
+            SubHunk {
+                header: original.header.clone(),
+                new_range: original.new_range,
+                lines: original.lines.clone(),
+                origin_offset: 0,
+            }
+        )],
+        actual
+    );
+}
+
+#[test]
+fn should_route_pure_deletion_hunk_to_module_level_bucket_when_position_intersects_no_symbol() {
+    // Same shape as the test above, but the deletion's zero-width position
+    // sits in the gap between two symbols rather than inside either one, so
+    // it must fall through to the module-level (`None`) bucket rather than
+    // being silently attributed to a neighboring symbol.
+    let original = hunk("@@ -4,1 +3,0 @@", 4, &[(DiffLineKind::Removed, "")]);
+    let symbols = [
+        (0, LineRange { start: 1, end: 3 }),
+        (1, LineRange { start: 5, end: 7 }),
+    ];
+
+    let actual = split_hunk(&original, &symbols);
+
+    assert_eq!(
+        vec![(
+            None,
+            SubHunk {
+                header: original.header.clone(),
+                new_range: original.new_range,
+                lines: original.lines.clone(),
+                origin_offset: 0,
+            }
+        )],
+        actual
+    );
+}

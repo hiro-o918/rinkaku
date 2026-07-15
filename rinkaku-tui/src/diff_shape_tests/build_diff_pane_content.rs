@@ -103,6 +103,51 @@ fn should_attribute_pure_deletion_hunk_to_owning_symbol_instead_of_module_level(
 }
 
 #[test]
+fn should_attribute_hunk_with_only_removed_lines_to_owning_symbol_not_module_level() {
+    // Blocker regression: a hunk whose lines are *all* `Removed` (an
+    // ordinary mid-function deletion, not a whole-symbol or brand-new-file
+    // edge case) has no Added/Context anchor line for
+    // `crate::hunk_split::line_owners` to seed from, so it used to fall
+    // through to the module-level bucket regardless of which symbol's body
+    // the deleted lines came from. The shared `hunk()` fixture helper
+    // always builds `Context` lines (`crate::diff_shape_tests::hunk`'s own
+    // doc comment), which cannot reproduce this shape, so this test builds
+    // the hunk directly with real `Removed` lines.
+    let report = Report {
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![symbol("lib.rs::foo", "foo", LineRange { start: 1, end: 3 })],
+        }],
+        ..empty_report()
+    };
+    let removed_hunk = Hunk {
+        header: "@@ -2,1 +1,0 @@".to_string(),
+        new_range: Some((2, 1)),
+        lines: vec![crate::diff_view::DiffLine {
+            kind: crate::diff_view::DiffLineKind::Removed,
+            content: "    old_body();".to_string(),
+        }],
+    };
+    let diff_files = vec![FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![removed_hunk.clone()],
+    }];
+    let target = DiffTarget::File {
+        path: "lib.rs".to_string(),
+    };
+
+    let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+    let expected = DiffPaneContent::File(vec![DiffSection {
+        title: "fn foo()".to_string(),
+        symbol_id: Some("lib.rs::foo".to_string()),
+        contract_header: None,
+        hunks: vec![attributed(0, removed_hunk)],
+    }]);
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_bucket_hunk_under_module_level_when_it_intersects_no_symbol() {
     let report = Report {
         files: vec![FileReport {

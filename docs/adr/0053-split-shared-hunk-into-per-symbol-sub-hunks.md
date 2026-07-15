@@ -88,6 +88,22 @@ approximation:
   running total during the same single-pass scan, not derived
   separately afterward.
 
+**A hunk with no Added/Context line at all falls back to the whole
+hunk's own zero-width position.** The single-pass row-ownership scan
+above assumes at least one Added/Context line exists to seed the
+Removed-run inheritance rule from. An ordinary deletion from the
+middle of an existing symbol — not just the brand-new-file or
+whole-symbol-removal cases already covered — can produce a hunk that
+is 100% Removed lines, leaving every row unresolved. For that case,
+ownership is resolved once for the whole hunk instead of per line: the
+hunk's own `new_range` zero-width position (`diff_view::Hunk::
+new_range`'s convention) is tested against each symbol range with
+`diff_view::hunk_intersects`' existing half-open rule — reused rather
+than reimplemented, so this fallback cannot drift from the rule
+`diff_view::hunks_for_range` already uses for the symbol-row view — and
+the resulting owner set (zero, one, or more symbols) is assigned to
+every line in the hunk.
+
 **New module `rinkaku-tui/src/hunk_split.rs`**, following the
 `split_pairing.rs` precedent (also split out of `diff_shape.rs` for an
 independent responsibility) rather than growing `diff_shape.rs`

@@ -93,6 +93,15 @@ pub fn split_hunk(hunk: &Hunk, symbols: &[(usize, LineRange)]) -> Vec<(Option<us
 /// Removed lines (before any Added/Context line has appeared) takes the
 /// owner set of the *next* resolved line, and every other Removed line
 /// takes the owner set of the *previous* resolved line.
+///
+/// A hunk with **no** Added/Context line at all (an ordinary deletion from
+/// the middle of an existing symbol, not just the brand-new-file or
+/// whole-symbol-removal edge cases) has no anchor for that forward/back-fill
+/// to seed from, so every line stays unresolved through both passes. This
+/// case falls back to testing the whole hunk's own zero-width `new_range`
+/// position against `symbols` via [`crate::diff_view::hunk_intersects`]'
+/// half-open rule, and — if it lands inside one or more symbols — assigns
+/// that owner set to every line in the hunk.
 fn line_owners(hunk: &Hunk, symbols: &[(usize, LineRange)]) -> Vec<Vec<usize>> {
     let mut owners: Vec<Option<Vec<usize>>> = vec![None; hunk.lines.len()];
     let mut next_new_line = hunk.new_range.map(|(start, _)| start);
@@ -111,6 +120,11 @@ fn line_owners(hunk: &Hunk, symbols: &[(usize, LineRange)]) -> Vec<Vec<usize>> {
             .collect();
         owners[index] = Some(line_owners);
         next_new_line = Some(new_line + 1);
+    }
+
+    if owners.iter().all(Option::is_none) {
+        let anchor_owners = anchorless_deletion_owners(hunk, symbols);
+        return owners.iter().map(|_| anchor_owners.clone()).collect();
     }
 
     // Retroactive attribution for Removed runs (function doc comment):
@@ -134,6 +148,20 @@ fn line_owners(hunk: &Hunk, symbols: &[(usize, LineRange)]) -> Vec<Vec<usize>> {
     owners
         .into_iter()
         .map(|owner| owner.unwrap_or_default())
+        .collect()
+}
+
+/// Owner set for a hunk with no Added/Context anchor line, resolved from
+/// its zero-width `new_range` position via `hunk_intersects`' half-open
+/// rule (`line_owners`' own doc comment) instead of the per-line new-file
+/// position test used for anchored lines — reused rather than
+/// reimplemented so this fallback stays in sync with
+/// `crate::diff_view::hunks_for_range`'s symbol-row filtering.
+fn anchorless_deletion_owners(hunk: &Hunk, symbols: &[(usize, LineRange)]) -> Vec<usize> {
+    symbols
+        .iter()
+        .filter(|(_, range)| crate::diff_view::hunk_intersects(hunk, range.start, range.end))
+        .map(|(symbol_index, _)| *symbol_index)
         .collect()
 }
 
