@@ -183,18 +183,18 @@ fn should_omit_module_level_section_when_every_hunk_is_attributed_to_a_symbol() 
 }
 
 #[test]
-fn should_attribute_overlapping_hunk_to_every_symbol_it_intersects() {
+fn should_split_overlapping_hunk_into_a_sub_hunk_per_symbol_it_intersects() {
     // Two symbols with adjacent, overlapping ranges (a pathological
     // input a real extractor would not normally produce, but the
     // shaping function's contract must still resolve deterministically).
-    // ADR 0029 amends ADR 0020's original first-match-only rule: a hunk
-    // intersecting more than one symbol's range is now attributed to
-    // every one of them, not just the first in source order — see ADR
-    // 0029 for why the TUI diff pane departs from ADR 0020's
-    // summary-view "duplication misleads about total change size"
-    // reasoning (the TUI has no change-size total to mislead, and a
-    // dropped section silently breaks that symbol's auto-scroll — ADR
-    // 0027 decision 2 — which is the worse failure mode here).
+    // ADR 0029 established "attribute to every intersecting symbol, not
+    // just the first"; ADR 0053 amends the attribution step itself to
+    // split the hunk into a per-symbol sub-hunk instead of cloning the
+    // whole hunk into every owning section. Here both symbols' ranges
+    // genuinely overlap at the one shared line, so both sub-hunks still
+    // carry that same line (ADR 0053's own doc comment on
+    // `hunk_split::split_hunk`) — this is the one case a split does not
+    // eliminate duplication, because the line truly belongs to both.
     let report = Report {
         files: vec![FileReport {
             path: "lib.rs".to_string(),
@@ -215,24 +215,23 @@ fn should_attribute_overlapping_hunk_to_every_symbol_it_intersects() {
 
     let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
 
+    let expected_hunk = AttributedHunk {
+        source_index: 0,
+        hunk: hunk("@@ -1,1 +3,1 @@", Some((3, 3)), vec!["shared line"]),
+        origin_offset: 0,
+    };
     let expected = DiffPaneContent::File(vec![
         DiffSection {
             title: "fn foo()".to_string(),
             symbol_id: Some("lib.rs::foo".to_string()),
             contract_header: None,
-            hunks: vec![attributed(
-                0,
-                hunk("@@ -1,1 +1,5 @@", Some((3, 4)), vec!["shared line"]),
-            )],
+            hunks: vec![expected_hunk.clone()],
         },
         DiffSection {
             title: "fn bar()".to_string(),
             symbol_id: Some("lib.rs::bar".to_string()),
             contract_header: None,
-            hunks: vec![attributed(
-                0,
-                hunk("@@ -1,1 +1,5 @@", Some((3, 4)), vec!["shared line"]),
-            )],
+            hunks: vec![expected_hunk],
         },
     ]);
     assert_eq!(expected, actual);
@@ -240,13 +239,17 @@ fn should_attribute_overlapping_hunk_to_every_symbol_it_intersects() {
 
 #[test]
 fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
-    // Regression test (PR #86 dogfooding, ADR 0029): a brand-new file's
-    // diff is always exactly one hunk spanning the whole file
-    // (`@@ -0,0 +1,N @@`), so every symbol the file defines has a
-    // range inside that one hunk. Before ADR 0029, only the first
+    // Regression test (PR #86 dogfooding, ADR 0029, amended by ADR 0053):
+    // a brand-new file's diff is always exactly one hunk spanning the
+    // whole file (`@@ -0,0 +1,N @@`), so every symbol the file defines
+    // has a range inside that one hunk. Before ADR 0029, only the first
     // symbol in source order (`foo`) ever got a section; `bar` and
     // `baz` were silently dropped, breaking their diff-pane auto-scroll
-    // (ADR 0027 decision 2) with no error or indicator.
+    // (ADR 0027 decision 2) with no error or indicator. ADR 0053 further
+    // amends the attribution step to split this one hunk into a sub-hunk
+    // per symbol (plus a module-level sub-hunk for the blank separator
+    // lines between them) instead of cloning the whole hunk into every
+    // section.
     let report = Report {
         files: vec![FileReport {
             path: "file_size.rs".to_string(),
@@ -263,7 +266,19 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
         hunks: vec![hunk(
             "@@ -0,0 +1,11 @@",
             Some((1, 11)),
-            vec!["whole new file"],
+            vec![
+                "fn foo() {",
+                "    body();",
+                "}",
+                "",
+                "fn bar() {",
+                "    body();",
+                "}",
+                "",
+                "fn baz() {",
+                "    body();",
+                "}",
+            ],
         )],
     }];
     let target = DiffTarget::File {
@@ -272,28 +287,65 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
 
     let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
 
-    let expected_hunk = attributed(
-        0,
-        hunk("@@ -0,0 +1,11 @@", Some((1, 11)), vec!["whole new file"]),
-    );
     let expected = DiffPaneContent::File(vec![
         DiffSection {
             title: "fn foo()".to_string(),
             symbol_id: Some("file_size.rs::foo".to_string()),
             contract_header: None,
-            hunks: vec![expected_hunk.clone()],
+            hunks: vec![AttributedHunk {
+                source_index: 0,
+                hunk: hunk(
+                    "@@ -0,3 +1,3 @@",
+                    Some((1, 3)),
+                    vec!["fn foo() {", "    body();", "}"],
+                ),
+                origin_offset: 0,
+            }],
         },
         DiffSection {
             title: "fn bar()".to_string(),
             symbol_id: Some("file_size.rs::bar".to_string()),
             contract_header: None,
-            hunks: vec![expected_hunk.clone()],
+            hunks: vec![AttributedHunk {
+                source_index: 0,
+                hunk: hunk(
+                    "@@ -4,3 +5,3 @@",
+                    Some((5, 7)),
+                    vec!["fn bar() {", "    body();", "}"],
+                ),
+                origin_offset: 4,
+            }],
         },
         DiffSection {
             title: "fn baz()".to_string(),
             symbol_id: Some("file_size.rs::baz".to_string()),
             contract_header: None,
-            hunks: vec![expected_hunk],
+            hunks: vec![AttributedHunk {
+                source_index: 0,
+                hunk: hunk(
+                    "@@ -8,3 +9,3 @@",
+                    Some((9, 11)),
+                    vec!["fn baz() {", "    body();", "}"],
+                ),
+                origin_offset: 8,
+            }],
+        },
+        DiffSection {
+            title: MODULE_LEVEL_TITLE.to_string(),
+            symbol_id: None,
+            contract_header: None,
+            hunks: vec![
+                AttributedHunk {
+                    source_index: 0,
+                    hunk: hunk("@@ -3,1 +4,1 @@", Some((4, 4)), vec![""]),
+                    origin_offset: 3,
+                },
+                AttributedHunk {
+                    source_index: 0,
+                    hunk: hunk("@@ -7,1 +8,1 @@", Some((8, 8)), vec![""]),
+                    origin_offset: 7,
+                },
+            ],
         },
     ]);
     assert_eq!(expected, actual);

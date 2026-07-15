@@ -82,7 +82,13 @@ pub(super) fn hunk(header: &str, new_range: Option<(usize, usize)>, lines: Vec<&
 /// Wraps `hunk` with the `source_index` it occupies in the fixture's
 /// `FileHunks::hunks` — every test below builds its `diff_files`
 /// fixture with hunks in a fixed order, so this index is just "which
-/// position in that `vec![...]` this hunk was written at".
+/// position in that `vec![...]` this hunk was written at". `origin_offset`
+/// is `0` (ADR 0053: this hunk was never split — the fixture's own
+/// `hunk(...)` always builds the whole hunk).
 pub(super) fn attributed(source_index: usize, hunk: Hunk) -> AttributedHunk {
-    AttributedHunk { source_index, hunk }
+    AttributedHunk {
+        source_index,
+        hunk,
+        origin_offset: 0,
+    }
 }

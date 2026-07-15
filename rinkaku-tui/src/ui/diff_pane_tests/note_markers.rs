@@ -28,6 +28,7 @@ fn section_for(diff_text: &str) -> DiffSection {
         hunks: vec![AttributedHunk {
             source_index: 0,
             hunk,
+            origin_offset: 0,
         }],
     }
 }
