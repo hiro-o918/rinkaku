@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.16](https://github.com/hiro-o918/rinkaku/compare/v0.6.15...v0.6.16) (2026-07-15)
+
+
+### Features
+
+* **tui:** rebind review annotations from n/N to a/A ([#183](https://github.com/hiro-o918/rinkaku/issues/183)) ([6933471](https://github.com/hiro-o918/rinkaku/commit/6933471e9dbef5fbe52e5384f588940488d799d5))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.14 to 0.6.15
+    * rinkaku-tui bumped from 0.6.14 to 0.6.15
+
 ## [0.6.15](https://github.com/hiro-o918/rinkaku/compare/v0.6.14...v0.6.15) (2026-07-15)
 
 

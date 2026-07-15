@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.15](https://github.com/hiro-o918/rinkaku/compare/v0.6.14...v0.6.15) (2026-07-15)
+
+
+### Features
+
+* **tui:** auto-open the update prompt at startup and fix frozen prompt keys ([#180](https://github.com/hiro-o918/rinkaku/issues/180)) ([aa36b80](https://github.com/hiro-o918/rinkaku/commit/aa36b8083718d006031e9357b82d8903b5ec5136))
+* **tui:** rebind review annotations from n/N to a/A ([#183](https://github.com/hiro-o918/rinkaku/issues/183)) ([6933471](https://github.com/hiro-o918/rinkaku/commit/6933471e9dbef5fbe52e5384f588940488d799d5))
+* **tui:** vim-like search in source view + help overlay Global group split ([#182](https://github.com/hiro-o918/rinkaku/issues/182)) ([3f89f05](https://github.com/hiro-o918/rinkaku/commit/3f89f05d0b02d438a9a8e982b5eb24a467490058))
+
+
+### Miscellaneous
+
+* release main ([#179](https://github.com/hiro-o918/rinkaku/issues/179)) ([24cc8b1](https://github.com/hiro-o918/rinkaku/commit/24cc8b169730c941c57f11b9ac5f588a09000340))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.14 to 0.6.15
+
 ## [0.6.14](https://github.com/hiro-o918/rinkaku/compare/v0.6.13...v0.6.14) (2026-07-15)
 
 
