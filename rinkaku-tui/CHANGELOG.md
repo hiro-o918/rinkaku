@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.6.7](https://github.com/hiro-o918/rinkaku/compare/v0.6.6...v0.6.7) (2026-07-15)
+
+
+### Features
+
+* **tui:** add review notes with PR review and clipboard export sinks (ADR 0048) ([#161](https://github.com/hiro-o918/rinkaku/issues/161)) ([82c25a7](https://github.com/hiro-o918/rinkaku/commit/82c25a730a758e481f08682a35a63039f485573c))
+* **tui:** add split (side-by-side) view for the diff pane ([#154](https://github.com/hiro-o918/rinkaku/issues/154)) ([8cc4955](https://github.com/hiro-o918/rinkaku/commit/8cc4955b8acc6afbaa9c2bd0e5ef8945262f39b9))
+* **tui:** align split-view run pairs by line similarity ([#162](https://github.com/hiro-o918/rinkaku/issues/162)) ([d5bd16a](https://github.com/hiro-o918/rinkaku/commit/d5bd16aafdb49c61de7d9700e9f3b924880e72fd))
+* **tui:** open the PR in a web browser with w (ADR 0050) ([#165](https://github.com/hiro-o918/rinkaku/issues/165)) ([9c1a321](https://github.com/hiro-o918/rinkaku/commit/9c1a321df51810107a071f67318dcb87cff71076))
+* **tui:** overlay the diff onto the source view ([#159](https://github.com/hiro-o918/rinkaku/issues/159)) ([abeb960](https://github.com/hiro-o918/rinkaku/commit/abeb9602980eb678d900596af861114ee89b4184))
+* **tui:** polish the diff pane (background tint fallback, v hint, split default) ([#158](https://github.com/hiro-o918/rinkaku/issues/158)) ([d1f4eb4](https://github.com/hiro-o918/rinkaku/commit/d1f4eb472e7e494ca3dd519998f2cb4eeb95f6c7))
+* **tui:** read --pr mode's source view from the PR head snapshot ([#163](https://github.com/hiro-o918/rinkaku/issues/163)) ([6f5ce4e](https://github.com/hiro-o918/rinkaku/commit/6f5ce4e20fe8f4cea052da6f37edce932ea02a86))
+* **tui:** render changed signatures as the diff pane anchor line ([#167](https://github.com/hiro-o918/rinkaku/issues/167)) ([926876e](https://github.com/hiro-o918/rinkaku/commit/926876e6db877b3a1fe1aaa0448b22550e5f440c))
+* **tui:** split (side-by-side) view for the source diff overlay ([#164](https://github.com/hiro-o918/rinkaku/issues/164)) ([c0c6264](https://github.com/hiro-o918/rinkaku/commit/c0c6264ac7276e59266f029fe50688a20e474c94))
+
+
+### Bug Fixes
+
+* **tui:** place a mixed file's TestGroup at its source-order position ([#155](https://github.com/hiro-o918/rinkaku/issues/155)) ([a7fb2da](https://github.com/hiro-o918/rinkaku/commit/a7fb2da30baefaf380608bcb5f2a1b8516f53957))
+
+
+### Miscellaneous
+
+* release main ([#151](https://github.com/hiro-o918/rinkaku/issues/151)) ([f4e1b35](https://github.com/hiro-o918/rinkaku/commit/f4e1b35fc30c29760cd1972ac16673c085ed691e))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.6 to 0.6.7
+
 ## [0.6.6](https://github.com/hiro-o918/rinkaku/compare/v0.6.5...v0.6.6) (2026-07-14)
 
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.8](https://github.com/hiro-o918/rinkaku/compare/v0.6.7...v0.6.8) (2026-07-15)
+
+
+### Features
+
+* **tui:** add review notes with PR review and clipboard export sinks (ADR 0048) ([#161](https://github.com/hiro-o918/rinkaku/issues/161)) ([82c25a7](https://github.com/hiro-o918/rinkaku/commit/82c25a730a758e481f08682a35a63039f485573c))
+* **tui:** open the PR in a web browser with w (ADR 0050) ([#165](https://github.com/hiro-o918/rinkaku/issues/165)) ([9c1a321](https://github.com/hiro-o918/rinkaku/commit/9c1a321df51810107a071f67318dcb87cff71076))
+* **tui:** read --pr mode's source view from the PR head snapshot ([#163](https://github.com/hiro-o918/rinkaku/issues/163)) ([6f5ce4e](https://github.com/hiro-o918/rinkaku/commit/6f5ce4e20fe8f4cea052da6f37edce932ea02a86))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.6 to 0.6.7
+    * rinkaku-tui bumped from 0.6.6 to 0.6.7
+
 ## [0.6.7](https://github.com/hiro-o918/rinkaku/compare/v0.6.6...v0.6.7) (2026-07-14)
 
 
