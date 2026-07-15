@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.14](https://github.com/hiro-o918/rinkaku/compare/v0.6.13...v0.6.14) (2026-07-15)
+
+
+### Features
+
+* **tui:** auto-open the update prompt at startup and fix frozen prompt keys ([#180](https://github.com/hiro-o918/rinkaku/issues/180)) ([aa36b80](https://github.com/hiro-o918/rinkaku/commit/aa36b8083718d006031e9357b82d8903b5ec5136))
+
+
+### Miscellaneous
+
+* release main ([#178](https://github.com/hiro-o918/rinkaku/issues/178)) ([46f07b8](https://github.com/hiro-o918/rinkaku/commit/46f07b8f8eb39aac65fe52b838ae61d288a572d8))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.13 to 0.6.14
+
 ## [0.6.13](https://github.com/hiro-o918/rinkaku/compare/v0.6.12...v0.6.13) (2026-07-15)
 
 
