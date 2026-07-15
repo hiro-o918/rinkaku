@@ -378,3 +378,8 @@ Decision 4's shared line-index invariant is narrowed, not fully
 superseded: every element a section renders other than its anchor row
 (hunk headers, hunk body lines, blank separators) still has one shared
 row count across both modes, unchanged.
+
+This supersedes an earlier "accepted trade-off" phrasing (now removed)
+that acknowledged a narrow-terminal wrong-symbol sync hazard as
+unavoidable — threading the effective mode into the scroll math closes
+that hazard, it is not merely documented.
