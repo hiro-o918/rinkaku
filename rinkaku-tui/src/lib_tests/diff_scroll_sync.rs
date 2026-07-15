@@ -113,7 +113,7 @@ fn should_return_none_when_scroll_did_not_change_this_key() {
     // which symbol the unchanged offset happens to point at.
     let app = app_focused_on_diff_pane_with_scroll(&report, 5);
 
-    let actual = sync_target_for_scroll(&app, &content, 5);
+    let actual = sync_target_for_scroll(&app, &content, 5, app::DiffViewMode::Split);
 
     assert_eq!(None, actual);
 }
@@ -125,7 +125,7 @@ fn should_return_none_when_tree_is_focused_even_if_scroll_changed() {
     let app = App::new(&report).with_right_pane_scroll(5);
     assert_eq!(app::Focus::Tree, app.focus());
 
-    let actual = sync_target_for_scroll(&app, &content, 0);
+    let actual = sync_target_for_scroll(&app, &content, 0, app::DiffViewMode::Split);
 
     assert_eq!(None, actual);
 }
@@ -140,7 +140,7 @@ fn should_return_none_when_right_pane_is_not_diff_even_if_focus_is_right() {
         .with_right_pane_scroll(5);
     assert_eq!(app::RightPane::Detail, app.right_pane());
 
-    let actual = sync_target_for_scroll(&app, &content, 0);
+    let actual = sync_target_for_scroll(&app, &content, 0, app::DiffViewMode::Split);
 
     assert_eq!(None, actual);
 }
@@ -153,7 +153,7 @@ fn should_return_bar_when_scroll_moved_into_bars_section() {
     // (line 2) down into bar's section (line 5, its title line).
     let app = app_focused_on_diff_pane_with_scroll(&report, 5);
 
-    let actual = sync_target_for_scroll(&app, &content, 2);
+    let actual = sync_target_for_scroll(&app, &content, 2, app::DiffViewMode::Split);
 
     assert_eq!(Some("lib.rs::bar".to_string()), actual);
 }
@@ -166,7 +166,7 @@ fn should_return_none_when_scroll_moved_but_stayed_within_the_current_symbols_se
     // inside foo's own section (0-4) — nothing to sync.
     let app = app_focused_on_diff_pane_with_scroll(&report, 2);
 
-    let actual = sync_target_for_scroll(&app, &content, 0);
+    let actual = sync_target_for_scroll(&app, &content, 0, app::DiffViewMode::Split);
 
     assert_eq!(None, actual);
 }
@@ -214,7 +214,7 @@ fn should_return_none_when_scroll_moved_into_the_module_level_bucket() {
     // two-symbol fixture).
     let app = app_focused_on_diff_pane_with_scroll(&report, 5);
 
-    let actual = sync_target_for_scroll(&app, &content, 2);
+    let actual = sync_target_for_scroll(&app, &content, 2, app::DiffViewMode::Split);
 
     assert_eq!(None, actual);
 }
@@ -312,6 +312,7 @@ fn should_sync_tree_cursor_when_scroll_moves_into_a_different_symbols_section() 
         &diff_hunks,
         last_diff_focus,
         scroll_before_dispatch,
+        app::DiffViewMode::Split,
     );
 
     assert_eq!(Some("lib.rs::bar"), effects.app.selected_symbol_id());
@@ -345,6 +346,7 @@ fn should_not_bounce_scroll_back_on_the_next_key_after_a_sync() {
         &diff_hunks,
         last_diff_focus,
         scroll_before_first_key,
+        app::DiffViewMode::Split,
     );
     assert_eq!(Some("lib.rs::bar"), first.app.selected_symbol_id());
     assert_eq!(5, first.app.right_pane_scroll());
@@ -364,6 +366,7 @@ fn should_not_bounce_scroll_back_on_the_next_key_after_a_sync() {
         &diff_hunks,
         first.last_diff_focus,
         scroll_before_second_key,
+        app::DiffViewMode::Split,
     );
 
     assert_eq!(6, second.app.right_pane_scroll());
@@ -392,7 +395,14 @@ fn should_resync_scroll_to_current_symbols_section_when_diff_pane_is_reentered_w
     // `run_app`'s loop passes in after a Diff -> Detail -> Diff toggle
     // with the cursor untouched, per the fix.
     let app = app.with_right_pane_scroll(0);
-    let effects = apply_diff_pane_selection_effects(app, &report, &diff_hunks, None, 0);
+    let effects = apply_diff_pane_selection_effects(
+        app,
+        &report,
+        &diff_hunks,
+        None,
+        0,
+        app::DiffViewMode::Split,
+    );
 
     // bar's section starts at line 5 (same layout as every other test in
     // this file); landing at 0 would show foo's section under a pinned
@@ -510,6 +520,11 @@ fn dispatch_draw_and_fold(
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    // Mirrors `run_app`'s startup init: before any frame has drawn there
+    // is no `last_effective_diff_view_mode` yet, so the requested mode is
+    // used until the first `DrawOutcome::effective_diff_view_mode` folds
+    // back.
+    let effective_mode = app.diff_view_mode();
     let scroll_before_dispatch = app.right_pane_scroll();
     app = app.handle_key(input_key);
     let effects = apply_diff_pane_selection_effects(
@@ -518,6 +533,7 @@ fn dispatch_draw_and_fold(
         diff_hunks,
         last_diff_focus,
         scroll_before_dispatch,
+        effective_mode,
     );
     let app = effects.app;
     let diff_pane_content = effects.diff_pane_content;

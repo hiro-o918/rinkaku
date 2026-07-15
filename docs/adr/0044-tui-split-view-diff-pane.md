@@ -363,25 +363,18 @@ paired row to correspond to.
 Each computes the section-anchor row count as 2 (unified, changed
 signature), 1 (unified, unchanged title), or 1 (split, either case),
 before continuing with decision 3/4's unchanged per-hunk counting.
-Callers pass `App::diff_view_mode()` — the *requested* mode, i.e. what
-`v`/`V` last toggled — not the pane's possibly-narrower *effective*
-mode after decision 7's `MIN_SPLIT_VIEW_WIDTH` fallback silently
-renders unified anyway. Threading the effective mode through instead
-would require plumbing the diff pane's `Rect` width into
-`crate::run_app`'s key-dispatch layer, which today has no notion of
-pane geometry at all — a materially larger change for a narrow-terminal
-edge case.
+Callers pass the *effective* mode last drawn (the pane's actually-rendered
+mode this frame, threaded through
+[`crate::ui::DrawOutcome::effective_diff_view_mode`] and folded back into
+`crate::run_app`'s loop between frames), not the requested
+`App::diff_view_mode()` — so decision 7's `MIN_SPLIT_VIEW_WIDTH` narrow-
+terminal fallback (`Split` requested but `Unified` rendered) still keeps
+the scroll math aligned with what the reviewer actually sees. The startup
+init and any frame that did not draw the diff pane (source screen, a
+different right pane) fall back to the requested mode — the effective
+mode simply is the requested mode there.
 
-**Accepted trade-off:** when the pane is narrower than
-`MIN_SPLIT_VIEW_WIDTH` and the reviewer has toggled to split, a
-hunk-jump (`]`/`[`) or symbol-scroll target computed from the
-requested (`Split`) row count can be off by one row per
-changed-signature section actually rendered as unified. This does not
-desync the diff pane from the tree cursor and does not corrupt
-rendering — `crate::ui::clamp_scroll` already absorbs any resulting
-overscroll the same way it absorbs any other requested-vs-actual
-mismatch, next frame. This is strictly narrower than decision 4's
-original invariant, not a full supersession of it: every other
-element a section renders (hunk headers, hunk body lines, blank
-separators) still has one shared row count across both modes,
-unchanged.
+Decision 4's shared line-index invariant is narrowed, not fully
+superseded: every element a section renders other than its anchor row
+(hunk headers, hunk body lines, blank separators) still has one shared
+row count across both modes, unchanged.

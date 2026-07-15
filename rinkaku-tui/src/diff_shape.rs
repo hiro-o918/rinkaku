@@ -117,11 +117,12 @@ pub const MODULE_LEVEL_TITLE: &str = "(module level)";
 /// handling to jump the scroll offset to a hunk boundary. `view_mode` picks
 /// which of the two anchor-row shapes [`walk_sections`] counts (unified's
 /// title-or-2-line-signature-pair vs. split's always-one-row anchor —
-/// [`walk_sections`]'s own doc comment); callers pass `App::diff_view_mode`,
-/// the *requested* mode, not the pane's possibly-narrower effective one
-/// (`crate::ui::diff_pane::MIN_SPLIT_VIEW_WIDTH`'s fallback) — the resulting
-/// off-by-a-few-line target in that narrow-pane case is no worse than any
-/// other overscroll `crate::ui::clamp_scroll` already absorbs next frame.
+/// [`walk_sections`]'s own doc comment); callers pass the *effective* mode
+/// last drawn ([`crate::ui::DrawOutcome::effective_diff_view_mode`], folded
+/// back into `crate::run_app`'s loop between frames), not the requested
+/// `App::diff_view_mode()`, so the count matches what a reviewer actually
+/// sees when ADR 0044 decision 7's [`crate::ui::diff_pane::MIN_SPLIT_VIEW_WIDTH`]
+/// fallback silently renders `Split` as `Unified`.
 /// Mirrors `diff_pane_lines`/`diff_pane_split_rows`'s own line-counting
 /// exactly rather than reusing either function directly, since this module
 /// must stay free of `ratatui` types (module doc comment) — a change to
