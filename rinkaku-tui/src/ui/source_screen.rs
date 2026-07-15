@@ -318,13 +318,9 @@ pub(crate) fn source_lines(
         .collect()
 }
 
-/// The search-match background tint for 0-based `line_index` (ADR 0057
-/// decision 6): [`SEARCH_CURRENT_MATCH_BG`] when `line_index` is
-/// `search_current`, [`SEARCH_MATCH_BG`] when it is any other entry in
-/// `search_matches`, `None` otherwise. Extracted as its own pure lookup so
-/// [`source_lines`]'s three call sites (unchanged, overlay-unchanged,
-/// overlay-added) share one definition of "is this line a match" rather
-/// than repeating the `contains`/equality check inline at each.
+/// Extracted so [`source_lines`]'s three call sites share one definition of
+/// "is this line a match" (ADR 0057 decision 6) rather than repeating the
+/// check inline at each.
 fn search_match_bg(
     line_index: usize,
     search_matches: &[MatchLine],
@@ -349,13 +345,10 @@ fn search_match_bg(
 /// for [`marker_span`]'s `+` glyph, pairing this line's gutter with
 /// [`removed_line`]'s own `-` gutter for the same diff signal.
 ///
-/// `search_bg` (ADR 0057 decision 6) layers between `diff_bg` and the
-/// symbol-range tint in the same `.or()` chain, one level more specific
-/// than the diff overlay: a line that is both a diff-added line and a
-/// search match keeps showing `ADDED_BG` (the diff signal is what a
-/// reviewer drilled into this symbol's file to see in the first place),
-/// while a match on an otherwise-unchanged line shows the search tint
-/// ahead of the plain symbol-range highlight.
+/// `search_bg` (ADR 0057 decision 6) layers into the same `.or()` chain,
+/// below `diff_bg`: the diff signal is what a reviewer drilled into this
+/// symbol's file to see in the first place, so it wins when a line is both
+/// diff-added and a search match.
 fn unchanged_line(
     source: &SourceView,
     token_highlights: &[crate::highlight::LineHighlight],
