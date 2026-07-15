@@ -31,7 +31,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -97,7 +97,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -169,7 +169,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -239,7 +239,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -304,7 +304,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })

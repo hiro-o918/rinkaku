@@ -32,7 +32,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -81,7 +81,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -123,7 +123,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -172,7 +172,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -237,7 +237,7 @@ fn should_offset_highlight_lookup_by_origin_offset_when_hunk_was_split() {
         &[&section],
         true,
         Some(&highlighted_file),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         "lib.rs",
     );
 
@@ -307,7 +307,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -389,7 +389,7 @@ fn should_replace_the_section_title_with_a_tinted_old_new_pair_in_unified_view_w
         &[&section],
         true,
         None,
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         "lib.rs",
     );
 
@@ -427,7 +427,7 @@ fn should_keep_the_plain_bold_title_in_unified_view_when_signature_is_unchanged(
         &[&section],
         true,
         None,
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         "lib.rs",
     );
 

@@ -217,7 +217,7 @@ mod tests {
                     &blast_radius_selection,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -248,7 +248,7 @@ mod tests {
                     &blast_radius_selection,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -294,7 +294,7 @@ mod tests {
                     &blast_radius_selection,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })

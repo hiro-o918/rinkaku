@@ -200,29 +200,30 @@ pub enum InputKey {
     /// mode for whichever content the Diff pane already shows, not an
     /// action on the row under the cursor.
     ToggleSplitView,
-    /// `n` on the entry screen (ADR 0048): opens the review-note compose
-    /// overlay over the row under the cursor. Needs a
-    /// [`crate::review::SelectionSnapshot`] derived from `report`/the
-    /// parsed diff hunks, which `App::handle_key` has no access to
-    /// (mirroring [`Self::Source`]'s own "IO/derivation stays outside
-    /// `App`" precedent) — `crate::lib::run_app` special-cases this
-    /// variant before dispatch rather than routing it through
+    /// `a` on the entry screen (ADR 0048, rebound from `n` by ADR 0058):
+    /// opens the review annotation compose overlay over the row under the
+    /// cursor. Needs a [`crate::review::SelectionSnapshot`] derived from
+    /// `report`/the parsed diff hunks, which `App::handle_key` has no
+    /// access to (mirroring [`Self::Source`]'s own "IO/derivation stays
+    /// outside `App`" precedent) — `crate::lib::run_app` special-cases
+    /// this variant before dispatch rather than routing it through
     /// `App::handle_key` at all, so this variant never reaches that
     /// method's match.
-    NoteCompose,
-    /// `N`: opens the review-notes list overlay (ADR 0048).
-    NotesList,
+    AnnotationCompose,
+    /// `A` (rebound from `N` by ADR 0058): opens the review annotations
+    /// list overlay (ADR 0048).
+    AnnotationsList,
     /// A printable character typed while the compose overlay is open.
     ComposeChar(char),
     /// Backspace while the compose overlay is open.
     ComposeBackspace,
-    /// `d` while the notes list overlay is open: deletes the note under
-    /// the list cursor.
-    NoteDelete,
+    /// `d` while the annotations list overlay is open: deletes the
+    /// annotation under the list cursor.
+    AnnotationDelete,
     /// `w`/`W` (ADR 0050): opens the current PR's page in the reviewer's
     /// default web browser. Global, like `d`/`r`/`s` — translated
     /// regardless of screen/focus. Needs the session's `PrContext`, which
-    /// `App` does not hold (mirroring [`Self::NoteCompose`]'s own "IO/
+    /// `App` does not hold (mirroring [`Self::AnnotationCompose`]'s own "IO/
     /// derivation stays outside `App`" precedent) — `crate::lib::run_app`
     /// special-cases this variant before dispatch rather than routing it
     /// through `App::handle_key`.
@@ -242,7 +243,7 @@ pub enum InputKey {
     /// mirrors [`Self::ComposeChar`]'s identical role for the review
     /// overlay, kept as a distinct variant (rather than reusing
     /// `ComposeChar`) so a reviewer cannot end up composing a search query
-    /// into a review note or vice versa through a shared variant both
+    /// into an annotation or vice versa through a shared variant both
     /// modes happen to interpret.
     SearchChar(char),
     /// Backspace while composing a search query — mirrors
@@ -250,7 +251,7 @@ pub enum InputKey {
     SearchBackspace,
     /// Enter while composing a search query: confirms it, computing its
     /// matches against the Source view's lines (data `App::handle_key`
-    /// has no access to, mirroring [`Self::NoteCompose`]'s own "IO/
+    /// has no access to, mirroring [`Self::AnnotationCompose`]'s own "IO/
     /// derivation stays outside `App`" precedent) — `crate::event_loop::run_app`
     /// special-cases this variant before dispatch rather than routing it
     /// through `App::handle_key` at all.
@@ -259,12 +260,13 @@ pub enum InputKey {
     /// still active: cancels/clears it (ADR 0057 decision 2).
     SearchCancel,
     /// `n` on the Source screen (ADR 0057): jumps to the next match of the
-    /// last confirmed query, wrapping. Source-screen-only, so it does not
-    /// collide with [`Self::NoteCompose`]'s own `n` binding on the entry
-    /// screen.
+    /// last confirmed query, wrapping. Source-screen-only — `n`/`N` are
+    /// entirely unbound on the entry screen since ADR 0058 moved
+    /// [`Self::AnnotationCompose`]/[`Self::AnnotationsList`] to `a`/`A`,
+    /// reserved for a future Entry-screen search reusing this same
+    /// binding.
     SearchNext,
     /// `N` on the Source screen: the reverse of [`Self::SearchNext`].
-    /// Source-screen-only, so it does not collide with [`Self::NotesList`]'s
-    /// own `N` binding on the entry screen.
+    /// Source-screen-only, same rationale as [`Self::SearchNext`].
     SearchPrev,
 }

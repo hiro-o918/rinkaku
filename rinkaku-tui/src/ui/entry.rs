@@ -44,7 +44,7 @@ pub(crate) fn draw_entry_screen(
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
     blast_radius_selection: &BlastRadiusSelection,
-    note_markers: &crate::note_markers::NoteMarkers,
+    annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     area: Rect,
 ) -> Option<usize> {
     let [tree_area, right_area] = Layout::horizontal([
@@ -53,7 +53,7 @@ pub(crate) fn draw_entry_screen(
     ])
     .areas(area);
 
-    draw_tree_pane(frame, app, note_markers, tree_area);
+    draw_tree_pane(frame, app, annotation_markers, tree_area);
     match app.right_pane() {
         RightPane::Detail => draw_detail_pane(frame, app, report, right_area),
         RightPane::Diff => draw_diff_pane(
@@ -62,7 +62,7 @@ pub(crate) fn draw_entry_screen(
             report,
             diff_content,
             diff_highlights,
-            note_markers,
+            annotation_markers,
             right_area,
         ),
         RightPane::BlastRadius => {
@@ -87,7 +87,7 @@ pub(crate) fn draw_entry_screen(
 pub(crate) fn draw_tree_pane(
     frame: &mut Frame,
     app: &App,
-    note_markers: &crate::note_markers::NoteMarkers,
+    annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     area: Rect,
 ) {
     let rows = app.nav().rows(app.tree());
@@ -114,7 +114,13 @@ pub(crate) fn draw_tree_pane(
             .zip(labels[start..end].iter())
             .enumerate()
             .map(|(offset, (row, label))| {
-                entry_row_line(row, label, ranks, note_markers, start + offset == cursor)
+                entry_row_line(
+                    row,
+                    label,
+                    ranks,
+                    annotation_markers,
+                    start + offset == cursor,
+                )
             }),
     );
     if let Some(below) = below {
@@ -253,7 +259,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -303,7 +309,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -335,7 +341,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -377,7 +383,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -434,7 +440,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -497,7 +503,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -531,7 +537,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -566,7 +572,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })

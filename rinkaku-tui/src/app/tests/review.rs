@@ -1,8 +1,8 @@
 //! Tests for `App::handle_review_key` (ADR 0048's review-overlay key
-//! dispatch): the notes-list overlay's own binding grammar (`j`/`k` move,
-//! Enter proceed, Esc back, `d` delete — unified with the jump popup's
-//! grammar) and the `pending_prefix` clear when `n` is pressed over a row
-//! with no derivable snapshot.
+//! dispatch): the annotations-list overlay's own binding grammar (`j`/`k`
+//! move, Enter proceed, Esc back, `d` delete — unified with the jump
+//! popup's grammar) and the `pending_prefix` clear when `a` (ADR 0058) is
+//! pressed over a row with no derivable snapshot.
 
 use super::*;
 use crate::review::{ReviewState, SelectionSnapshot};
@@ -19,7 +19,7 @@ fn snapshot() -> SelectionSnapshot {
 }
 
 #[test]
-fn should_open_export_menu_when_confirming_the_notes_list() {
+fn should_open_export_menu_when_confirming_the_annotations_list() {
     let report = report_with_one_symbol();
     let review = ReviewState::default()
         .begin_compose(snapshot())

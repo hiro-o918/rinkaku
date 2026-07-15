@@ -28,8 +28,8 @@
 //! - `jump` — `selected_symbol_id`, `jump_to_symbol`, the jump popup's
 //!   own key handling, `PendingPrefix::G` bookkeeping, and the
 //!   `JumpBack`/`JumpForward` jumplist (ADR 0022)
-//! - `review` — `handle_review_key`'s notes-list overlay dispatch (ADR
-//!   0048)
+//! - `review` — `handle_review_key`'s annotations-list overlay dispatch
+//!   (ADR 0048)
 //! - `search` — Source-view search composing/cancel/next/prev dispatch
 //!   (ADR 0057)
 //! - `update_prompt` — `notify_update_available`, `OpenUpdatePrompt`'s

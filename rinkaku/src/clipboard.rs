@@ -92,7 +92,9 @@ fn copy_via_command(program: &str, args: &[&str], text: &str) -> Result<String, 
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    Ok(format!("copied review notes to clipboard via {program}"))
+    Ok(format!(
+        "copied review annotations to clipboard via {program}"
+    ))
 }
 
 /// A conservative guard on the raw packet length, below common
@@ -111,7 +113,7 @@ fn copy_via_osc52(text: &str) -> Result<String, String> {
         .write_all(sequence.as_bytes())
         .and_then(|()| stdout.flush())
         .map_err(|err| format!("failed to write OSC 52 sequence: {err}"))?;
-    let base = "copied review notes to clipboard via OSC 52 (terminal support required)";
+    let base = "copied review annotations to clipboard via OSC 52 (terminal support required)";
     if text.len() > OSC52_SIZE_GUARD_BYTES {
         Ok(format!(
             "{base} — packet is {} bytes, which may exceed the terminal's OSC 52 limit; \

@@ -48,11 +48,12 @@ use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 /// unwind on any key that is not `d`/`r`.
 pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Option<InputKey> {
     // The review overlay (ADR 0048) is checked before even the help
-    // overlay: while composing a note, every printable character the
-    // reviewer types (including `?`) must land in the note buffer, not
-    // trigger the help overlay or any other single-key gesture. Composing
-    // is also the one mode exempt from full-width normalization below —
-    // free text must keep whatever the reviewer actually typed.
+    // overlay: while composing an annotation, every printable character
+    // the reviewer types (including `?`) must land in the annotation
+    // buffer, not trigger the help overlay or any other single-key
+    // gesture. Composing is also the one mode exempt from full-width
+    // normalization below — free text must keep whatever the reviewer
+    // actually typed.
     if let review::ReviewMode::Compose { .. } = app.review().mode() {
         return match code {
             KeyCode::Enter => Some(InputKey::PopupConfirm),
@@ -72,7 +73,7 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
                 KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
                 KeyCode::Enter => Some(InputKey::PopupConfirm),
                 KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::PopupCancel),
-                KeyCode::Char('d') => Some(InputKey::NoteDelete),
+                KeyCode::Char('d') => Some(InputKey::AnnotationDelete),
                 _ => None,
             };
         }
@@ -249,20 +250,19 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // pane search is future work (ADR 0057's own Alternatives).
         KeyCode::Char('/') if on_source_screen => Some(InputKey::SearchStart),
         // `n`/`N` (ADR 0057): jump to the next/previous search match.
-        // Source-screen-only, checked ahead of the entry-screen `n`/`N`
-        // arms just below so the two never collide — a search never has
-        // more than [`SearchState::matches`] to navigate on this screen,
-        // and the entry screen's review-note `n`/`N` (ADR 0048) are
-        // unaffected since this arm never matches there.
+        // Source-screen-only — ADR 0058 freed these on the entry screen
+        // (moving the annotation bindings below to `a`/`A`) precisely so
+        // a future Entry-screen search can reuse them without colliding
+        // with anything.
         KeyCode::Char('n') if on_source_screen => Some(InputKey::SearchNext),
         KeyCode::Char('N') if on_source_screen => Some(InputKey::SearchPrev),
-        // `n` (ADR 0048): opens the review-note compose overlay over the
-        // row under the cursor. `N`: opens the review-notes list overlay.
-        // Both are only meaningful on the entry screen (Source-screen
-        // rows have no `SelectionSnapshot` to compose against, and are
-        // shadowed by the search bindings just above there anyway).
-        KeyCode::Char('n') => Some(InputKey::NoteCompose),
-        KeyCode::Char('N') => Some(InputKey::NotesList),
+        // `a` (ADR 0048, rebound from `n` by ADR 0058): opens the review
+        // annotation compose overlay over the row under the cursor. `A`
+        // (rebound from `N`): opens the review annotations list overlay.
+        // Both are only meaningful on the entry screen (Source-screen rows
+        // have no `SelectionSnapshot` to compose against).
+        KeyCode::Char('a') => Some(InputKey::AnnotationCompose),
+        KeyCode::Char('A') => Some(InputKey::AnnotationsList),
         // `w` (ADR 0050): opens the current PR's page in a web browser —
         // matches `gh` CLI's own `-w`/`--web` convention. Global regardless
         // of screen/focus, like `d`/`r`/`s`; `crate::lib::run_app`
@@ -302,7 +302,8 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
 /// `KeyCode::Char`, leaving every other `KeyCode` untouched. Applied to
 /// every normal-mode/overlay gesture in [`translate_key`] but not while
 /// [`review::ReviewMode::Compose`] is open — that buffer is free text, so a
-/// full-width character typed there must reach the note body unchanged.
+/// full-width character typed there must reach the annotation body
+/// unchanged.
 fn normalize_fullwidth_key(code: KeyCode) -> KeyCode {
     match code {
         KeyCode::Char(c @ '\u{FF01}'..='\u{FF5E}') => {

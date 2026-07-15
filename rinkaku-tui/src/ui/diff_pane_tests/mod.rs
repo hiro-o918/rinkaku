@@ -11,9 +11,9 @@
 //!   default when the toggle was never pressed
 //! - `styling` — token/diff background tint, hunk-header color, and the
 //!   unrecognized-extension style fallback
-//! - `note_markers` — the ADR 0048 `*`-marker column's positive case
+//! - `annotation_markers` — the ADR 0048 `*`-marker column's positive case
 //!   (unified and split), since every other block in this module exercises
-//!   only an empty `NoteMarkers`
+//!   only an empty `AnnotationMarkers`
 
 use super::*;
 use crate::app::{App, BlastRadiusSelection};
@@ -26,8 +26,8 @@ use rinkaku_core::extract::{Classification, ExtractedSymbol, SymbolKind};
 use rinkaku_core::graph::SymbolGraph;
 use rinkaku_core::render::FileReport;
 
+mod annotation_markers;
 mod header_lines;
-mod note_markers;
 mod row_kinds;
 mod split_view;
 mod styling;

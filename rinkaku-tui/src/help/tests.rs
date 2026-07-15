@@ -198,7 +198,7 @@ fn should_document_jumplist_bindings_in_the_entry_only_group() {
 }
 
 #[test]
-fn should_document_review_notes_bindings_in_a_review_group() {
+fn should_document_review_annotations_bindings_in_a_review_group() {
     let content = help_content(Locale::English);
     let review = content
         .keymap_groups
@@ -208,8 +208,8 @@ fn should_document_review_notes_bindings_in_a_review_group() {
 
     let keys: Vec<&str> = review.bindings.iter().map(|binding| binding.keys).collect();
 
-    assert!(keys.contains(&"n"));
-    assert!(keys.contains(&"N"));
+    assert!(keys.contains(&"a"));
+    assert!(keys.contains(&"A"));
     assert!(keys.contains(&"j/k, Enter, Esc, d"));
 }
 

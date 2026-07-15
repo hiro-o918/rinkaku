@@ -158,7 +158,7 @@ pub(crate) fn draw_diff_pane(
     report: &Report,
     diff_content: &crate::diff_shape::DiffPaneContent,
     diff_highlights: &[HighlightedFile],
-    note_markers: &crate::note_markers::NoteMarkers,
+    annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     area: Rect,
 ) -> Option<usize> {
     use crate::diff_shape::DiffPaneContent;
@@ -209,10 +209,10 @@ pub(crate) fn draw_diff_pane(
     let unified_lines = if render_split {
         Vec::new()
     } else {
-        diff_pane_lines(&sections, true, highlighted_file, note_markers, path)
+        diff_pane_lines(&sections, true, highlighted_file, annotation_markers, path)
     };
     let split_rows = if render_split {
-        diff_pane_split_rows(&sections, true, highlighted_file, note_markers, path)
+        diff_pane_split_rows(&sections, true, highlighted_file, annotation_markers, path)
     } else {
         (Vec::new(), Vec::new())
     };
@@ -323,7 +323,7 @@ pub(crate) fn diff_pane_lines(
     sections: &[&DiffSection],
     show_section_headers: bool,
     highlighted_file: Option<&HighlightedFile>,
-    note_markers: &crate::note_markers::NoteMarkers,
+    annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     path: &str,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -364,10 +364,17 @@ pub(crate) fn diff_pane_lines(
                 let token_spans = hunk_highlight
                     .and_then(|lines| lines.get(attributed.origin_offset + line_index).cloned())
                     .flatten();
-                let has_note = new_side_lines[line_index].is_some_and(|line_no| {
-                    crate::note_markers::line_has_note(note_markers, path, line_no)
+                let has_annotation = new_side_lines[line_index].is_some_and(|line_no| {
+                    crate::annotation_markers::line_has_annotation(
+                        annotation_markers,
+                        path,
+                        line_no,
+                    )
                 });
-                lines.push(prefix_note_marker(diff_line(line, token_spans), has_note));
+                lines.push(prefix_annotation_marker(
+                    diff_line(line, token_spans),
+                    has_annotation,
+                ));
             }
         }
     }
@@ -429,12 +436,13 @@ fn new_side_line_numbers(hunk: &crate::diff_view::Hunk) -> Vec<Option<usize>> {
         .collect()
 }
 
-/// Prepends a 1-character note-marker column (ADR 0048) to `line`: a cyan
-/// `*` when `has_note`, a space otherwise — every diff-pane row gets this
-/// column regardless, so the marker's presence/absence never shifts the
-/// rest of the line's own columns out of alignment with its neighbors.
-fn prefix_note_marker(line: Line<'static>, has_note: bool) -> Line<'static> {
-    let marker = if has_note {
+/// Prepends a 1-character annotation-marker column (ADR 0048) to `line`: a
+/// cyan `*` when `has_annotation`, a space otherwise — every diff-pane row
+/// gets this column regardless, so the marker's presence/absence never
+/// shifts the rest of the line's own columns out of alignment with its
+/// neighbors.
+fn prefix_annotation_marker(line: Line<'static>, has_annotation: bool) -> Line<'static> {
+    let marker = if has_annotation {
         Span::styled("*", Style::default().fg(Color::Cyan))
     } else {
         Span::raw(" ")
@@ -471,7 +479,7 @@ pub(crate) fn diff_pane_split_rows(
     sections: &[&DiffSection],
     show_section_headers: bool,
     highlighted_file: Option<&HighlightedFile>,
-    note_markers: &crate::note_markers::NoteMarkers,
+    annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     path: &str,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
     let mut left = Vec::new();
@@ -514,18 +522,22 @@ pub(crate) fn diff_pane_split_rows(
                     hunk_highlight,
                     None,
                 ));
-                let right_has_note = split_row
+                let right_has_annotation = split_row
                     .right_index
                     .and_then(|index| new_side_lines.get(index).copied().flatten())
                     .is_some_and(|line_no| {
-                        crate::note_markers::line_has_note(note_markers, path, line_no)
+                        crate::annotation_markers::line_has_annotation(
+                            annotation_markers,
+                            path,
+                            line_no,
+                        )
                     });
                 right.push(split_side_line(
                     split_row.right.as_ref(),
                     split_row.right_index,
                     attributed.origin_offset,
                     hunk_highlight,
-                    Some(right_has_note),
+                    Some(right_has_annotation),
                 ));
             }
         }
@@ -569,9 +581,9 @@ fn section_anchor_split_row(section: &DiffSection) -> (Line<'static>, Line<'stat
 /// `right_index`'s own doc comment on why this must be the original index,
 /// not the split row's own position).
 ///
-/// `has_note` (ADR 0048) is `Some(bool)` on the new-side (right) call, and
+/// `has_annotation` (ADR 0048) is `Some(bool)` on the new-side (right) call, and
 /// `None` on the old-side (left) call — split view only marks the new
-/// side, matching [`crate::review::NoteLocation`]'s own new-side-only
+/// side, matching [`crate::review::AnnotationLocation`]'s own new-side-only
 /// anchoring; a `Some` value prefixes the 1-column marker, `None` prefixes
 /// nothing at all (the old side keeps its pre-ADR-0048 column layout
 /// unchanged).
@@ -580,7 +592,7 @@ fn split_side_line(
     index: Option<usize>,
     origin_offset: usize,
     hunk_highlight: Option<&[Option<Vec<TokenSpan>>]>,
-    has_note: Option<bool>,
+    has_annotation: Option<bool>,
 ) -> Line<'static> {
     let rendered = match (line, index) {
         (Some(line), Some(index)) => {
@@ -594,8 +606,8 @@ fn split_side_line(
         }
         _ => Line::raw(""),
     };
-    match has_note {
-        Some(has_note) => prefix_note_marker(rendered, has_note),
+    match has_annotation {
+        Some(has_annotation) => prefix_annotation_marker(rendered, has_annotation),
         None => rendered,
     }
 }

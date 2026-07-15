@@ -24,7 +24,7 @@ fn should_render_lines_count_unstyled_when_file_has_normal_band() {
         &row,
         "small.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -56,7 +56,7 @@ fn should_render_lines_count_in_yellow_when_file_has_watch_band() {
         &row,
         "mid.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -88,7 +88,7 @@ fn should_render_lines_count_in_red_when_file_has_warn_band() {
         &row,
         "big.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -121,7 +121,7 @@ fn should_render_lines_count_in_bold_red_when_file_has_split_band() {
         &row,
         "huge.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -156,7 +156,7 @@ fn should_render_warn_and_split_labels_side_by_side_on_dir_row() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -180,7 +180,7 @@ fn should_not_render_file_size_badge_when_file_node_has_no_band() {
         &row,
         "lib.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -211,7 +211,7 @@ fn should_render_only_warn_label_on_dir_row_when_no_split_files() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 

@@ -1,15 +1,15 @@
-//! Tests for `crate::review_flow` (ADR 0048's review-notes integration
+//! Tests for `crate::review_flow` (ADR 0048's review-annotations integration
 //! glue), split from the source file to keep it under the ADR 0028
 //! file-size threshold. Grouped by which function each submodule pins:
 //!
-//! - `note_snapshot` — `first_anchor_run`, `derive_selection_snapshot`, and
-//!   `dispatch_note_compose_key`
+//! - `annotation_snapshot` — `first_anchor_run`, `derive_selection_snapshot`, and
+//!   `dispatch_annotation_compose_key`
 //! - `perform_export` — the clipboard sink's OSC 52 status passthrough
 //!   (ADR 0048 sink B)
 //! - `open_pr_in_browser` — the no-`PrContext`/spawn-failure status-line
 //!   messages and the URL built from a `PrContext` (ADR 0050)
 
-mod note_snapshot;
+mod annotation_snapshot;
 mod open_pr_in_browser;
 mod perform_export;
 

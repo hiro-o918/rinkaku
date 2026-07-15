@@ -149,7 +149,7 @@ pub struct DrawOutcome {
 /// value (ADR 0055's scope decision).
 // This function's parameter list already sat at clippy's 7-argument
 // threshold before ADR 0046 added `diff_hunks`/ADR 0048 added
-// `note_markers`/ADR 0055 added `locale`; every existing parameter is an
+// `annotation_markers`/ADR 0055 added `locale`; every existing parameter is an
 // independently-computed, independently-cached piece of content
 // `crate::run_app` must not recompute inside the draw path (this
 // function's own doc comment), so bundling them into a struct now would
@@ -166,7 +166,7 @@ pub fn draw(
     blast_radius_selection: &BlastRadiusSelection,
     source_content: Option<&Result<HighlightedSourceView, String>>,
     diff_hunks: &[FileHunks],
-    note_markers: &crate::note_markers::NoteMarkers,
+    annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     locale: Locale,
 ) -> DrawOutcome {
     let area = frame.area();
@@ -182,7 +182,7 @@ pub fn draw(
                 diff_content,
                 diff_highlights,
                 blast_radius_selection,
-                note_markers,
+                annotation_markers,
                 body,
             );
             // Right-pane inner height (borders excluded), computed the

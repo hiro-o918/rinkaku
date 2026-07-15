@@ -88,7 +88,7 @@ impl App {
         // (this function's own doc comment on `help_open`) but checked
         // first: a reviewer mid-compose must never have a stray `?` yank
         // focus away into the help overlay instead of typing a literal
-        // `?` into their note. `InputKey::NoteCompose` itself never
+        // `?` into their annotation. `InputKey::AnnotationCompose` itself never
         // reaches this function at all while `review` is `Idle`
         // (`crate::lib::run_app` special-cases it before dispatch, see
         // that variant's own doc comment), so this branch only needs to
@@ -119,7 +119,7 @@ impl App {
                 // `SearchConfirm` needs the Source view's lines, which this
                 // function has no access to — `crate::event_loop::
                 // dispatch_search_confirm` handles it instead (mirroring
-                // `InputKey::NoteCompose`'s identical "IO/derivation stays
+                // `InputKey::AnnotationCompose`'s identical "IO/derivation stays
                 // outside `App`" precedent), so this arm only needs to keep
                 // the match exhaustive.
                 _ => self.search.clone(),
@@ -684,28 +684,28 @@ impl App {
             // exhaustive against future refactors — same reasoning as the
             // `ToggleHelp` arm just above.
             (Screen::Entry, _, InputKey::PopupConfirm | InputKey::PopupCancel) => {}
-            (Screen::Entry, _, InputKey::NotesList) => {
+            (Screen::Entry, _, InputKey::AnnotationsList) => {
                 self.review = self.review.clone().open_list();
             }
             // Unreachable while `handle_key` is entered directly:
-            // `crate::lib::run_app` special-cases `NoteCompose` before
-            // dispatch (`InputKey::NoteCompose`'s own doc comment) and the
+            // `crate::lib::run_app` special-cases `AnnotationCompose` before
+            // dispatch (`InputKey::AnnotationCompose`'s own doc comment) and the
             // review-overlay priority check at the top of this function
-            // intercepts `ComposeChar`/`ComposeBackspace`/`NoteDelete`
+            // intercepts `ComposeChar`/`ComposeBackspace`/`AnnotationDelete`
             // whenever a review mode is actually open — kept only so the
             // match stays exhaustive against future refactors, same
             // reasoning as the `ToggleHelp`/`PopupConfirm` arms above.
             (
                 Screen::Entry,
                 _,
-                InputKey::NoteCompose
+                InputKey::AnnotationCompose
                 | InputKey::ComposeChar(_)
                 | InputKey::ComposeBackspace
-                | InputKey::NoteDelete,
+                | InputKey::AnnotationDelete,
             ) => {}
             // `w` (ADR 0050) needs the session's `PrContext`, which `App`
             // does not hold — `crate::lib::run_app` special-cases this
-            // variant before dispatch (mirroring `NoteCompose`'s own
+            // variant before dispatch (mirroring `AnnotationCompose`'s own
             // precedent just above), so this arm is a no-op stub kept only
             // for match exhaustiveness.
             (Screen::Entry, _, InputKey::OpenPrInBrowser) => {}
@@ -745,7 +745,7 @@ impl App {
     /// review transition this method reaches is a plain
     /// [`crate::review::ReviewState`] method call, since the one review
     /// action that *does* need external data (opening the compose overlay,
-    /// [`InputKey::NoteCompose`]) is special-cased by `crate::lib::run_app`
+    /// [`InputKey::AnnotationCompose`]) is special-cased by `crate::lib::run_app`
     /// before dispatch and never reaches this method while `review` is
     /// `Idle` — this method only ever runs once a review mode is already
     /// open.
@@ -762,7 +762,7 @@ impl App {
             crate::review::ReviewMode::List { .. } => match key {
                 InputKey::Up => review.list_up(),
                 InputKey::Down => review.list_down(),
-                InputKey::NoteDelete => review.delete_selected(),
+                InputKey::AnnotationDelete => review.delete_selected(),
                 InputKey::PopupConfirm => review.open_export_menu(),
                 InputKey::PopupCancel => review.close(),
                 _ => review,

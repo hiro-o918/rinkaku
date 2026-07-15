@@ -378,7 +378,7 @@ struct AnalyzedReport {
     diff_text: String,
     resolved_workdir: Option<PathBuf>,
     pr_head_sha: Option<String>,
-    /// The PR's identity, for `--tui`'s review-notes sink A (ADR 0048) —
+    /// The PR's identity, for `--tui`'s review-annotations sink A (ADR 0048) —
     /// `Some` only in `--pr` mode, and only when owner/repo could be
     /// resolved (see [`resolve_pr_context`]'s own doc comment on why that
     /// resolution can fail even in `--pr` mode without failing the whole
@@ -464,7 +464,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
             ));
         }
         let (report, diff_text) = run_base_pipeline(cli, &base_sha, &head_sha, cwd, progress)?;
-        // ADR 0048: `PrContext` for `--tui`'s review-notes sink A, `None`
+        // ADR 0048: `PrContext` for `--tui`'s review-annotations sink A, `None`
         // when owner/repo can't be resolved (`resolve_pr_context`'s own
         // doc comment on why that is a soft failure, not a hard error —
         // the analysis above has already succeeded by this point, and
@@ -585,7 +585,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
     })
 }
 
-/// Resolves a [`PrContext`] for `--tui`'s review-notes sink A (ADR 0048),
+/// Resolves a [`PrContext`] for `--tui`'s review-annotations sink A (ADR 0048),
 /// given the already-validated `parsed` PR arg, the `cwd` `--pr` mode
 /// resolved (`resolve_pr_workdir`'s own doc comment), the PR `number`, and
 /// its `head_sha` (already fetched and verified against `gh`'s own report

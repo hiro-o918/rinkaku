@@ -159,7 +159,7 @@ fn dispatch_draw_and_fold(
                 &app::BlastRadiusSelection::NotApplicable,
                 None,
                 diff_hunks,
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -227,7 +227,7 @@ fn render_diff_pane_rows(
                 &app::BlastRadiusSelection::NotApplicable,
                 None,
                 diff_hunks,
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -477,7 +477,7 @@ fn should_resolve_the_correct_symbol_when_scroll_position_lands_inside_a_precedi
                 &app::BlastRadiusSelection::NotApplicable,
                 None,
                 &diff_hunks,
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -637,7 +637,7 @@ fn scroll_positions_after_repeated_down(
                     &app::BlastRadiusSelection::NotApplicable,
                     None,
                     diff_hunks,
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -796,7 +796,7 @@ fn should_not_oscillate_when_alternating_down_and_up_past_a_huge_wrapped_leading
                     &app::BlastRadiusSelection::NotApplicable,
                     None,
                     &diff_hunks,
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })

@@ -13,7 +13,7 @@ fn should_render_plain_text_for_zero_badges_and_no_classification() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -53,7 +53,7 @@ fn should_include_badge_labels_for_nonzero_badges_on_a_dir_row() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -73,7 +73,7 @@ fn should_omit_zero_badges_entirely() {
         &row,
         "lib.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -93,7 +93,7 @@ fn should_append_skip_reason_for_a_skipped_file_row() {
         &row,
         "assets/logo.png",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -113,7 +113,7 @@ fn should_dim_label_for_a_skipped_file_row() {
         &row,
         "assets/logo.png",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -134,7 +134,7 @@ fn should_not_append_skip_reason_for_an_ordinary_file_row() {
         &row,
         "lib.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -159,7 +159,7 @@ fn should_prepend_test_badge_with_plural_symbols_noun_before_a_whole_test_file_l
         &row,
         "src/lib_test.go",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -179,7 +179,7 @@ fn should_prepend_test_badge_with_singular_symbol_noun_when_count_is_one() {
         &row,
         "src/lib_test.go",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -203,7 +203,7 @@ fn should_show_collapse_marker_when_dir_is_not_expanded() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -237,7 +237,7 @@ fn should_render_section_row_with_its_fixed_label_and_badges() {
         &row,
         "ignored-label",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -261,7 +261,7 @@ fn should_show_collapse_marker_for_a_collapsed_section_row() {
         &row,
         "ignored-label",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -293,7 +293,7 @@ fn should_never_show_cycle_marker_on_a_section_row_even_if_ranks_has_a_stray_ent
         &row,
         "ignored-label",
         &ranks,
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -321,7 +321,7 @@ fn should_append_cycle_marker_when_dir_path_is_in_cycle() {
         &row,
         "src",
         &ranks,
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -349,7 +349,7 @@ fn should_not_append_cycle_marker_when_dir_path_is_not_in_cycle() {
         &row,
         "src",
         &ranks,
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -373,7 +373,7 @@ fn should_mark_added_symbol_with_plus() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -397,7 +397,7 @@ fn should_mark_signature_changed_symbol_with_tilde() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -421,7 +421,7 @@ fn should_mark_removed_symbol_with_x() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -452,7 +452,7 @@ fn should_dim_name_and_omit_test_badge_for_a_test_symbol_in_a_mixed_file() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -476,7 +476,7 @@ fn should_not_append_test_badge_for_an_ordinary_non_test_symbol() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -496,7 +496,7 @@ fn should_apply_reversed_modifier_when_row_is_selected() {
         &row,
         "lib.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         true,
     );
 
@@ -516,7 +516,7 @@ fn should_not_apply_reversed_modifier_when_row_is_not_selected() {
         &row,
         "lib.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -536,7 +536,7 @@ fn should_indent_by_depth_times_indent_width() {
         &row,
         "lib.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -569,7 +569,7 @@ fn should_prepend_risk_marker_for_a_high_risk_dir_row() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -598,7 +598,7 @@ fn should_omit_risk_marker_when_contract_changes_is_zero() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -626,7 +626,7 @@ fn should_omit_risk_marker_when_fan_in_is_below_threshold() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -653,7 +653,7 @@ fn should_prepend_risk_marker_for_a_high_risk_file_row() {
         &row,
         "lib.rs",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -684,7 +684,7 @@ fn should_prepend_risk_marker_for_a_high_risk_signature_changed_symbol() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -715,7 +715,7 @@ fn should_omit_risk_marker_for_a_signature_changed_symbol_below_fan_in_threshold
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -743,7 +743,7 @@ fn should_dim_name_for_a_body_only_symbol() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -770,7 +770,7 @@ fn should_not_dim_name_for_an_added_symbol() {
         &row,
         "",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -804,7 +804,7 @@ fn should_render_test_group_row_with_plural_count() {
         &row,
         "ignored-label",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -839,7 +839,7 @@ fn should_render_test_group_row_with_singular_count() {
         &row,
         "ignored-label",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -847,53 +847,55 @@ fn should_render_test_group_row_with_singular_count() {
 }
 
 #[test]
-fn should_show_note_badge_on_a_symbol_row_with_a_matching_note_count() {
+fn should_show_annotation_badge_on_a_symbol_row_with_a_matching_annotation_count() {
     let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
     let row = Row {
         node: &node,
         depth: 0,
         expanded: false,
     };
-    let mut note_markers = crate::note_markers::NoteMarkers::default();
-    note_markers
+    let mut annotation_markers = crate::annotation_markers::AnnotationMarkers::default();
+    annotation_markers
         .symbol_counts
         .insert("lib.rs::foo".to_string(), 2);
 
-    let line = entry_row_line(&row, "", &HashMap::new(), &note_markers, false);
+    let line = entry_row_line(&row, "", &HashMap::new(), &annotation_markers, false);
 
-    assert_eq!("    fn foo n:2", line_text(&line));
+    assert_eq!("    fn foo ann:2", line_text(&line));
 }
 
 #[test]
-fn should_omit_note_badge_on_a_symbol_row_with_no_matching_note_count() {
+fn should_omit_annotation_badge_on_a_symbol_row_with_no_matching_annotation_count() {
     let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
     let row = Row {
         node: &node,
         depth: 0,
         expanded: false,
     };
-    let mut note_markers = crate::note_markers::NoteMarkers::default();
-    note_markers
+    let mut annotation_markers = crate::annotation_markers::AnnotationMarkers::default();
+    annotation_markers
         .symbol_counts
         .insert("lib.rs::bar".to_string(), 1);
 
-    let line = entry_row_line(&row, "", &HashMap::new(), &note_markers, false);
+    let line = entry_row_line(&row, "", &HashMap::new(), &annotation_markers, false);
 
     assert_eq!("    fn foo", line_text(&line));
 }
 
 #[test]
-fn should_show_note_badge_on_a_file_row_with_a_matching_note_count() {
+fn should_show_annotation_badge_on_a_file_row_with_a_matching_annotation_count() {
     let node = file_node("lib.rs", Badges::default());
     let row = Row {
         node: &node,
         depth: 0,
         expanded: false,
     };
-    let mut note_markers = crate::note_markers::NoteMarkers::default();
-    note_markers.file_counts.insert("lib.rs".to_string(), 3);
+    let mut annotation_markers = crate::annotation_markers::AnnotationMarkers::default();
+    annotation_markers
+        .file_counts
+        .insert("lib.rs".to_string(), 3);
 
-    let line = entry_row_line(&row, "lib.rs", &HashMap::new(), &note_markers, false);
+    let line = entry_row_line(&row, "lib.rs", &HashMap::new(), &annotation_markers, false);
 
-    assert_eq!("  lib.rs  n:3", line_text(&line));
+    assert_eq!("  lib.rs  ann:3", line_text(&line));
 }

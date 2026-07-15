@@ -37,7 +37,7 @@ fn draw_source_screen_split_for_test(
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 diff_hunks,
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -185,7 +185,7 @@ fn should_render_unified_when_split_view_is_toggled_off() {
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &diff_hunks,
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })

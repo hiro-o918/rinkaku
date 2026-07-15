@@ -571,13 +571,13 @@ fn should_translate_q_to_none_while_jump_popup_is_open() {
 // their half-width counterpart would.
 
 #[test]
-fn should_translate_fullwidth_n_to_the_same_input_key_as_halfwidth_n() {
+fn should_translate_fullwidth_a_to_the_same_input_key_as_halfwidth_a() {
     let report = empty_report();
     let app = App::new(&report);
 
-    let actual = translate_key(KeyCode::Char('ｎ'), KeyModifiers::NONE, &app);
+    let actual = translate_key(KeyCode::Char('ａ'), KeyModifiers::NONE, &app);
 
-    assert_eq!(Some(InputKey::NoteCompose), actual);
+    assert_eq!(Some(InputKey::AnnotationCompose), actual);
 }
 
 #[test]
@@ -651,10 +651,11 @@ fn should_translate_uppercase_u_to_none_without_control_modifier() {
 }
 
 #[test]
-fn should_not_normalize_fullwidth_characters_while_composing_a_note() {
+fn should_not_normalize_fullwidth_characters_while_composing_an_annotation() {
     // The compose buffer is free text (ADR 0048) — a full-width character
-    // typed there must land in the note body verbatim, not get folded to
-    // its half-width form the way normal-mode single-key gestures are.
+    // typed there must land in the annotation body verbatim, not get
+    // folded to its half-width form the way normal-mode single-key
+    // gestures are.
     let report = report_with_one_symbol();
     let snapshot = crate::review::SelectionSnapshot {
         path: "lib.rs".to_string(),

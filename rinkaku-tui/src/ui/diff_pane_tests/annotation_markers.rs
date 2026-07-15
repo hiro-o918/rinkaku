@@ -1,8 +1,8 @@
-//! Positive-case coverage for the ADR 0048 note-marker column: every other
-//! `diff_pane_lines`/`diff_pane_split_rows` test in this module exercises
-//! an empty `NoteMarkers`, which pins only the "no marker drawn" default —
-//! these tests populate `line_ranges` so the `*`-marker/space-alignment
-//! branch itself is actually exercised.
+//! Positive-case coverage for the ADR 0048 annotation-marker column: every
+//! other `diff_pane_lines`/`diff_pane_split_rows` test in this module
+//! exercises an empty `AnnotationMarkers`, which pins only the "no marker
+//! drawn" default — these tests populate `line_ranges` so the
+//! `*`-marker/space-alignment branch itself is actually exercised.
 
 use super::*;
 use crate::diff_shape::{AttributedHunk, DiffSection};
@@ -34,15 +34,15 @@ fn section_for(diff_text: &str) -> DiffSection {
 }
 
 #[test]
-fn should_prefix_note_marker_only_on_the_line_inside_the_notes_range_in_unified_view() {
+fn should_prefix_annotation_marker_only_on_the_line_inside_the_annotation_range_in_unified_view() {
     let section = section_for(DIFF_TEXT);
-    let mut note_markers = crate::note_markers::NoteMarkers::default();
+    let mut annotation_markers = crate::annotation_markers::AnnotationMarkers::default();
     // New-side line 2 is the added "+fn foo() {}" line in DIFF_TEXT above.
-    note_markers
+    annotation_markers
         .line_ranges
         .insert("lib.rs".to_string(), vec![(2, 2)]);
 
-    let lines = diff_pane_lines(&[&section], true, None, &note_markers, "lib.rs");
+    let lines = diff_pane_lines(&[&section], true, None, &annotation_markers, "lib.rs");
 
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
     let marked = rendered
@@ -58,14 +58,15 @@ fn should_prefix_note_marker_only_on_the_line_inside_the_notes_range_in_unified_
 }
 
 #[test]
-fn should_prefix_note_marker_only_on_the_new_side_in_split_view() {
+fn should_prefix_annotation_marker_only_on_the_new_side_in_split_view() {
     let section = section_for(DIFF_TEXT);
-    let mut note_markers = crate::note_markers::NoteMarkers::default();
-    note_markers
+    let mut annotation_markers = crate::annotation_markers::AnnotationMarkers::default();
+    annotation_markers
         .line_ranges
         .insert("lib.rs".to_string(), vec![(2, 2)]);
 
-    let (left, right) = diff_pane_split_rows(&[&section], true, None, &note_markers, "lib.rs");
+    let (left, right) =
+        diff_pane_split_rows(&[&section], true, None, &annotation_markers, "lib.rs");
 
     let left_rendered: Vec<String> = left.iter().map(line_text).collect();
     let right_rendered: Vec<String> = right.iter().map(line_text).collect();
@@ -75,8 +76,8 @@ fn should_prefix_note_marker_only_on_the_new_side_in_split_view() {
         .expect("added line present on the new side");
     assert!(marked_right.starts_with("*"));
     // The old side never carries the marker column at all (ADR 0048:
-    // `NoteLocation`'s anchoring is new-side only) — every left-side line
-    // stays exactly as it would with an empty `NoteMarkers`.
+    // `AnnotationLocation`'s anchoring is new-side only) — every left-side line
+    // stays exactly as it would with an empty `AnnotationMarkers`.
     assert!(left_rendered.iter().all(|line| !line.starts_with("*")));
 }
 

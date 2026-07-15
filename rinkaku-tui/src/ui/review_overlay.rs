@@ -1,5 +1,5 @@
-//! Review-notes overlays (ADR 0048): the compose text-input box and the
-//! combined notes-list/export-menu/verdict-menu surface. Follows
+//! Review-annotations overlays (ADR 0048): the compose text-input box and
+//! the combined annotations-list/export-menu/verdict-menu surface. Follows
 //! `ui::overlay`'s existing `draw_help_overlay`/`draw_jump_popup`
 //! precedent — `Clear` the popup's `Rect`, then render `Paragraph`/`List`
 //! content built from plain data already sitting on [`ReviewState`], fed
@@ -31,7 +31,7 @@ pub(crate) fn draw_review_overlay(
         ReviewMode::Compose { snapshot, buffer } => {
             draw_compose_overlay(frame, full_area, snapshot, buffer)
         }
-        ReviewMode::List { cursor } => draw_notes_overlay(frame, review, *cursor, full_area),
+        ReviewMode::List { cursor } => draw_annotations_overlay(frame, review, *cursor, full_area),
         ReviewMode::ExportMenu { cursor } => {
             draw_export_menu_overlay(frame, sink_a_available, *cursor, full_area)
         }
@@ -50,7 +50,7 @@ fn draw_compose_overlay(
     let overlay_area = centered_rect(full_area, 70, 50);
     frame.render_widget(Clear, overlay_area);
 
-    let title = format!(" New note: {} ", compose_title_location(snapshot));
+    let title = format!(" New annotation: {} ", compose_title_location(snapshot));
     let block = Block::bordered().title(title);
     let mut lines: Vec<Line<'static>> = vec![Line::raw(buffer.to_string())];
     lines.push(Line::raw(""));
@@ -66,8 +66,8 @@ fn draw_compose_overlay(
 
 /// The compose overlay's title location text: `"{path}:{start}-{end}
 /// {symbol_name}"`, degrading gracefully when a field is absent — the same
-/// fallback shape `crate::review`'s own note-heading formatting uses (kept
-/// separate rather than shared, since that formats a *note's*
+/// fallback shape `crate::review`'s own annotation-heading formatting uses
+/// (kept separate rather than shared, since that formats an *annotation's*
 /// already-resolved anchor/range, while this formats a live
 /// [`crate::review::SelectionSnapshot`] still being composed against).
 fn compose_title_location(snapshot: &crate::review::SelectionSnapshot) -> String {
@@ -86,10 +86,15 @@ fn compose_title_location(snapshot: &crate::review::SelectionSnapshot) -> String
     }
 }
 
-/// The notes-list overlay: every note as `{path}:{anchor} {symbol_name}:
-/// {body's first line}`, the list cursor highlighted, plus a key-hint
-/// footer and (when set) the last export status message.
-fn draw_notes_overlay(frame: &mut Frame, review: &ReviewState, cursor: usize, full_area: Rect) {
+/// The annotations-list overlay: every annotation as `{path}:{anchor}
+/// {symbol_name}: {body's first line}`, the list cursor highlighted, plus
+/// a key-hint footer and (when set) the last export status message.
+fn draw_annotations_overlay(
+    frame: &mut Frame,
+    review: &ReviewState,
+    cursor: usize,
+    full_area: Rect,
+) {
     let overlay_area = centered_rect(full_area, 80, 60);
     frame.render_widget(Clear, overlay_area);
 
@@ -101,14 +106,14 @@ fn draw_notes_overlay(frame: &mut Frame, review: &ReviewState, cursor: usize, fu
         ));
         lines.push(Line::raw(""));
     }
-    if review.notes().is_empty() {
+    if review.annotations().is_empty() {
         lines.push(Line::styled(
-            "(no notes yet — press n over a symbol to add one)",
+            "(no annotations yet — press a over a symbol to add one)",
             Style::default().add_modifier(Modifier::DIM),
         ));
     }
-    for (index, note) in review.notes().iter().enumerate() {
-        let text = notes_list_entry_text(note);
+    for (index, annotation) in review.annotations().iter().enumerate() {
+        let text = annotations_list_entry_text(annotation);
         if index == cursor {
             lines.push(Line::styled(
                 text,
@@ -124,18 +129,18 @@ fn draw_notes_overlay(frame: &mut Frame, review: &ReviewState, cursor: usize, fu
         Style::default().add_modifier(Modifier::DIM),
     ));
 
-    let block = Block::bordered().title(" Review notes ");
+    let block = Block::bordered().title(" Review annotations ");
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, overlay_area);
 }
 
-/// One notes-list row's text: `"{path}:{anchor-or-range} {symbol_name}:
-/// {body's first line}"`, degrading the location half the same way
-/// [`compose_title_location`] does.
-fn notes_list_entry_text(note: &crate::review::Note) -> String {
-    let location = &note.location;
+/// One annotations-list row's text: `"{path}:{anchor-or-range}
+/// {symbol_name}: {body's first line}"`, degrading the location half the
+/// same way [`compose_title_location`] does.
+fn annotations_list_entry_text(annotation: &crate::review::Annotation) -> String {
+    let location = &annotation.location;
     let range = location.anchor.or(location.range).map(|(start, end)| {
         if start == end {
             format!("{start}")
@@ -149,7 +154,7 @@ fn notes_list_entry_text(note: &crate::review::Note) -> String {
         (None, Some(name)) => format!("{} {name}", location.path),
         (None, None) => location.path.clone(),
     };
-    let body_first_line = note.body.lines().next().unwrap_or("");
+    let body_first_line = annotation.body.lines().next().unwrap_or("");
     format!("{location_text}: {body_first_line}")
 }
 

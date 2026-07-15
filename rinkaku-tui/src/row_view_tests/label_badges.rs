@@ -30,7 +30,7 @@ fn should_color_only_the_number_of_chg_badge_and_leave_label_uncolored() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -59,7 +59,7 @@ fn should_color_only_the_number_of_fan_in_badge_and_leave_label_uncolored() {
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
@@ -91,7 +91,7 @@ fn should_color_only_the_number_of_api_badge_yellow_and_leave_label_uncolored() 
         &row,
         "src",
         &HashMap::new(),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         false,
     );
 
