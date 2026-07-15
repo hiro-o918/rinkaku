@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.11](https://github.com/hiro-o918/rinkaku/compare/v0.6.10...v0.6.11) (2026-07-15)
+
+
+### Features
+
+* **tui:** add Japanese localization for the help overlay ([#175](https://github.com/hiro-o918/rinkaku/issues/175)) ([6d8a2c0](https://github.com/hiro-o918/rinkaku/commit/6d8a2c0402bb4d75b248427c1913b8015037745f))
+
+
+### Miscellaneous
+
+* release main ([#173](https://github.com/hiro-o918/rinkaku/issues/173)) ([e1cc452](https://github.com/hiro-o918/rinkaku/commit/e1cc452abbb38d0bd86ed509748875edd7dd2ccc))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.10 to 0.6.11
+
 ## [0.6.10](https://github.com/hiro-o918/rinkaku/compare/v0.6.9...v0.6.10) (2026-07-15)
 
 
