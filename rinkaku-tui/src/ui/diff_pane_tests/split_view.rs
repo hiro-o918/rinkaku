@@ -150,6 +150,31 @@ fn should_pair_old_and_new_signature_on_the_anchor_row_when_section_has_a_contra
 }
 
 #[test]
+fn should_mirror_the_plain_bold_title_on_both_sides_in_split_view_when_signature_is_unchanged() {
+    let section = DiffSection {
+        title: "fn foo()".to_string(),
+        symbol_id: Some("lib.rs::foo".to_string()),
+        contract_header: None,
+        hunks: vec![],
+    };
+
+    let (left, right) = diff_pane_split_rows(
+        &[&section],
+        true,
+        None,
+        &crate::note_markers::NoteMarkers::default(),
+        "lib.rs",
+    );
+
+    let expected = vec![Line::styled(
+        "fn foo()".to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )];
+    assert_eq!(expected, left);
+    assert_eq!(expected, right);
+}
+
+#[test]
 fn should_draw_old_and_new_signature_side_by_side_when_symbol_signature_changed() {
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
