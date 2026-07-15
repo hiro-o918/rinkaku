@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.10](https://github.com/hiro-o918/rinkaku/compare/v0.6.9...v0.6.10) (2026-07-15)
+
+
+### Features
+
+* **tui:** prompt to self-update when a newer release is available ([#172](https://github.com/hiro-o918/rinkaku/issues/172)) ([9ac4628](https://github.com/hiro-o918/rinkaku/commit/9ac462896f467dbb526c784d0f154c5dcdc7eb89))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.8 to 0.6.9
+    * rinkaku-tui bumped from 0.6.8 to 0.6.9
+
 ## [0.6.9](https://github.com/hiro-o918/rinkaku/compare/v0.6.8...v0.6.9) (2026-07-15)
 
 
