@@ -112,13 +112,13 @@ fn should_translate_lowercase_r_to_toggle_blast_radius() {
 }
 
 #[test]
-fn should_translate_uppercase_r_to_toggle_blast_radius() {
+fn should_translate_uppercase_r_to_none() {
     let report = empty_report();
     let app = App::new(&report);
 
     let actual = translate_key(KeyCode::Char('R'), KeyModifiers::NONE, &app);
 
-    assert_eq!(Some(InputKey::ToggleBlastRadius), actual);
+    assert_eq!(None, actual);
 }
 
 #[test]
@@ -132,13 +132,13 @@ fn should_translate_lowercase_v_to_toggle_split_view() {
 }
 
 #[test]
-fn should_translate_uppercase_v_to_toggle_split_view() {
+fn should_translate_uppercase_v_to_none() {
     let report = empty_report();
     let app = App::new(&report);
 
     let actual = translate_key(KeyCode::Char('V'), KeyModifiers::NONE, &app);
 
-    assert_eq!(Some(InputKey::ToggleSplitView), actual);
+    assert_eq!(None, actual);
 }
 
 #[test]
@@ -322,6 +322,26 @@ fn should_translate_r_to_goto_references_when_g_is_pending() {
 }
 
 #[test]
+fn should_translate_uppercase_d_to_none_when_g_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+    let actual = translate_key(KeyCode::Char('D'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_translate_uppercase_r_to_none_when_g_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+    let actual = translate_key(KeyCode::Char('R'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
 fn should_translate_d_to_toggle_diff_when_no_prefix_is_pending() {
     let report = empty_report();
     let app = App::new(&report);
@@ -329,6 +349,16 @@ fn should_translate_d_to_toggle_diff_when_no_prefix_is_pending() {
     let actual = translate_key(KeyCode::Char('d'), KeyModifiers::NONE, &app);
 
     assert_eq!(Some(InputKey::ToggleDiff), actual);
+}
+
+#[test]
+fn should_translate_uppercase_d_to_none_when_no_prefix_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('D'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
 }
 
 #[test]
@@ -391,6 +421,46 @@ fn should_translate_plain_o_to_toggle_order_without_control_modifier() {
     let actual = translate_key(KeyCode::Char('o'), KeyModifiers::NONE, &app);
 
     assert_eq!(Some(InputKey::ToggleOrder), actual);
+}
+
+#[test]
+fn should_translate_uppercase_o_to_none_without_control_modifier() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('O'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_translate_uppercase_e_to_none() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('E'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_translate_uppercase_c_to_none_without_control_modifier() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('C'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_translate_uppercase_s_to_none() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('S'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
 }
 
 // ADR 0026 scroll bindings (translate_key half).
@@ -551,13 +621,13 @@ fn should_translate_lowercase_w_to_open_pr_in_browser() {
 }
 
 #[test]
-fn should_translate_uppercase_w_to_open_pr_in_browser() {
+fn should_translate_uppercase_w_to_none() {
     let report = empty_report();
     let app = App::new(&report);
 
     let actual = translate_key(KeyCode::Char('W'), KeyModifiers::NONE, &app);
 
-    assert_eq!(Some(InputKey::OpenPrInBrowser), actual);
+    assert_eq!(None, actual);
 }
 
 #[test]
@@ -571,13 +641,13 @@ fn should_translate_lowercase_u_to_open_update_prompt() {
 }
 
 #[test]
-fn should_translate_uppercase_u_to_open_update_prompt() {
+fn should_translate_uppercase_u_to_none_without_control_modifier() {
     let report = empty_report();
     let app = App::new(&report);
 
     let actual = translate_key(KeyCode::Char('U'), KeyModifiers::NONE, &app);
 
-    assert_eq!(Some(InputKey::OpenUpdatePrompt), actual);
+    assert_eq!(None, actual);
 }
 
 #[test]

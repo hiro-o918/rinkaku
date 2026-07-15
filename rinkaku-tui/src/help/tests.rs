@@ -177,7 +177,7 @@ fn should_document_open_pr_in_browser_binding_in_the_global_group() {
 
     let keys: Vec<&str> = global.bindings.iter().map(|binding| binding.keys).collect();
 
-    assert!(keys.contains(&"w / W"));
+    assert!(keys.contains(&"w"));
 }
 
 #[test]
@@ -195,6 +195,37 @@ fn should_document_h_and_esc_as_the_return_to_tree_binding_in_right_focus_group(
         .any(|binding| binding.keys == "h / esc");
 
     assert!(has_return_binding);
+}
+
+fn source_screen() -> Screen {
+    Screen::Source {
+        symbol_id: "lib.rs::foo".to_string(),
+        scroll_top: 0,
+    }
+}
+
+#[test]
+fn should_show_tree_focus_review_and_global_groups_when_tree_focused_on_entry_screen() {
+    let groups = applicable_help_groups(Locale::English, &Screen::Entry, Focus::Tree);
+    let titles: Vec<&str> = groups.iter().map(|group| group.title.as_str()).collect();
+
+    assert_eq!(vec!["Tree focus", "Review", "Global"], titles);
+}
+
+#[test]
+fn should_show_right_focus_review_and_global_groups_when_right_focused_on_entry_screen() {
+    let groups = applicable_help_groups(Locale::English, &Screen::Entry, Focus::Right);
+    let titles: Vec<&str> = groups.iter().map(|group| group.title.as_str()).collect();
+
+    assert_eq!(vec!["Right focus", "Review", "Global"], titles);
+}
+
+#[test]
+fn should_show_only_source_view_and_global_groups_on_source_screen_regardless_of_focus() {
+    let groups = applicable_help_groups(Locale::English, &source_screen(), Focus::Tree);
+    let titles: Vec<&str> = groups.iter().map(|group| group.title.as_str()).collect();
+
+    assert_eq!(vec!["Source view", "Global"], titles);
 }
 
 #[test]

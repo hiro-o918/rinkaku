@@ -8,6 +8,7 @@
 
 use super::overlay::centered_rect;
 use super::scroll::{Body, render_scrollable_pane};
+use crate::app::{Focus, Screen};
 use crate::locale::Locale;
 use crate::row_view::{
     band_style, cyan_badge_style, risk_marker_style, split_badge_style, symbol_marker_span,
@@ -22,17 +23,22 @@ use ratatui::widgets::Clear;
 use rinkaku_core::extract::{Classification, SymbolKind};
 use rinkaku_core::file_size::FileSizeBand;
 
-/// The `?` help overlay's content laid out once for `locale`, independent
-/// of the pane's rendered size — extracted from [`draw_help_overlay`] so
-/// tests can pin its shape without a live `Frame`, mirroring how
-/// `crate::help::help_content` itself is already plain data rather than
-/// something computed at draw time (ADR 0055: locale-parameterized, not a
-/// `const`, since the underlying strings now come from `rust_i18n::t!`).
-fn help_overlay_lines(locale: Locale) -> Vec<Line<'static>> {
+/// The `?` help overlay's content laid out once for `locale`/`screen`/
+/// `focus`, independent of the pane's rendered size — extracted from
+/// [`draw_help_overlay`] so tests can pin its shape without a live `Frame`,
+/// mirroring how `crate::help::help_content` itself is already plain data
+/// rather than something computed at draw time (ADR 0055:
+/// locale-parameterized, not a `const`, since the underlying strings now
+/// come from `rust_i18n::t!`). Only the keymap groups are scoped to
+/// `screen`/`focus` (`crate::help::applicable_help_groups`) — the Markers
+/// legend and Glossary sections stay unconditional, since neither depends on
+/// which pane currently has focus.
+fn help_overlay_lines(locale: Locale, screen: &Screen, focus: Focus) -> Vec<Line<'static>> {
     let tag = locale.tag();
     let content = crate::help::help_content(locale);
+    let keymap_groups = crate::help::applicable_help_groups(locale, screen, focus);
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for group in &content.keymap_groups {
+    for group in &keymap_groups {
         lines.push(Line::styled(
             group.title.clone(),
             Style::default().add_modifier(Modifier::BOLD),
@@ -172,10 +178,13 @@ fn badge_swatch_spans(label: &'static str, number_style: Style) -> Vec<Span<'sta
 /// content past a typical terminal's height) centered over `full_area`: a
 /// bordered box roughly 80%/90% of the frame's width/height (capped so it
 /// never claims more than the frame itself on a small terminal), listing
-/// every [`crate::help::help_content`] keymap group for `locale` (ADR
-/// 0055) followed by the glossary. [`Clear`] is rendered first so the
-/// overlay's background is opaque rather than letting the underlying
-/// frame's glyphs show through gaps in the overlay's own text.
+/// every keymap group applicable to `screen`/`focus`
+/// (`crate::help::applicable_help_groups`, scoped this way so the overlay
+/// never lists a binding that would be a no-op if pressed right now) for
+/// `locale` (ADR 0055) followed by the markers legend and glossary, both
+/// unconditional. [`Clear`] is rendered first so the overlay's background is
+/// opaque rather than letting the underlying frame's glyphs show through
+/// gaps in the overlay's own text.
 ///
 /// Scrolled via [`render_scrollable_pane`] — the same clamp/indicator/
 /// `Paragraph::scroll` machinery the Detail and Diff panes already share
@@ -194,11 +203,13 @@ pub(crate) fn draw_help_overlay(
     full_area: Rect,
     requested_scroll: usize,
     locale: Locale,
+    screen: &Screen,
+    focus: Focus,
 ) -> (usize, usize) {
     let overlay_area = centered_rect(full_area, 80, 90);
     frame.render_widget(Clear, overlay_area);
 
-    let lines = help_overlay_lines(locale);
+    let lines = help_overlay_lines(locale, screen, focus);
     let inner_height = overlay_area.height.saturating_sub(2) as usize;
     let title = format!(
         " {} ",
