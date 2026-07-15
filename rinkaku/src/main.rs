@@ -153,6 +153,27 @@ fn main() -> anyhow::Result<()> {
             // guard is purely the safety net for the paths that skip them.
             let _log_sink_guard = log_writer::ReleaseGuard::new(log_sink.clone(), std::io::stderr);
 
+            // ADR 0054: a background version check, skippable via
+            // `RINKAKU_UPDATE_CHECK=0` (checked here, at the composition
+            // root, rather than inside `rinkaku_tui` — env reads are IO,
+            // same boundary rule as everything else this module gates).
+            // The spawned thread is fire-and-forget: it is never joined,
+            // and `self_update::check_update_available`'s own "silent on
+            // any failure" contract means a slow or failed network call
+            // simply never sends anything, rather than blocking or
+            // panicking this thread.
+            let update_check = if std::env::var("RINKAKU_UPDATE_CHECK").as_deref() != Ok("0") {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    if let Some(version) = self_update::check_update_available() {
+                        let _ = sender.send(version);
+                    }
+                });
+                Some(receiver)
+            } else {
+                None
+            };
+
             // No stderr spinner in this branch (ADR 0033 decision 1): the
             // splash screen drawn on the alternate screen is this run's
             // only progress feedback, replacing it rather than layering on
@@ -236,16 +257,15 @@ fn main() -> anyhow::Result<()> {
                 clipboard: &system_clipboard,
                 browser: &system_browser,
             };
-            let result = session
-                .run(
-                    &report,
-                    &diff_text,
-                    cli.entry.as_deref(),
-                    &repo_root,
-                    source_reader,
-                    review_ports,
-                )
-                .map_err(anyhow::Error::from);
+            let run_result = session.run(
+                &report,
+                &diff_text,
+                cli.entry.as_deref(),
+                &repo_root,
+                source_reader,
+                review_ports,
+                update_check,
+            );
             // Flushed after `TuiSession::run` has already restored the
             // terminal (its own postamble, unconditional on both the `Ok`
             // and `Err` paths — see that method's doc comment) — this is
@@ -257,7 +277,17 @@ fn main() -> anyhow::Result<()> {
             // or entry-screen frame mid-redraw.
             release_log_sink(&log_sink);
             flush_notes(buffered_notes);
-            result
+            let update_requested = run_result.map_err(anyhow::Error::from)?;
+            // ADR 0054: the update itself runs only after the block above
+            // has already restored the terminal — `yes: true` since the
+            // reviewer already confirmed inside the TUI's own popup, so
+            // `run_self_update` skips straight to downloading rather than
+            // prompting a second time on the now-restored terminal.
+            if update_requested {
+                self_update::run_self_update(true)
+            } else {
+                Ok(())
+            }
         }
         DisplayMode::Output(format) => {
             // Non-TUI: no alternate screen ever opens, so `log::` output
