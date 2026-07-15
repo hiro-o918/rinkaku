@@ -13,6 +13,7 @@ mod blast_radius;
 mod detail_pane;
 mod diff_pane;
 mod entry;
+mod help_overlay;
 mod overlay;
 mod review_overlay;
 mod scroll;
@@ -25,7 +26,8 @@ use crate::diff_view::FileHunks;
 use crate::highlight::HighlightedFile;
 use crate::source::HighlightedSourceView;
 use entry::draw_entry_screen;
-use overlay::{draw_help_overlay, draw_jump_popup};
+use help_overlay::draw_help_overlay;
+use overlay::{draw_jump_popup, draw_update_prompt};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use rinkaku_core::render::Report;
@@ -238,6 +240,11 @@ pub fn draw(
     }
     if let Some(popup) = app.jump_popup() {
         draw_jump_popup(frame, popup, area);
+    }
+    if app.update_prompt_open()
+        && let Some(version) = app.update_available()
+    {
+        draw_update_prompt(frame, version, area);
     }
 
     // ADR 0048: the review overlay (compose/list/export/verdict) draws

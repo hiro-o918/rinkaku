@@ -135,6 +135,31 @@ impl App {
             return self.handle_key_with_popup_open(key);
         }
 
+        // The update confirmation popup (ADR 0054) takes over the whole
+        // key space while open, mirroring the jump popup's own structure
+        // just above — checked after it since the two can never be open
+        // together (`InputKey::OpenUpdatePrompt`'s own arm below only
+        // opens this popup when neither the jump popup nor this one is
+        // already showing).
+        if self.update_prompt_open {
+            match key {
+                InputKey::PopupConfirm => {
+                    self.update_prompt_open = false;
+                    self.update_requested = true;
+                    self.should_quit = true;
+                }
+                InputKey::PopupCancel => {
+                    self.update_prompt_open = false;
+                }
+                _ => {}
+            }
+            return self;
+        }
+        if key == InputKey::OpenUpdatePrompt && self.update_available.is_some() {
+            self.update_prompt_open = true;
+            return self;
+        }
+
         let preserve_scroll = matches!(
             (&self.screen, self.focus, key),
             (Screen::Entry, Focus::Right, InputKey::Up)
@@ -622,6 +647,11 @@ impl App {
             // precedent just above), so this arm is a no-op stub kept only
             // for match exhaustiveness.
             (Screen::Entry, _, InputKey::OpenPrInBrowser) => {}
+            // `U` (ADR 0054) reaches this arm only when no update is
+            // available (`self.update_available.is_none()`) — the branch
+            // above this match already intercepts it and opens the popup
+            // otherwise. A no-op either way: nothing to confirm yet.
+            (Screen::Entry, _, InputKey::OpenUpdatePrompt) => {}
         }
 
         if !preserve_scroll && !preserve_scroll_after_jump {

@@ -222,6 +222,10 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // special-cases the actual dispatch (it needs the session's
         // `PrContext`, which `App` doesn't hold).
         KeyCode::Char('w') | KeyCode::Char('W') => Some(InputKey::OpenPrInBrowser),
+        // `U` (ADR 0054): opens the update confirmation popup. Global,
+        // like `w`/`d`/`r`/`s`; `App::handle_key`'s own arm no-ops unless
+        // `App::update_available` is `Some`.
+        KeyCode::Char('u') | KeyCode::Char('U') => Some(InputKey::OpenUpdatePrompt),
         // `g` (ADR 0022): the first half of the `gd`/`gr` two-key sequence.
         // Checked after the `pending_prefix` resolution above so a second
         // `g` press (`gg`, not a bound sequence today) simply restarts the

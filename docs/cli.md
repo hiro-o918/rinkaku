@@ -195,6 +195,13 @@ your package manager's bookkeeping stays in sync. When stdin is not a
 terminal and `--yes` is not given, `self-update` refuses to run rather
 than silently proceeding.
 
+`--tui` also checks for a newer release in the background on startup.
+When one is found, the status line shows an `update vX.Y.Z: U` hint;
+press `U` to open a confirmation popup, and `Enter` to update and quit
+(the update itself runs after the TUI has exited, reusing the same
+`self-update` path). The check is silent on any failure and never
+blocks TUI startup. Set `RINKAKU_UPDATE_CHECK=0` to skip it entirely.
+
 ## Known limitations
 
 **Mitigated in [#9](https://github.com/hiro-o918/rinkaku/pull/9):** the

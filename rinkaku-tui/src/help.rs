@@ -182,6 +182,10 @@ const GLOBAL_BINDINGS: &[KeyBinding] = &[
         description: "Open the current PR's page in a web browser (--pr mode only)",
     },
     KeyBinding {
+        keys: "U",
+        description: "Prompt to self-update (only shown when a newer release is available)",
+    },
+    KeyBinding {
         keys: "?",
         description: "Toggle this help overlay",
     },

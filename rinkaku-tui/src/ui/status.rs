@@ -90,6 +90,11 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
         None => help,
     };
 
+    let help = match app.update_available() {
+        Some(version) => format!("{help}  |  update v{version}: U"),
+        None => help,
+    };
+
     match app.status() {
         Some(status) => format!("{status}  |  {help}"),
         None => help,
@@ -404,6 +409,37 @@ mod tests {
         assert!(
             !actual.contains("file-size warnings"),
             "expected no warnings segment, got: {actual}",
+        );
+    }
+
+    // ADR 0054: once the background version check reports a newer
+    // release, the status line appends a persistent `update vX.Y.Z: U`
+    // hint (unlike `App::status`'s transient slot) so it survives past
+    // the next handled key.
+    #[test]
+    fn should_append_update_hint_to_status_line_when_update_is_available() {
+        let report = empty_report_for_status_line();
+        let mut app = App::new(&report);
+        app.notify_update_available("1.2.3");
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            actual.ends_with("  |  update v1.2.3: U"),
+            "expected trailing update hint, got: {actual}",
+        );
+    }
+
+    #[test]
+    fn should_not_append_update_hint_when_no_update_is_available() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report);
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            !actual.contains("update v"),
+            "expected no update hint, got: {actual}",
         );
     }
 }

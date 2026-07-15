@@ -227,4 +227,10 @@ pub enum InputKey {
     /// special-cases this variant before dispatch rather than routing it
     /// through `App::handle_key`.
     OpenPrInBrowser,
+    /// `U` (ADR 0054): opens the update confirmation popup once a newer
+    /// released version has been found. Deliberately key-gated rather than
+    /// auto-opening when the background version-check thread reports: an
+    /// unprompted modal stealing keystrokes mid-review would be worse than
+    /// a quiet, persistent status-line hint.
+    OpenUpdatePrompt,
 }

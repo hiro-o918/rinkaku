@@ -561,6 +561,26 @@ fn should_translate_uppercase_w_to_open_pr_in_browser() {
 }
 
 #[test]
+fn should_translate_lowercase_u_to_open_update_prompt() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('u'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::OpenUpdatePrompt), actual);
+}
+
+#[test]
+fn should_translate_uppercase_u_to_open_update_prompt() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('U'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::OpenUpdatePrompt), actual);
+}
+
+#[test]
 fn should_not_normalize_fullwidth_characters_while_composing_a_note() {
     // The compose buffer is free text (ADR 0048) — a full-width character
     // typed there must land in the note body verbatim, not get folded to
