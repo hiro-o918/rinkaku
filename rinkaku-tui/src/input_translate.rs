@@ -33,6 +33,11 @@ use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 /// `j`/`k`/Up/Down move its own selection, Enter confirms (`PopupConfirm`),
 /// Esc cancels (`PopupCancel`), and every other key is swallowed.
 ///
+/// `app.update_prompt_open()` (ADR 0054) is the next short-circuit: Enter
+/// confirms (`PopupConfirm`), Esc/`q` cancel (`PopupCancel`), and every
+/// other key is swallowed — the same shape as the jump popup above, minus
+/// its own Up/Down selection (this popup has none).
+///
 /// `app.pending_prefix()` (ADR 0022) is consulted only for `d`/`r`: when a
 /// `g` press is still pending, `d` resolves to `GotoDefinition` and `r` to
 /// `GotoReferences` instead of their own ordinary meanings (`ToggleDiff`/
@@ -112,6 +117,17 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
             KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),
             KeyCode::Enter => Some(InputKey::PopupConfirm),
             KeyCode::Esc => Some(InputKey::PopupCancel),
+            _ => None,
+        };
+    }
+
+    // Without this short-circuit, Enter/Esc/`q` fell through to their
+    // ordinary entry-view meanings, none of which `App::handle_key`'s
+    // `update_prompt_open` branch recognizes as confirm/cancel (ADR 0056).
+    if app.update_prompt_open() {
+        return match code {
+            KeyCode::Enter => Some(InputKey::PopupConfirm),
+            KeyCode::Esc | KeyCode::Char('q') => Some(InputKey::PopupCancel),
             _ => None,
         };
     }

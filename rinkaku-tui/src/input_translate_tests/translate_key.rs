@@ -671,3 +671,51 @@ fn should_not_normalize_fullwidth_characters_while_composing_a_note() {
 
     assert_eq!(Some(InputKey::ComposeChar('ｎ')), actual);
 }
+
+#[test]
+fn should_translate_enter_to_popup_confirm_while_update_prompt_open() {
+    let report = empty_report();
+    let mut app = App::new(&report);
+    app.notify_update_available("1.2.3");
+    let app = app.handle_key(InputKey::OpenUpdatePrompt);
+
+    let actual = translate_key(KeyCode::Enter, KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::PopupConfirm), actual);
+}
+
+#[test]
+fn should_translate_esc_to_popup_cancel_while_update_prompt_open() {
+    let report = empty_report();
+    let mut app = App::new(&report);
+    app.notify_update_available("1.2.3");
+    let app = app.handle_key(InputKey::OpenUpdatePrompt);
+
+    let actual = translate_key(KeyCode::Esc, KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::PopupCancel), actual);
+}
+
+#[test]
+fn should_translate_lowercase_q_to_popup_cancel_while_update_prompt_open() {
+    let report = empty_report();
+    let mut app = App::new(&report);
+    app.notify_update_available("1.2.3");
+    let app = app.handle_key(InputKey::OpenUpdatePrompt);
+
+    let actual = translate_key(KeyCode::Char('q'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::PopupCancel), actual);
+}
+
+#[test]
+fn should_swallow_unrelated_key_while_update_prompt_open() {
+    let report = empty_report();
+    let mut app = App::new(&report);
+    app.notify_update_available("1.2.3");
+    let app = app.handle_key(InputKey::OpenUpdatePrompt);
+
+    let actual = translate_key(KeyCode::Char('d'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}

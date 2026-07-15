@@ -360,14 +360,21 @@ pub struct App {
     /// found, if any (`main.rs`'s version-check thread, delivered via
     /// [`Self::notify_update_available`]) — `None` until that check
     /// completes or finds nothing newer. Drives the status line's update
-    /// hint and whether `U` opens [`Self::update_prompt_open`] at all.
+    /// hint and whether `u` opens [`Self::update_prompt_open`] at all.
     update_available: Option<String>,
-    /// Whether the update confirmation popup (`U`, only reachable once
-    /// [`Self::update_available`] is `Some`) is currently open. Mirrors
+    /// Whether the update confirmation popup is currently open — reachable
+    /// via `u` (once [`Self::update_available`] is `Some`) or auto-opened by
+    /// [`Self::notify_update_available`] (ADR 0056). Mirrors
     /// [`Self::jump_popup`]'s flag-not-`Screen` shape for the same reason:
     /// it sits on top of whatever was already showing and must not disturb
     /// that state.
     update_prompt_open: bool,
+    /// Whether the reviewer has already closed the update prompt once this
+    /// session (`PopupCancel` while it was open) — kept separate from
+    /// [`Self::update_prompt_open`] so [`should_auto_open_update_prompt`]
+    /// can tell "never shown yet" from "shown and dismissed" and not
+    /// reopen the popup out from under a reviewer who just closed it.
+    update_prompt_dismissed: bool,
     /// Whether the reviewer confirmed the update popup — `run_app`/
     /// `TuiSession::run` read this once [`Self::should_quit`] is set to
     /// decide whether to run `self-update` after the terminal is restored.
@@ -411,6 +418,7 @@ impl App {
             review_sink_a_available: false,
             update_available: None,
             update_prompt_open: false,
+            update_prompt_dismissed: false,
             update_requested: false,
         }
     }
@@ -592,13 +600,24 @@ impl App {
     /// version-check thread's `mpsc::Receiver` yields a version string
     /// (`main.rs`'s composition root spawns that thread; this method is
     /// the only seam through which its result reaches `App`, keeping this
-    /// module free of the thread/channel itself). Deliberately does not
-    /// open [`Self::update_prompt_open`] on its own — the popup is only
-    /// ever opened by an explicit `U` press
-    /// ([`InputKey::OpenUpdatePrompt`]'s own doc comment on why an
-    /// unprompted popup would be a bad surprise mid-review).
+    /// module free of the thread/channel itself). Auto-opens
+    /// [`Self::update_prompt_open`] via [`should_auto_open_update_prompt`]
+    /// (ADR 0056, superseding ADR 0054's original "never auto-opens"
+    /// decision) unless the reviewer already dismissed the prompt once
+    /// this session, or another modal (help overlay, jump popup) is
+    /// currently on screen — the renderer draws the update prompt on top
+    /// of everything else, but key routing checks those modals first, so
+    /// auto-opening over one of them would show the prompt while still
+    /// routing keys to the hidden modal underneath.
     pub fn notify_update_available(&mut self, version: impl Into<String>) {
         self.update_available = Some(version.into());
+        if should_auto_open_update_prompt(
+            self.update_available.is_some(),
+            self.update_prompt_dismissed,
+            !self.help_open && self.jump_popup.is_none(),
+        ) {
+            self.update_prompt_open = true;
+        }
     }
 
     /// The detail-pane content for the row currently under the cursor
@@ -950,4 +969,18 @@ impl App {
         }
         self
     }
+}
+
+/// Whether the update prompt should auto-open now that an update is known
+/// to be available, given whether the reviewer has already dismissed it
+/// once this session and whether no other modal is currently active.
+/// Extracted as a free function (rather than inlined in
+/// [`App::notify_update_available`]) so a future startup splash screen can
+/// reuse this exact decision without depending on `App`'s internals.
+fn should_auto_open_update_prompt(
+    update_available: bool,
+    update_prompt_dismissed: bool,
+    no_other_modal_active: bool,
+) -> bool {
+    update_available && !update_prompt_dismissed && no_other_modal_active
 }
