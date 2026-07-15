@@ -219,6 +219,98 @@ fn should_return_none_when_scroll_moved_into_the_module_level_bucket() {
     assert_eq!(None, actual);
 }
 
+/// Two-section fixture where `foo`'s signature changed and `bar`'s did
+/// not — the only shape whose section boundaries diverge between
+/// `Split` (anchor is always 1 row) and `Unified` (a changed-signature
+/// anchor is 2 rows). `bar` therefore starts one row later in
+/// `Unified` than in `Split`.
+fn diff_pane_content_with_foo_signature_changed() -> diff_shape::DiffPaneContent {
+    use diff_view::{DiffLine, DiffLineKind, Hunk};
+
+    fn hunk(header: &str, new_range: (usize, usize), line: &str) -> Hunk {
+        Hunk {
+            header: header.to_string(),
+            new_range: Some(new_range),
+            lines: vec![DiffLine {
+                kind: DiffLineKind::Context,
+                content: line.to_string(),
+            }],
+        }
+    }
+
+    diff_shape::DiffPaneContent::File(vec![
+        diff_shape::DiffSection {
+            title: "fn foo(a: i32)".to_string(),
+            symbol_id: Some("lib.rs::foo".to_string()),
+            contract_header: Some(diff_shape::ContractHeader {
+                previous_signature: "fn foo()".to_string(),
+                signature: "fn foo(a: i32)".to_string(),
+            }),
+            hunks: vec![diff_shape::AttributedHunk {
+                source_index: 0,
+                hunk: hunk("@@ -1,1 +1,2 @@", (1, 2), "fn foo(a: i32) {}"),
+            }],
+        },
+        diff_shape::DiffSection {
+            title: "fn bar()".to_string(),
+            symbol_id: Some("lib.rs::bar".to_string()),
+            contract_header: None,
+            hunks: vec![diff_shape::AttributedHunk {
+                source_index: 1,
+                hunk: hunk("@@ -10,1 +10,2 @@", (10, 11), "fn bar() {}"),
+            }],
+        },
+    ])
+}
+
+/// Regression pin for `a1e71d6`'s narrow-terminal fix: the same scroll
+/// offset must resolve to different symbols under `Split` vs `Unified`
+/// when a preceding section has a changed signature. Reverting
+/// `a1e71d6` (feeding the *requested* mode instead of the *effective*
+/// mode into `symbol_id_for_scroll_line`) collapses the two branches
+/// onto the same answer and this test starts failing.
+#[test]
+fn should_resolve_a_different_symbol_at_the_boundary_when_effective_view_mode_differs() {
+    let content = diff_pane_content_with_foo_signature_changed();
+    let boundary = diff_shape::section_start_line_for_symbol(
+        &content,
+        "lib.rs::bar",
+        app::DiffViewMode::Split,
+    )
+    .expect("bar's start under Split must resolve");
+
+    let split = diff_shape::symbol_id_for_scroll_line(&content, boundary, app::DiffViewMode::Split);
+    let unified =
+        diff_shape::symbol_id_for_scroll_line(&content, boundary, app::DiffViewMode::Unified);
+
+    assert_eq!(Some("lib.rs::bar"), split);
+    assert_eq!(Some("lib.rs::foo"), unified);
+}
+
+/// End-to-end companion to
+/// `should_resolve_a_different_symbol_at_the_boundary_when_effective_view_mode_differs`:
+/// `sync_target_for_scroll` (the caller that actually feeds
+/// `symbol_id_for_scroll_line`) must produce the answer matching the
+/// *effective* view mode passed in, not the requested one.
+#[test]
+fn should_sync_to_the_symbol_matching_the_effective_view_mode_at_the_boundary() {
+    let report = report_with_two_symbols();
+    let content = diff_pane_content_with_foo_signature_changed();
+    let boundary = diff_shape::section_start_line_for_symbol(
+        &content,
+        "lib.rs::bar",
+        app::DiffViewMode::Split,
+    )
+    .expect("bar's start under Split must resolve");
+    let app = app_focused_on_diff_pane_with_scroll(&report, boundary);
+
+    let split = sync_target_for_scroll(&app, &content, 0, app::DiffViewMode::Split);
+    let unified = sync_target_for_scroll(&app, &content, 0, app::DiffViewMode::Unified);
+
+    assert_eq!(Some("lib.rs::bar".to_string()), split);
+    assert_eq!(None, unified);
+}
+
 #[test]
 fn should_move_the_tree_cursor_to_bar_when_synced() {
     let report = report_with_two_symbols();
