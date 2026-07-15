@@ -296,3 +296,14 @@ pub(crate) fn jump_scroll_target(
 #[cfg(test)]
 #[path = "scroll_sync_tests.rs"]
 mod tests;
+
+// Split out (ADR 0028) rather than appended to `scroll_sync_tests.rs`
+// (already near this crate's file-size watch threshold on its own): this
+// scroll-unit fix's own regression coverage needs a *narrow* pane fixture
+// (wrapping actually occurs) distinct from every existing test in that file,
+// which deliberately uses a wide one (`scroll_sync_tests.rs`'s own
+// `dispatch_draw_and_fold` doc comment) — grouping by that fixture
+// difference keeps each file's tests self-consistent about what they pin.
+#[cfg(test)]
+#[path = "scroll_sync_wrap_tests.rs"]
+mod wrap_tests;

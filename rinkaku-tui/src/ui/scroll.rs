@@ -1,10 +1,18 @@
 //! Pure scroll/wrap helpers shared by the panes in this module — extracted so
 //! `clamp_scroll`, `scroll_indicator`, `visible_index_window`,
 //! `window_overflow_indicators`, `windowed_rows_with_indicators`,
-//! `wrap_lines`/`wrap_one_line`, and `truncate_to_width` stay unit-testable
-//! without a live `ratatui::backend::TestBackend`, and so
+//! `wrap_lines_with_origins`/`wrap_one_line`, and `truncate_to_width` stay
+//! unit-testable without a live `ratatui::backend::TestBackend`, and so
 //! [`render_scrollable_pane`] itself (the one non-pure helper here) has a
 //! single home shared by every pane that scrolls.
+//!
+//! `App::right_pane_scroll` is a logical-line offset (an index into the
+//! unwrapped content), the same unit `crate::diff_shape` computes symbol
+//! section positions in — [`logical_line_to_display_row`]/
+//! [`display_row_to_logical_line`] are the only place that unit is ever
+//! converted to/from the wrapped display-row index `ratatui::widgets::Paragraph::scroll`
+//! actually consumes, confining wrap-width knowledge to this module rather
+//! than leaking it into `App`/`crate::diff_shape`.
 
 use super::style::pane_border_style;
 use ratatui::Frame;
@@ -15,7 +23,9 @@ use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
 /// Renders `lines` into a bordered pane titled `title`, scrolled to
-/// `requested_scroll` lines down and clamped to what actually fits
+/// `requested_scroll` *logical* lines down (an index into the unwrapped
+/// `body`, the same unit `crate::diff_shape::walk_sections` and its
+/// derivatives compute against) and clamped to what actually fits
 /// (`clamp_scroll`'s own doc comment on why clamping only happens here,
 /// not in `crate::app`). When the content overflows the pane's inner
 /// height, the title grows a `(first-last/total)` suffix so the reviewer
@@ -28,26 +38,28 @@ use unicode_width::UnicodeWidthChar;
 /// duplicating the clamp-then-scroll-then-indicator sequence, since the two
 /// panes' only difference is which `Vec<Line>` and title they pass in.
 ///
-/// `lines` is wrapped (via [`wrap_lines`]) to the pane's inner width
-/// *before* `clamp_scroll`/`scroll_indicator` run and *before* handing it to
-/// `Paragraph`, and `Paragraph::wrap` is deliberately not used here: that
-/// widget's own line-wrapping happens after `Paragraph::scroll` has already
-/// consumed `scroll.y` as an offset into the *unwrapped* logical lines, so
-/// any logical line long enough to wrap desyncs the scroll unit from the
-/// rendered unit — content past the first wrapped line of such a line
-/// becomes unreachable at any scroll offset, and the overflow indicator
-/// (computed from logical line count) undercounts and falsely claims
-/// everything is visible. Wrapping first makes every one of
-/// `clamp_scroll`/`scroll_indicator`/`Paragraph::scroll` operate on the same
-/// "one rendered terminal row" unit.
+/// `lines` is wrapped (via [`wrap_lines_with_origins`]) to the pane's inner
+/// width *before* handing it to `Paragraph`, and `Paragraph::wrap` is
+/// deliberately not used here: that widget's own line-wrapping happens
+/// after `Paragraph::scroll` has already consumed `scroll.y`, which would
+/// force the scroll unit back onto rendered rows. Confining wrap knowledge
+/// to this function (rather than the logical-line unit `App::right_pane_scroll`
+/// and `crate::diff_shape` share) is this fix's whole point: converting
+/// `requested_scroll` to its first display row via [`logical_line_to_display_row`]
+/// happens *after* wrapping, `clamp_scroll`/`scroll_indicator`/
+/// `Paragraph::scroll` all operate on the wrapped (display-row) unit as
+/// before, and the clamped result is converted back to a logical line via
+/// [`display_row_to_logical_line`] before being returned — so every
+/// consumer outside this function only ever sees logical lines.
 ///
-/// Returns the actually-applied (clamped) scroll offset — dogfooding
-/// finding: `App::right_pane_scroll` is deliberately an *unclamped*
-/// "requested" value (its own doc comment), so repeated `j` past the
-/// content's end kept incrementing that request with no visible effect,
-/// and winding it back down again took as many `k` presses as it took to
-/// overshoot — the scrollbar-less pane gave no feedback that this had
-/// happened. `crate::run_app` feeds this return value back into `App` via
+/// Returns the actually-applied (clamped) scroll offset, in the same
+/// logical-line unit as `requested_scroll` — dogfooding finding:
+/// `App::right_pane_scroll` is deliberately an *unclamped* "requested"
+/// value (its own doc comment), so repeated `j` past the content's end
+/// kept incrementing that request with no visible effect, and winding it
+/// back down again took as many `k` presses as it took to overshoot — the
+/// scrollbar-less pane gave no feedback that this had happened.
+/// `crate::run_app` feeds this return value back into `App` via
 /// `App::with_right_pane_scroll` after every draw, so the *next* `k` moves
 /// the visible content immediately instead of first re-tracing the
 /// overshoot.
@@ -96,14 +108,16 @@ pub(crate) fn render_scrollable_pane(
         Layout::vertical([Constraint::Length(header_rows), Constraint::Min(0)]).areas(inner_area);
 
     let viewport_height = body_area.height as usize;
-    let (content_len, scroll) = match body {
+    let (content_len, display_row, logical_scroll) = match body {
         Body::Single(lines) => {
             let viewport_width = body_area.width as usize;
-            let wrapped = wrap_lines(lines, viewport_width);
-            let scroll = clamp_scroll(wrapped.len(), viewport_height, requested_scroll);
-            let paragraph = Paragraph::new(wrapped.clone()).scroll((scroll as u16, 0));
+            let (wrapped, origins) = wrap_lines_with_origins(lines, viewport_width);
+            let requested_display_row = logical_line_to_display_row(&origins, requested_scroll);
+            let display_row = clamp_scroll(wrapped.len(), viewport_height, requested_display_row);
+            let paragraph = Paragraph::new(wrapped.clone()).scroll((display_row as u16, 0));
             frame.render_widget(paragraph, body_area);
-            (wrapped.len(), scroll)
+            let logical_scroll = display_row_to_logical_line(&origins, display_row);
+            (wrapped.len(), display_row, logical_scroll)
         }
         Body::Split(left, right) => {
             // A 1-column gutter between the two sides, mirroring a border's
@@ -115,27 +129,30 @@ pub(crate) fn render_scrollable_pane(
                 Constraint::Min(0),
             ])
             .areas(body_area);
-            let (left_rows, right_rows) = pair_wrap(
+            let (left_rows, right_rows, origins) = pair_wrap_with_origins(
                 left,
                 right,
                 left_area.width as usize,
                 right_area.width as usize,
             );
-            let scroll = clamp_scroll(left_rows.len(), viewport_height, requested_scroll);
+            let requested_display_row = logical_line_to_display_row(&origins, requested_scroll);
+            let display_row = clamp_scroll(left_rows.len(), viewport_height, requested_display_row);
 
             frame.render_widget(
-                Paragraph::new(left_rows.clone()).scroll((scroll as u16, 0)),
+                Paragraph::new(left_rows.clone()).scroll((display_row as u16, 0)),
                 left_area,
             );
             frame.render_widget(
-                Paragraph::new(vec![Line::raw("│"); left_rows.len()]).scroll((scroll as u16, 0)),
+                Paragraph::new(vec![Line::raw("│"); left_rows.len()])
+                    .scroll((display_row as u16, 0)),
                 gutter_area,
             );
             frame.render_widget(
-                Paragraph::new(right_rows.clone()).scroll((scroll as u16, 0)),
+                Paragraph::new(right_rows.clone()).scroll((display_row as u16, 0)),
                 right_area,
             );
-            (left_rows.len(), scroll)
+            let logical_scroll = display_row_to_logical_line(&origins, display_row);
+            (left_rows.len(), display_row, logical_scroll)
         }
     };
 
@@ -143,7 +160,10 @@ pub(crate) fn render_scrollable_pane(
     // (e.g. `" Detail "`, matching every other `Block` title in this
     // module) — trim the trailing one before appending the indicator so
     // the two don't produce a double space (`"Detail  (1-17/43)"`).
-    let title = match scroll_indicator(content_len, viewport_height, scroll) {
+    // The indicator is measured in display rows (`content_len` is the
+    // wrapped row count), not logical lines, so it uses `display_row`
+    // rather than the logical-line `logical_scroll` this function returns.
+    let title = match scroll_indicator(content_len, viewport_height, display_row) {
         Some(indicator) => format!("{}{indicator} ", title.trim_end()),
         None => title.to_string(),
     };
@@ -156,7 +176,7 @@ pub(crate) fn render_scrollable_pane(
         let header = Paragraph::new(header_lines[..header_rows as usize].to_vec());
         frame.render_widget(header, header_area);
     }
-    scroll
+    logical_scroll
 }
 
 /// [`render_scrollable_pane`]'s scrollable content, either a single column
@@ -177,14 +197,22 @@ pub(crate) enum Body<'a> {
 /// its counterpart on the other side at a narrow column width — this
 /// function pads per logical row so the two columns never drift out of
 /// alignment after wrapping.
-pub(crate) fn pair_wrap(
+///
+/// Also returns, for each output display row, the logical row index (the
+/// shared `left`/`right` index) it was wrapped from — the split-view input
+/// to [`logical_line_to_display_row`]/[`display_row_to_logical_line`], so
+/// [`render_scrollable_pane`] can convert between `App::right_pane_scroll`'s
+/// logical-line unit and the wrapped rows `Paragraph::scroll` actually
+/// consumes.
+pub(crate) fn pair_wrap_with_origins(
     left: &[Line<'static>],
     right: &[Line<'static>],
     left_width: usize,
     right_width: usize,
-) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+) -> (Vec<Line<'static>>, Vec<Line<'static>>, Vec<usize>) {
     let mut left_out = Vec::new();
     let mut right_out = Vec::new();
+    let mut origins = Vec::new();
     let row_count = left.len().max(right.len());
     for index in 0..row_count {
         let left_wrapped = left
@@ -199,9 +227,10 @@ pub(crate) fn pair_wrap(
         for row in 0..rows {
             left_out.push(left_wrapped.get(row).cloned().unwrap_or(Line::raw("")));
             right_out.push(right_wrapped.get(row).cloned().unwrap_or(Line::raw("")));
+            origins.push(index);
         }
     }
-    (left_out, right_out)
+    (left_out, right_out, origins)
 }
 
 /// Wraps each of `lines` to `width` display columns, splitting a logical
@@ -229,20 +258,61 @@ pub(crate) fn pair_wrap(
 /// into — an actual zero-width pane cannot render any column anyway, and
 /// looping without ever advancing would otherwise be a defensive infinite-
 /// loop risk).
-pub(crate) fn wrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+///
+/// Also returns, for each output display row, the index into `lines` (the
+/// logical line, `App::right_pane_scroll`'s unit) it was wrapped from — the
+/// single-column input to [`logical_line_to_display_row`]/
+/// [`display_row_to_logical_line`], mirroring [`pair_wrap_with_origins`] for
+/// the split-view body.
+pub(crate) fn wrap_lines_with_origins(
+    lines: &[Line<'static>],
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     if width == 0 {
-        return lines.to_vec();
+        return (lines.to_vec(), (0..lines.len()).collect());
     }
 
     let mut output = Vec::new();
-    for line in lines {
-        output.extend(wrap_one_line(line, width));
+    let mut origins = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let wrapped = wrap_one_line(line, width);
+        origins.extend(std::iter::repeat_n(index, wrapped.len()));
+        output.extend(wrapped);
     }
-    output
+    (output, origins)
+}
+
+/// Converts a logical-line offset (`App::right_pane_scroll`'s unit, and
+/// [`crate::diff_shape::walk_sections`]'s) to the display-row index of that
+/// logical line's *first* wrapped row, given `origins` (either
+/// [`wrap_lines_with_origins`]'s or [`pair_wrap_with_origins`]'s per-row
+/// logical-line index). A `logical_line` past every origin (an overscroll
+/// about to be clamped by [`clamp_scroll`] anyway, or empty content) maps to
+/// `origins.len()` — one past the last display row, which `clamp_scroll`
+/// then pulls back into range exactly like any other overscrolled request.
+pub(crate) fn logical_line_to_display_row(origins: &[usize], logical_line: usize) -> usize {
+    origins
+        .iter()
+        .position(|&origin| origin >= logical_line)
+        .unwrap_or(origins.len())
+}
+
+/// The inverse of [`logical_line_to_display_row`]: the logical-line index
+/// that display row `display_row` was wrapped from, given the same
+/// `origins`. `display_row` past the end of `origins` (defensively — a
+/// caller passes in a value [`clamp_scroll`] already bounded to
+/// `origins.len() - 1` in practice) falls back to the last origin, or `0`
+/// when `origins` itself is empty (nothing to scroll to).
+pub(crate) fn display_row_to_logical_line(origins: &[usize], display_row: usize) -> usize {
+    origins
+        .get(display_row)
+        .or_else(|| origins.last())
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Wraps a single logical [`Line`] into one or more output lines, per
-/// [`wrap_lines`]'s doc comment. A line with no spans at all (a blank line)
+/// [`wrap_lines_with_origins`]'s doc comment. A line with no spans at all (a blank line)
 /// produces exactly one empty output line, matching `ratatui::widgets::Wrap`
 /// rendering a blank logical line as one blank row rather than zero rows.
 pub(crate) fn wrap_one_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
@@ -288,7 +358,7 @@ pub(crate) fn wrap_one_line(line: &Line<'static>, width: usize) -> Vec<Line<'sta
 
 /// Truncates `text` to fit within `width` display columns, replacing the
 /// tail with a single `…` (1 column) when it does not fit — unlike
-/// [`wrap_lines`], which turns overflow into *more rows*, this turns
+/// [`wrap_lines_with_origins`], which turns overflow into *more rows*, this turns
 /// overflow into a shorter *single* row, for callers whose windowing math
 /// (e.g. [`windowed_rows_with_indicators`]) has already committed to
 /// "one logical item = one rendered row" and would desync if a row were
