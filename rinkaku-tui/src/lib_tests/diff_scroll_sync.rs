@@ -401,3 +401,213 @@ fn should_resync_scroll_to_current_symbols_section_when_diff_pane_is_reentered_w
     assert_eq!(5, effects.app.right_pane_scroll());
     assert_eq!(Some("lib.rs::bar"), effects.app.selected_symbol_id());
 }
+
+// --- apply_diff_pane_selection_effects with adjacent signature-changed
+// symbols sharing one hunk (ADR 0029), driven end-to-end through the
+// draw+clamp pipeline: the fixtures above use `contract_header: None` and
+// two separate hunks, and their tests observe `apply_diff_pane_selection_effects`
+// output in isolation. This block covers the interaction between the
+// mode-aware anchor rows added by the amendment on ADR 0044 decision 4
+// and the actual post-frame scroll — the target computation and the
+// clamp-against-`wrap_lines` output are both correct only when the two
+// agree on how many rows the anchor occupies in the currently-rendered mode.
+
+/// Two `SignatureChanged` symbols so close that git's line-level diff
+/// produces one hunk spanning both — ADR 0029 duplicates it into both
+/// sections.
+fn report_with_two_adjacent_signature_changed_symbols() -> Report {
+    use rinkaku_core::diff::LineRange;
+    use rinkaku_core::extract::{Classification, ExtractedSymbol, SymbolKind};
+    use rinkaku_core::render::FileReport;
+
+    fn changed_symbol(id: &str, name: &str, range: LineRange, previous: &str) -> ExtractedSymbol {
+        ExtractedSymbol {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: SymbolKind::Function,
+            signature: format!("fn {name}(a: i32, extra: i32)"),
+            range,
+            container: None,
+            referenced_names: vec![],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+            classification: Some(Classification::SignatureChanged),
+            previous_signature: Some(previous.to_string()),
+        }
+    }
+
+    Report {
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![
+                changed_symbol(
+                    "lib.rs::foo",
+                    "foo",
+                    LineRange { start: 1, end: 3 },
+                    "fn foo(a: i32)",
+                ),
+                changed_symbol(
+                    "lib.rs::bar",
+                    "bar",
+                    LineRange { start: 5, end: 7 },
+                    "fn bar(a: i32)",
+                ),
+            ],
+        }],
+        ..empty_report()
+    }
+}
+
+fn diff_hunks_with_two_signature_changed_sections() -> Vec<diff_view::FileHunks> {
+    use diff_view::{DiffLine, DiffLineKind, Hunk};
+
+    vec![diff_view::FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![Hunk {
+            header: "@@ -1,7 +1,7 @@".to_string(),
+            new_range: Some((1, 7)),
+            lines: vec![
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    content: "fn foo(a: i32) {}".to_string(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    content: "fn foo(a: i32, extra: i32) {}".to_string(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Context,
+                    content: "".to_string(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    content: "fn bar(a: i32) {}".to_string(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    content: "fn bar(a: i32, extra: i32) {}".to_string(),
+                },
+            ],
+        }],
+    }]
+}
+
+/// Mirrors one iteration of `crate::run_app`'s loop: dispatch + sync +
+/// draw + post-draw fold-back. Caller must size the viewport smaller than
+/// the pane's content — if it fits, `crate::ui::clamp_scroll` pins scroll
+/// to 0 regardless of the requested target and any regression in
+/// `apply_diff_pane_selection_effects`'s target computation is invisible.
+fn dispatch_draw_and_fold(
+    mut app: App,
+    report: &Report,
+    diff_hunks: &[diff_view::FileHunks],
+    last_diff_focus: Option<app::DiffFocus>,
+    input_key: InputKey,
+    width: u16,
+    height: u16,
+) -> App {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let scroll_before_dispatch = app.right_pane_scroll();
+    app = app.handle_key(input_key);
+    let effects = apply_diff_pane_selection_effects(
+        app,
+        report,
+        diff_hunks,
+        last_diff_focus,
+        scroll_before_dispatch,
+    );
+    let app = effects.app;
+    let diff_pane_content = effects.diff_pane_content;
+
+    let diff_highlights = crate::highlight::highlight_diff_files(diff_hunks);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    let mut outcome = crate::ui::DrawOutcome::default();
+    terminal
+        .draw(|frame| {
+            outcome = crate::ui::draw(
+                frame,
+                &app,
+                report,
+                &diff_pane_content,
+                &diff_highlights,
+                &app::BlastRadiusSelection::NotApplicable,
+                None,
+                diff_hunks,
+                &crate::note_markers::NoteMarkers::default(),
+            );
+        })
+        .expect("draw");
+    crate::clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll)
+}
+
+#[test]
+fn should_scroll_into_the_second_signature_changed_section_in_unified_view() {
+    // `App::new` defaults to `DiffViewMode::Split` (ADR 0044 amendment);
+    // `ToggleSplitView` is what reaches unified rendering here.
+    let report = report_with_two_adjacent_signature_changed_symbols();
+    let diff_hunks = diff_hunks_with_two_signature_changed_sections();
+    let app = App::new(&report)
+        .handle_key(InputKey::Down)
+        .handle_key(InputKey::ToggleSplitView);
+    assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
+    let last_diff_focus = app.selected_diff_focus(&report);
+
+    let app = dispatch_draw_and_fold(
+        app,
+        &report,
+        &diff_hunks,
+        last_diff_focus,
+        InputKey::Down,
+        160,
+        10,
+    );
+
+    assert_eq!(Some("lib.rs::bar"), app.selected_symbol_id());
+    let expected_scroll = diff_shape::section_start_line_for_symbol(
+        &diff_shape::build_diff_pane_content(
+            &report,
+            &diff_hunks,
+            app.selected_diff_target(&report).as_ref(),
+        ),
+        "lib.rs::bar",
+        app.diff_view_mode(),
+    )
+    .expect("bar's section start must resolve");
+    assert_eq!(expected_scroll, app.right_pane_scroll());
+}
+
+#[test]
+fn should_scroll_into_the_second_signature_changed_section_in_split_view() {
+    // `App::new` already defaults to `DiffViewMode::Split`.
+    let report = report_with_two_adjacent_signature_changed_symbols();
+    let diff_hunks = diff_hunks_with_two_signature_changed_sections();
+    let app = App::new(&report).handle_key(InputKey::Down);
+    assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
+    let last_diff_focus = app.selected_diff_focus(&report);
+
+    let app = dispatch_draw_and_fold(
+        app,
+        &report,
+        &diff_hunks,
+        last_diff_focus,
+        InputKey::Down,
+        160,
+        10,
+    );
+
+    assert_eq!(Some("lib.rs::bar"), app.selected_symbol_id());
+    let expected_scroll = diff_shape::section_start_line_for_symbol(
+        &diff_shape::build_diff_pane_content(
+            &report,
+            &diff_hunks,
+            app.selected_diff_target(&report).as_ref(),
+        ),
+        "lib.rs::bar",
+        app.diff_view_mode(),
+    )
+    .expect("bar's section start must resolve");
+    assert_eq!(expected_scroll, app.right_pane_scroll());
+}
