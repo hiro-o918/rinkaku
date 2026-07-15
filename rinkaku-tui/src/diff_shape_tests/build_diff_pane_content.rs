@@ -1,6 +1,24 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+/// Builds a [`Hunk`] whose every line is `Added` (`crate::diff_shape_tests`'
+/// shared `hunk()` helper always builds `Context` lines instead, which
+/// cannot represent a brand-new file's diff: real `git diff` output for a
+/// new file has no old side at all).
+fn added_hunk(header: &str, new_range: Option<(usize, usize)>, lines: Vec<&str>) -> Hunk {
+    Hunk {
+        header: header.to_string(),
+        new_range,
+        lines: lines
+            .into_iter()
+            .map(|content| crate::diff_view::DiffLine {
+                kind: crate::diff_view::DiffLineKind::Added,
+                content: content.to_string(),
+            })
+            .collect(),
+    }
+}
+
 #[test]
 fn should_return_empty_when_target_is_none() {
     let report = empty_report();
@@ -295,6 +313,11 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
     // per symbol (plus a module-level sub-hunk for the blank separator
     // lines between them) instead of cloning the whole hunk into every
     // section.
+    //
+    // A real brand-new-file hunk has every line `Added` and an old-side
+    // count of 0 (there is no old side at all), unlike the shared `hunk()`
+    // fixture helper, which always builds `Context` lines — so this test
+    // builds its own hunk directly rather than via that helper.
     let report = Report {
         files: vec![FileReport {
             path: "file_size.rs".to_string(),
@@ -308,7 +331,7 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
     };
     let diff_files = vec![FileHunks {
         path: "file_size.rs".to_string(),
-        hunks: vec![hunk(
+        hunks: vec![added_hunk(
             "@@ -0,0 +1,11 @@",
             Some((1, 11)),
             vec![
@@ -339,8 +362,8 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
             contract_header: None,
             hunks: vec![AttributedHunk {
                 source_index: 0,
-                hunk: hunk(
-                    "@@ -0,3 +1,3 @@",
+                hunk: added_hunk(
+                    "@@ -0,0 +1,3 @@",
                     Some((1, 3)),
                     vec!["fn foo() {", "    body();", "}"],
                 ),
@@ -353,8 +376,8 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
             contract_header: None,
             hunks: vec![AttributedHunk {
                 source_index: 0,
-                hunk: hunk(
-                    "@@ -4,3 +5,3 @@",
+                hunk: added_hunk(
+                    "@@ -0,0 +5,3 @@",
                     Some((5, 7)),
                     vec!["fn bar() {", "    body();", "}"],
                 ),
@@ -367,8 +390,8 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
             contract_header: None,
             hunks: vec![AttributedHunk {
                 source_index: 0,
-                hunk: hunk(
-                    "@@ -8,3 +9,3 @@",
+                hunk: added_hunk(
+                    "@@ -0,0 +9,3 @@",
                     Some((9, 11)),
                     vec!["fn baz() {", "    body();", "}"],
                 ),
@@ -382,12 +405,12 @@ fn should_attribute_new_file_single_hunk_to_every_symbol_it_defines() {
             hunks: vec![
                 AttributedHunk {
                     source_index: 0,
-                    hunk: hunk("@@ -3,1 +4,1 @@", Some((4, 4)), vec![""]),
+                    hunk: added_hunk("@@ -0,0 +4,1 @@", Some((4, 4)), vec![""]),
                     origin_offset: 3,
                 },
                 AttributedHunk {
                     source_index: 0,
-                    hunk: hunk("@@ -7,1 +8,1 @@", Some((8, 8)), vec![""]),
+                    hunk: added_hunk("@@ -0,0 +8,1 @@", Some((8, 8)), vec![""]),
                     origin_offset: 7,
                 },
             ],
