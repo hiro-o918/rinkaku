@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.13](https://github.com/hiro-o918/rinkaku/compare/v0.6.12...v0.6.13) (2026-07-15)
+
+
+### Features
+
+* **tui:** drop uppercase key aliases and filter help overlay by focus ([#177](https://github.com/hiro-o918/rinkaku/issues/177)) ([bce98ff](https://github.com/hiro-o918/rinkaku/commit/bce98ff1ba2003ecf134263fd0625c6fe9375336))
+
+
+### Miscellaneous
+
+* release main ([#176](https://github.com/hiro-o918/rinkaku/issues/176)) ([4725202](https://github.com/hiro-o918/rinkaku/commit/4725202fb352b79062b8494bb8d34ac4db207d10))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.12 to 0.6.13
+
 ## [0.6.12](https://github.com/hiro-o918/rinkaku/compare/v0.6.11...v0.6.12) (2026-07-15)
 
 
