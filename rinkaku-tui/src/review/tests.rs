@@ -77,7 +77,7 @@ mod compose_tests {
     }
 
     #[test]
-    fn should_add_a_note_and_return_to_idle_when_confirming_a_non_blank_buffer() {
+    fn should_add_an_annotation_and_return_to_idle_when_confirming_a_non_blank_buffer() {
         let state = ReviewState::default()
             .begin_compose(snapshot("lib.rs"))
             .push_char('h')
@@ -86,29 +86,29 @@ mod compose_tests {
 
         assert_eq!(&ReviewMode::Idle, state.mode());
         assert_eq!(
-            &[Note {
-                location: NoteLocation::from(snapshot("lib.rs")),
+            &[Annotation {
+                location: AnnotationLocation::from(snapshot("lib.rs")),
                 body: "hi".to_string(),
                 signature: Some("fn foo()".to_string()),
             }],
-            state.notes()
+            state.annotations()
         );
         assert_eq!(1, state.revision());
     }
 
     #[test]
-    fn should_not_add_a_note_when_confirming_an_empty_buffer() {
+    fn should_not_add_an_annotation_when_confirming_an_empty_buffer() {
         let state = ReviewState::default()
             .begin_compose(snapshot("lib.rs"))
             .confirm_compose();
 
         assert_eq!(&ReviewMode::Idle, state.mode());
-        assert!(state.notes().is_empty());
+        assert!(state.annotations().is_empty());
         assert_eq!(0, state.revision());
     }
 
     #[test]
-    fn should_not_add_a_note_when_confirming_a_whitespace_only_buffer() {
+    fn should_not_add_an_annotation_when_confirming_a_whitespace_only_buffer() {
         let state = ReviewState::default()
             .begin_compose(snapshot("lib.rs"))
             .push_char(' ')
@@ -116,7 +116,7 @@ mod compose_tests {
             .confirm_compose();
 
         assert_eq!(&ReviewMode::Idle, state.mode());
-        assert!(state.notes().is_empty());
+        assert!(state.annotations().is_empty());
         assert_eq!(0, state.revision());
     }
 
@@ -128,7 +128,7 @@ mod compose_tests {
             .cancel_compose();
 
         assert_eq!(&ReviewMode::Idle, state.mode());
-        assert!(state.notes().is_empty());
+        assert!(state.annotations().is_empty());
         assert_eq!(0, state.revision());
     }
 
@@ -137,7 +137,7 @@ mod compose_tests {
         let state = ReviewState::default().confirm_compose();
 
         assert_eq!(&ReviewMode::Idle, state.mode());
-        assert!(state.notes().is_empty());
+        assert!(state.annotations().is_empty());
     }
 
     #[test]
@@ -152,7 +152,7 @@ mod list_tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn state_with_two_notes() -> ReviewState {
+    fn state_with_two_annotations() -> ReviewState {
         ReviewState::default()
             .begin_compose(snapshot("a.rs"))
             .push_char('a')
@@ -163,54 +163,57 @@ mod list_tests {
     }
 
     #[test]
-    fn should_open_list_mode_with_cursor_on_first_note() {
-        let state = state_with_two_notes().open_list();
+    fn should_open_list_mode_with_cursor_on_first_annotation() {
+        let state = state_with_two_annotations().open_list();
 
         assert_eq!(&ReviewMode::List { cursor: 0 }, state.mode());
     }
 
     #[test]
-    fn should_move_list_cursor_down_clamped_to_the_last_note() {
-        let state = state_with_two_notes().open_list().list_down().list_down();
+    fn should_move_list_cursor_down_clamped_to_the_last_annotation() {
+        let state = state_with_two_annotations()
+            .open_list()
+            .list_down()
+            .list_down();
 
         assert_eq!(&ReviewMode::List { cursor: 1 }, state.mode());
     }
 
     #[test]
     fn should_move_list_cursor_up_clamped_to_zero() {
-        let state = state_with_two_notes().open_list().list_up();
+        let state = state_with_two_annotations().open_list().list_up();
 
         assert_eq!(&ReviewMode::List { cursor: 0 }, state.mode());
     }
 
     #[test]
     fn should_close_the_list_and_return_to_idle() {
-        let state = state_with_two_notes().open_list().close();
+        let state = state_with_two_annotations().open_list().close();
 
         assert_eq!(&ReviewMode::Idle, state.mode());
     }
 
     #[test]
-    fn should_delete_the_note_under_the_list_cursor() {
-        let state = state_with_two_notes()
+    fn should_delete_the_annotation_under_the_list_cursor() {
+        let state = state_with_two_annotations()
             .open_list()
             .list_down()
             .delete_selected();
 
         assert_eq!(
-            &[Note {
-                location: NoteLocation::from(snapshot("a.rs")),
+            &[Annotation {
+                location: AnnotationLocation::from(snapshot("a.rs")),
                 body: "a".to_string(),
                 signature: Some("fn foo()".to_string()),
             }],
-            state.notes()
+            state.annotations()
         );
         assert_eq!(3, state.revision());
     }
 
     #[test]
-    fn should_clamp_list_cursor_after_deleting_the_last_note() {
-        let state = state_with_two_notes()
+    fn should_clamp_list_cursor_after_deleting_the_last_annotation() {
+        let state = state_with_two_annotations()
             .open_list()
             .list_down()
             .delete_selected();
@@ -223,7 +226,7 @@ mod list_tests {
         let state = ReviewState::default().open_list().delete_selected();
 
         assert_eq!(&ReviewMode::List { cursor: 0 }, state.mode());
-        assert!(state.notes().is_empty());
+        assert!(state.annotations().is_empty());
         assert_eq!(0, state.revision());
     }
 }

@@ -229,7 +229,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -274,7 +274,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -335,7 +335,7 @@ mod tests {
                         &BlastRadiusSelection::NotApplicable,
                         None,
                         &[],
-                        &crate::note_markers::NoteMarkers::default(),
+                        &crate::annotation_markers::AnnotationMarkers::default(),
                         Locale::English,
                     );
                 })
@@ -368,7 +368,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -400,7 +400,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -433,7 +433,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })
@@ -464,7 +464,7 @@ mod tests {
                     &BlastRadiusSelection::NotApplicable,
                     None,
                     &[],
-                    &crate::note_markers::NoteMarkers::default(),
+                    &crate::annotation_markers::AnnotationMarkers::default(),
                     Locale::English,
                 );
             })

@@ -1,7 +1,7 @@
-//! Review notes (ADR 0048): a location-anchored `Note` primitive plus a
+//! Review annotations (ADR 0048): a location-anchored `Annotation` primitive plus a
 //! pure state machine (`ReviewState`) for composing, listing, and exporting
 //! them, decoupled from the rest of the TUI through the narrow
-//! `SelectionSnapshot` input and the `Vec<Note>`/rendered-`String` output
+//! `SelectionSnapshot` input and the `Vec<Annotation>`/rendered-`String` output
 //! (this module's own "own state, narrow input" boundary — see the ADR's
 //! Module boundary decision).
 //!
@@ -17,22 +17,22 @@ mod render;
 
 pub use render::{render_agent_packet, render_review_comments};
 
-/// A destination-neutral note attached to a location in the diff (ADR
-/// 0048's primitive): nothing about a `Note` says who will eventually read
-/// it — that decision is deferred to export time, per sink.
+/// A destination-neutral annotation attached to a location in the diff (ADR
+/// 0048's primitive): nothing about an `Annotation` says who will eventually
+/// read it — that decision is deferred to export time, per sink.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Note {
-    pub location: NoteLocation,
+pub struct Annotation {
+    pub location: AnnotationLocation,
     pub body: String,
     pub signature: Option<String>,
 }
 
-/// Where a [`Note`] is anchored: a file path, the symbol it was taken
+/// Where a [`Annotation`] is anchored: a file path, the symbol it was taken
 /// against (if any), the symbol's own new-side line range, and the
 /// GitHub-comment anchor within that range (the first hunk-intersecting
 /// contiguous run — see [`crate::review::render_review_comments`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NoteLocation {
+pub struct AnnotationLocation {
     pub path: String,
     pub symbol_id: Option<String>,
     pub symbol_name: Option<String>,
@@ -45,7 +45,7 @@ pub struct NoteLocation {
     pub anchor: Option<(usize, usize)>,
 }
 
-/// What the cursor pointed at when `n` (compose) was pressed — the sole
+/// What the cursor pointed at when `a` (compose) was pressed — the sole
 /// channel by which [`ReviewState`] learns what the reviewer is
 /// annotating (ADR 0048's Input boundary decision). Derived by
 /// `crate::lib`/`crate::app` from the tree cursor plus the diff hunks
@@ -60,7 +60,7 @@ pub struct SelectionSnapshot {
     pub signature: Option<String>,
 }
 
-impl From<SelectionSnapshot> for NoteLocation {
+impl From<SelectionSnapshot> for AnnotationLocation {
     fn from(snapshot: SelectionSnapshot) -> Self {
         Self {
             path: snapshot.path,
@@ -105,10 +105,10 @@ pub enum Verdict {
     Comment,
 }
 
-/// One [`Note`] rendered for sink A (GitHub PR review comments) — plain
-/// data, not a `gh api` request shape, so [`crate::review::render_review_comments`]
-/// stays testable without a JSON dependency and the `rinkaku` binary crate
-/// decides the wire format.
+/// One [`Annotation`] rendered for sink A (GitHub PR review comments) —
+/// plain data, not a `gh api` request shape, so
+/// [`crate::review::render_review_comments`] stays testable without a JSON
+/// dependency and the `rinkaku` binary crate decides the wire format.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedComment {
     pub path: String,
@@ -177,20 +177,20 @@ impl ExportMenuEntry {
 const VERDICT_ENTRIES: [Verdict; 3] = [Verdict::Approve, Verdict::RequestChanges, Verdict::Comment];
 
 /// The review feature's own state (ADR 0048's Module boundary decision):
-/// the accumulated notes, which overlay (if any) is open, a change counter
-/// consulted by `crate::lib::run_app`'s `NoteMarkers` cache-on-change gate,
-/// and a pending export request/status message for `crate::lib::run_app`
-/// to act on and report back through. Every method here is a pure state
-/// transition — no IO, no port calls.
+/// the accumulated annotations, which overlay (if any) is open, a change
+/// counter consulted by `crate::lib::run_app`'s `AnnotationMarkers`
+/// cache-on-change gate, and a pending export request/status message for
+/// `crate::lib::run_app` to act on and report back through. Every method
+/// here is a pure state transition — no IO, no port calls.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReviewState {
-    notes: Vec<Note>,
+    annotations: Vec<Annotation>,
     mode: ReviewMode,
-    /// Incremented on every mutation to `notes` — `crate::lib::run_app`'s
-    /// `NoteMarkers` cache-on-change gate compares this against the value
-    /// it last recomputed from, mirroring
+    /// Incremented on every mutation to `annotations` — `crate::lib::run_app`'s
+    /// `AnnotationMarkers` cache-on-change gate compares this against the
+    /// value it last recomputed from, mirroring
     /// `should_recompute_blast_radius_selection`'s own contract (ADR
-    /// 0048's Rendering boundary decision: `NoteMarkers` must not be
+    /// 0048's Rendering boundary decision: `AnnotationMarkers` must not be
     /// derived per frame).
     revision: u64,
     pending_export: Option<ExportRequest>,
@@ -198,8 +198,8 @@ pub struct ReviewState {
 }
 
 impl ReviewState {
-    pub fn notes(&self) -> &[Note] {
-        &self.notes
+    pub fn annotations(&self) -> &[Annotation] {
+        &self.annotations
     }
 
     pub fn mode(&self) -> &ReviewMode {
@@ -218,7 +218,7 @@ impl ReviewState {
     /// `crate::lib::run_app` when `n` is pressed and a snapshot could be
     /// derived from the cursor (`derive_selection_snapshot` returned
     /// `Some`); a `None` snapshot never reaches this method at all, since
-    /// `run_app` special-cases `InputKey::NoteCompose` before dispatch
+    /// `run_app` special-cases `InputKey::AnnotationCompose` before dispatch
     /// (ADR 0048's touch-point (a): the one key that needs data
     /// `App::handle_key` cannot provide).
     pub fn begin_compose(mut self, snapshot: SelectionSnapshot) -> Self {
@@ -247,17 +247,18 @@ impl ReviewState {
         self
     }
 
-    /// Confirms the in-progress compose: appends a [`Note`] built from the
-    /// snapshot and buffer and returns to [`ReviewMode::Idle`], unless the
-    /// buffer is empty or whitespace-only, in which case composing is
-    /// simply abandoned (no note is added) — mirrors [`Self::cancel_compose`]
-    /// for a blank buffer, since an empty note carries nothing worth
-    /// recording. A no-op outside [`ReviewMode::Compose`].
+    /// Confirms the in-progress compose: appends an [`Annotation`] built
+    /// from the snapshot and buffer and returns to [`ReviewMode::Idle`],
+    /// unless the buffer is empty or whitespace-only, in which case
+    /// composing is simply abandoned (no annotation is added) — mirrors
+    /// [`Self::cancel_compose`] for a blank buffer, since an empty
+    /// annotation carries nothing worth recording. A no-op outside
+    /// [`ReviewMode::Compose`].
     pub fn confirm_compose(mut self) -> Self {
         if let ReviewMode::Compose { snapshot, buffer } = self.mode {
             if !buffer.trim().is_empty() {
                 let signature = snapshot.signature.clone();
-                self.notes.push(Note {
+                self.annotations.push(Annotation {
                     location: snapshot.into(),
                     body: buffer,
                     signature,
@@ -269,8 +270,8 @@ impl ReviewState {
         self
     }
 
-    /// Abandons the in-progress compose without adding a note — a no-op
-    /// outside [`ReviewMode::Compose`].
+    /// Abandons the in-progress compose without adding an annotation — a
+    /// no-op outside [`ReviewMode::Compose`].
     pub fn cancel_compose(mut self) -> Self {
         if matches!(self.mode, ReviewMode::Compose { .. }) {
             self.mode = ReviewMode::Idle;
@@ -278,7 +279,8 @@ impl ReviewState {
         self
     }
 
-    /// Opens the notes list overlay (`N`), cursor on the first note.
+    /// Opens the annotations list overlay (`A`), cursor on the first
+    /// annotation.
     pub fn open_list(mut self) -> Self {
         self.mode = ReviewMode::List { cursor: 0 };
         self
@@ -319,7 +321,7 @@ impl ReviewState {
     pub fn list_down(mut self) -> Self {
         match &mut self.mode {
             ReviewMode::List { cursor } => {
-                *cursor = (*cursor + 1).min(self.notes.len().saturating_sub(1));
+                *cursor = (*cursor + 1).min(self.annotations.len().saturating_sub(1));
             }
             ReviewMode::ExportMenu { cursor } => {
                 let max_len = export_menu_entries(true).len();
@@ -333,15 +335,15 @@ impl ReviewState {
         self
     }
 
-    /// Deletes the note the list cursor currently points at — a no-op
-    /// outside [`ReviewMode::List`] or when the list is empty.
+    /// Deletes the annotation the list cursor currently points at — a
+    /// no-op outside [`ReviewMode::List`] or when the list is empty.
     pub fn delete_selected(mut self) -> Self {
         if let ReviewMode::List { cursor } = self.mode
-            && cursor < self.notes.len()
+            && cursor < self.annotations.len()
         {
-            self.notes.remove(cursor);
+            self.annotations.remove(cursor);
             self.revision += 1;
-            let new_len = self.notes.len();
+            let new_len = self.annotations.len();
             self.mode = ReviewMode::List {
                 cursor: cursor.min(new_len.saturating_sub(1)),
             };
@@ -349,7 +351,7 @@ impl ReviewState {
         self
     }
 
-    /// Opens the export menu (`x` from the notes list) — a no-op outside
+    /// Opens the export menu (`x` from the annotations list) — a no-op outside
     /// [`ReviewMode::List`].
     pub fn open_export_menu(mut self) -> Self {
         if matches!(self.mode, ReviewMode::List { .. }) {
@@ -403,7 +405,7 @@ impl ReviewState {
         self.pending_export.take()
     }
 
-    /// Sets the status message shown in the notes-list overlay (an export
+    /// Sets the status message shown in the annotations-list overlay (an export
     /// result, success or failure) — called by `crate::lib::run_app` after
     /// performing an export.
     pub fn set_status(mut self, message: impl Into<String>) -> Self {

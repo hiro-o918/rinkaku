@@ -1,7 +1,8 @@
 //! `translate_key` tests for ADR 0057's Source-view search bindings: `/`
 //! starting a query, the composing-mode early return, `n`/`N` being
-//! Source-screen-only (and not colliding with the entry screen's own
-//! review-note `n`/`N`), and Esc's dual "cancel search" / "back" meaning.
+//! Source-screen-only (freed entirely on the entry screen by ADR 0058,
+//! which moved the review-annotation bindings to `a`/`A`), and Esc's dual
+//! "cancel search" / "back" meaning.
 
 use super::{empty_report, report_with_one_symbol};
 use crate::app::{App, InputKey};
@@ -59,26 +60,60 @@ fn should_translate_uppercase_n_to_search_prev_on_source_screen() {
 }
 
 #[test]
-fn should_translate_n_to_note_compose_on_entry_screen() {
-    // Unaffected by ADR 0057: the entry screen's own `n` (ADR 0048) keeps
-    // its pre-existing meaning, since the search bindings are gated on
-    // `on_source_screen`.
+fn should_translate_n_to_none_on_entry_screen() {
+    // ADR 0058: `n`/`N` are freed entirely on the entry screen (moved to
+    // `a`/`A`), reserved for a future Entry-screen search reusing the same
+    // next/prev idiom Source view already has.
     let report = empty_report();
     let app = App::new(&report);
 
     let actual = translate_key(KeyCode::Char('n'), KeyModifiers::NONE, &app);
 
-    assert_eq!(Some(InputKey::NoteCompose), actual);
+    assert_eq!(None, actual);
 }
 
 #[test]
-fn should_translate_uppercase_n_to_notes_list_on_entry_screen() {
+fn should_translate_uppercase_n_to_none_on_entry_screen() {
     let report = empty_report();
     let app = App::new(&report);
 
     let actual = translate_key(KeyCode::Char('N'), KeyModifiers::NONE, &app);
 
-    assert_eq!(Some(InputKey::NotesList), actual);
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_translate_a_to_annotation_compose_on_entry_screen() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('a'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::AnnotationCompose), actual);
+}
+
+#[test]
+fn should_translate_uppercase_a_to_annotations_list_on_entry_screen() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('A'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::AnnotationsList), actual);
+}
+
+#[test]
+fn should_translate_a_to_annotation_compose_on_source_screen() {
+    // `translate_key` maps `a` unconditionally, the same way it mapped `n`
+    // before ADR 0058 — `App::handle_key`'s own `Screen::Entry` guard on
+    // `AnnotationCompose`/`AnnotationsList` is what actually makes the
+    // binding a no-op on the source screen, not this function.
+    let report = report_with_one_symbol();
+    let app = opened_source_screen(&report);
+
+    let actual = translate_key(KeyCode::Char('a'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::AnnotationCompose), actual);
 }
 
 #[test]

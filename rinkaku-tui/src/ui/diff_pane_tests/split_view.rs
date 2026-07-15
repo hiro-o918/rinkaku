@@ -36,7 +36,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -90,7 +90,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -122,7 +122,7 @@ fn should_pair_old_and_new_signature_on_the_anchor_row_when_section_has_a_contra
         &[&section],
         true,
         None,
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         "lib.rs",
     );
 
@@ -164,7 +164,7 @@ fn should_mirror_the_plain_bold_title_on_both_sides_in_split_view_when_signature
         &[&section],
         true,
         None,
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         "lib.rs",
     );
 
@@ -230,7 +230,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -281,7 +281,7 @@ index e69de29..4b825dc 100644
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -343,7 +343,7 @@ fn should_offset_highlight_lookup_by_origin_offset_in_split_view_when_hunk_was_s
         &[&section],
         true,
         Some(&highlighted_file),
-        &crate::note_markers::NoteMarkers::default(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
         "lib.rs",
     );
 

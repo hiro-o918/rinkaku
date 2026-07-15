@@ -26,7 +26,7 @@ fn should_draw_source_screen_title_and_error_message_when_file_is_missing() {
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -70,7 +70,7 @@ fn should_wrap_source_error_message_instead_of_truncating_it_in_a_narrow_pane() 
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -128,7 +128,7 @@ fn should_report_none_clamped_scroll_but_source_viewport_height_when_source_scre
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })

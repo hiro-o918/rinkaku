@@ -44,7 +44,7 @@ pub fn entry_row_line(
     row: &Row<'_>,
     label: &str,
     ranks: &HashMap<String, DirRank>,
-    note_markers: &crate::note_markers::NoteMarkers,
+    annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     selected: bool,
 ) -> Line<'static> {
     let indent = " ".repeat(row.depth * INDENT_WIDTH);
@@ -110,9 +110,9 @@ pub fn entry_row_line(
             spans.push(Span::styled(label.to_string(), file_label_style(row.node)));
             spans.push(Span::raw(" "));
             push_badge_spans(&mut spans, &row.node.badges, BadgeContext::File);
-            push_note_badge_span(
+            push_annotation_badge_span(
                 &mut spans,
-                note_markers.file_counts.get(&row.node.path).copied(),
+                annotation_markers.file_counts.get(&row.node.path).copied(),
             );
             // `skip_reason` is mutually exclusive with `test_symbol_count`
             // (`crate::tree::TreeNode::skip_reason`'s own doc comment: a
@@ -137,9 +137,12 @@ pub fn entry_row_line(
                 symbol_ref.name.clone(),
                 symbol_name_style(symbol_ref),
             ));
-            push_note_badge_span(
+            push_annotation_badge_span(
                 &mut spans,
-                note_markers.symbol_counts.get(&symbol_ref.id).copied(),
+                annotation_markers
+                    .symbol_counts
+                    .get(&symbol_ref.id)
+                    .copied(),
             );
         }
     }
@@ -356,21 +359,24 @@ pub(crate) fn cyan_badge_style() -> Style {
     Style::default().fg(Color::Cyan)
 }
 
-/// Appends an `n:N` badge (ADR 0048) — "this row has N review notes
-/// attached" — in the same cyan-number style [`cyan_badge_style`] already
-/// uses for informational counts (`chg:`/`fan-in:`), a no-op when `count`
-/// is `None` or `0`. Kept as its own function rather than folded into
-/// [`push_badge_spans`]: that function's `Badges` input is baked once at
-/// tree-build time (`crate::tree::build_tree`'s own doc comment), while
-/// note counts change during the session (`crate::note_markers`'s own
-/// module doc comment) — a genuinely different data source, not just a
-/// different badge label.
-fn push_note_badge_span(spans: &mut Vec<Span<'static>>, count: Option<usize>) {
+/// Appends an `ann:N` badge (ADR 0048, ADR 0058) — "this row has N review
+/// annotations attached" — in the same cyan-number style
+/// [`cyan_badge_style`] already uses for informational counts
+/// (`chg:`/`fan-in:`), a no-op when `count` is `None` or `0`. Kept as its
+/// own function rather than folded into [`push_badge_spans`]: that
+/// function's `Badges` input is baked once at tree-build time
+/// (`crate::tree::build_tree`'s own doc comment), while annotation counts
+/// change during the session (`crate::annotation_markers`'s own module doc
+/// comment) — a genuinely different data source, not just a different
+/// badge label. `ann:` rather than `n:` (ADR 0058) — `n` no longer names
+/// this feature's key binding, so keeping it as the badge abbreviation
+/// would be a stale mnemonic.
+fn push_annotation_badge_span(spans: &mut Vec<Span<'static>>, count: Option<usize>) {
     let Some(count) = count.filter(|&count| count > 0) else {
         return;
     };
     spans.push(Span::raw(" "));
-    spans.push(Span::raw("n:"));
+    spans.push(Span::raw("ann:"));
     spans.push(Span::styled(count.to_string(), cyan_badge_style()));
 }
 

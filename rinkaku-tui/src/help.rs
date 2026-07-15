@@ -190,18 +190,18 @@ fn review_bindings(locale: Locale) -> Vec<KeyBinding> {
     let tag = locale.tag();
     vec![
         KeyBinding {
-            keys: "n",
-            description: rust_i18n::t!("help.binding.compose_review_note", locale = tag)
+            keys: "a",
+            description: rust_i18n::t!("help.binding.compose_annotation", locale = tag)
                 .into_owned(),
         },
         KeyBinding {
-            keys: "N",
-            description: rust_i18n::t!("help.binding.open_review_notes_list", locale = tag)
+            keys: "A",
+            description: rust_i18n::t!("help.binding.open_annotations_list", locale = tag)
                 .into_owned(),
         },
         KeyBinding {
             keys: "j/k, Enter, Esc, d",
-            description: rust_i18n::t!("help.binding.notes_list_actions", locale = tag)
+            description: rust_i18n::t!("help.binding.annotations_list_actions", locale = tag)
                 .into_owned(),
         },
     ]
@@ -328,9 +328,9 @@ fn keymap_groups(locale: Locale) -> Vec<KeyBindingGroup> {
 /// (`InputKey::Select`) and [`HelpGroup::RightFocus`]'s scroll/`h`/`esc`
 /// bindings are only ever dispatched under their matching [`Focus`];
 /// [`HelpGroup::SourceView`] only under [`Screen::Source`];
-/// [`HelpGroup::Review`]'s `n`/`N` only under [`Screen::Entry`] (regardless
+/// [`HelpGroup::Review`]'s `a`/`A` only under [`Screen::Entry`] (regardless
 /// of `Focus`, per `review_flow::derive_selection_snapshot` and
-/// `App::handle_key`'s own `NotesList` arm); [`HelpGroup::Global`] always;
+/// `App::handle_key`'s own `AnnotationsList` arm); [`HelpGroup::Global`] always;
 /// [`HelpGroup::EntryOnly`] (ADR 0057) only under [`Screen::Entry`] —
 /// `d`/`r`/`o`/`s`/`ctrl-o`/`ctrl-i` are no-ops on [`Screen::Source`]
 /// (`App::handle_key`'s own Source-screen catch-all arm).

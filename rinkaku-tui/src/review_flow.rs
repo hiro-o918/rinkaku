@@ -1,7 +1,7 @@
-//! ADR 0048 review-notes integration glue (split out of `lib.rs`, which had
+//! ADR 0048 review-annotations integration glue (split out of `lib.rs`, which had
 //! grown past the file-size threshold, ADR 0028): the pieces of
 //! `crate::event_loop::run_app`'s event loop that are specifically about
-//! composing, exporting, and caching review notes, as opposed to the loop's
+//! composing, exporting, and caching review annotations, as opposed to the loop's
 //! general dispatch machinery (`dispatch_non_source_key`, the diff-pane/
 //! blast-radius recompute gates, etc., which live in `crate::event_loop`).
 //! Every function here is pure or, for [`perform_export`], calls out to a
@@ -15,7 +15,7 @@ use rinkaku_core::render::Report;
 
 /// Applies [`InputKey::OpenPrInBrowser`] (ADR 0050): opens `ports.pr_context`'s
 /// PR page via `ports.browser`, given `App` has no `PrContext` of its own
-/// (mirroring [`dispatch_note_compose_key`]'s own "needs data `handle_key`
+/// (mirroring [`dispatch_annotation_compose_key`]'s own "needs data `handle_key`
 /// doesn't have" precedent). Only the two failure paths (no `PrContext`, or
 /// `ports.browser` erroring) set a status-line message — a successful open
 /// leaves it untouched, since the browser actually opening is itself the
@@ -35,23 +35,23 @@ pub(crate) fn open_pr_in_browser(mut app: App, ports: &ReviewPorts<'_>) -> App {
     app
 }
 
-/// Applies [`InputKey::NoteCompose`] given the [`review::SelectionSnapshot`]
+/// Applies [`InputKey::AnnotationCompose`] given the [`review::SelectionSnapshot`]
 /// `crate::run_app` already derived from the cursor (that derivation needs
 /// `report`/the parsed diff hunks, which `App::handle_key` has no access
-/// to — `InputKey::NoteCompose`'s own doc comment). Always routes through
+/// to — `InputKey::AnnotationCompose`'s own doc comment). Always routes through
 /// `App::handle_key` first, even on a `None` snapshot (cursor not on a
 /// present symbol row, or on the source screen): `handle_key`'s own
-/// `NoteCompose` match arm is a no-op stub, but what matters is its
+/// `AnnotationCompose` match arm is a no-op stub, but what matters is its
 /// unconditional `pending_prefix` clear at the top of the function — the
 /// same "call `handle_key` for its clear even when its own arm does
 /// nothing" contract `crate::dispatch_non_source_key`'s `GotoDefinition`/
 /// `GotoReferences` arm documents for itself. A `Some` snapshot opens the
 /// compose overlay after that call; `None` leaves `review` untouched.
-pub(crate) fn dispatch_note_compose_key(
+pub(crate) fn dispatch_annotation_compose_key(
     app: App,
     snapshot: Option<review::SelectionSnapshot>,
 ) -> App {
-    let app = app.handle_key(InputKey::NoteCompose);
+    let app = app.handle_key(InputKey::AnnotationCompose);
     match snapshot {
         Some(snapshot) => {
             let review = app.review().clone().begin_compose(snapshot);
@@ -62,26 +62,26 @@ pub(crate) fn dispatch_note_compose_key(
 }
 
 /// Whether `crate::run_app`'s event loop should recompute
-/// [`crate::note_markers::NoteMarkers`] this key, mirroring
+/// [`crate::annotation_markers::AnnotationMarkers`] this key, mirroring
 /// `crate::should_recompute_blast_radius_selection`'s/
 /// `crate::should_recompute_diff_pane_content`'s own change-gated-cache
 /// contract (ADR 0048's Rendering boundary decision: this derivation must
 /// not run inside `ui::draw`, since that runs on every ~100ms idle poll
-/// tick, not only on a key press). `true` only when `review`'s note set
-/// actually changed since the last recompute — compares `revision` rather
-/// than gating on screen/pane the way the blast-radius/diff-pane gates do,
-/// since note markers are relevant on every row/pane, not just one right
-/// pane's own active mode.
-pub(crate) fn should_recompute_note_markers(app: &App, last_revision: u64) -> bool {
+/// tick, not only on a key press). `true` only when `review`'s annotation
+/// set actually changed since the last recompute — compares `revision`
+/// rather than gating on screen/pane the way the blast-radius/diff-pane
+/// gates do, since annotation markers are relevant on every row/pane, not
+/// just one right pane's own active mode.
+pub(crate) fn should_recompute_annotation_markers(app: &App, last_revision: u64) -> bool {
     app.review().revision() != last_revision
 }
 
 /// The summary line posted alongside every GitHub PR review sink A submits
 /// (ADR 0048) — every review is submitted with the same fixed summary,
-/// since the individual notes themselves carry the substantive content as
-/// inline comments; there is no per-session reviewer-authored summary in
-/// v1.
-const REVIEW_SUMMARY: &str = "Review notes posted via rinkaku.";
+/// since the individual annotations themselves carry the substantive
+/// content as inline comments; there is no per-session reviewer-authored
+/// summary in v1.
+const REVIEW_SUMMARY: &str = "Review annotations posted via rinkaku.";
 
 /// Performs `export` against the matching port in `ports` (ADR 0048's
 /// Output boundary decision: `review` itself never calls a port, only
@@ -111,7 +111,7 @@ pub(crate) fn perform_export(
             let Some(pr_context) = &ports.pr_context else {
                 return review.set_status("error: no PR context available to post a review");
             };
-            let comments = review::render_review_comments(review.notes());
+            let comments = review::render_review_comments(review.annotations());
             match submitter.submit_review(pr_context, verdict, REVIEW_SUMMARY, &comments) {
                 Ok(()) => review.set_status(format!(
                     "posted {} review comment(s) to PR #{}",
@@ -122,7 +122,7 @@ pub(crate) fn perform_export(
             }
         }
         review::ExportRequest::Clipboard => {
-            let packet = review::render_agent_packet(review.notes());
+            let packet = review::render_agent_packet(review.annotations());
             match ports.clipboard.copy(&packet) {
                 Ok(status) => review.set_status(status),
                 Err(message) => review.set_status(format!("error copying to clipboard: {message}")),
@@ -134,7 +134,7 @@ pub(crate) fn perform_export(
 /// Derives a [`review::SelectionSnapshot`] from whatever the tree cursor
 /// currently points at (ADR 0048's Input boundary decision) — the sole
 /// channel by which `review` learns what the reviewer is annotating.
-/// `crate::run_app` calls this when [`InputKey::NoteCompose`] is pressed,
+/// `crate::run_app` calls this when [`InputKey::AnnotationCompose`] is pressed,
 /// since `App::handle_key` itself has no access to `report`/the parsed diff
 /// hunks (mirroring `InputKey::Source`'s own "IO/derivation stays outside
 /// `App`" precedent).
@@ -142,9 +142,9 @@ pub(crate) fn perform_export(
 /// `None` on [`Screen::Source`] (composing against a source-view line is
 /// out of v1's scope) and on any row that is not a present symbol
 /// (`app::NodeKind::Dir`/`File`/`Section`/`TestGroup`, or a removed
-/// symbol) — v1 only supports symbol-anchored notes (module doc comment on
-/// `crate::review`), matching `App::selected_symbol_id`'s own row-kind
-/// scoping.
+/// symbol) — v1 only supports symbol-anchored annotations (module doc
+/// comment on `crate::review`), matching `App::selected_symbol_id`'s own
+/// row-kind scoping.
 ///
 /// The anchor is the first contiguous new-side run where the symbol's own
 /// range intersects a diff hunk touching `path` — GitHub's review API only
@@ -152,7 +152,7 @@ pub(crate) fn perform_export(
 /// this is what [`review::render_review_comments`] posts against. `None`
 /// when no hunk intersects the symbol's range at all (e.g. the symbol
 /// itself is unchanged but was pulled into view via dependency
-/// expansion) — the note still gets a location (`range`), just no
+/// expansion) — the annotation still gets a location (`range`), just no
 /// GitHub-postable anchor; [`review::render_review_comments`] falls back
 /// to `range` in that case.
 pub(crate) fn derive_selection_snapshot(

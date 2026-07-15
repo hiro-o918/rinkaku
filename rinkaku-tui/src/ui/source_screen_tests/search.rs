@@ -34,7 +34,7 @@ fn draw_source_screen_with_search(
                 &BlastRadiusSelection::NotApplicable,
                 source_content.as_ref(),
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })

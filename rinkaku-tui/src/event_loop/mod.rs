@@ -5,7 +5,7 @@
 //! scroll synchronization, the hunk-jump target, and the post-draw scroll
 //! fold-back) and [`goto`] (ADR 0022's `gd`/`gr` candidate resolution).
 //! `crate::input_translate` (raw `crossterm` events -> `InputKey`) and
-//! `crate::review_flow` (ADR 0048's review-notes composing/exporting/caching
+//! `crate::review_flow` (ADR 0048's review-annotations composing/exporting/caching
 //! glue) are further siblings this loop delegates to but does not own.
 
 mod goto;
@@ -16,10 +16,10 @@ use crate::locale::Locale;
 use crate::review::PrContext;
 use crate::review::ports::{BrowserOpener, ClipboardSink, ReviewSubmitter};
 use crate::review_flow::{
-    derive_selection_snapshot, dispatch_note_compose_key, open_pr_in_browser, perform_export,
-    should_recompute_note_markers,
+    derive_selection_snapshot, dispatch_annotation_compose_key, open_pr_in_browser, perform_export,
+    should_recompute_annotation_markers,
 };
-use crate::{diff_shape, diff_view, highlight, input_translate, note_markers, source, ui};
+use crate::{annotation_markers, diff_shape, diff_view, highlight, input_translate, source, ui};
 use goto::{GotoOutcome, resolve_goto};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use rinkaku_core::render::Report;
@@ -29,7 +29,7 @@ use scroll_sync::{
 };
 use std::time::Duration;
 
-/// Review-notes export wiring (ADR 0048), assembled once by `main.rs`'s
+/// Review-annotations export wiring (ADR 0048), assembled once by `main.rs`'s
 /// composition root and threaded through unchanged from
 /// [`crate::session::TuiSession::run`] to [`run_app`]: `pr_context`/
 /// `submitter` are both `Some`/`None` together (sink A's own "absent when
@@ -187,17 +187,18 @@ pub(crate) fn run_app(
     // the very first key press before any frame has drawn (a rare edge
     // case at startup) still has a sensible value to feed in.
     let mut last_effective_diff_view_mode: crate::app::DiffViewMode = app.diff_view_mode();
-    // ADR 0048's `NoteMarkers` cache-on-change, mirroring
+    // ADR 0048's `AnnotationMarkers` cache-on-change, mirroring
     // `blast_radius_selection`/`diff_pane_content`'s own up-front-then-
     // gated-recompute shape: built once from `App::new`'s initial (empty)
-    // `review` state, then only recomputed when `should_recompute_note_markers`
-    // reports the note set actually changed. `last_note_markers_revision`
+    // `review` state, then only recomputed when `should_recompute_annotation_markers`
+    // reports the annotation set actually changed. `last_annotation_markers_revision`
     // starts at `app.review().revision()` itself (0 on a fresh session)
     // rather than a sentinel, so the first key press that does not touch
     // `review` correctly skips a redundant recompute of an already-empty
     // table.
-    let mut note_markers = note_markers::build_note_markers(app.review().notes());
-    let mut last_note_markers_revision = app.review().revision();
+    let mut annotation_markers =
+        annotation_markers::build_annotation_markers(app.review().annotations());
+    let mut last_annotation_markers_revision = app.review().revision();
 
     loop {
         // `ui::draw`'s return value (`DrawOutcome`, `ui::draw`'s own doc
@@ -216,7 +217,7 @@ pub(crate) fn run_app(
                 &blast_radius_selection,
                 source_content.as_ref(),
                 &diff_hunks,
-                &note_markers,
+                &annotation_markers,
                 locale,
             );
         })?;
@@ -285,13 +286,13 @@ pub(crate) fn run_app(
             // variants, `]c`/`[c`) can all change the scroll offset and this
             // sync applies uniformly to any of them.
             let scroll_before_dispatch = app.right_pane_scroll();
-            if let InputKey::NoteCompose = input_key {
+            if let InputKey::AnnotationCompose = input_key {
                 // ADR 0048: needs a `SelectionSnapshot` derived from
                 // `report`/`diff_hunks`, which `App::handle_key` has no
-                // access to (`InputKey::NoteCompose`'s own doc comment) —
+                // access to (`InputKey::AnnotationCompose`'s own doc comment) —
                 // derived here, mirroring `InputKey::Source`'s own "IO/
                 // derivation stays outside `App`" precedent just below, then
-                // applied via `dispatch_note_compose_key` (extracted for the
+                // applied via `dispatch_annotation_compose_key` (extracted for the
                 // same "sequencing needs its own regression coverage"
                 // reason `dispatch_non_source_key`'s own doc comment gives —
                 // an earlier version of this arm left `app` completely
@@ -300,11 +301,11 @@ pub(crate) fn run_app(
                 // the same way the ADR 0022 bug `dispatch_non_source_key`
                 // documents did).
                 let snapshot = derive_selection_snapshot(&app, report, &diff_hunks);
-                app = dispatch_note_compose_key(app, snapshot);
+                app = dispatch_annotation_compose_key(app, snapshot);
             } else if let InputKey::SearchConfirm = input_key {
                 // ADR 0057: needs the Source view's own lines to compute
                 // matches, which `App::handle_key` has no access to
-                // (mirrors `InputKey::NoteCompose`'s own "IO/derivation
+                // (mirrors `InputKey::AnnotationCompose`'s own "IO/derivation
                 // stays outside `App`" precedent just above). See
                 // `dispatch_search_confirm`'s own doc comment for what
                 // happens when `source_content` is not a loaded `Ok` view —
@@ -325,11 +326,11 @@ pub(crate) fn run_app(
             } else if let InputKey::OpenPrInBrowser = input_key {
                 // ADR 0050: needs `review_ports.pr_context`/`.browser`,
                 // neither of which `App::handle_key` has access to (mirrors
-                // `InputKey::NoteCompose`'s own precedent just above).
+                // `InputKey::AnnotationCompose`'s own precedent just above).
                 // `app.handle_key(input_key)` still runs first for the
                 // blanket `status`/`pending_prefix` reset every key needs
                 // (`App::handle_key`'s own doc comment) — its own arm for
-                // this variant is a no-op stub, same as `NoteCompose`'s.
+                // this variant is a no-op stub, same as `AnnotationCompose`'s.
                 app = app.handle_key(input_key);
                 app = open_pr_in_browser(app, &review_ports);
             } else if let InputKey::Source = input_key {
@@ -434,9 +435,10 @@ pub(crate) fn run_app(
                 app = app.with_review(review);
             }
 
-            if should_recompute_note_markers(&app, last_note_markers_revision) {
-                note_markers = note_markers::build_note_markers(app.review().notes());
-                last_note_markers_revision = app.review().revision();
+            if should_recompute_annotation_markers(&app, last_annotation_markers_revision) {
+                annotation_markers =
+                    annotation_markers::build_annotation_markers(app.review().annotations());
+                last_annotation_markers_revision = app.review().revision();
             }
 
             if should_recompute_blast_radius_selection(&app) {

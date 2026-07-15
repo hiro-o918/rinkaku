@@ -1,4 +1,4 @@
-//! Side-effect ports for review-notes export (ADR 0048's Output boundary
+//! Side-effect ports for review-annotations export (ADR 0048's Output boundary
 //! decision): `review` returns only plain data, never calling `gh` or
 //! touching the clipboard itself — every side effect sits behind one of
 //! these traits, defined here (the consumer side, per this project's

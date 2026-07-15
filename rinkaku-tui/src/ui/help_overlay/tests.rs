@@ -345,7 +345,7 @@ fn should_draw_help_overlay_with_keymap_markers_and_glossary_when_help_is_open()
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -389,7 +389,7 @@ fn should_hide_tree_focus_and_source_view_groups_when_right_focused_on_diff_pane
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -429,16 +429,16 @@ fn should_show_only_source_view_and_global_groups_on_source_screen() {
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
         .expect("draw");
 
     let text = buffer_text(&terminal);
-    // Review is hidden on the source screen: `n`/`N` (NoteCompose/NotesList)
+    // Review is hidden on the source screen: `n`/`N` (AnnotationCompose/AnnotationsList)
     // only dispatch on Screen::Entry (`review_flow::derive_selection_snapshot`,
-    // `App::handle_key`'s own `NotesList` arm).
+    // `App::handle_key`'s own `AnnotationsList` arm).
     assert_eq!(vec!["Source view", "Global"], present_group_titles(&text));
 }
 
@@ -459,7 +459,7 @@ fn should_draw_help_overlay_in_japanese_when_locale_is_japanese() {
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::Japanese,
             );
         })
@@ -527,7 +527,7 @@ fn should_not_show_glossary_when_terminal_is_too_short_to_fit_the_whole_keymap_a
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -564,7 +564,7 @@ fn should_reveal_glossary_after_scrolling_down_when_terminal_is_too_short_to_fit
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -606,7 +606,7 @@ fn should_report_none_clamped_help_scroll_and_none_viewport_height_when_help_ove
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -633,7 +633,7 @@ fn should_not_draw_help_overlay_when_help_is_closed() {
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })

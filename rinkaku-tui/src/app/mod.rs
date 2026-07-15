@@ -343,7 +343,7 @@ pub struct App {
     /// stale error doesn't linger forever once the user has moved on.
     status: Option<String>,
     should_quit: bool,
-    /// The review-notes feature's own state (ADR 0048) — `App` holds
+    /// The review-annotations feature's own state (ADR 0048) — `App` holds
     /// exactly this one field of it, per the ADR's Module boundary
     /// decision; every review-specific transition lives on [`ReviewState`]
     /// itself, not here.
@@ -550,7 +550,7 @@ impl App {
         self.status.as_deref()
     }
 
-    /// The review-notes feature's own state (ADR 0048) — see
+    /// The review-annotations feature's own state (ADR 0048) — see
     /// [`crate::review::ReviewState`]'s own doc comment.
     pub fn review(&self) -> &ReviewState {
         &self.review
@@ -577,7 +577,7 @@ impl App {
     /// `crate::lib::run_app` for the one review transition that needs data
     /// (a [`crate::review::SelectionSnapshot`]) `App::handle_key` cannot
     /// derive itself: opening the compose overlay
-    /// ([`InputKey::NoteCompose`]'s own doc comment on why that key is
+    /// ([`InputKey::AnnotationCompose`]'s own doc comment on why that key is
     /// special-cased before dispatch rather than routed through
     /// `handle_key`).
     pub fn with_review(mut self, review: ReviewState) -> Self {
@@ -592,7 +592,7 @@ impl App {
     /// ([`InputKey::SearchConfirm`]'s own doc comment on why that key is
     /// special-cased before dispatch rather than routed through
     /// `handle_key`, mirroring [`Self::with_review`]'s identical precedent
-    /// for [`InputKey::NoteCompose`]).
+    /// for [`InputKey::AnnotationCompose`]).
     pub fn with_search(mut self, search: SearchState) -> Self {
         self.search = search;
         self

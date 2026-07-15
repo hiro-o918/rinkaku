@@ -84,7 +84,7 @@ fn draw_app(app: &App, report: &Report) -> String {
                 &BlastRadiusSelection::NotApplicable,
                 None,
                 &[],
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
@@ -99,8 +99,8 @@ fn should_not_draw_review_overlay_when_review_is_idle() {
 
     let text = draw_app(&app, &report);
 
-    assert!(!text.contains("New note"));
-    assert!(!text.contains("Review notes"));
+    assert!(!text.contains("New annotation"));
+    assert!(!text.contains("Review annotations"));
 }
 
 #[test]
@@ -114,14 +114,14 @@ fn should_draw_compose_overlay_with_location_and_buffer_when_composing() {
 
     let text = draw_app(&app, &report);
 
-    assert!(text.contains("New note"));
+    assert!(text.contains("New annotation"));
     assert!(text.contains("lib.rs:1-5 foo"));
     assert!(text.contains("hi"));
     assert!(text.contains("Enter: save"));
 }
 
 #[test]
-fn should_draw_notes_list_overlay_with_note_summary() {
+fn should_draw_annotations_list_overlay_with_annotation_summary() {
     let report = report_with_one_symbol();
     let review = ReviewState::default()
         .begin_compose(snapshot())
@@ -134,21 +134,21 @@ fn should_draw_notes_list_overlay_with_note_summary() {
 
     let text = draw_app(&app, &report);
 
-    assert!(text.contains("Review notes"));
+    assert!(text.contains("Review annotations"));
     assert!(text.contains("lib.rs:1-5 foo: fix"));
     assert!(text.contains("Enter: export"));
     assert!(text.contains("d: delete"));
 }
 
 #[test]
-fn should_draw_empty_notes_list_placeholder_when_there_are_no_notes() {
+fn should_draw_empty_annotations_list_placeholder_when_there_are_no_annotations() {
     let report = report_with_one_symbol();
     let review = ReviewState::default().open_list();
     let app = App::new(&report).with_review(review);
 
     let text = draw_app(&app, &report);
 
-    assert!(text.contains("no notes yet"));
+    assert!(text.contains("no annotations yet"));
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn should_draw_verdict_menu_overlay_entries() {
 }
 
 #[test]
-fn should_show_last_status_message_in_notes_list_overlay() {
+fn should_show_last_status_message_in_annotations_list_overlay() {
     let report = report_with_one_symbol();
     let review = ReviewState::default()
         .set_status("posted 1 review comment(s) to PR #7")

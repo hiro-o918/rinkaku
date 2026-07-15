@@ -33,7 +33,7 @@ fn ports_with<'a>(
 #[test]
 fn should_surface_the_ports_status_line_when_copy_succeeds() {
     let clipboard = FakeClipboard {
-        result: Ok("copied review notes to clipboard via pbcopy".to_string()),
+        result: Ok("copied review annotations to clipboard via pbcopy".to_string()),
     };
     let browser = super::FakeBrowserOpener::new(Ok(()));
 
@@ -44,7 +44,7 @@ fn should_surface_the_ports_status_line_when_copy_succeeds() {
     );
 
     assert_eq!(
-        Some("copied review notes to clipboard via pbcopy"),
+        Some("copied review annotations to clipboard via pbcopy"),
         actual.last_status()
     );
 }

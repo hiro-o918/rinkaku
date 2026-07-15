@@ -21,7 +21,7 @@
 //!   [`event_loop::run_app`]'s own event loop delegates responsibilities to
 //!   sibling modules (ADR 0028, split out once this crate's event-loop code
 //!   grew past the file-size threshold): `input_translate` (raw `crossterm`
-//!   events → [`app::InputKey`]) and `review_flow` (ADR 0048's review-notes
+//!   events → [`app::InputKey`]) and `review_flow` (ADR 0048's review-annotations
 //!   composing/exporting/caching glue).
 //!
 //! [`run`] is the crate's single public entry point for the CLI binary:
@@ -38,6 +38,7 @@
 // matching this project's fixed English default.
 rust_i18n::i18n!("locales", fallback = "en");
 
+pub mod annotation_markers;
 pub mod app;
 pub mod blast_radius;
 pub mod detail;
@@ -50,7 +51,6 @@ mod hunk_split;
 mod input_translate;
 pub mod locale;
 pub mod nav;
-pub mod note_markers;
 pub mod order;
 pub mod review;
 mod review_flow;

@@ -861,7 +861,7 @@ fn dispatch_draw_and_fold(
                 &app::BlastRadiusSelection::NotApplicable,
                 None,
                 diff_hunks,
-                &crate::note_markers::NoteMarkers::default(),
+                &crate::annotation_markers::AnnotationMarkers::default(),
                 Locale::English,
             );
         })
