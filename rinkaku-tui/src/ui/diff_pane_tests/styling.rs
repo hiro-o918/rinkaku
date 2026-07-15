@@ -183,6 +183,74 @@ index e69de29..4b825dc 100644
 }
 
 #[test]
+fn should_offset_highlight_lookup_by_origin_offset_when_hunk_was_split() {
+    // ADR 0053: a hunk shared by two symbols is split into per-symbol
+    // sub-hunks, each keeping `origin_offset` — its start index within
+    // the *original* hunk's `lines` — needed to look up the right slice
+    // of `crate::highlight::highlight_hunk`'s output, which stays keyed
+    // by position in the original, unsplit hunk (that highlight table is
+    // computed once per original hunk, not re-split alongside it). This
+    // section's sub-hunk starts at `origin_offset` 1 (after the first
+    // section's own 1 line); `hunk_highlight[0]` and `hunk_highlight[1]`
+    // are deliberately set to different, distinguishable spans so an
+    // unoffset lookup (`line_index` 0 instead of `origin_offset +
+    // line_index` = 1) is caught by asserting the exact `TokenSpan`
+    // used, not just "some" highlight was applied.
+    let section = DiffSection {
+        title: "fn bar()".to_string(),
+        symbol_id: Some("lib.rs::bar".to_string()),
+        contract_header: None,
+        hunks: vec![crate::diff_shape::AttributedHunk {
+            source_index: 0,
+            hunk: crate::diff_view::Hunk {
+                header: "@@ -2,1 +2,1 @@".to_string(),
+                new_range: Some((2, 2)),
+                lines: vec![DiffLine {
+                    kind: DiffLineKind::Added,
+                    content: "bar_body".to_string(),
+                }],
+            },
+            origin_offset: 1,
+        }],
+    };
+    let highlighted_file = HighlightedFile {
+        path: "lib.rs".to_string(),
+        hunks: vec![vec![
+            Some(vec![TokenSpan {
+                start: 0,
+                end: 8,
+                palette_index: 0,
+            }]),
+            Some(vec![TokenSpan {
+                start: 0,
+                end: 8,
+                palette_index: 1,
+            }]),
+        ]],
+    };
+
+    let actual = diff_pane_lines(
+        &[&section],
+        true,
+        Some(&highlighted_file),
+        &crate::note_markers::NoteMarkers::default(),
+        "lib.rs",
+    );
+
+    let body_line = actual
+        .iter()
+        .find(|line| line.spans.iter().any(|span| span.content == "bar_body"))
+        .expect("body line present");
+    let token_style = body_line
+        .spans
+        .iter()
+        .find(|span| span.content == "bar_body")
+        .expect("bar_body span present")
+        .style;
+    assert_eq!(crate::ui::style::palette_style(1).fg, token_style.fg);
+}
+
+#[test]
 fn should_fall_back_to_plain_diff_style_when_file_extension_is_unrecognized() {
     // A symbol whose path has no known extension (mirrors an unbuilt
     // language, e.g. YAML): `App::selected_diff_target` reads the path

@@ -266,6 +266,7 @@ fn diff_pane_content_with_two_symbol_sections() -> diff_shape::DiffPaneContent {
             hunks: vec![diff_shape::AttributedHunk {
                 source_index: 0,
                 hunk: hunk("@@ -1,1 +1,2 @@", (1, 2), "fn foo() {}"),
+                origin_offset: 0,
             }],
         },
         diff_shape::DiffSection {
@@ -275,6 +276,7 @@ fn diff_pane_content_with_two_symbol_sections() -> diff_shape::DiffPaneContent {
             hunks: vec![diff_shape::AttributedHunk {
                 source_index: 1,
                 hunk: hunk("@@ -10,1 +10,2 @@", (10, 11), "fn bar() {}"),
+                origin_offset: 0,
             }],
         },
     ])
@@ -386,6 +388,7 @@ fn should_return_none_when_scroll_moved_into_the_module_level_bucket() {
                         content: "fn foo() {}".to_string(),
                     }],
                 },
+                origin_offset: 0,
             }],
         },
         diff_shape::DiffSection {
@@ -402,6 +405,7 @@ fn should_return_none_when_scroll_moved_into_the_module_level_bucket() {
                         content: "use foo::bar;".to_string(),
                     }],
                 },
+                origin_offset: 0,
             }],
         },
     ]);
@@ -444,6 +448,7 @@ fn diff_pane_content_with_foo_signature_changed() -> diff_shape::DiffPaneContent
             hunks: vec![diff_shape::AttributedHunk {
                 source_index: 0,
                 hunk: hunk("@@ -1,1 +1,2 @@", (1, 2), "fn foo(a: i32) {}"),
+                origin_offset: 0,
             }],
         },
         diff_shape::DiffSection {
@@ -453,6 +458,7 @@ fn diff_pane_content_with_foo_signature_changed() -> diff_shape::DiffPaneContent
             hunks: vec![diff_shape::AttributedHunk {
                 source_index: 1,
                 hunk: hunk("@@ -10,1 +10,2 @@", (10, 11), "fn bar() {}"),
+                origin_offset: 0,
             }],
         },
     ])
@@ -756,6 +762,13 @@ fn report_with_two_adjacent_signature_changed_symbols() -> Report {
     }
 }
 
+/// The two symbols' new-side lines here must actually land inside
+/// `report_with_two_adjacent_signature_changed_symbols`'s own ranges
+/// (`foo`: 1-3, `bar`: 5-7) — `crate::hunk_split::split_hunk` derives each
+/// line's owner from its *real* new-file position (a running count over
+/// `lines`, the same derivation `crate::ui::diff_pane::new_side_line_numbers`
+/// uses), not from the hunk header's declared range alone, so each
+/// function needs a body line to occupy every line its own range claims.
 fn diff_hunks_with_two_signature_changed_sections() -> Vec<diff_view::FileHunks> {
     use diff_view::{DiffLine, DiffLineKind, Hunk};
 
@@ -767,11 +780,15 @@ fn diff_hunks_with_two_signature_changed_sections() -> Vec<diff_view::FileHunks>
             lines: vec![
                 DiffLine {
                     kind: DiffLineKind::Removed,
-                    content: "fn foo(a: i32) {}".to_string(),
+                    content: "fn foo(a: i32) {".to_string(),
                 },
                 DiffLine {
                     kind: DiffLineKind::Added,
-                    content: "fn foo(a: i32, extra: i32) {}".to_string(),
+                    content: "fn foo(a: i32, extra: i32) {".to_string(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Context,
+                    content: "}".to_string(),
                 },
                 DiffLine {
                     kind: DiffLineKind::Context,
@@ -779,11 +796,15 @@ fn diff_hunks_with_two_signature_changed_sections() -> Vec<diff_view::FileHunks>
                 },
                 DiffLine {
                     kind: DiffLineKind::Removed,
-                    content: "fn bar(a: i32) {}".to_string(),
+                    content: "fn bar(a: i32) {".to_string(),
                 },
                 DiffLine {
                     kind: DiffLineKind::Added,
-                    content: "fn bar(a: i32, extra: i32) {}".to_string(),
+                    content: "fn bar(a: i32, extra: i32) {".to_string(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Context,
+                    content: "}".to_string(),
                 },
             ],
         }],

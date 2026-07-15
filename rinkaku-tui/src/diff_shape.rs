@@ -44,9 +44,10 @@ pub struct ContractHeader {
     pub signature: String,
 }
 
-/// One [`Hunk`], cloned out of the original [`FileHunks`] into a shaped
-/// [`DiffSection`] (this module's own doc comment on why cloning, not
-/// borrowing), plus its `source_index` — its position in that original
+/// One [`Hunk`] (or, per ADR 0053, one per-symbol slice of a shared hunk —
+/// see `origin_offset` below), cloned out of the original [`FileHunks`] into
+/// a shaped [`DiffSection`] (this module's own doc comment on why cloning,
+/// not borrowing), plus its `source_index` — its position in that original
 /// `FileHunks::hunks` slice. `crate::highlight::lookup_hunk_highlight`
 /// looks up a hunk's precomputed highlight by `std::ptr::eq` against the
 /// *original* `Hunk` it was highlighted from; a clone breaks that pointer
@@ -58,6 +59,18 @@ pub struct ContractHeader {
 pub struct AttributedHunk {
     pub source_index: usize,
     pub hunk: Hunk,
+    /// This hunk's start index within the *original* hunk's `lines`
+    /// (`crate::diff_shape::AttributedHunk`), i.e. `hunk_split::SubHunk::origin_offset`
+    /// (ADR 0053) — `0` for a hunk that was never split (the common case,
+    /// including every hunk owned by only one symbol). `crate::ui::diff_pane`
+    /// offsets a line's position within `hunk.lines` by this before indexing
+    /// into `crate::highlight::lookup_hunk_highlight_by_index`'s
+    /// `source_index`-keyed, *original*-hunk-length highlight slice — the
+    /// highlight table is still computed once per original hunk (highlighting
+    /// is the expensive step; ADR 0053 does not want to re-run it once per
+    /// sub-hunk for the same tokens), so a sub-hunk's own `lines` no longer
+    /// line up positionally with that table without this offset.
+    pub origin_offset: usize,
 }
 
 /// One symbol's worth of shaped diff content: its own contract header
@@ -310,35 +323,36 @@ fn build_file_content(report: &Report, diff_files: &[FileHunks], path: &str) -> 
         .collect();
     let mut module_level_hunks: Vec<AttributedHunk> = Vec::new();
 
+    let symbol_ranges: Vec<(usize, rinkaku_core::diff::LineRange)> = symbols
+        .iter()
+        .enumerate()
+        .map(|(index, symbol)| (index, symbol.range))
+        .collect();
+
     for (source_index, hunk) in file_hunks.hunks.iter().enumerate() {
         // Every symbol (source order) whose range intersects this hunk —
         // ADR 0029 amends ADR 0020's original first-match-only rule: a
         // brand-new file's diff is always exactly one hunk spanning the
         // whole file, so first-match silently dropped every symbol but the
         // first from the diff pane and from auto-scroll (ADR 0027 decision
-        // 2). The hunk is cloned once per matching section — see ADR 0029
-        // for why the TUI departs from ADR 0020's "duplication misleads
-        // about total change size" reasoning (the TUI has no change-size
-        // total to mislead).
-        let owners: Vec<usize> = symbols
-            .iter()
-            .enumerate()
-            .filter(|(_, symbol)| {
-                crate::diff_view::hunk_intersects(hunk, symbol.range.start, symbol.range.end)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        if owners.is_empty() {
-            module_level_hunks.push(AttributedHunk {
+        // 2). ADR 0053 further amends the attribution step itself: a hunk
+        // shared by more than one symbol is split into per-symbol
+        // sub-hunks (`crate::hunk_split::split_hunk`) rather than cloned
+        // whole into every owning section, so a reviewer no longer reads
+        // the same hunk body once per owning symbol.
+        for (owner, sub_hunk) in crate::hunk_split::split_hunk(hunk, &symbol_ranges) {
+            let attributed = AttributedHunk {
                 source_index,
-                hunk: hunk.clone(),
-            });
-        } else {
-            for index in owners {
-                sections[index].hunks.push(AttributedHunk {
-                    source_index,
-                    hunk: hunk.clone(),
-                });
+                hunk: Hunk {
+                    header: sub_hunk.header,
+                    new_range: sub_hunk.new_range,
+                    lines: sub_hunk.lines,
+                },
+                origin_offset: sub_hunk.origin_offset,
+            };
+            match owner {
+                Some(index) => sections[index].hunks.push(attributed),
+                None => module_level_hunks.push(attributed),
             }
         }
     }

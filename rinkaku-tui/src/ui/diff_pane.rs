@@ -357,9 +357,12 @@ pub(crate) fn diff_pane_lines(
                 // — `flatten` collapses "no highlight data at all for this
                 // hunk" and "this specific line had no highlight" into the
                 // same `None` `diff_line` already treats as its fallback
-                // signal.
+                // signal. `origin_offset` (ADR 0053) rebases `line_index`
+                // back into the *original* hunk's line positions, since
+                // `hunk_highlight` stays keyed by that original length even
+                // when `attributed.hunk` is a smaller split sub-hunk.
                 let token_spans = hunk_highlight
-                    .and_then(|lines| lines.get(line_index).cloned())
+                    .and_then(|lines| lines.get(attributed.origin_offset + line_index).cloned())
                     .flatten();
                 let has_note = new_side_lines[line_index].is_some_and(|line_no| {
                     crate::note_markers::line_has_note(note_markers, path, line_no)
@@ -507,6 +510,7 @@ pub(crate) fn diff_pane_split_rows(
                 left.push(split_side_line(
                     split_row.left.as_ref(),
                     split_row.left_index,
+                    attributed.origin_offset,
                     hunk_highlight,
                     None,
                 ));
@@ -519,6 +523,7 @@ pub(crate) fn diff_pane_split_rows(
                 right.push(split_side_line(
                     split_row.right.as_ref(),
                     split_row.right_index,
+                    attributed.origin_offset,
                     hunk_highlight,
                     Some(right_has_note),
                 ));
@@ -573,13 +578,17 @@ fn section_anchor_split_row(section: &DiffSection) -> (Line<'static>, Line<'stat
 fn split_side_line(
     line: Option<&DiffLine>,
     index: Option<usize>,
+    origin_offset: usize,
     hunk_highlight: Option<&[Option<Vec<TokenSpan>>]>,
     has_note: Option<bool>,
 ) -> Line<'static> {
     let rendered = match (line, index) {
         (Some(line), Some(index)) => {
+            // `origin_offset` (ADR 0053) rebases `index` back into the
+            // *original* hunk's line positions — `diff_pane_lines`'s own
+            // sibling offset has the full explanation.
             let token_spans = hunk_highlight
-                .and_then(|lines| lines.get(index).cloned())
+                .and_then(|lines| lines.get(origin_offset + index).cloned())
                 .flatten();
             diff_line(line, token_spans)
         }
