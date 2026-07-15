@@ -356,6 +356,22 @@ pub struct App {
     /// needs it and `App` is the only layer that both dispatches keys and
     /// is told this flag at startup.
     review_sink_a_available: bool,
+    /// The latest released version rinkaku's background update check
+    /// found, if any (`main.rs`'s version-check thread, delivered via
+    /// [`Self::notify_update_available`]) — `None` until that check
+    /// completes or finds nothing newer. Drives the status line's update
+    /// hint and whether `U` opens [`Self::update_prompt_open`] at all.
+    update_available: Option<String>,
+    /// Whether the update confirmation popup (`U`, only reachable once
+    /// [`Self::update_available`] is `Some`) is currently open. Mirrors
+    /// [`Self::jump_popup`]'s flag-not-`Screen` shape for the same reason:
+    /// it sits on top of whatever was already showing and must not disturb
+    /// that state.
+    update_prompt_open: bool,
+    /// Whether the reviewer confirmed the update popup — `run_app`/
+    /// `TuiSession::run` read this once [`Self::should_quit`] is set to
+    /// decide whether to run `self-update` after the terminal is restored.
+    update_requested: bool,
 }
 
 impl App {
@@ -393,6 +409,9 @@ impl App {
             should_quit: false,
             review: ReviewState::default(),
             review_sink_a_available: false,
+            update_available: None,
+            update_prompt_open: false,
+            update_requested: false,
         }
     }
 
@@ -548,6 +567,38 @@ impl App {
 
     pub fn should_quit(&self) -> bool {
         self.should_quit
+    }
+
+    /// The latest released version found by the background update check
+    /// (`main.rs`'s version-check thread), if any — see the field's own
+    /// doc comment.
+    pub fn update_available(&self) -> Option<&str> {
+        self.update_available.as_deref()
+    }
+
+    /// Whether the update confirmation popup is currently open.
+    pub fn update_prompt_open(&self) -> bool {
+        self.update_prompt_open
+    }
+
+    /// Whether the reviewer confirmed the update popup — see the field's
+    /// own doc comment.
+    pub fn update_requested(&self) -> bool {
+        self.update_requested
+    }
+
+    /// Records that a newer released version is available, called once by
+    /// `crate::event_loop::run_app`'s event loop when the background
+    /// version-check thread's `mpsc::Receiver` yields a version string
+    /// (`main.rs`'s composition root spawns that thread; this method is
+    /// the only seam through which its result reaches `App`, keeping this
+    /// module free of the thread/channel itself). Deliberately does not
+    /// open [`Self::update_prompt_open`] on its own — the popup is only
+    /// ever opened by an explicit `U` press
+    /// ([`InputKey::OpenUpdatePrompt`]'s own doc comment on why an
+    /// unprompted popup would be a bad surprise mid-review).
+    pub fn notify_update_available(&mut self, version: impl Into<String>) {
+        self.update_available = Some(version.into());
     }
 
     /// The detail-pane content for the row currently under the cursor

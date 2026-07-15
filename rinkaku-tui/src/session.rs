@@ -90,7 +90,11 @@ use rinkaku_core::render::Report;
 /// [`TuiSession::run`] for callers that have no splash screen to draw
 /// in between (ADR 0033) — every terminal-lifecycle detail this doc
 /// comment describes lives on `TuiSession` now, see that type's own doc
-/// comment for the same guarantees.
+/// comment for the same guarantees. Passes `None` for
+/// [`TuiSession::run`]'s update-check receiver (ADR 0054) — this
+/// convenience wrapper has no version-check thread of its own to hand
+/// one in from; callers that want the update prompt use `TuiSession::run`
+/// directly, as `rinkaku`'s `main.rs` does.
 pub fn run(
     report: &Report,
     diff_text: &str,
@@ -98,14 +102,17 @@ pub fn run(
     repo_root: &std::path::Path,
     review_ports: ReviewPorts<'_>,
 ) -> std::io::Result<()> {
-    TuiSession::init()?.run(
-        report,
-        diff_text,
-        entry_path,
-        repo_root,
-        &WorkingTreeSourceReader,
-        review_ports,
-    )
+    TuiSession::init()?
+        .run(
+            report,
+            diff_text,
+            entry_path,
+            repo_root,
+            &WorkingTreeSourceReader,
+            review_ports,
+            None,
+        )
+        .map(|_update_requested| ())
 }
 
 /// Owns the terminal's raw-mode/alternate-screen/mouse-capture lifecycle
@@ -200,6 +207,25 @@ impl TuiSession {
     /// absent from the export menu otherwise, per the ADR's "no implicit
     /// fallback" decision. `ReviewPorts::clipboard` (sink B) is always
     /// required — it never depends on a PR.
+    ///
+    /// `update_check` (ADR 0054) is the receiving half of the mpsc channel
+    /// `main.rs`'s background version-check thread sends a version string
+    /// over, `None` when that thread was never spawned
+    /// (`RINKAKU_UPDATE_CHECK=0`, or a caller with no such thread — e.g.
+    /// [`run`]'s own convenience wrapper). Threaded through unchanged to
+    /// [`run_app`]'s event loop, which owns the actual non-blocking
+    /// `try_recv` poll.
+    ///
+    /// Returns whether the reviewer confirmed the update popup before
+    /// quitting (`App::update_requested`) alongside the ordinary
+    /// `std::io::Result` — `main.rs` uses this to decide whether to run
+    /// `self-update` after this call's terminal-restoring postamble below
+    /// has already completed, exactly the "update runs after TUI teardown"
+    /// ordering ADR 0054 requires.
+    // `update_check` pushed this past clippy's 7-argument threshold — see
+    // `run_app`'s own `#[allow]` (this method's sole caller) for why a
+    // struct wrapper is not worth it here.
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         mut self,
         report: &Report,
@@ -208,7 +234,8 @@ impl TuiSession {
         repo_root: &std::path::Path,
         source_reader: &dyn SourceReader,
         review_ports: ReviewPorts<'_>,
-    ) -> std::io::Result<()> {
+        update_check: Option<std::sync::mpsc::Receiver<String>>,
+    ) -> std::io::Result<bool> {
         let result = run_app(
             &mut self.terminal,
             report,
@@ -217,6 +244,7 @@ impl TuiSession {
             repo_root,
             source_reader,
             review_ports,
+            update_check,
         );
         let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
         ratatui::restore();

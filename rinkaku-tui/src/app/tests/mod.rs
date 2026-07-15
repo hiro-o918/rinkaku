@@ -30,6 +30,9 @@
 //!   `JumpBack`/`JumpForward` jumplist (ADR 0022)
 //! - `review` — `handle_review_key`'s notes-list overlay dispatch (ADR
 //!   0048)
+//! - `update_prompt` — `notify_update_available`, `OpenUpdatePrompt`'s
+//!   `update_available` gating, and the update popup's own
+//!   `PopupConfirm`/`PopupCancel` handling (ADR 0054)
 
 use crate::app::App;
 use crate::app::InputKey;
@@ -46,6 +49,7 @@ mod review;
 mod right_pane;
 mod scroll_reset;
 mod source_screen;
+mod update_prompt;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {
     ExtractedSymbol {

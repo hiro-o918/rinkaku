@@ -312,6 +312,25 @@ pub(crate) fn draw_jump_popup(frame: &mut Frame, popup: &crate::app::JumpPopup, 
     frame.render_widget(paragraph, overlay_area);
 }
 
+/// Draws the update confirmation popup (ADR 0054) centered over
+/// `full_area`, once `U` has opened it over a background-discovered
+/// `version` — the same `Clear`-first, centered-bordered-box compositing
+/// [`draw_jump_popup`] uses, sized the same 60% x 40% since its content is
+/// just as short (two lines).
+pub(crate) fn draw_update_prompt(frame: &mut Frame, version: &str, full_area: Rect) {
+    let overlay_area = centered_rect(full_area, 60, 40);
+    frame.render_widget(Clear, overlay_area);
+
+    let lines = vec![
+        Line::raw(format!("Update rinkaku to v{version}?")),
+        Line::raw(""),
+        Line::raw("[Enter] update & quit  [Esc] not now"),
+    ];
+    let block = Block::bordered().title(" Update available ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, overlay_area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FileSizeBand, markers_legend_lines};
@@ -617,15 +636,15 @@ mod tests {
     fn should_draw_help_overlay_with_keymap_markers_and_glossary_when_help_is_open() {
         let report = report_with_one_symbol();
         let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
-        // A 150x74 terminal (up from 150x70): taller again so the
+        // A 150x76 terminal (up from 150x74): taller again so the
         // overlay's 80% x 90% area still fits every keymap group —
-        // now including the "Review" group (ADR 0048) — the Markers
-        // legend, and the trailing Glossary section without the last
-        // section being pushed off the bottom. Grown here rather than
-        // narrowing the content itself, same rationale as the
-        // 100x40 -> 100x50 -> 150x70 growths this test already went
-        // through for ADR 0026's keymap additions.
-        let mut terminal = Terminal::new(TestBackend::new(150, 74)).expect("terminal");
+        // now including the `U` update-prompt binding (ADR 0054) in the
+        // "Global" group — the Markers legend, and the trailing Glossary
+        // section without the last section being pushed off the bottom.
+        // Grown here rather than narrowing the content itself, same
+        // rationale as the 100x40 -> 100x50 -> 150x70 -> 150x74 growths
+        // this test already went through for earlier keymap additions.
+        let mut terminal = Terminal::new(TestBackend::new(150, 76)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -940,6 +959,63 @@ mod tests {
                 step + 1
             );
         }
+    }
+
+    #[test]
+    fn should_draw_update_prompt_with_version_when_update_prompt_is_open() {
+        let report = report_with_one_symbol();
+        let mut app = App::new(&report);
+        app.notify_update_available("1.2.3");
+        let app = app.handle_key(crate::app::InputKey::OpenUpdatePrompt);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                    &[],
+                    &crate::note_markers::NoteMarkers::default(),
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Update available"));
+        assert!(text.contains("Update rinkaku to v1.2.3?"));
+        assert!(text.contains("[Enter] update & quit  [Esc] not now"));
+    }
+
+    #[test]
+    fn should_not_draw_update_prompt_when_update_prompt_is_closed() {
+        let report = report_with_one_symbol();
+        let mut app = App::new(&report);
+        app.notify_update_available("1.2.3");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                    &[],
+                    &crate::note_markers::NoteMarkers::default(),
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("Update available"));
     }
 
     #[test]

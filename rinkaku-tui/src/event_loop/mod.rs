@@ -53,6 +53,12 @@ pub struct ReviewPorts<'a> {
 /// it needs this visibility to call in.
 ///
 /// [`TuiSession::run`]: crate::session::TuiSession::run
+// `update_check` (ADR 0054) pushed this past clippy's 7-argument
+// threshold; every parameter is already independently load-bearing (see
+// this function's own doc comment and `TuiSession::run`'s, which has the
+// same allow for the same reason), so bundling them into a struct now
+// would only rename the same values one level deeper.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_app(
     terminal: &mut ratatui::DefaultTerminal,
     report: &Report,
@@ -61,7 +67,8 @@ pub(crate) fn run_app(
     repo_root: &std::path::Path,
     source_reader: &dyn source::SourceReader,
     review_ports: ReviewPorts<'_>,
-) -> std::io::Result<()> {
+    update_check: Option<std::sync::mpsc::Receiver<String>>,
+) -> std::io::Result<bool> {
     let mut app = App::new(report).with_review_sink_a_available(review_ports.pr_context.is_some());
     if let Some(path) = entry_path {
         app = app.with_entry_pivot(path);
@@ -219,7 +226,20 @@ pub(crate) fn run_app(
         }
 
         if app.should_quit() {
-            return Ok(());
+            return Ok(app.update_requested());
+        }
+
+        // ADR 0054: a non-blocking check of the background version-check
+        // thread's channel, once per loop iteration alongside the poll
+        // timeout below — `try_recv` never blocks, so this cannot delay
+        // input handling the way waiting on the thread itself would.
+        // `recv()`'s `Err` (the sender dropped without ever sending, e.g.
+        // the check found nothing newer) is silently ignored, same as
+        // `check_update_available`'s own "silent on failure" contract.
+        if let Some(receiver) = &update_check
+            && let Ok(version) = receiver.try_recv()
+        {
+            app.notify_update_available(version);
         }
 
         // A 100ms poll timeout keeps the loop responsive to terminal
