@@ -17,6 +17,9 @@ categories = ["command-line-utilities", "development-tools"]
 name = "rinkaku"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 rinkaku-core = { path = "../rinkaku-core", version = "0.6.6" }
 rinkaku-tui = { path = "../rinkaku-tui", version = "0.6.6" }

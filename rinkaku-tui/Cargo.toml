@@ -17,6 +17,9 @@ categories = ["development-tools"]
 name = "rinkaku_tui"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 rinkaku-core = { path = "../rinkaku-core", version = "0.6.6" }
 ratatui = { workspace = true }
