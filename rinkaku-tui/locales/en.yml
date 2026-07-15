@@ -9,6 +9,7 @@ help:
     source_view: "Source view"
     review: "Review"
     global: "Global"
+    entry_only: "Entry screen only"
   binding:
     move_cursor: "Move the cursor"
     expand_collapse_open: "Expand/collapse a directory row, or open a file/symbol row (moves focus right)"
@@ -24,6 +25,8 @@ help:
     scroll_source_pane_line: "Scroll the source pane by one line"
     scroll_source_pane_half_page: "Scroll the source pane by half a page"
     jump_file_top_bottom: "Jump to the top / bottom of the file"
+    start_search: "Start a search"
+    jump_next_prev_match: "Jump to the next / previous search match"
     return_to_entry_view: "Return to the entry view"
     compose_review_note: "Compose a review note over the symbol under the cursor"
     open_review_notes_list: "Open the review notes list"
