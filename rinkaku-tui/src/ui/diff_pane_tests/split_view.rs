@@ -293,3 +293,65 @@ index e69de29..4b825dc 100644
         .unwrap_or_else(|| panic!("expected a row with the removed line, got:\n{text}"));
     assert!(!removed_row.contains("+fn foo() {}"));
 }
+
+#[test]
+fn should_offset_highlight_lookup_by_origin_offset_in_split_view_when_hunk_was_split() {
+    // Split-view sibling of `styling::should_offset_highlight_lookup_by_origin_offset_when_hunk_was_split`
+    // (ADR 0053): `split_side_line` looks up `hunk_highlight` by
+    // `split_row.left_index`/`right_index`, which — like unified view's
+    // `line_index` — is a position within the *sub*-hunk's own `lines`,
+    // not the original hunk's. `origin_offset` must be added before that
+    // lookup here too.
+    let section = DiffSection {
+        title: "fn bar()".to_string(),
+        symbol_id: Some("lib.rs::bar".to_string()),
+        contract_header: None,
+        hunks: vec![crate::diff_shape::AttributedHunk {
+            source_index: 0,
+            hunk: crate::diff_view::Hunk {
+                header: "@@ -2,1 +2,1 @@".to_string(),
+                new_range: Some((2, 2)),
+                lines: vec![DiffLine {
+                    kind: DiffLineKind::Added,
+                    content: "bar_body".to_string(),
+                }],
+            },
+            origin_offset: 1,
+        }],
+    };
+    let highlighted_file = HighlightedFile {
+        path: "lib.rs".to_string(),
+        hunks: vec![vec![
+            Some(vec![TokenSpan {
+                start: 0,
+                end: 8,
+                palette_index: 0,
+            }]),
+            Some(vec![TokenSpan {
+                start: 0,
+                end: 8,
+                palette_index: 1,
+            }]),
+        ]],
+    };
+
+    let (_, right) = diff_pane_split_rows(
+        &[&section],
+        true,
+        Some(&highlighted_file),
+        &crate::note_markers::NoteMarkers::default(),
+        "lib.rs",
+    );
+
+    let body_line = right
+        .iter()
+        .find(|line| line.spans.iter().any(|span| span.content == "bar_body"))
+        .expect("body line present");
+    let token_style = body_line
+        .spans
+        .iter()
+        .find(|span| span.content == "bar_body")
+        .expect("bar_body span present")
+        .style;
+    assert_eq!(crate::ui::style::palette_style(1).fg, token_style.fg);
+}

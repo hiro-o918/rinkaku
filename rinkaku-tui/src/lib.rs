@@ -41,6 +41,7 @@ pub mod diff_view;
 mod event_loop;
 pub mod help;
 pub mod highlight;
+mod hunk_split;
 mod input_translate;
 pub mod nav;
 pub mod note_markers;
