@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.12](https://github.com/hiro-o918/rinkaku/compare/v0.6.11...v0.6.12) (2026-07-15)
+
+
+### Features
+
+* **tui:** add Japanese localization for the help overlay ([#175](https://github.com/hiro-o918/rinkaku/issues/175)) ([6d8a2c0](https://github.com/hiro-o918/rinkaku/commit/6d8a2c0402bb4d75b248427c1913b8015037745f))
+* **tui:** drop uppercase key aliases and filter help overlay by focus ([#177](https://github.com/hiro-o918/rinkaku/issues/177)) ([bce98ff](https://github.com/hiro-o918/rinkaku/commit/bce98ff1ba2003ecf134263fd0625c6fe9375336))
+
+
+### Miscellaneous
+
+* release main ([#174](https://github.com/hiro-o918/rinkaku/issues/174)) ([cf8f292](https://github.com/hiro-o918/rinkaku/commit/cf8f2928a5679d7793c8b9b45ea1037c98cffa2f))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.11 to 0.6.12
+
 ## [0.6.11](https://github.com/hiro-o918/rinkaku/compare/v0.6.10...v0.6.11) (2026-07-15)
 
 
