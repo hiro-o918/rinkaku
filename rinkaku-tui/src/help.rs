@@ -15,7 +15,12 @@
 //! `rust_i18n::t!` (ADR 0055), which allocates and so cannot run in const
 //! context. Key labels (`keys`, `swatch`, `term`) stay `&'static str` —
 //! ADR 0055 scopes translation to prose, not key labels or term names.
+//!
+//! [`applicable_help_groups`] narrows [`help_content`]'s full keymap down to
+//! the groups reachable from the reviewer's current screen/focus, so the
+//! overlay never lists a binding that would be a no-op if pressed right now.
 
+use crate::app::{Focus, Screen};
 use crate::locale::Locale;
 
 /// One row of the keymap: the key(s) as displayed text, and what they do.
@@ -46,10 +51,24 @@ pub struct MarkerLegendEntry {
     pub explanation: String,
 }
 
+/// A [`KeyBindingGroup`]'s stable identity, independent of its localized
+/// [`KeyBindingGroup::title`] — [`applicable_help_groups`] filters on this
+/// rather than the title string so the filter does not have to special-case
+/// every [`Locale`] the title can render in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpGroup {
+    TreeFocus,
+    RightFocus,
+    SourceView,
+    Review,
+    Global,
+}
+
 /// One named group of [`KeyBinding`]s — "Tree focus", "Right focus", or
 /// "Global" (ADR 0020's own focus/global split).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindingGroup {
+    pub id: HelpGroup,
     pub title: String,
     pub bindings: Vec<KeyBinding>,
 }
@@ -241,26 +260,68 @@ fn keymap_groups(locale: Locale) -> Vec<KeyBindingGroup> {
     let tag = locale.tag();
     vec![
         KeyBindingGroup {
+            id: HelpGroup::TreeFocus,
             title: rust_i18n::t!("help.group.tree_focus", locale = tag).into_owned(),
             bindings: tree_focus_bindings(locale),
         },
         KeyBindingGroup {
+            id: HelpGroup::RightFocus,
             title: rust_i18n::t!("help.group.right_focus", locale = tag).into_owned(),
             bindings: right_focus_bindings(locale),
         },
         KeyBindingGroup {
+            id: HelpGroup::SourceView,
             title: rust_i18n::t!("help.group.source_view", locale = tag).into_owned(),
             bindings: source_screen_bindings(locale),
         },
         KeyBindingGroup {
+            id: HelpGroup::Review,
             title: rust_i18n::t!("help.group.review", locale = tag).into_owned(),
             bindings: review_bindings(locale),
         },
         KeyBindingGroup {
+            id: HelpGroup::Global,
             title: rust_i18n::t!("help.group.global", locale = tag).into_owned(),
             bindings: global_bindings(locale),
         },
     ]
+}
+
+/// Whether `group` is reachable in the given `screen`/`focus` combination —
+/// the ground truth is `crate::input_translate::translate_key` and
+/// `crate::app::handle_key::App::handle_key`'s own match arms, not this
+/// module's group labels: [`HelpGroup::TreeFocus`]'s `space`
+/// (`InputKey::Select`) and [`HelpGroup::RightFocus`]'s scroll/`h`/`esc`
+/// bindings are only ever dispatched under their matching [`Focus`];
+/// [`HelpGroup::SourceView`] only under [`Screen::Source`];
+/// [`HelpGroup::Review`]'s `n`/`N` only under [`Screen::Entry`] (regardless
+/// of `Focus`, per `review_flow::derive_selection_snapshot` and
+/// `App::handle_key`'s own `NotesList` arm); [`HelpGroup::Global`] always.
+fn is_group_applicable(group: HelpGroup, screen: &Screen, focus: Focus) -> bool {
+    let on_source_screen = matches!(screen, Screen::Source { .. });
+    match group {
+        HelpGroup::TreeFocus => !on_source_screen && focus == Focus::Tree,
+        HelpGroup::RightFocus => !on_source_screen && focus == Focus::Right,
+        HelpGroup::SourceView => on_source_screen,
+        HelpGroup::Review => !on_source_screen,
+        HelpGroup::Global => true,
+    }
+}
+
+/// [`keymap_groups`] filtered down to the groups reachable in the given
+/// `screen`/`focus` combination (see [`is_group_applicable`]) — a group not
+/// applicable to the current context is omitted entirely, not merely
+/// reordered or dimmed, so the `?` overlay only ever lists bindings the
+/// reviewer can actually press right now.
+pub fn applicable_help_groups(
+    locale: Locale,
+    screen: &Screen,
+    focus: Focus,
+) -> Vec<KeyBindingGroup> {
+    keymap_groups(locale)
+        .into_iter()
+        .filter(|group| is_group_applicable(group.id, screen, focus))
+        .collect()
 }
 
 /// The tree pane's marker/badge legend, in the same added-like →

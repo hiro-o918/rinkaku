@@ -297,10 +297,33 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
         .join("\n")
 }
 
+/// Every [`crate::help::HelpGroup`] title string, in [`crate::help::keymap_groups`]'s
+/// own display order — the full, unfiltered set this crate's group-filtering
+/// tests below check subsets of.
+const ALL_GROUP_TITLES: [&str; 5] = [
+    "Tree focus",
+    "Right focus",
+    "Source view",
+    "Review",
+    "Global",
+];
+
+/// Which of [`ALL_GROUP_TITLES`] are present in `text` (the overlay's
+/// rendered buffer), preserving [`ALL_GROUP_TITLES`]'s own order — the
+/// fully-qualified value each context test below compares against, rather
+/// than one `assert!(text.contains(...))` per heading.
+fn present_group_titles(text: &str) -> Vec<&'static str> {
+    ALL_GROUP_TITLES
+        .into_iter()
+        .filter(|title| text.contains(title))
+        .collect()
+}
+
 #[test]
 fn should_draw_help_overlay_with_keymap_markers_and_glossary_when_help_is_open() {
     let report = report_with_one_symbol();
     let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
+    assert_eq!(crate::app::Focus::Tree, app.focus());
     // A 150x76 terminal (up from 150x74): taller again so the
     // overlay's 80% x 90% area still fits every keymap group —
     // now including the `U` update-prompt binding (ADR 0054) in the
@@ -330,14 +353,93 @@ fn should_draw_help_overlay_with_keymap_markers_and_glossary_when_help_is_open()
 
     let text = buffer_text(&terminal);
     assert!(text.contains("Help"));
-    assert!(text.contains("Tree focus"));
-    assert!(text.contains("Right focus"));
-    assert!(text.contains("Source view"));
-    assert!(text.contains("Global"));
+    // Tree focus (Focus::Tree, ADR 0020) hides the Right-focus and
+    // Source-view groups, which are only ever reachable from a different
+    // focus/screen (`crate::help::is_group_applicable`'s own doc comment).
+    assert_eq!(
+        vec!["Tree focus", "Review", "Global"],
+        present_group_titles(&text)
+    );
     assert!(text.contains("Markers"));
     assert!(text.contains("fan-in:N"));
     assert!(text.contains("Glossary"));
     assert!(text.contains("blast radius"));
+}
+
+#[test]
+fn should_hide_tree_focus_and_source_view_groups_when_right_focused_on_diff_pane() {
+    let report = report_with_one_symbol();
+    // `Open` on the symbol row (cursor starts there, `report_with_one_symbol`'s
+    // own single file/symbol tree) reaches Focus::Right + RightPane::Diff
+    // (ADR 0020) without leaving Screen::Entry.
+    let app = App::new(&report)
+        .handle_key(crate::app::InputKey::Open)
+        .handle_key(crate::app::InputKey::ToggleHelp);
+    assert_eq!(crate::app::Focus::Right, app.focus());
+    let mut terminal = Terminal::new(TestBackend::new(150, 76)).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                &report,
+                &crate::diff_shape::DiffPaneContent::Empty,
+                &[],
+                &BlastRadiusSelection::NotApplicable,
+                None,
+                &[],
+                &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
+            );
+        })
+        .expect("draw");
+
+    let text = buffer_text(&terminal);
+    assert_eq!(
+        vec!["Right focus", "Review", "Global"],
+        present_group_titles(&text)
+    );
+}
+
+#[test]
+fn should_show_only_source_view_and_global_groups_on_source_screen() {
+    let report = report_with_one_symbol();
+    // `report_with_one_symbol`'s tree starts with the cursor on the file
+    // row; `Down` moves it onto the symbol row `Source` (`s`) requires
+    // (`App::handle_key`'s own `InputKey::Source` arm only fires on a
+    // `NodeKind::Symbol` row) — the same sequence
+    // `should_show_source_view_scroll_hints_on_source_screen_regardless_of_focus`
+    // in `ui::status`'s own tests already uses.
+    let app = App::new(&report)
+        .handle_key(crate::app::InputKey::Down)
+        .handle_key(crate::app::InputKey::Source)
+        .handle_key(crate::app::InputKey::ToggleHelp);
+    assert!(matches!(app.screen(), crate::app::Screen::Source { .. }));
+    let mut terminal = Terminal::new(TestBackend::new(150, 76)).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                &report,
+                &crate::diff_shape::DiffPaneContent::Empty,
+                &[],
+                &BlastRadiusSelection::NotApplicable,
+                None,
+                &[],
+                &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
+            );
+        })
+        .expect("draw");
+
+    let text = buffer_text(&terminal);
+    // Review is hidden on the source screen: `n`/`N` (NoteCompose/NotesList)
+    // only dispatch on Screen::Entry (`review_flow::derive_selection_snapshot`,
+    // `App::handle_key`'s own `NotesList` arm).
+    assert_eq!(vec!["Source view", "Global"], present_group_titles(&text));
 }
 
 #[test]

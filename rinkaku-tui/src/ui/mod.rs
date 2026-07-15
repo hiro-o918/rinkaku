@@ -240,8 +240,14 @@ pub fn draw(
     draw_status_line(frame, app, report, status_area);
 
     if app.help_open() {
-        let (clamped_help_scroll, help_scroll_viewport_height) =
-            draw_help_overlay(frame, area, app.help_scroll(), locale);
+        let (clamped_help_scroll, help_scroll_viewport_height) = draw_help_overlay(
+            frame,
+            area,
+            app.help_scroll(),
+            locale,
+            app.screen(),
+            app.focus(),
+        );
         outcome.clamped_help_scroll = Some(clamped_help_scroll);
         outcome.help_scroll_viewport_height = Some(help_scroll_viewport_height);
     }
