@@ -1,5 +1,16 @@
 use super::*;
 
+fn pair_wrap(
+    left: &[Line<'static>],
+    right: &[Line<'static>],
+    left_width: usize,
+    right_width: usize,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let (left_out, right_out, _origins) =
+        pair_wrap_with_origins(left, right, left_width, right_width);
+    (left_out, right_out)
+}
+
 #[test]
 fn should_return_empty_columns_when_both_sides_are_empty() {
     let actual = pair_wrap(&[], &[], 10, 10);
