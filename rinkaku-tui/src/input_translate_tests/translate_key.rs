@@ -1,12 +1,12 @@
 //! `translate_key` tests: keyboard `KeyCode` → `Option<InputKey>` mapping,
 //! covering the plain keymap and the help-overlay / jump-popup "swallow"
 //! contracts (ADR 0020, ADR 0022, ADR 0026). Mouse translation lives in
-//! `translate_mouse`; the `dispatch_non_source_key` sequence tests live
-//! in `goto_dispatch`.
+//! `translate_mouse`; the `dispatch_non_source_key` sequence tests live in
+//! `crate::event_loop`'s own test tree.
 
 use super::{candidate, empty_report, report_with_one_symbol};
 use crate::app::{self, App, InputKey};
-use crate::translate_key;
+use crate::input_translate::translate_key;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 #[test]

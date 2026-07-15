@@ -3,7 +3,7 @@
 //! `None` (this crate has no click-targeting).
 
 use crate::app::InputKey;
-use crate::translate_mouse_event;
+use crate::input_translate::translate_mouse_event;
 use ratatui::crossterm::event;
 
 #[test]

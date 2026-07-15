@@ -8,6 +8,12 @@ authors = ["Hironori Yamamoto"]
 license = "MIT"
 repository = "https://github.com/hiro-o918/rinkaku"
 
+# ADR 0051: enforces the mod.rs module-layout convention (a submodule that
+# needs siblings gets its own directory with mod.rs, rather than a
+# same-named .rs file plus directory pair) across every crate.
+[workspace.lints.clippy]
+self_named_module_files = "warn"
+
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"

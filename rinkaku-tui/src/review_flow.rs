@@ -1,13 +1,13 @@
 //! ADR 0048 review-notes integration glue (split out of `lib.rs`, which had
 //! grown past the file-size threshold, ADR 0028): the pieces of
-//! `crate::run_app`'s event loop that are specifically about composing,
-//! exporting, and caching review notes, as opposed to the loop's general
-//! dispatch machinery (`dispatch_non_source_key`, the diff-pane/blast-radius
-//! recompute gates, etc., which stay in `lib.rs`). Every function here is
-//! pure or, for [`perform_export`], calls out to a port passed in by the
-//! caller — none of them touch a live `ratatui::DefaultTerminal` directly,
-//! which is what makes them unit-testable in isolation from `run_app`
-//! itself.
+//! `crate::event_loop::run_app`'s event loop that are specifically about
+//! composing, exporting, and caching review notes, as opposed to the loop's
+//! general dispatch machinery (`dispatch_non_source_key`, the diff-pane/
+//! blast-radius recompute gates, etc., which live in `crate::event_loop`).
+//! Every function here is pure or, for [`perform_export`], calls out to a
+//! port passed in by the caller — none of them touch a live
+//! `ratatui::DefaultTerminal` directly, which is what makes them
+//! unit-testable in isolation from `run_app` itself.
 
 use crate::app::{App, InputKey, Screen};
 use crate::{ReviewPorts, diff_view, review};
@@ -214,3 +214,7 @@ pub(crate) fn first_anchor_run(
             (start <= end).then_some((start, end))
         })
 }
+
+#[cfg(test)]
+#[path = "review_flow_tests/mod.rs"]
+mod tests;

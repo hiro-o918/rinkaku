@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::App;
 use crate::diff_view::{FileHunks, Hunk};
-use crate::{derive_selection_snapshot, dispatch_note_compose_key, first_anchor_run};
+use crate::review_flow::{derive_selection_snapshot, dispatch_note_compose_key, first_anchor_run};
 
 fn hunk(new_range: Option<(usize, usize)>) -> Hunk {
     Hunk {
