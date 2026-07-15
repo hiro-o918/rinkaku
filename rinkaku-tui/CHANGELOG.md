@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.9](https://github.com/hiro-o918/rinkaku/compare/v0.6.8...v0.6.9) (2026-07-15)
+
+
+### Features
+
+* **tui:** prompt to self-update when a newer release is available ([#172](https://github.com/hiro-o918/rinkaku/issues/172)) ([9ac4628](https://github.com/hiro-o918/rinkaku/commit/9ac462896f467dbb526c784d0f154c5dcdc7eb89))
+* **tui:** split shared diff-pane hunks into per-symbol sub-hunks ([#169](https://github.com/hiro-o918/rinkaku/issues/169)) ([53e38ac](https://github.com/hiro-o918/rinkaku/commit/53e38ac94e83dc36e40feb77ca7ad02740b43090))
+
+
+### Bug Fixes
+
+* **tui:** unify right_pane_scroll on pre-wrap logical lines ([#170](https://github.com/hiro-o918/rinkaku/issues/170)) ([2543a04](https://github.com/hiro-o918/rinkaku/commit/2543a041abe288059921e2c82e2cfa2cd62b8542))
+
+
+### Miscellaneous
+
+* release main ([#168](https://github.com/hiro-o918/rinkaku/issues/168)) ([79e5984](https://github.com/hiro-o918/rinkaku/commit/79e5984b2a428266261d20be9dc5ee1cd790a65a))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.8 to 0.6.9
+
 ## [0.6.8](https://github.com/hiro-o918/rinkaku/compare/v0.6.7...v0.6.8) (2026-07-15)
 
 
