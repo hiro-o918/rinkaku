@@ -38,6 +38,7 @@ fn draw_source_screen_split_for_test(
                 source_content.as_ref(),
                 diff_hunks,
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -185,6 +186,7 @@ fn should_render_unified_when_split_view_is_toggled_off() {
                 source_content.as_ref(),
                 &diff_hunks,
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");

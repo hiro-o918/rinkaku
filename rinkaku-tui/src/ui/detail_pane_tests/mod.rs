@@ -17,6 +17,7 @@
 use super::file_detail_lines;
 use crate::app::{App, BlastRadiusSelection};
 use crate::detail::FileDetail;
+use crate::locale::Locale;
 use crate::ui::{DrawOutcome, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

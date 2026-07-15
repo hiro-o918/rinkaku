@@ -12,6 +12,7 @@ use super::{
 };
 use crate::app::{self, App, InputKey};
 use crate::event_loop::tests::{empty_report, report_with_one_symbol};
+use crate::locale::Locale;
 use crate::{diff_shape, diff_view};
 use pretty_assertions::assert_eq;
 use rinkaku_core::render::Report;
@@ -861,6 +862,7 @@ fn dispatch_draw_and_fold(
                 None,
                 diff_hunks,
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");

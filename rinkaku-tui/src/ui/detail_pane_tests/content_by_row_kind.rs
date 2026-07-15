@@ -35,6 +35,7 @@ fn should_draw_placeholder_message_when_there_are_no_rows_at_all() {
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -83,6 +84,7 @@ fn should_draw_dir_detail_content_when_cursor_is_on_a_directory_row() {
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -136,6 +138,7 @@ fn should_draw_symbols_label_without_changed_wording_when_origin_is_repo_outline
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -171,6 +174,7 @@ fn should_draw_skip_reason_in_detail_pane_when_cursor_is_on_a_skipped_file_row()
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -204,6 +208,7 @@ fn should_draw_test_symbol_count_in_detail_pane_when_cursor_is_on_a_whole_test_f
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -265,6 +270,7 @@ fn should_draw_both_test_note_and_real_symbols_in_detail_pane_when_file_is_mixed
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -298,6 +304,7 @@ fn should_draw_detail_pane_content_when_cursor_is_on_a_symbol_row() {
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");

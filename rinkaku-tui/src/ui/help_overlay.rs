@@ -8,6 +8,7 @@
 
 use super::overlay::centered_rect;
 use super::scroll::{Body, render_scrollable_pane};
+use crate::locale::Locale;
 use crate::row_view::{
     band_style, cyan_badge_style, risk_marker_style, split_badge_style, symbol_marker_span,
     symbol_name_style, test_badge_style, warning_badge_style,
@@ -21,18 +22,22 @@ use ratatui::widgets::Clear;
 use rinkaku_core::extract::{Classification, SymbolKind};
 use rinkaku_core::file_size::FileSizeBand;
 
-/// The `?` help overlay's content laid out once, independent of the pane's
-/// rendered size — extracted from [`draw_help_overlay`] so tests can pin
-/// its shape without a live `Frame`, mirroring how `crate::help::HELP_CONTENT`
-/// itself is already plain data rather than something computed at draw time.
-fn help_overlay_lines() -> Vec<Line<'static>> {
+/// The `?` help overlay's content laid out once for `locale`, independent
+/// of the pane's rendered size — extracted from [`draw_help_overlay`] so
+/// tests can pin its shape without a live `Frame`, mirroring how
+/// `crate::help::help_content` itself is already plain data rather than
+/// something computed at draw time (ADR 0055: locale-parameterized, not a
+/// `const`, since the underlying strings now come from `rust_i18n::t!`).
+fn help_overlay_lines(locale: Locale) -> Vec<Line<'static>> {
+    let tag = locale.tag();
+    let content = crate::help::help_content(locale);
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for group in crate::help::HELP_CONTENT.keymap_groups {
+    for group in &content.keymap_groups {
         lines.push(Line::styled(
-            group.title,
+            group.title.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         ));
-        for binding in group.bindings {
+        for binding in &group.bindings {
             lines.push(Line::raw(format!(
                 "  {:<16} {}",
                 binding.keys, binding.description
@@ -41,16 +46,16 @@ fn help_overlay_lines() -> Vec<Line<'static>> {
         lines.push(Line::raw(""));
     }
     lines.push(Line::styled(
-        "Markers",
+        rust_i18n::t!("help.section.markers", locale = tag).into_owned(),
         Style::default().add_modifier(Modifier::BOLD),
     ));
-    lines.extend(markers_legend_lines());
+    lines.extend(markers_legend_lines(locale));
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "Glossary",
+        rust_i18n::t!("help.section.glossary", locale = tag).into_owned(),
         Style::default().add_modifier(Modifier::BOLD),
     ));
-    for entry in crate::help::HELP_CONTENT.glossary {
+    for entry in &content.glossary {
         lines.push(Line::raw(format!(
             "  {:<16} {}",
             entry.term, entry.explanation
@@ -82,14 +87,14 @@ fn legend_symbol(
 const MARKER_SWATCH_COLUMN_WIDTH: usize = 40;
 
 /// Builds the Markers section's lines: one row per
-/// [`crate::help::HELP_CONTENT`]'s `markers` legend entry, its swatch
-/// rendered with the exact [`ratatui::style::Style`]
+/// [`crate::help::help_content`]'s `markers` legend entry for `locale`, its
+/// swatch rendered with the exact [`ratatui::style::Style`]
 /// `crate::row_view::entry_row_line` itself would use — a real style, not a
 /// prose color name — followed by the entry's explanation. Extracted as its
 /// own pure function, mirroring [`help_overlay_lines`]'s own split, so a
 /// test can assert on the built `Vec<Line>` without a live `Frame`.
-fn markers_legend_lines() -> Vec<Line<'static>> {
-    crate::help::HELP_CONTENT
+fn markers_legend_lines(locale: Locale) -> Vec<Line<'static>> {
+    crate::help::help_content(locale)
         .markers
         .iter()
         .map(|entry| {
@@ -167,10 +172,10 @@ fn badge_swatch_spans(label: &'static str, number_style: Style) -> Vec<Span<'sta
 /// content past a typical terminal's height) centered over `full_area`: a
 /// bordered box roughly 80%/90% of the frame's width/height (capped so it
 /// never claims more than the frame itself on a small terminal), listing
-/// every [`crate::help::HELP_CONTENT`] keymap group followed by the
-/// glossary. [`Clear`] is rendered first so the overlay's background is
-/// opaque rather than letting the underlying frame's glyphs show through
-/// gaps in the overlay's own text.
+/// every [`crate::help::help_content`] keymap group for `locale` (ADR
+/// 0055) followed by the glossary. [`Clear`] is rendered first so the
+/// overlay's background is opaque rather than letting the underlying
+/// frame's glyphs show through gaps in the overlay's own text.
 ///
 /// Scrolled via [`render_scrollable_pane`] — the same clamp/indicator/
 /// `Paragraph::scroll` machinery the Detail and Diff panes already share
@@ -188,19 +193,24 @@ pub(crate) fn draw_help_overlay(
     frame: &mut Frame,
     full_area: Rect,
     requested_scroll: usize,
+    locale: Locale,
 ) -> (usize, usize) {
     let overlay_area = centered_rect(full_area, 80, 90);
     frame.render_widget(Clear, overlay_area);
 
-    let lines = help_overlay_lines();
+    let lines = help_overlay_lines(locale);
     let inner_height = overlay_area.height.saturating_sub(2) as usize;
+    let title = format!(
+        " {} ",
+        rust_i18n::t!("help.overlay_title", locale = locale.tag())
+    );
     // Always drawn as focused: this overlay is modal (composited on top of
     // whatever screen was already showing) and is always the surface `?`'s
     // own scroll keys act on while open, so there is no competing pane to
     // distinguish it from (`render_scrollable_pane`'s own doc comment).
     let scroll = render_scrollable_pane(
         frame,
-        " Help (? to close) ",
+        &title,
         &[],
         Body::Single(&lines),
         requested_scroll,
@@ -211,485 +221,5 @@ pub(crate) fn draw_help_overlay(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{FileSizeBand, markers_legend_lines};
-    use crate::app::{App, BlastRadiusSelection};
-    use crate::ui::draw;
-    use pretty_assertions::assert_eq;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::style::{Color, Modifier, Style};
-    use ratatui::text::Span;
-    use rinkaku_core::diff::LineRange;
-    use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
-    use rinkaku_core::graph::SymbolGraph;
-    use rinkaku_core::render::{FileReport, Report};
-
-    #[test]
-    fn should_render_api_badge_swatch_with_yellow_number_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let api_line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "api:")
-            })
-            .expect("api: line present");
-
-        // NOTE: partial assert — a `Line` built from `format!` interpolation
-        // doesn't have one clean expected `Line` value to compare as a
-        // whole (the explanation half is plain, unstyled text pulled
-        // straight from `help::MARKER_LEGEND`), so this only pins the
-        // swatch's number span style, which is the thing this test exists
-        // to guard.
-        let number_span = line_span(api_line, "N");
-        assert_eq!(Style::default().fg(Color::Yellow), number_span.style);
-    }
-
-    #[test]
-    fn should_render_fan_in_badge_swatch_with_cyan_number_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let fan_in_line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "fan-in:")
-            })
-            .expect("fan-in: line present");
-
-        let number_span = line_span(fan_in_line, "N");
-        assert_eq!(Style::default().fg(Color::Cyan), number_span.style);
-    }
-
-    #[test]
-    fn should_render_warn_badge_swatch_with_yellow_number_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let warn_line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "warn:")
-            })
-            .expect("warn: line present");
-
-        let number_span = line_span(warn_line, "N");
-        assert_eq!(Style::default().fg(Color::Yellow), number_span.style);
-    }
-
-    #[test]
-    fn should_render_split_badge_swatch_with_red_number_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let split_line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "split:")
-            })
-            .expect("split: line present");
-
-        let number_span = line_span(split_line, "N");
-        assert_eq!(Style::default().fg(Color::Red), number_span.style);
-    }
-
-    #[test]
-    fn should_render_signature_changed_marker_swatch_with_yellow_tilde_when_building_markers_legend()
-     {
-        let lines = markers_legend_lines();
-
-        let changed_line = lines
-            .iter()
-            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "~"))
-            .expect("~ line present");
-
-        let swatch_span = line_span(changed_line, "~");
-        assert_eq!(Style::default().fg(Color::Yellow), swatch_span.style);
-    }
-
-    #[test]
-    fn should_render_cycle_marker_swatch_bold_yellow_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let cycle_line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "(cycle)")
-            })
-            .expect("(cycle) line present");
-
-        let swatch_span = line_span(cycle_line, "(cycle)");
-        assert_eq!(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-            swatch_span.style
-        );
-    }
-
-    #[test]
-    fn should_render_added_marker_swatch_with_green_plus_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let added_line = lines
-            .iter()
-            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "+"))
-            .expect("+ line present");
-
-        let swatch_span = line_span(added_line, "+");
-        assert_eq!(Style::default().fg(Color::Green), swatch_span.style);
-    }
-
-    #[test]
-    fn should_render_removed_marker_swatch_with_red_x_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let removed_line = lines
-            .iter()
-            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "x"))
-            .expect("x line present");
-
-        let swatch_span = line_span(removed_line, "x");
-        assert_eq!(Style::default().fg(Color::Red), swatch_span.style);
-    }
-
-    #[test]
-    fn should_render_risk_marker_swatch_bold_red_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let risk_line = lines
-            .iter()
-            .find(|line| line.spans.iter().any(|span| span.content.as_ref() == "!"))
-            .expect("! line present");
-
-        let swatch_span = line_span(risk_line, "!");
-        assert_eq!(
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            swatch_span.style
-        );
-    }
-
-    #[test]
-    fn should_render_dimmed_and_crossed_out_removed_name_swatch_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "(dimmed + struck-through name)")
-            })
-            .expect("removed-name swatch line present");
-
-        let swatch_span = line_span(line, "(dimmed + struck-through name)");
-        assert_eq!(
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::CROSSED_OUT),
-            swatch_span.style
-        );
-    }
-
-    #[test]
-    fn should_reuse_row_view_band_style_for_lines_swatch_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "lines:N")
-            })
-            .expect("lines:N line present");
-
-        let swatch_span = line_span(line, "lines:N");
-        assert_eq!(
-            crate::row_view::band_style(FileSizeBand::Watch),
-            swatch_span.style
-        );
-    }
-
-    #[test]
-    fn should_render_test_badge_swatch_with_magenta_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "[test] (N symbols)")
-            })
-            .expect("[test] (N symbols) line present");
-
-        let swatch_span = line_span(line, "[test] (N symbols)");
-        assert_eq!(Style::default().fg(Color::Magenta), swatch_span.style);
-    }
-
-    #[test]
-    fn should_render_test_group_swatch_dark_gray_when_building_markers_legend() {
-        let lines = markers_legend_lines();
-
-        let line = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.as_ref() == "N tests")
-            })
-            .expect("N tests line present");
-
-        let swatch_span = line_span(line, "N tests");
-        assert_eq!(Style::default().fg(Color::DarkGray), swatch_span.style);
-    }
-
-    fn line_span<'a>(line: &'a ratatui::text::Line<'static>, content: &str) -> &'a Span<'static> {
-        line.spans
-            .iter()
-            .find(|span| span.content.as_ref() == content)
-            .unwrap_or_else(|| panic!("span {content:?} not found in line"))
-    }
-
-    fn symbol(id: &str, name: &str) -> ExtractedSymbol {
-        ExtractedSymbol {
-            id: id.to_string(),
-            name: name.to_string(),
-            kind: SymbolKind::Function,
-            signature: format!("fn {name}()"),
-            range: LineRange { start: 1, end: 1 },
-            container: None,
-            referenced_names: vec![],
-            dependencies: vec![],
-            omitted_dependency_matches: 0,
-            is_test: false,
-            classification: None,
-            previous_signature: None,
-        }
-    }
-
-    fn report_with_one_symbol() -> Report {
-        Report {
-            origin: rinkaku_core::render::ReportOrigin::Diff,
-            files: vec![FileReport {
-                path: "lib.rs".to_string(),
-                symbols: vec![symbol("lib.rs::foo", "foo")],
-            }],
-            skipped: vec![],
-            graph: SymbolGraph {
-                nodes: vec![],
-                edges: vec![],
-                roots: vec![],
-            },
-            tests: vec![],
-            fan_ins: vec![],
-            file_size_warnings: vec![],
-            file_size_bands: vec![],
-            removed: vec![],
-        }
-    }
-
-    fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
-        let buffer = terminal.backend().buffer();
-        let area = buffer.area;
-        (0..area.height)
-            .map(|y| {
-                (0..area.width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn should_draw_help_overlay_with_keymap_markers_and_glossary_when_help_is_open() {
-        let report = report_with_one_symbol();
-        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
-        // A 150x76 terminal (up from 150x74): taller again so the
-        // overlay's 80% x 90% area still fits every keymap group —
-        // now including the `U` update-prompt binding (ADR 0054) in the
-        // "Global" group — the Markers legend, and the trailing Glossary
-        // section without the last section being pushed off the bottom.
-        // Grown here rather than narrowing the content itself, same
-        // rationale as the 100x40 -> 100x50 -> 150x70 -> 150x74 growths
-        // this test already went through for earlier keymap additions.
-        let mut terminal = Terminal::new(TestBackend::new(150, 76)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &crate::diff_shape::DiffPaneContent::Empty,
-                    &[],
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                    &[],
-                    &crate::note_markers::NoteMarkers::default(),
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(text.contains("Help"));
-        assert!(text.contains("Tree focus"));
-        assert!(text.contains("Right focus"));
-        assert!(text.contains("Source view"));
-        assert!(text.contains("Global"));
-        assert!(text.contains("Markers"));
-        assert!(text.contains("fan-in:N"));
-        assert!(text.contains("Glossary"));
-        assert!(text.contains("blast radius"));
-    }
-
-    #[test]
-    fn should_not_show_glossary_when_terminal_is_too_short_to_fit_the_whole_keymap_and_scroll_is_zero()
-     {
-        // A small terminal (30 rows) whose overlay box cannot fit every
-        // keymap group *and* the trailing Glossary section at once — the
-        // gap this feature exists to close (previously: the unscrolled
-        // `Paragraph` simply clipped the bottom of the content with no way
-        // to reach it, `draw_help_overlay`'s pre-scroll doc comment).
-        // Pinning that the Glossary is *not* visible at scroll 0 here, and
-        // *is* visible after scrolling in the next test, is what proves
-        // scrolling actually moves the rendered content rather than the
-        // box merely being tall enough by coincidence.
-        let report = report_with_one_symbol();
-        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &crate::diff_shape::DiffPaneContent::Empty,
-                    &[],
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                    &[],
-                    &crate::note_markers::NoteMarkers::default(),
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(text.contains("Tree focus"));
-        assert!(!text.contains("Glossary"), "Glossary should not fit yet");
-    }
-
-    #[test]
-    fn should_reveal_glossary_after_scrolling_down_when_terminal_is_too_short_to_fit_the_whole_keymap()
-     {
-        let report = report_with_one_symbol();
-        let app = App::new(&report).handle_key(crate::app::InputKey::ToggleHelp);
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
-
-        // Scroll well past every keymap group — `handle_scroll_key`'s own
-        // clamp-free "requested" semantics mean this overshoots on
-        // purpose; `render_scrollable_pane`'s clamp inside `draw` below is
-        // what brings it back in bounds, mirroring how every other
-        // scrollable pane in this crate is exercised in its own tests.
-        let app = app.handle_scroll_key(crate::app::InputKey::ScrollToBottom, 20);
-
-        let mut actual_outcome = crate::ui::DrawOutcome::default();
-        terminal
-            .draw(|frame| {
-                actual_outcome = draw(
-                    frame,
-                    &app,
-                    &report,
-                    &crate::diff_shape::DiffPaneContent::Empty,
-                    &[],
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                    &[],
-                    &crate::note_markers::NoteMarkers::default(),
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(
-            text.contains("Glossary"),
-            "Glossary should be visible after scrolling to the bottom"
-        );
-        assert!(
-            text.contains("jumplist"),
-            "the last glossary entry should be visible at the bottom"
-        );
-        // The scroll actually applied must be reported back (`DrawOutcome`'s
-        // own doc comment on why `crate::run_app` needs this to fold the
-        // overshot request back down) rather than staying at the
-        // unclamped `usize::MAX` sentinel `ScrollToBottom` set.
-        assert!(actual_outcome.clamped_help_scroll.is_some());
-        assert_ne!(Some(usize::MAX), actual_outcome.clamped_help_scroll);
-        assert!(actual_outcome.help_scroll_viewport_height.is_some());
-    }
-
-    #[test]
-    fn should_report_none_clamped_help_scroll_and_none_viewport_height_when_help_overlay_is_closed()
-    {
-        let report = report_with_one_symbol();
-        let app = App::new(&report);
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
-
-        let mut actual_outcome = crate::ui::DrawOutcome::default();
-        terminal
-            .draw(|frame| {
-                actual_outcome = draw(
-                    frame,
-                    &app,
-                    &report,
-                    &crate::diff_shape::DiffPaneContent::Empty,
-                    &[],
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                    &[],
-                    &crate::note_markers::NoteMarkers::default(),
-                );
-            })
-            .expect("draw");
-
-        assert_eq!(None, actual_outcome.clamped_help_scroll);
-        assert_eq!(None, actual_outcome.help_scroll_viewport_height);
-    }
-
-    #[test]
-    fn should_not_draw_help_overlay_when_help_is_closed() {
-        let report = report_with_one_symbol();
-        let app = App::new(&report);
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
-
-        terminal
-            .draw(|frame| {
-                draw(
-                    frame,
-                    &app,
-                    &report,
-                    &crate::diff_shape::DiffPaneContent::Empty,
-                    &[],
-                    &BlastRadiusSelection::NotApplicable,
-                    None,
-                    &[],
-                    &crate::note_markers::NoteMarkers::default(),
-                );
-            })
-            .expect("draw");
-
-        let text = buffer_text(&terminal);
-        assert!(!text.contains("Glossary"));
-    }
-}
+#[path = "help_overlay/tests.rs"]
+mod tests;

@@ -33,6 +33,11 @@
 //! string rather than reconstructing a diff from `Report` (which no longer
 //! carries hunk text once extraction has run).
 
+// ADR 0055: the `?` help overlay's translations, compiled in from
+// `locales/{en,ja}.yml` at build time. English is this macro's fallback,
+// matching this project's fixed English default.
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod app;
 pub mod blast_radius;
 pub mod detail;
@@ -43,6 +48,7 @@ pub mod help;
 pub mod highlight;
 mod hunk_split;
 mod input_translate;
+pub mod locale;
 pub mod nav;
 pub mod note_markers;
 pub mod order;

@@ -1,4 +1,5 @@
 use crate::app::{App, BlastRadiusSelection};
+use crate::locale::Locale;
 use crate::review::{ReviewState, SelectionSnapshot};
 use crate::ui::draw;
 use ratatui::Terminal;
@@ -84,6 +85,7 @@ fn draw_app(app: &App, report: &Report) -> String {
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");

@@ -37,6 +37,7 @@ index e69de29..4b825dc 100644
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -90,6 +91,7 @@ index e69de29..4b825dc 100644
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -229,6 +231,7 @@ index e69de29..4b825dc 100644
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -279,6 +282,7 @@ index e69de29..4b825dc 100644
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");

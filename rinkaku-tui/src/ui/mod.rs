@@ -24,6 +24,7 @@ mod style;
 use crate::app::{App, BlastRadiusSelection, Screen};
 use crate::diff_view::FileHunks;
 use crate::highlight::HighlightedFile;
+use crate::locale::Locale;
 use crate::source::HighlightedSourceView;
 use entry::draw_entry_screen;
 use help_overlay::draw_help_overlay;
@@ -142,14 +143,19 @@ pub struct DrawOutcome {
 /// that already seeds `diff_highlights` above, passed through unchanged so
 /// the source screen can composite it onto the drilled-into symbol's file
 /// as an added/removed overlay.
+///
+/// `locale` (ADR 0055) governs only the `?` help overlay's own prose —
+/// every other pane this function draws is English-only regardless of its
+/// value (ADR 0055's scope decision).
 // This function's parameter list already sat at clippy's 7-argument
 // threshold before ADR 0046 added `diff_hunks`/ADR 0048 added
-// `note_markers`; every existing parameter is an independently-computed,
-// independently-cached piece of content `crate::run_app` must not
-// recompute inside the draw path (this function's own doc comment), so
-// bundling them into a struct now would only rename the same 9 values one
-// level deeper, not reduce the actual coupling — not worth the churn
-// across this module's own ~50 call sites for a lint threshold.
+// `note_markers`/ADR 0055 added `locale`; every existing parameter is an
+// independently-computed, independently-cached piece of content
+// `crate::run_app` must not recompute inside the draw path (this
+// function's own doc comment), so bundling them into a struct now would
+// only rename the same values one level deeper, not reduce the actual
+// coupling — not worth the churn across this module's own ~50 call sites
+// for a lint threshold.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -161,6 +167,7 @@ pub fn draw(
     source_content: Option<&Result<HighlightedSourceView, String>>,
     diff_hunks: &[FileHunks],
     note_markers: &crate::note_markers::NoteMarkers,
+    locale: Locale,
 ) -> DrawOutcome {
     let area = frame.area();
     let [body, status_area] =
@@ -234,7 +241,7 @@ pub fn draw(
 
     if app.help_open() {
         let (clamped_help_scroll, help_scroll_viewport_height) =
-            draw_help_overlay(frame, area, app.help_scroll());
+            draw_help_overlay(frame, area, app.help_scroll(), locale);
         outcome.clamped_help_scroll = Some(clamped_help_scroll);
         outcome.help_scroll_viewport_height = Some(help_scroll_viewport_height);
     }

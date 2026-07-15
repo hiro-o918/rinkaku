@@ -49,6 +49,10 @@ tree-sitter-rust = { workspace = true }
 tree-sitter-go = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-typescript = { workspace = true }
+# ADR 0055: the `?` help overlay's Japanese localization. Compiled in from
+# `locales/{en,ja}.yml` at build time via the `i18n!` macro (`lib.rs`) —
+# no runtime file IO, matching this crate's IO-at-the-boundary discipline.
+rust-i18n = "4.2"
 
 [dev-dependencies]
 rstest = { workspace = true }

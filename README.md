@@ -77,6 +77,11 @@ last. `fan-in:` counts other *production* symbols referencing this one,
 never tests. Press `r`/`R` on any row to pivot the right pane to its
 blast radius; `?` opens the full keymap.
 
+The `?` help overlay is also available in Japanese: it follows your
+locale (`LC_ALL` > `LC_MESSAGES` > `LANG`), so e.g.
+`LC_MESSAGES=ja_JP.UTF-8` switches the descriptions to Japanese while
+key names and technical terms stay in English.
+
 See [`docs/tui.md`](docs/tui.md) for the full layout, key bindings, and
 caveats on ordering and dependency resolution.
 

@@ -21,6 +21,7 @@ fn should_draw_source_screen_title_and_error_message_when_file_is_missing() {
                 source_content.as_ref(),
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -64,6 +65,7 @@ fn should_wrap_source_error_message_instead_of_truncating_it_in_a_narrow_pane() 
                 source_content.as_ref(),
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
@@ -121,6 +123,7 @@ fn should_report_none_clamped_scroll_but_source_viewport_height_when_source_scre
                 None,
                 &[],
                 &crate::note_markers::NoteMarkers::default(),
+                Locale::English,
             );
         })
         .expect("draw");
