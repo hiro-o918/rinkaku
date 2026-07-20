@@ -61,6 +61,7 @@ pub(super) fn report_with_one_symbol() -> Report {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],

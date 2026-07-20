@@ -8,6 +8,7 @@ use super::fake_reader;
 use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
 use crate::file_size::{FileSizeBand, FileSizeEntry};
+use crate::graph::TestCoverage;
 use crate::pipeline::analyze_diff;
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile};
 use pretty_assertions::assert_eq;
@@ -217,6 +218,13 @@ func Foo() int { return 2 }
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![TestCoverage {
+            id: "models/user.go::Foo".to_string(),
+            path: "models/user.go".to_string(),
+            name: "Foo".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "models/user.go".to_string(),
@@ -292,6 +300,13 @@ fn foo(a: i32) -> i32 {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![TestCoverage {
+            id: "src/lib.rs::foo".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "foo".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "src/lib.rs".to_string(),
@@ -377,6 +392,13 @@ index e69de29..4b825dc 100644
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![TestCoverage {
+            id: "src/lib.rs::foo".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "foo".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "src/lib.rs".to_string(),

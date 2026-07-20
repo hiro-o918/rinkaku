@@ -13,7 +13,7 @@ use crate::extract::{
     ExtractedSymbol, RemovedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
 };
 use crate::file_size::{compute_file_size_bands, compute_file_size_warnings};
-use crate::graph::{build_graph, compute_fan_ins, stamp_ids};
+use crate::graph::{build_graph, compute_fan_ins, compute_test_coverage, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
 use crate::progress::{OnProgress, should_report_progress};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile, TestFileSummary};
@@ -318,6 +318,8 @@ pub fn analyze_diff(
     // fan-in entry's `used_by` names always match the stamped ids/nodes
     // (ADR 0013).
     let fan_ins = compute_fan_ins(&graph);
+    // ADR 0059: same graph, mirror aggregation.
+    let test_coverage = compute_test_coverage(&graph);
     // ADR 0028: file-size warnings from the `(path, line_count)` pairs
     // collected inline above during the per-file read loop.
     let file_size_warnings = compute_file_size_warnings(&sized_files);
@@ -331,6 +333,7 @@ pub fn analyze_diff(
         graph,
         tests,
         fan_ins,
+        test_coverage,
         file_size_warnings,
         file_size_bands,
         removed,
@@ -528,6 +531,7 @@ pub fn analyze_repo(
     let graph = build_graph(&files);
     stamp_ids(&mut files, &graph);
     let fan_ins = compute_fan_ins(&graph);
+    let test_coverage = compute_test_coverage(&graph);
     let file_size_warnings = compute_file_size_warnings(&sized_files);
     let file_size_bands = compute_file_size_bands(&sized_files);
 
@@ -538,6 +542,7 @@ pub fn analyze_repo(
         graph,
         tests: Vec::new(),
         fan_ins,
+        test_coverage,
         file_size_warnings,
         file_size_bands,
         removed: Vec::new(),

@@ -17,6 +17,9 @@
 //!   with no matching `ExtractedSymbol` in `files`.
 //! - [`classification_and_removed`] — ADR 0014 classification markers,
 //!   the diff-signature block, and the "Removed symbols" section.
+//! - [`untested_changes`] — ADR 0059's "## Untested changes" section:
+//!   omit-when-empty and its placement between "High fan-in symbols"
+//!   and "File sizes".
 
 use super::*;
 use crate::diff::LineRange;
@@ -30,6 +33,7 @@ mod definition_body;
 mod empty_and_ordering;
 mod lookup_miss_defenses;
 mod sections_skipped_fan_in_filesize;
+mod untested_changes;
 
 /// Builds an `ExtractedSymbol` for rendering tests, with `id` set (the
 /// graph-building pipeline stage this module assumes already ran) and

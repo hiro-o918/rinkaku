@@ -158,6 +158,10 @@ fn marker_swatch_spans(swatch: &'static str) -> Vec<Span<'static>> {
         "fan-in:N" => badge_swatch_spans("fan-in:", cyan_badge_style()),
         "warn:N" => badge_swatch_spans("warn:", warning_badge_style()),
         "split:N" => badge_swatch_spans("split:", split_badge_style()),
+        "tests:0" => vec![
+            Span::raw("tests:"),
+            Span::styled("0", warning_badge_style()),
+        ],
         "[test] (N symbols)" => vec![Span::styled(swatch, test_badge_style())],
         "N tests" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],
         "(skipped: ...)" => vec![Span::styled(swatch, Style::default().fg(Color::DarkGray))],

@@ -11,6 +11,9 @@
 //!   onto the source `FileReport`s, including the disambiguated case
 //! - `compute_fan_ins` — fan-in threshold, referrer dedup, cycle-edge
 //!   contribution, and the descending / tie-break ordering
+//! - `compute_test_coverage` — the fan-in mirror (ADR 0059): production
+//!   referrer exclusion, zero-coverage inclusion, and the ascending
+//!   test-count / tie-break ordering
 //! - `pivot` — `pivot_graph` / `pivot_roots` / `path_under_prefix`:
 //!   subset root election, cycle across pivot, and empty-prefix identity
 
@@ -20,6 +23,7 @@ use crate::extract::{ExtractedSymbol, SymbolKind};
 
 mod build_graph;
 mod compute_fan_ins;
+mod compute_test_coverage;
 mod pivot;
 mod roots_and_cycles;
 mod stamp_ids;

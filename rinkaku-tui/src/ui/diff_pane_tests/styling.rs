@@ -275,6 +275,7 @@ fn should_fall_back_to_plain_diff_style_when_file_extension_is_unrecognized() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],

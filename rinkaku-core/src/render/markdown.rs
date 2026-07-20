@@ -9,7 +9,7 @@
 
 use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol, SymbolKind};
 use crate::file_size::{FileSizeBand, FileSizeEntry};
-use crate::graph::{FanIn, Node, NodeId, SymbolGraph};
+use crate::graph::{FanIn, Node, NodeId, SymbolGraph, TestCoverage};
 use crate::render::RenderError;
 use crate::render::report::{Report, ReportOrigin, SkipReason, SkippedFile, skip_reason_label};
 use crate::render::shared::SymbolLookup;
@@ -69,6 +69,11 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
     let lookup = SymbolLookup::build(&report.files);
     let children = children_by_node(&report.graph);
     let visit_order = dfs_pre_order(&report.graph, &children);
+    let test_coverage_by_id: HashMap<&str, &TestCoverage> = report
+        .test_coverage
+        .iter()
+        .map(|coverage| (coverage.id.as_str(), coverage))
+        .collect();
 
     let mut out = String::new();
 
@@ -103,6 +108,20 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
             writeln!(out)?;
         }
 
+        let untested: Vec<&TestCoverage> = report
+            .test_coverage
+            .iter()
+            .filter(|coverage| coverage.test_count == 0)
+            .collect();
+        if !untested.is_empty() {
+            writeln!(out, "## Untested changes")?;
+            writeln!(out)?;
+            for coverage in &untested {
+                writeln!(out, "- {}", test_coverage_label(coverage, &lookup))?;
+            }
+            writeln!(out)?;
+        }
+
         if !report.file_size_bands.is_empty() {
             writeln!(out, "## File sizes")?;
             writeln!(out)?;
@@ -118,7 +137,13 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
             let Some((path, symbol)) = lookup.get(id) else {
                 continue;
             };
-            render_definition(&mut out, path, symbol)?;
+            render_definition(
+                &mut out,
+                path,
+                symbol,
+                test_coverage_by_id.get(id.as_str()).copied(),
+                &lookup,
+            )?;
         }
     }
 
@@ -399,8 +424,9 @@ fn render_tree_node(
 
 /// Renders one symbol's "Definitions" entry: a `###` heading using the same
 /// label as the tree (with ADR 0014's contract-impact marker, same as
-/// "Change graph"/"High fan-in symbols"), the signature block, and its
-/// unchanged 1-hop `dependencies` under "Depends on:".
+/// "Change graph"/"High fan-in symbols"), the signature block, a "Tests:
+/// N" line (ADR 0059), and its unchanged 1-hop `dependencies` under
+/// "Depends on:".
 ///
 /// The signature block is a plain fence for every classification except
 /// [`Classification::SignatureChanged`] (or classification not attempted),
@@ -411,10 +437,17 @@ fn render_tree_node(
 /// unchanged either way (not part of the diff, since it never differs
 /// between base and head — `find_container`'s output depends only on
 /// enclosing-block structure, not on the signature text being compared).
+///
+/// `test_coverage` is `None` for a symbol `compute_test_coverage` never
+/// produced an entry for (a test symbol rendered as its own Definitions
+/// entry — coverage is not a meaningful question to ask of a test), in
+/// which case no "Tests:" line is emitted at all.
 fn render_definition(
     out: &mut String,
     path: &str,
     symbol: &ExtractedSymbol,
+    test_coverage: Option<&TestCoverage>,
+    lookup: &SymbolLookup,
 ) -> Result<(), RenderError> {
     writeln!(out, "### {}", labeled_with_marker(path, symbol))?;
     writeln!(out)?;
@@ -446,6 +479,11 @@ fn render_definition(
         }
     }
     writeln!(out)?;
+
+    if let Some(coverage) = test_coverage {
+        writeln!(out, "{}", test_coverage_line(coverage, lookup))?;
+        writeln!(out)?;
+    }
 
     if !symbol.dependencies.is_empty() || symbol.omitted_dependency_matches > 0 {
         writeln!(out, "Depends on:")?;
@@ -524,6 +562,45 @@ fn fan_in_label(fan_in: &FanIn, lookup: &SymbolLookup) -> String {
         Some((path, symbol)) => labeled_with_marker(path, symbol),
         None => format!("{} ({})", fan_in.name, fan_in.path),
     }
+}
+
+/// Builds the "## Untested changes" line label for a [`TestCoverage`],
+/// the same shape [`fan_in_label`] builds for "## High fan-in symbols" —
+/// see that function's doc comment for the lookup-miss fallback rationale.
+fn test_coverage_label(coverage: &TestCoverage, lookup: &SymbolLookup) -> String {
+    match lookup.get(&coverage.id) {
+        Some((path, symbol)) => labeled_with_marker(path, symbol),
+        None => format!("{} ({})", coverage.name, coverage.path),
+    }
+}
+
+/// Builds a definition entry's "Tests: N" line (ADR 0059): `Tests: 0` when
+/// nothing covers the symbol, or `Tests: N (\`name\`, ...)` with each
+/// covering test's name resolved via `lookup` (falling back to the raw id
+/// on a lookup miss, same defensive fallback [`fan_in_label`] uses).
+fn test_coverage_line(coverage: &TestCoverage, lookup: &SymbolLookup) -> String {
+    if coverage.covering_tests.is_empty() {
+        return "Tests: 0".to_string();
+    }
+    let names: Vec<&str> = coverage
+        .covering_tests
+        .iter()
+        .map(|id| {
+            lookup
+                .get(id)
+                .map(|(_, symbol)| symbol.name.as_str())
+                .unwrap_or(id.as_str())
+        })
+        .collect();
+    format!(
+        "Tests: {} ({})",
+        coverage.test_count,
+        names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// Builds the "File sizes" line label for a [`FileSizeEntry`] (ADR 0028

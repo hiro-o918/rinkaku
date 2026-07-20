@@ -236,6 +236,54 @@ fn should_leave_fan_in_at_zero_when_symbol_has_no_matching_fan_in_entry() {
     assert_eq!(0, tree.roots[0].badges.fan_in);
 }
 
+#[test]
+fn should_set_test_count_badge_on_the_symbol_leaf_from_matching_test_coverage() {
+    // Unlike `fan_in`, `test_count` (ADR 0059) is not aggregated upward
+    // (`Badges::test_count`'s own doc comment) — only the symbol leaf
+    // itself carries it.
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![symbol("src/lib.rs::shared", "shared", SymbolKind::Function)],
+        }],
+        test_coverage: vec![rinkaku_core::graph::TestCoverage {
+            id: "src/lib.rs::shared".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "shared".to_string(),
+            covering_tests: vec!["src/lib.rs::spec".to_string()],
+            test_count: 2,
+        }],
+        ..empty_report()
+    };
+
+    let tree = build_tree(&report);
+
+    let src = &tree.roots[0];
+    assert_eq!("src", src.path);
+    let file_node = &src.children[0];
+    let symbol_node = &file_node.children[0];
+    assert_eq!(Some(2), symbol_node.badges.test_count);
+}
+
+#[test]
+fn should_leave_test_count_none_when_symbol_has_no_matching_test_coverage_entry() {
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![symbol("lib.rs::solo", "solo", SymbolKind::Function)],
+        }],
+        test_coverage: vec![],
+        ..empty_report()
+    };
+
+    let tree = build_tree(&report);
+
+    let symbol_node = &tree.roots[0].children[0];
+    assert_eq!(None, symbol_node.badges.test_count);
+}
+
 // The following tests pin ADR 0035's `SymbolRef::is_test` propagation: a
 // mixed file (real + test symbols in `report.files`, ADR 0025's default)
 // nests its test symbols under a synthetic `TestGroup` child (visual-

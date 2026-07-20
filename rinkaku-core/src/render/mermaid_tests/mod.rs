@@ -70,6 +70,7 @@ fn empty_report(graph: SymbolGraph, files: Vec<FileReport>) -> Report {
         graph,
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],

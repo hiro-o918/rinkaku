@@ -53,7 +53,7 @@ help:
     removed_symbol: "Removed symbol"
     removed_symbol_name: "Removed symbol's name"
     dependency_cycle: "Directory contains a dependency cycle"
-    risk_marker: "Risk marker: a contract change and a high-fan-in symbol in the same subtree"
+    risk_marker: "Risk marker: a contract change combined with a high-fan-in symbol in the same subtree, or (on a symbol row) zero covering tests"
     whole_test_file_badge: "Whole-test-file badge"
     collapsed_test_group: "Collapsed group of a file's test symbols"
     skipped_reason: "Reason a file was not analyzed (parse failure, unsupported language, ...)"
@@ -63,6 +63,7 @@ help:
     lines_count: "This file's own line count, colored by file-size band (normal/watch/warn/split)"
     warn_count: "Directory rows: count of Warn-band files in this subtree"
     split_count: "Directory rows: count of Split-band files in this subtree"
+    tests_count: "Symbol row: zero test symbols reference this symbol"
   glossary:
     topological_order: "Directories ordered least-depended-on first, foundations last"
     alphabetical_order: "Directories ordered A-Z, ignoring dependency direction"

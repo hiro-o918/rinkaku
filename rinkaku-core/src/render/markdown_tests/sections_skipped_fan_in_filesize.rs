@@ -38,6 +38,7 @@ fn should_render_skipped_files_section_when_report_has_skips() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -80,6 +81,7 @@ fn should_render_change_graph_then_skipped_section_when_report_has_both() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -131,6 +133,7 @@ fn should_omit_high_fan_in_symbols_section_when_fan_ins_is_empty() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -231,6 +234,7 @@ fn should_render_high_fan_in_symbols_section_between_change_graph_and_definition
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        test_coverage: vec![],
     };
 
     let expected = "\
@@ -304,6 +308,7 @@ fn should_render_fan_in_line_for_symbol_with_no_matching_definition() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        test_coverage: vec![],
     };
 
     let expected = "\
@@ -346,6 +351,7 @@ fn should_render_file_sizes_section_in_report_order_across_all_bands() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![
             crate::file_size::FileSizeEntry {
@@ -422,6 +428,7 @@ fn should_omit_file_sizes_section_when_report_has_no_bands() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -501,6 +508,7 @@ fn should_place_file_sizes_between_high_fan_in_symbols_and_definitions() {
             band: crate::file_size::FileSizeBand::Split,
         }],
         removed: vec![],
+        test_coverage: vec![],
     };
 
     let expected = "\
@@ -563,6 +571,7 @@ fn should_include_file_size_warnings_in_json_output() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![
             crate::file_size::FileSizeWarning {
                 path: "b.rs".to_string(),
@@ -590,6 +599,7 @@ fn should_include_file_size_warnings_in_json_output() {
   },
   \"tests\": [],
   \"fan_ins\": [],
+  \"test_coverage\": [],
   \"file_size_warnings\": [
     {
       \"path\": \"b.rs\",

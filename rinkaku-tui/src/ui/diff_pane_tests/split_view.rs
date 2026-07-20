@@ -197,6 +197,7 @@ fn should_draw_old_and_new_signature_side_by_side_when_symbol_signature_changed(
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
