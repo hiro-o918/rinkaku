@@ -52,6 +52,7 @@ fn should_render_line_2_span_for_span_from_the_same_badges_the_tree_row_would_re
         changed_symbols: 1,
         contract_changes: 1,
         fan_in: 4,
+        test_count: None,
         own_file_size_band: None,
         own_file_line_count: None,
         file_size_warn_count: 0,

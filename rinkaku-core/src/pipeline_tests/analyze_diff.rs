@@ -9,7 +9,7 @@ use super::{empty_graph, fake_reader};
 use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
 use crate::file_size::{FileSizeBand, FileSizeEntry};
-use crate::graph::FanIn;
+use crate::graph::{FanIn, TestCoverage};
 use crate::pipeline::{AnalyzeError, analyze_diff};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile};
 use pretty_assertions::assert_eq;
@@ -26,6 +26,7 @@ fn should_return_empty_report_when_diff_is_empty() {
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -88,6 +89,13 @@ fn foo(a: i32) -> i32 {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![TestCoverage {
+            id: "src/lib.rs::foo".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "foo".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "src/lib.rs".to_string(),
@@ -137,6 +145,7 @@ index 4b825dc..0000000
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -175,6 +184,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -221,6 +231,7 @@ index e69de29..4b825dc 100644
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -271,6 +282,7 @@ rename to src/new_name.rs
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -405,6 +417,13 @@ index e69de29..4b825dc 100644
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![TestCoverage {
+            id: "src/lib.rs::a".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "a".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "src/lib.rs".to_string(),
@@ -497,6 +516,11 @@ func (r *repoImpl) Save(id string) error {
 - interface Repo (repo.go)
   - fn Save (repo.go)
 
+## Untested changes
+
+- interface Repo (repo.go)
+- fn Save (repo.go)
+
 ## File sizes
 
 - `repo.go` (11 lines)
@@ -509,12 +533,16 @@ func (r *repoImpl) Save(id string) error {
 Repo interface { Save(id string) (err error) }
 ```
 
+Tests: 0
+
 ### fn Save (repo.go)
 
 ```
 // repoImpl
 func (r *repoImpl) Save(id string) error
 ```
+
+Tests: 0
 
 "
     .to_string();

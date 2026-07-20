@@ -7,6 +7,7 @@ use super::fake_reader;
 use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
 use crate::file_size::{FileSizeBand, FileSizeEntry};
+use crate::graph::TestCoverage;
 use crate::pipeline::analyze_diff;
 use crate::render::{FileReport, Report, ReportOrigin, TestFileSummary};
 use pretty_assertions::assert_eq;
@@ -109,6 +110,7 @@ fn should_add_two_numbers() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "src/lib.rs".to_string(),
@@ -292,6 +294,13 @@ mod tests {
             symbol_count: 1,
         }],
         fan_ins: vec![],
+        test_coverage: vec![TestCoverage {
+            id: "src/lib.rs::add".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "add".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "src/lib.rs".to_string(),

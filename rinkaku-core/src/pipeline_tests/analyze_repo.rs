@@ -8,6 +8,7 @@ use super::{empty_graph, fake_reader};
 use crate::diff::LineRange;
 use crate::extract::{ExtractedSymbol, SymbolKind};
 use crate::file_size::{FileSizeBand, FileSizeEntry};
+use crate::graph::TestCoverage;
 use crate::pipeline::analyze_repo;
 use crate::render::{FileReport, Report, ReportOrigin};
 use pretty_assertions::assert_eq;
@@ -24,6 +25,7 @@ fn should_return_empty_report_when_paths_is_empty() {
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -110,6 +112,22 @@ struct Point {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![
+            TestCoverage {
+                id: "src/lib.rs::Point".to_string(),
+                path: "src/lib.rs".to_string(),
+                name: "Point".to_string(),
+                covering_tests: vec![],
+                test_count: 0,
+            },
+            TestCoverage {
+                id: "src/lib.rs::helper".to_string(),
+                path: "src/lib.rs".to_string(),
+                name: "helper".to_string(),
+                covering_tests: vec![],
+                test_count: 0,
+            },
+        ],
         file_size_warnings: vec![],
         file_size_bands: vec![FileSizeEntry {
             path: "src/lib.rs".to_string(),
@@ -156,6 +174,7 @@ fn should_skip_path_without_registered_language_support() {
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -180,6 +199,7 @@ fn should_skip_path_when_read_file_fails() {
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -208,6 +228,7 @@ fn should_skip_path_in_generated_paths_set_without_reading_it() {
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -230,6 +251,7 @@ fn should_skip_file_with_generated_content_marker_when_include_generated_is_fals
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -269,6 +291,7 @@ func TestFoo(t *testing.T) {
         graph: empty_graph(),
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],

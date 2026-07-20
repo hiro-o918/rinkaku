@@ -184,6 +184,93 @@ pub fn compute_fan_ins(graph: &SymbolGraph) -> Vec<FanIn> {
     fan_ins
 }
 
+/// A changed, non-test symbol paired with the test symbols that reference
+/// it (ADR 0059) — the mirror of [`FanIn`]: where `FanIn::used_by` names
+/// the *production* referrers a symbol worries about, `covering_tests`
+/// lists the *test* referrers a reviewer can trust to have exercised it.
+/// Unlike `FanIn`, every changed non-test node gets an entry regardless of
+/// count — a `test_count` of 0 (no test referrers at all) is the signal
+/// this aggregation exists to surface, so it cannot be filtered out the
+/// way `compute_fan_ins` filters out low fan-in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TestCoverage {
+    pub id: NodeId,
+    pub path: String,
+    pub name: String,
+    /// Ids (not names, unlike `FanIn::used_by`) of every test symbol
+    /// covering this node, sorted ascending — an id lets a consumer (the
+    /// TUI in particular) jump straight to the covering test, which a
+    /// name alone cannot do when two test symbols share a name.
+    pub covering_tests: Vec<NodeId>,
+    /// Redundant with `covering_tests.len()`, kept as its own field so a
+    /// JSON consumer can filter `test_count == 0` without recomputing it.
+    pub test_count: usize,
+}
+
+/// Aggregates `graph.edges` by target node into [`TestCoverage`]s: the
+/// inverse filter of [`compute_fan_ins`] (keeps only edges whose referrer
+/// *is* `Node::is_test`, ADR 0042's classification) over every changed,
+/// non-test node — including nodes with zero test referrers, since an
+/// empty `covering_tests` list is the untested-symbol signal this
+/// aggregation exists to surface, not a case to omit.
+///
+/// Results are sorted by `test_count` ascending (untested symbols first —
+/// the opposite direction from `compute_fan_ins`'s descending sort, since
+/// here the low end of the range is what a reviewer should see first),
+/// ties broken by `(path, name, id)` ascending for the same determinism
+/// reason `compute_fan_ins` breaks its own ties that way.
+pub fn compute_test_coverage(graph: &SymbolGraph) -> Vec<TestCoverage> {
+    let node_by_id: HashMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    let mut covering_tests_by_target: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &graph.edges {
+        if !node_by_id
+            .get(edge.from.as_str())
+            .is_some_and(|referrer| referrer.is_test)
+        {
+            continue;
+        }
+        let covering_tests = covering_tests_by_target
+            .entry(edge.to.as_str())
+            .or_default();
+        if !covering_tests.contains(&edge.from.as_str()) {
+            covering_tests.push(edge.from.as_str());
+        }
+    }
+
+    let mut test_coverage: Vec<TestCoverage> = graph
+        .nodes
+        .iter()
+        .filter(|n| !n.is_test)
+        .map(|node| {
+            let mut covering_tests: Vec<String> = covering_tests_by_target
+                .get(node.id.as_str())
+                .into_iter()
+                .flatten()
+                .map(|id| id.to_string())
+                .collect();
+            covering_tests.sort();
+            TestCoverage {
+                id: node.id.clone(),
+                path: node.path.clone(),
+                name: node.name.clone(),
+                test_count: covering_tests.len(),
+                covering_tests,
+            }
+        })
+        .collect();
+
+    test_coverage.sort_by(|a, b| {
+        a.test_count
+            .cmp(&b.test_count)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    test_coverage
+}
+
 /// Builds a [`SymbolGraph`] over every symbol in `files`.
 ///
 /// Node order (and therefore `nodes`, tie-breaks in `roots`, and DFS

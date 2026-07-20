@@ -107,6 +107,7 @@ fn should_order_marker_legend_added_changed_removed_then_aggregates() {
             "lines:N",
             "warn:N",
             "split:N",
+            "tests:0",
         ],
         swatches
     );

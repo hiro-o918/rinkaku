@@ -34,6 +34,7 @@ fn should_render_container_comment_when_symbol_has_container() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -89,6 +90,7 @@ fn should_render_depends_on_list_when_symbol_has_dependencies() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -152,6 +154,7 @@ fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencie
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -211,6 +214,7 @@ fn should_render_omitted_matches_note_when_dependency_matches_were_capped() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -272,6 +276,7 @@ fn should_widen_fence_when_signature_contains_a_backtick_run() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -326,6 +331,7 @@ fn should_widen_fence_when_container_contains_a_backtick_run() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
@@ -346,6 +352,142 @@ fn should_widen_fence_when_container_contains_a_backtick_run() {
 // impl Foo /* ```` */
 fn bar(&self) -> i32
 `````
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+// ADR 0059: a definition entry gets a "Tests: N" line derived from
+// `report.test_coverage`, so a reviewer skimming "Definitions" sees
+// coverage without opening "## Untested changes" or the TUI blast-radius
+// view.
+#[test]
+fn should_render_zero_tests_line_when_symbol_has_no_covering_tests() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![symbol(
+                "src/lib.rs::bar",
+                "bar",
+                SymbolKind::Function,
+                "fn bar() -> i32",
+            )],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![node("src/lib.rs::bar", "src/lib.rs", "bar")],
+            edges: vec![],
+            roots: vec!["src/lib.rs::bar".to_string()],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![crate::graph::TestCoverage {
+            id: "src/lib.rs::bar".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "bar".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn bar (src/lib.rs)
+
+## Untested changes
+
+- fn bar (src/lib.rs)
+
+## Definitions
+
+### fn bar (src/lib.rs)
+
+```
+fn bar() -> i32
+```
+
+Tests: 0
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_render_covering_test_names_when_symbol_has_tests() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![
+            FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "src/lib.rs::bar",
+                    "bar",
+                    SymbolKind::Function,
+                    "fn bar() -> i32",
+                )],
+            },
+            FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![ExtractedSymbol {
+                    is_test: true,
+                    ..symbol(
+                        "src/lib.rs::test_bar",
+                        "test_bar",
+                        SymbolKind::Function,
+                        "fn test_bar()",
+                    )
+                }],
+            },
+        ],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![node("src/lib.rs::bar", "src/lib.rs", "bar")],
+            edges: vec![],
+            roots: vec!["src/lib.rs::bar".to_string()],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![crate::graph::TestCoverage {
+            id: "src/lib.rs::bar".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "bar".to_string(),
+            covering_tests: vec!["src/lib.rs::test_bar".to_string()],
+            test_count: 1,
+        }],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn bar (src/lib.rs)
+
+## Definitions
+
+### fn bar (src/lib.rs)
+
+```
+fn bar() -> i32
+```
+
+Tests: 1 (`test_bar`)
 
 "
     .to_string();

@@ -7,7 +7,7 @@
 //! directly — no hand-written JSON codegen lives here.
 
 use crate::extract::{ExtractedSymbol, RemovedSymbol};
-use crate::graph::{FanIn, SymbolGraph};
+use crate::graph::{FanIn, SymbolGraph, TestCoverage};
 use serde::Serialize;
 
 /// The result of running the extraction pipeline over a whole diff.
@@ -50,6 +50,15 @@ pub struct Report {
     /// without recomputing the aggregation themselves, matching how `graph`
     /// itself is already exposed alongside `files`.
     pub fan_ins: Vec<FanIn>,
+    /// Per-symbol test coverage (ADR 0059): for every changed, non-test
+    /// symbol, which test symbols (if any) reference it. The mirror of
+    /// `fan_ins` above — derived from `graph` via
+    /// [`crate::graph::compute_test_coverage`] and kept as its own `Report`
+    /// field for the same reason `fan_ins` is: JSON consumers get it without
+    /// recomputing the aggregation themselves. Unlike `fan_ins`, every
+    /// changed non-test symbol has an entry here, including `test_count: 0`
+    /// ones — that emptiness is the signal this field exists to surface.
+    pub test_coverage: Vec<TestCoverage>,
     /// File-size warnings (ADR 0028): source files whose line count crosses
     /// the [`crate::file_size::WARN_LINE_THRESHOLD`] / [`crate::file_size::SPLIT_LINE_THRESHOLD`]
     /// watch/split thresholds. Derived from the same per-file content
@@ -217,6 +226,7 @@ mod tests {
             },
             tests: vec![],
             fan_ins: vec![],
+            test_coverage: vec![],
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
@@ -238,6 +248,7 @@ mod tests {
   },
   \"tests\": [],
   \"fan_ins\": [],
+  \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
   \"removed\": []
@@ -268,6 +279,7 @@ mod tests {
             },
             tests: vec![],
             fan_ins: vec![],
+            test_coverage: vec![],
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
@@ -285,6 +297,7 @@ mod tests {
   },
   \"tests\": [],
   \"fan_ins\": [],
+  \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
   \"removed\": []
@@ -319,6 +332,7 @@ mod tests {
             },
             tests: vec![],
             fan_ins: vec![],
+            test_coverage: vec![],
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
@@ -367,6 +381,7 @@ mod tests {
   },
   \"tests\": [],
   \"fan_ins\": [],
+  \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
   \"removed\": []
@@ -401,6 +416,7 @@ mod tests {
             },
             tests: vec![],
             fan_ins: vec![],
+            test_coverage: vec![],
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![RemovedSymbol {
@@ -451,6 +467,7 @@ mod tests {
   },
   \"tests\": [],
   \"fan_ins\": [],
+  \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
   \"removed\": [

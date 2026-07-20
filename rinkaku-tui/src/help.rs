@@ -447,6 +447,10 @@ fn marker_legend(locale: Locale) -> Vec<MarkerLegendEntry> {
             swatch: "split:N",
             explanation: rust_i18n::t!("help.marker.split_count", locale = tag).into_owned(),
         },
+        MarkerLegendEntry {
+            swatch: "tests:0",
+            explanation: rust_i18n::t!("help.marker.tests_count", locale = tag).into_owned(),
+        },
     ]
 }
 

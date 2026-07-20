@@ -57,6 +57,7 @@ pub(super) fn report_with_graph(nodes: Vec<Node>, edges: Vec<Edge>) -> Report {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],

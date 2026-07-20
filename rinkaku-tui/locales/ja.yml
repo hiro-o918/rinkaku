@@ -53,7 +53,7 @@ help:
     removed_symbol: "削除されたシンボル"
     removed_symbol_name: "削除されたシンボルの名前"
     dependency_cycle: "ディレクトリ内に依存の循環がある"
-    risk_marker: "リスクマーカー: 同じサブツリー内に契約変更と高 fan-in シンボルが共存"
+    risk_marker: "リスクマーカー: 同じサブツリー内に契約変更と高 fan-in シンボルが共存、またはシンボル行でカバーするテストが0件"
     whole_test_file_badge: "ファイル全体がテストであることを示すバッジ"
     collapsed_test_group: "ファイル内のテストシンボルをまとめた折りたたみグループ"
     skipped_reason: "ファイルが解析されなかった理由（パース失敗、未対応言語など）"
@@ -63,6 +63,7 @@ help:
     lines_count: "このファイル自体の行数（file-size band: normal/watch/warn/split で色分け）"
     warn_count: "ディレクトリ行: このサブツリー内の Warn band ファイル数"
     split_count: "ディレクトリ行: このサブツリー内の Split band ファイル数"
+    tests_count: "シンボル行: このシンボルを参照するテストが0件"
   glossary:
     topological_order: "依存が少ないディレクトリから並べる順序（基盤となるものほど後ろ）"
     alphabetical_order: "依存関係を無視して A-Z で並べる順序"

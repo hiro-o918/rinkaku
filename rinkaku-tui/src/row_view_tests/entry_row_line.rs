@@ -722,6 +722,145 @@ fn should_omit_risk_marker_for_a_signature_changed_symbol_below_fan_in_threshold
     assert_eq!("  ~ fn changed_fn", line_text(&line));
 }
 
+// ADR 0059: a `tests:0` badge on a symbol row, and the same `!` risk
+// marker treatment a high-fan-in + signature-changed symbol already gets.
+
+#[test]
+fn should_append_tests_badge_when_symbol_has_zero_test_count() {
+    let node = symbol_node(
+        "lib.rs",
+        plain_symbol("foo"),
+        Badges {
+            test_count: Some(0),
+            ..Badges::default()
+        },
+    );
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(
+        &row,
+        "",
+        &HashMap::new(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
+        false,
+    );
+
+    assert_eq!("    fn foo tests:0", line_text(&line));
+}
+
+#[test]
+fn should_omit_tests_badge_when_symbol_has_nonzero_test_count() {
+    let node = symbol_node(
+        "lib.rs",
+        plain_symbol("foo"),
+        Badges {
+            test_count: Some(2),
+            ..Badges::default()
+        },
+    );
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(
+        &row,
+        "",
+        &HashMap::new(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
+        false,
+    );
+
+    assert_eq!("    fn foo", line_text(&line));
+}
+
+#[test]
+fn should_omit_tests_badge_when_symbol_has_no_test_coverage_entry() {
+    let node = symbol_node("lib.rs", plain_symbol("foo"), Badges::default());
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(
+        &row,
+        "",
+        &HashMap::new(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
+        false,
+    );
+
+    assert_eq!("    fn foo", line_text(&line));
+}
+
+#[test]
+fn should_prepend_risk_marker_for_a_signature_changed_symbol_with_zero_test_count() {
+    let symbol_ref = SymbolRef {
+        classification: Some(Classification::SignatureChanged),
+        ..plain_symbol("risky_fn")
+    };
+    let node = symbol_node(
+        "lib.rs",
+        symbol_ref,
+        Badges {
+            test_count: Some(0),
+            ..Badges::default()
+        },
+    );
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(
+        &row,
+        "",
+        &HashMap::new(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
+        false,
+    );
+
+    assert_eq!("  ~ fn ! risky_fn tests:0", line_text(&line));
+}
+
+#[test]
+fn should_omit_risk_marker_for_a_signature_changed_symbol_with_nonzero_test_count() {
+    let symbol_ref = SymbolRef {
+        classification: Some(Classification::SignatureChanged),
+        ..plain_symbol("changed_fn")
+    };
+    let node = symbol_node(
+        "lib.rs",
+        symbol_ref,
+        Badges {
+            test_count: Some(1),
+            ..Badges::default()
+        },
+    );
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(
+        &row,
+        "",
+        &HashMap::new(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
+        false,
+    );
+
+    assert_eq!("  ~ fn changed_fn", line_text(&line));
+}
+
 // Visual-encoding prototype: a body-only (or unclassified) symbol's name
 // dims to DarkGray — it carries less review weight than an added/
 // signature-changed/removed symbol, since its signature didn't change.
