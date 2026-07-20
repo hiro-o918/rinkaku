@@ -206,14 +206,15 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
             Some(InputKey::JumpForward)
         }
         KeyCode::Char('o') => Some(InputKey::ToggleOrder),
-        // `Ctrl-d`/`Ctrl-u` (ADR 0026): half-page scroll on the reading
-        // pane (`Screen::Source`, or `Screen::Entry` + `Focus::Right`).
-        // Must come *before* the plain `Char('d')`/`Char('u')` arms —
-        // otherwise a `Ctrl-d` press would match `ToggleDiff` first and
-        // the modifier would be ignored, silently rebinding "half-page
-        // down" to "toggle diff pane". Emitted regardless of screen/
-        // focus; `App::handle_scroll_key` no-ops on `Focus::Tree` in the
-        // entry view (ADR 0026 decision 3's Tree-focus rule).
+        // `Ctrl-d`/`Ctrl-u` (ADR 0026, tree support added by amendment):
+        // half-page motion on the reading pane (`Screen::Source`, or
+        // `Screen::Entry` + `Focus::Right`) or the tree cursor
+        // (`Screen::Entry` + `Focus::Tree`). Must come *before* the plain
+        // `Char('d')`/`Char('u')` arms — otherwise a `Ctrl-d` press would
+        // match `ToggleDiff` first and the modifier would be ignored,
+        // silently rebinding "half-page down" to "toggle diff pane".
+        // Emitted regardless of screen/focus; `App::handle_scroll_key`
+        // picks the right target from `self.screen`/`self.focus`.
         KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
             Some(InputKey::ScrollHalfPageDown)
         }

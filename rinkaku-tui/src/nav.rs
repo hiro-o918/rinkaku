@@ -15,6 +15,28 @@ use std::collections::HashSet;
 pub enum Action {
     CursorUp,
     CursorDown,
+    /// Jumps the cursor to the first visible row (ADR 0026 amendment: `gg`
+    /// on the tree, the [`Focus::Tree`](crate::app::Focus::Tree) counterpart
+    /// of `Screen::Source`/`Focus::Right`'s own `ScrollToTop`). A no-op when
+    /// there are no visible rows.
+    CursorTop,
+    /// Jumps the cursor to the last visible row (ADR 0026 amendment: `G` on
+    /// the tree). A no-op when there are no visible rows.
+    CursorBottom,
+    /// Moves the cursor down by up to `usize` rows, clamped to the last
+    /// visible row — the tree's `Ctrl-d` (ADR 0026 amendment): since the
+    /// tree pane has no separate scroll-offset state (it windows around the
+    /// cursor at draw time, `crate::ui::entry::draw_tree_pane`'s own doc
+    /// comment), "half-page down" here means "move the cursor" rather than
+    /// "move a scroll offset" the way it does on `Screen::Source`/
+    /// `Focus::Right`. The caller (`App::handle_scroll_key`) is responsible
+    /// for turning a viewport height into this step count.
+    CursorPageDown(usize),
+    /// Moves the cursor up by up to `usize` rows, clamped to the first
+    /// visible row — the tree's `Ctrl-u` (ADR 0026 amendment). See
+    /// [`Self::CursorPageDown`]'s doc comment for why this moves the cursor
+    /// rather than a scroll offset.
+    CursorPageUp(usize),
     /// Toggles the node under the cursor between expanded and collapsed.
     /// A no-op on a [`NodeKind::Symbol`] row (symbols are leaves — see
     /// this module's doc comment) or when there are no visible rows at
@@ -223,12 +245,13 @@ impl Nav {
     /// this also future-proofs against a new `Action` variant added there
     /// later that shrinks the row list in some other way.
     ///
-    /// `CursorUp`/`CursorDown` are the two exceptions: they `return self`
-    /// directly from inside the `match`, bypassing `retarget_cursor`
-    /// entirely. This is safe rather than an oversight — moving the cursor
-    /// is the action that *sets* the cursor's new target, so there is
-    /// nothing to re-target it against; both arms already do their own
-    /// bounds clamping against the current `rows(tree).len()` inline.
+    /// `CursorUp`/`CursorDown`/`CursorTop`/`CursorBottom`/`CursorPageDown`/
+    /// `CursorPageUp` are the exceptions: they `return self` directly from
+    /// inside the `match`, bypassing `retarget_cursor` entirely. This is
+    /// safe rather than an oversight — moving the cursor is the action that
+    /// *sets* the cursor's new target, so there is nothing to re-target it
+    /// against; every arm already does its own bounds clamping against the
+    /// current `rows(tree).len()` inline.
     pub fn handle(mut self, action: Action, tree: &Tree) -> Self {
         let cursor_path_chain = self.cursor_path_chain(tree);
 
@@ -242,6 +265,26 @@ impl Nav {
                 if row_count > 0 {
                     self.cursor = (self.cursor + 1).min(row_count - 1);
                 }
+                return self;
+            }
+            Action::CursorTop => {
+                self.cursor = 0;
+                return self;
+            }
+            Action::CursorBottom => {
+                let row_count = self.rows(tree).len();
+                self.cursor = row_count.saturating_sub(1);
+                return self;
+            }
+            Action::CursorPageDown(step) => {
+                let row_count = self.rows(tree).len();
+                if row_count > 0 {
+                    self.cursor = (self.cursor + step).min(row_count - 1);
+                }
+                return self;
+            }
+            Action::CursorPageUp(step) => {
+                self.cursor = self.cursor.saturating_sub(step);
                 return self;
             }
             Action::ToggleExpand => {

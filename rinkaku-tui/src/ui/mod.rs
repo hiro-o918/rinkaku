@@ -68,12 +68,26 @@ pub struct DrawOutcome {
     /// The inner height (borders excluded) of whichever pane is currently
     /// scrollable — the source pane on [`Screen::Source`], the right pane
     /// on [`Screen::Entry`] + [`crate::app::Focus::Right`], and `None`
-    /// otherwise (Tree-focused on the entry view has no scrollable pane
-    /// receiving motion). `crate::run_app` remembers this between frames
-    /// and passes it into [`crate::app::App::handle_scroll_key`] when a
-    /// half-page (ADR 0026) key arrives, so the step size scales with
-    /// the actual pane rather than a magic constant.
+    /// otherwise ([`Self::tree_viewport_height`] covers the
+    /// [`crate::app::Focus::Tree`] case instead). `crate::run_app` remembers
+    /// this between frames and passes it into
+    /// [`crate::app::App::handle_scroll_key`] when a half-page (ADR 0026)
+    /// key arrives, so the step size scales with the actual pane rather
+    /// than a magic constant.
     pub scroll_viewport_height: Option<usize>,
+    /// The tree pane's inner height (borders excluded), reported only while
+    /// [`crate::app::Focus::Tree`] (ADR 0026 amendment: `gg`/`G`/`Ctrl-d`/
+    /// `Ctrl-u` moving the tree cursor rather than any scroll offset — the
+    /// tree pane has none of its own, see
+    /// `crate::ui::entry::draw_tree_pane`'s own doc comment). Kept as a
+    /// separate field from [`Self::scroll_viewport_height`] rather than
+    /// reusing it, mirroring [`Self::clamped_help_scroll`]'s own "one more
+    /// field on the same seam" reasoning: the two panes can never be the
+    /// active motion target in the same frame (they are gated on opposite
+    /// arms of the same `Focus`), but giving each its own field means a
+    /// future frame where that stops being true would not need one field to
+    /// silently pick a winner.
+    pub tree_viewport_height: Option<usize>,
     /// The `?` help overlay's own scroll offset as actually clamped and
     /// rendered this frame (`None` while the overlay is closed) — kept
     /// separate from [`Self::clamped_right_pane_scroll`] rather than reusing
@@ -197,6 +211,11 @@ pub fn draw(
             } else {
                 None
             };
+            let tree_viewport_height = if app.focus() == crate::app::Focus::Tree {
+                Some(tree_pane_viewport_height(body))
+            } else {
+                None
+            };
             let effective_diff_view_mode = if app.right_pane() == crate::app::RightPane::Diff {
                 Some(effective_diff_view_mode_for_body(
                     body,
@@ -208,6 +227,7 @@ pub fn draw(
             DrawOutcome {
                 clamped_right_pane_scroll: clamped,
                 scroll_viewport_height,
+                tree_viewport_height,
                 clamped_help_scroll: None,
                 help_scroll_viewport_height: None,
                 effective_diff_view_mode,
@@ -232,6 +252,7 @@ pub fn draw(
             DrawOutcome {
                 clamped_right_pane_scroll: None,
                 scroll_viewport_height: Some(inner_height),
+                tree_viewport_height: None,
                 clamped_help_scroll: None,
                 help_scroll_viewport_height: None,
                 effective_diff_view_mode: None,
@@ -288,6 +309,23 @@ fn right_pane_viewport_height(body: Rect) -> usize {
     right.height.saturating_sub(2) as usize
 }
 
+/// The tree pane's inner height (borders excluded), computed from `body`
+/// the same way [`right_pane_viewport_height`] computes the right pane's —
+/// same split, same `saturating_sub(2)` border deduction, just the other
+/// half of the [`Layout::horizontal`] array. Extracted for the identical
+/// reason: [`DrawOutcome::tree_viewport_height`] must reflect the exact
+/// viewport a reviewer just saw, without `draw_entry_screen`/
+/// `entry::draw_tree_pane` having to plumb their own inner-height
+/// computation back out through a return value.
+fn tree_pane_viewport_height(body: Rect) -> usize {
+    let [tree, _] = Layout::horizontal([
+        Constraint::Percentage(ENTRY_TREE_WIDTH_PERCENT),
+        Constraint::Percentage(ENTRY_RIGHT_WIDTH_PERCENT),
+    ])
+    .areas(body);
+    tree.height.saturating_sub(2) as usize
+}
+
 /// The diff pane's effective view mode given `body` and the requested
 /// mode — mirrors [`crate::ui::diff_pane::draw_diff_pane`]'s own
 /// `split_requested && split_fits` gate so `DrawOutcome` can report the
@@ -316,8 +354,9 @@ fn effective_diff_view_mode_for_body(
 
 /// Tree-pane / right-pane horizontal split percentages for [`Screen::Entry`],
 /// shared between [`draw_entry_screen`]'s actual layout and
-/// [`right_pane_viewport_height`]'s report of that layout to
-/// [`DrawOutcome::scroll_viewport_height`] (ADR 0026) so the two cannot
+/// [`right_pane_viewport_height`]/[`tree_pane_viewport_height`]'s report of
+/// that layout to [`DrawOutcome::scroll_viewport_height`]/
+/// [`DrawOutcome::tree_viewport_height`] (ADR 0026) so the two cannot
 /// drift.
 pub(crate) const ENTRY_TREE_WIDTH_PERCENT: u16 = 40;
 pub(crate) const ENTRY_RIGHT_WIDTH_PERCENT: u16 = 60;

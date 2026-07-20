@@ -198,3 +198,44 @@ behavior per screen" trap ADR 0020 exists to close.
   release (ADR 0015/0016), so this is a strict addition to the
   interaction model. `Ctrl-d`/`Ctrl-u`/`gg`/`G` were previously
   unbound on both screens.
+
+## Amendment: `Focus::Tree` moves the cursor instead of staying a no-op
+
+Decision 3's third bullet scoped `Focus::Tree` to a deliberate no-op,
+reasoned by analogy to `j`/`k` not scrolling the right pane while
+Tree-focused. Dogfooding found the analogy did not hold: `j`/`k` on the
+tree already move the cursor (`Nav::Action::CursorUp`/`CursorDown`) —
+they are not idle there the way they are on an unfocused right pane —
+so a reviewer reasonably expected `Ctrl-d`/`Ctrl-u`/`gg`/`G` to extend
+the same cursor motion, and instead got silence. Filed after a user
+report that these keys "did nothing" while the tree (the entry view's
+default focus) had the cursor.
+
+**The tree pane has no scroll-offset state of its own to reuse** —
+unlike `Screen::Source::scroll_top`/`App::right_pane_scroll`, it
+windows around the cursor position at draw time
+(`crate::ui::entry::draw_tree_pane`). So on `Focus::Tree` these four
+variants move `Nav`'s cursor directly rather than any scroll offset:
+
+- `Ctrl-d`/`Ctrl-u` → `Nav::Action::CursorPageDown(step)`/
+  `CursorPageUp(step)`, clamped to the first/last visible row. `step`
+  is half of the tree pane's own last-drawn inner height — a new
+  `DrawOutcome::tree_viewport_height` field, folded back by
+  `crate::run_app` into a `last_tree_viewport_height` the same way
+  decision 5 already does for `scroll_viewport_height`/
+  `help_scroll_viewport_height`.
+- `gg`/`G` → `Nav::Action::CursorTop`/`CursorBottom`, jumping straight
+  to the first/last visible row.
+
+`App::handle_scroll_key` gains four `(Screen::Entry, Focus::Tree, ...)`
+match arms alongside its existing `Focus::Right` ones; the tree pane's
+own viewport-height plumbing mirrors `right_pane_viewport_height`
+(a new `tree_pane_viewport_height(body: Rect)` sibling in
+`crate::ui`, same split, same border deduction) rather than
+introducing a different mechanism. The `?` help overlay's "Tree focus"
+group and the entry-view Tree-focus status-line hint both gain
+`ctrl-d/ctrl-u`/`gg / G` entries, matching decision 6's discoverability
+rule.
+
+No change to the `Screen::Source`/`Focus::Right` cases — this
+amendment only fills in the previously-unhandled third branch.

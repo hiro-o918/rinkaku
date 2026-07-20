@@ -234,10 +234,10 @@ fn should_add_half_viewport_to_right_pane_scroll_when_focus_right_scroll_half_pa
 
 #[test]
 fn should_leave_right_pane_scroll_untouched_when_focus_tree_and_scroll_half_page_down() {
-    // Tree focus is the entry view's default; `handle_scroll_key` must
-    // no-op there (ADR 0026's decision 3), leaving `right_pane_scroll`
-    // at 0 rather than scrolling a pane the reviewer is not looking
-    // at.
+    // Tree focus is the entry view's default; `handle_scroll_key` moves
+    // the tree cursor there (ADR 0026 amendment, see the
+    // `should_move_tree_cursor_*` tests below), not `right_pane_scroll`
+    // — that field must stay untouched since no pane is being scrolled.
     let report = report_with_one_symbol();
     let app = App::new(&report);
     assert_eq!(Focus::Tree, app.focus());
@@ -245,6 +245,72 @@ fn should_leave_right_pane_scroll_untouched_when_focus_tree_and_scroll_half_page
     let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 30);
 
     assert_eq!(0, app.right_pane_scroll());
+}
+
+// ADR 0026 amendment: `Focus::Tree` on the entry view has no pane of its
+// own to scroll (`crate::ui::entry::draw_tree_pane` windows around the
+// cursor at draw time instead), so these four variants move the tree
+// cursor — `Nav::Action::CursorPageDown`/`CursorPageUp`/`CursorTop`/
+// `CursorBottom` — rather than any scroll offset. Uses
+// `report_with_two_directories` (6 rows: a(0), a/one.rs(1), foo(2), b(3),
+// b/two.rs(4), bar(5)) so half-page motion has more than one row of
+// headroom to exercise.
+
+#[test]
+fn should_move_tree_cursor_down_by_half_viewport_when_focus_tree_scroll_half_page_down() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report);
+    assert_eq!(Focus::Tree, app.focus());
+    assert_eq!(0, app.nav().cursor());
+
+    // Viewport height 4 -> step size 2.
+    let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 4);
+
+    assert_eq!(2, app.nav().cursor());
+}
+
+#[test]
+fn should_clamp_tree_cursor_to_last_row_when_focus_tree_scroll_half_page_down_overshoots() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report);
+
+    let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 100);
+
+    assert_eq!(5, app.nav().cursor());
+}
+
+#[test]
+fn should_move_tree_cursor_up_by_half_viewport_when_focus_tree_scroll_half_page_up() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report).handle_scroll_key(InputKey::ScrollToBottom, 4);
+    assert_eq!(5, app.nav().cursor());
+
+    // Viewport height 4 -> step size 2.
+    let app = app.handle_scroll_key(InputKey::ScrollHalfPageUp, 4);
+
+    assert_eq!(3, app.nav().cursor());
+}
+
+#[test]
+fn should_move_tree_cursor_to_first_row_when_focus_tree_scroll_to_top() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report).handle_scroll_key(InputKey::ScrollToBottom, 4);
+    assert_eq!(5, app.nav().cursor());
+
+    let app = app.handle_scroll_key(InputKey::ScrollToTop, 4);
+
+    assert_eq!(0, app.nav().cursor());
+}
+
+#[test]
+fn should_move_tree_cursor_to_last_row_when_focus_tree_scroll_to_bottom() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report);
+    assert_eq!(0, app.nav().cursor());
+
+    let app = app.handle_scroll_key(InputKey::ScrollToBottom, 4);
+
+    assert_eq!(5, app.nav().cursor());
 }
 
 #[test]

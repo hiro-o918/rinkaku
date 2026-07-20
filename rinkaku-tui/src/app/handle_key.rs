@@ -848,8 +848,13 @@ impl App {
     /// - On [`Screen::Entry`] + [`Focus::Right`], acts on
     ///   [`Self::right_pane_scroll`], the same field plain `j`/`k`
     ///   already updates while Right-focused.
-    /// - On [`Screen::Entry`] + [`Focus::Tree`], a no-op — Tree-focused
-    ///   motion belongs on the tree cursor, not on any pane's scroll.
+    /// - On [`Screen::Entry`] + [`Focus::Tree`] (ADR 0026 amendment): acts
+    ///   on `self.nav`'s cursor via [`crate::nav::Action::CursorPageDown`]/
+    ///   [`crate::nav::Action::CursorPageUp`]/[`crate::nav::Action::CursorTop`]/
+    ///   [`crate::nav::Action::CursorBottom`] — the tree pane has no scroll
+    ///   offset of its own to move (it windows around the cursor at draw
+    ///   time, `crate::ui::entry::draw_tree_pane`'s own doc comment), so
+    ///   "half-page"/"top"/"bottom" here mean moving the cursor itself.
     ///
     /// `usize::MAX` is used as the "scroll to bottom" sentinel
     /// ([`InputKey::ScrollToBottom`]'s doc comment): the clamp-at-draw
@@ -938,10 +943,28 @@ impl App {
             (Screen::Entry, Focus::Right, InputKey::ScrollToBottom) => {
                 self.right_pane_scroll = usize::MAX;
             }
-            // Tree focus on the entry view, or any non-scroll key on the
-            // source screen — deliberate no-op. `crate::run_app` only
-            // calls this for the four scroll variants, so the non-scroll
-            // case is defensive.
+            // Tree focus on the entry view (ADR 0026 amendment): the tree
+            // pane has no scroll offset of its own — it windows around the
+            // cursor at draw time (`crate::ui::entry::draw_tree_pane`'s own
+            // doc comment) — so these four variants move `self.nav`'s
+            // cursor instead of any pane's scroll state. `step` (half of
+            // `viewport_height`, computed once at the top of this method)
+            // is the same half-page size the right pane/source pane use.
+            (Screen::Entry, Focus::Tree, InputKey::ScrollHalfPageDown) => {
+                self.nav = self.nav.handle(Action::CursorPageDown(step), &self.tree);
+            }
+            (Screen::Entry, Focus::Tree, InputKey::ScrollHalfPageUp) => {
+                self.nav = self.nav.handle(Action::CursorPageUp(step), &self.tree);
+            }
+            (Screen::Entry, Focus::Tree, InputKey::ScrollToTop) => {
+                self.nav = self.nav.handle(Action::CursorTop, &self.tree);
+            }
+            (Screen::Entry, Focus::Tree, InputKey::ScrollToBottom) => {
+                self.nav = self.nav.handle(Action::CursorBottom, &self.tree);
+            }
+            // Any non-scroll key on the source screen — deliberate no-op.
+            // `crate::run_app` only calls this for the four scroll
+            // variants, so this arm is defensive.
             _ => {}
         }
         self

@@ -3,6 +3,9 @@
 //!
 //! - `move_cursor` — `move_cursor_to_path`/`move_cursor_to_symbol`:
 //!   directory/file/symbol targeting, collapsed-ancestor handling
+//! - `cursor_jump` — `CursorTop`/`CursorBottom`/`CursorPageDown`/
+//!   `CursorPageUp`: jump-to-edge and step-clamped paging (ADR 0026
+//!   amendment: `gg`/`G`/`Ctrl-d`/`Ctrl-u` on the tree)
 //! - `expand_collapse` — `ToggleExpand`/`ExpandAll`/`CollapseAll`, cursor
 //!   clamping, collapse-state stability across a tree rebuild
 //! - `retarget_cursor` — the CRITICAL regressions: cursor re-targeting
@@ -17,6 +20,7 @@
 use super::*;
 use crate::tree::Badges;
 
+mod cursor_jump;
 mod default_collapse;
 mod expand_collapse;
 mod move_cursor;

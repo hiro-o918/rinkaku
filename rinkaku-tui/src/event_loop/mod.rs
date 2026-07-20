@@ -11,7 +11,7 @@
 mod goto;
 mod scroll_sync;
 
-use crate::app::{App, BlastRadiusSelection, InputKey, Screen};
+use crate::app::{App, BlastRadiusSelection, Focus, InputKey, Screen};
 use crate::locale::Locale;
 use crate::review::PrContext;
 use crate::review::ports::{BrowserOpener, ClipboardSink, ReviewSubmitter};
@@ -169,6 +169,16 @@ pub(crate) fn run_app(
     // near-impossible edge case, but guarded rather than defaulting to a
     // zero step) falls back to [`DEFAULT_SCROLL_VIEWPORT_HEIGHT`].
     let mut last_scroll_viewport_height: Option<usize> = None;
+    // The tree pane's own last-drawn inner height
+    // (`ui::DrawOutcome::tree_viewport_height`), tracked separately from
+    // `last_scroll_viewport_height` above for the same reason
+    // `last_help_scroll_viewport_height` is (ADR 0026 amendment): the tree
+    // pane is a different box than the right pane/source pane, and the two
+    // are never the active `Ctrl-d`/`Ctrl-u`/`gg`/`G` target in the same
+    // frame (gated on opposite arms of `Focus`), but sizing a tree-focused
+    // press against a stale right-pane height would silently move the
+    // cursor the wrong distance.
+    let mut last_tree_viewport_height: Option<usize> = None;
     // The `?` help overlay's own last-drawn inner height, tracked
     // separately from `last_scroll_viewport_height` above: the overlay can
     // be open on top of either screen, and its box is a different size
@@ -224,6 +234,9 @@ pub(crate) fn run_app(
         app = clamp_right_pane_scroll_after_draw(app, outcome.clamped_right_pane_scroll);
         if outcome.scroll_viewport_height.is_some() {
             last_scroll_viewport_height = outcome.scroll_viewport_height;
+        }
+        if outcome.tree_viewport_height.is_some() {
+            last_tree_viewport_height = outcome.tree_viewport_height;
         }
         app = clamp_help_scroll_after_draw(app, outcome.clamped_help_scroll);
         if outcome.help_scroll_viewport_height.is_some() {
@@ -401,9 +414,17 @@ pub(crate) fn run_app(
                 // `App::handle_scroll_key`'s own `help_open` branches) —
                 // `last_help_scroll_viewport_height` is this loop's mirror
                 // of `last_scroll_viewport_height` for that surface.
+                //
+                // ADR 0026 amendment: `Focus::Tree` on `Screen::Entry` sizes
+                // against `last_tree_viewport_height` instead — the tree
+                // pane `App::handle_scroll_key` now moves the cursor in
+                // (ADR 0026's own right-pane/source-pane cases fall through
+                // to `last_scroll_viewport_height` unchanged).
                 app = app.handle_key(input_key);
                 let viewport_height = if app.help_open() {
                     last_help_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT)
+                } else if matches!(app.screen(), Screen::Entry) && app.focus() == Focus::Tree {
+                    last_tree_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT)
                 } else {
                     last_scroll_viewport_height.unwrap_or(DEFAULT_SCROLL_VIEWPORT_HEIGHT)
                 };

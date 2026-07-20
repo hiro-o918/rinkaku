@@ -12,6 +12,8 @@ help:
     entry_only: "エントリー画面のみ"
   binding:
     move_cursor: "カーソルを移動"
+    scroll_tree_half_page: "カーソルを半ページ分移動"
+    jump_tree_top_bottom: "ツリーの先頭/末尾へジャンプ"
     expand_collapse_open: "ディレクトリ行を開閉、またはファイル/シンボル行を開く（フォーカスが右に移動）"
     expand_collapse_row: "ディレクトリ/ファイル行を開閉（フォーカスは移動しない）"
     expand_every_row: "全行を展開"

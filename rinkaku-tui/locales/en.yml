@@ -12,6 +12,8 @@ help:
     entry_only: "Entry screen only"
   binding:
     move_cursor: "Move the cursor"
+    scroll_tree_half_page: "Move the cursor by half a page"
+    jump_tree_top_bottom: "Jump to the top / bottom of the tree"
     expand_collapse_open: "Expand/collapse a directory row, or open a file/symbol row (moves focus right)"
     expand_collapse_row: "Expand/collapse a directory/file row (never moves focus)"
     expand_every_row: "Expand every row"

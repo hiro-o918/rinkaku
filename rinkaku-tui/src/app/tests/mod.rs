@@ -8,8 +8,10 @@
 //!   for file/symbol/directory rows
 //! - `source_screen` — `Source`/`Back` transitions and all
 //!   `Screen::Source` scroll behaviors (ADR 0026: `j`/`k`,
-//!   half-page/`gg`/`G`), plus the entry-view `handle_scroll_key`
-//!   variants that act on `right_pane_scroll` while `Focus::Right`
+//!   half-page/`gg`/`G`), the entry-view `handle_scroll_key` variants
+//!   that act on `right_pane_scroll` while `Focus::Right`, and (ADR
+//!   0026 amendment) the same variants moving the tree cursor while
+//!   `Focus::Tree`
 //! - `right_pane` — right-pane toggles (`ToggleDiff`,
 //!   `ToggleBlastRadius`), `blast_radius_return_pane`,
 //!   `selected_blast_radius_view`, `with_entry_pivot`, and
