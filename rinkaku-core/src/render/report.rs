@@ -467,4 +467,82 @@ mod tests {
 
         assert_eq!(expected, actual);
     }
+
+    // ADR 0060: a multi-line signature serializes as a JSON string with
+    // escaped `\n` sequences, same as any other string field — pins the
+    // output-format change JSON consumers must account for.
+    #[test]
+    fn should_serialize_multiline_signature_with_escaped_newlines_in_json() {
+        let point = symbol(
+            "src/lib.rs::Point",
+            "Point",
+            SymbolKind::Struct,
+            "struct Point {\n    x: i32,\n}",
+        );
+        let report = Report {
+            origin: ReportOrigin::Diff,
+            files: vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![point],
+            }],
+            skipped: vec![],
+            graph: SymbolGraph {
+                nodes: vec![node("src/lib.rs::Point", "src/lib.rs", "Point")],
+                edges: vec![],
+                roots: vec!["src/lib.rs::Point".to_string()],
+            },
+            tests: vec![],
+            fan_ins: vec![],
+            file_size_warnings: vec![],
+            file_size_bands: vec![],
+            removed: vec![],
+        };
+
+        let expected = "\
+{
+  \"files\": [
+    {
+      \"path\": \"src/lib.rs\",
+      \"symbols\": [
+        {
+          \"id\": \"src/lib.rs::Point\",
+          \"name\": \"Point\",
+          \"kind\": \"Struct\",
+          \"signature\": \"struct Point {\\n    x: i32,\\n}\",
+          \"range\": {
+            \"start\": 1,
+            \"end\": 1
+          },
+          \"container\": null,
+          \"dependencies\": [],
+          \"omitted_matches\": 0
+        }
+      ]
+    }
+  ],
+  \"skipped\": [],
+  \"graph\": {
+    \"nodes\": [
+      {
+        \"id\": \"src/lib.rs::Point\",
+        \"path\": \"src/lib.rs\",
+        \"name\": \"Point\"
+      }
+    ],
+    \"edges\": [],
+    \"roots\": [
+      \"src/lib.rs::Point\"
+    ]
+  },
+  \"tests\": [],
+  \"fan_ins\": [],
+  \"file_size_warnings\": [],
+  \"file_size_bands\": [],
+  \"removed\": []
+}"
+        .to_string();
+        let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
+
+        assert_eq!(expected, actual);
+    }
 }
