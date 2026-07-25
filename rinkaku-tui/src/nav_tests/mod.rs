@@ -4,8 +4,11 @@
 //! - `move_cursor` — `move_cursor_to_path`/`move_cursor_to_symbol`:
 //!   directory/file/symbol targeting, collapsed-ancestor handling
 //! - `cursor_jump` — `CursorTop`/`CursorBottom`/`CursorPageDown`/
-//!   `CursorPageUp`: jump-to-edge and step-clamped paging (ADR 0026
-//!   amendment: `gg`/`G`/`Ctrl-d`/`Ctrl-u` on the tree)
+//!   `CursorPageUp`/`CursorTo`: jump-to-edge, step-clamped paging, and
+//!   direct index jumps (ADR 0026 amendment: `gg`/`G`/`Ctrl-d`/`Ctrl-u`
+//!   on the tree; `CursorTo` also backs ADR 0057's tree search amendment)
+//! - `search_text` — `row_search_texts`: per-row search text (ADR 0057
+//!   amendment, tree search)
 //! - `expand_collapse` — `ToggleExpand`/`ExpandAll`/`CollapseAll`, cursor
 //!   clamping, collapse-state stability across a tree rebuild
 //! - `retarget_cursor` — the CRITICAL regressions: cursor re-targeting
@@ -25,6 +28,7 @@ mod default_collapse;
 mod expand_collapse;
 mod move_cursor;
 mod retarget_cursor;
+mod search_text;
 mod section_crossing;
 
 pub(super) fn symbol_node(path: &str, name: &str) -> TreeNode {

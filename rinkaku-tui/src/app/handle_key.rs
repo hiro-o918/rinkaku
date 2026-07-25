@@ -98,16 +98,20 @@ impl App {
             return self;
         }
 
-        // Source-view search composing (ADR 0057) takes over the key space
-        // next, mirroring the review overlay's own priority just above —
-        // checked ahead of the help overlay for the identical reason: a
-        // reviewer mid-query must never have a stray `?` yank focus away
-        // into the help overlay instead of typing a literal `?` into their
-        // search. Only reachable while composing (`crate::input_translate::
-        // translate_key` only emits `SearchChar`/`SearchBackspace`/
-        // `SearchCancel` for other keys while composing, and only on
-        // `Screen::Source`), so every other key this function processes is
-        // unaffected by this branch existing.
+        // Search composing (ADR 0057, tree search by amendment) takes over
+        // the key space next, mirroring the review overlay's own priority
+        // just above — checked ahead of the help overlay for the identical
+        // reason: a reviewer mid-query must never have a stray `?` yank
+        // focus away into the help overlay instead of typing a literal `?`
+        // into their search. Only reachable while composing
+        // (`crate::input_translate::translate_key` only emits `SearchChar`/
+        // `SearchBackspace`/`SearchCancel` for other keys while composing,
+        // and only on `Screen::Source` or `Screen::Entry` + `Focus::Tree`),
+        // so every other key this function processes is unaffected by this
+        // branch existing. Screen-agnostic on purpose — the two search
+        // targets (Source-view lines, tree rows) share this exact composing
+        // shape, so there is nothing screen-specific left to check once
+        // `SearchMode::Composing` is already active.
         if matches!(
             self.search.mode(),
             crate::search::SearchMode::Composing { .. }
@@ -357,30 +361,40 @@ impl App {
                     DiffViewMode::Split => DiffViewMode::Unified,
                 };
             }
-            // ADR 0057: `/` starts composing a search query — the
-            // composing-mode branch above this match takes over from the
+            // ADR 0057 (extended to `Screen::Entry` + `Focus::Tree` by
+            // amendment, tree search): `/` starts composing a search query —
+            // the composing-mode branch above this match takes over from the
             // next key onward, so this arm only needs to flip the mode on.
-            (Screen::Source { .. }, _, InputKey::SearchStart) => {
+            // Entry-screen tree search is `Focus::Tree`-only — `Focus::Right`
+            // falls through to that screen's own arms/catch-all below
+            // unchanged, leaving `/` reserved for a possible future Diff-pane
+            // search (ADR 0057's own Alternatives) rather than colliding
+            // with it now.
+            (Screen::Source { .. }, _, InputKey::SearchStart)
+            | (Screen::Entry, Focus::Tree, InputKey::SearchStart) => {
                 self.search = self.search.clone().start();
             }
             // `n`/`N` jump the confirmed query's current match, wrapping —
             // a no-op with no confirmed matches (`SearchState::next`/`prev`'s
-            // own doc comment). Applying the jump to `scroll_top` itself
-            // happens in `crate::event_loop::run_app`, the same "App has no
-            // notion of the pane's rendered height/content" split ADR 0026's
-            // hunk-jump arms already use — this arm only advances which
-            // match is current.
-            (Screen::Source { .. }, _, InputKey::SearchNext) => {
+            // own doc comment). Applying the jump to `scroll_top`/the tree
+            // cursor itself happens in `crate::event_loop::run_app`, the
+            // same "App has no notion of the pane's rendered height/content"
+            // split ADR 0026's hunk-jump arms already use — this arm only
+            // advances which match is current.
+            (Screen::Source { .. }, _, InputKey::SearchNext)
+            | (Screen::Entry, Focus::Tree, InputKey::SearchNext) => {
                 self.search = self.search.clone().next();
             }
-            (Screen::Source { .. }, _, InputKey::SearchPrev) => {
+            (Screen::Source { .. }, _, InputKey::SearchPrev)
+            | (Screen::Entry, Focus::Tree, InputKey::SearchPrev) => {
                 self.search = self.search.clone().prev();
             }
             // Esc while a confirmed search is active (`crate::input_translate::
             // translate_key`'s own doc comment on why this arrives as
-            // `SearchCancel` rather than `Back` in that case): clears the
-            // search without leaving the screen.
-            (Screen::Source { .. }, _, InputKey::SearchCancel) => {
+            // `SearchCancel` rather than `Back`/`FocusLeft` in that case):
+            // clears the search without leaving the screen/pane.
+            (Screen::Source { .. }, _, InputKey::SearchCancel)
+            | (Screen::Entry, Focus::Tree, InputKey::SearchCancel) => {
                 self.search = self.search.clone().cancel();
             }
             // Every other key is a no-op while the source view is open —

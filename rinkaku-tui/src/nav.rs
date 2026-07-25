@@ -37,6 +37,12 @@ pub enum Action {
     /// [`Self::CursorPageDown`]'s doc comment for why this moves the cursor
     /// rather than a scroll offset.
     CursorPageUp(usize),
+    /// Jumps the cursor directly to visible-row index `usize`, clamped to
+    /// the last visible row — used to land on a confirmed tree search's
+    /// current match (`crate::nav::row_search_texts`' own doc comment),
+    /// which already knows the exact row index it wants rather than a
+    /// relative step.
+    CursorTo(usize),
     /// Toggles the node under the cursor between expanded and collapsed.
     /// A no-op on a [`NodeKind::Symbol`] row (symbols are leaves — see
     /// this module's doc comment) or when there are no visible rows at
@@ -246,7 +252,7 @@ impl Nav {
     /// later that shrinks the row list in some other way.
     ///
     /// `CursorUp`/`CursorDown`/`CursorTop`/`CursorBottom`/`CursorPageDown`/
-    /// `CursorPageUp` are the exceptions: they `return self` directly from
+    /// `CursorPageUp`/`CursorTo` are the exceptions: they `return self` directly from
     /// inside the `match`, bypassing `retarget_cursor` entirely. This is
     /// safe rather than an oversight — moving the cursor is the action that
     /// *sets* the cursor's new target, so there is nothing to re-target it
@@ -285,6 +291,13 @@ impl Nav {
             }
             Action::CursorPageUp(step) => {
                 self.cursor = self.cursor.saturating_sub(step);
+                return self;
+            }
+            Action::CursorTo(index) => {
+                let row_count = self.rows(tree).len();
+                if row_count > 0 {
+                    self.cursor = index.min(row_count - 1);
+                }
                 return self;
             }
             Action::ToggleExpand => {
@@ -377,6 +390,34 @@ impl Nav {
 
         self.cursor = rows.len().saturating_sub(1);
     }
+}
+
+/// The searchable text for one row (ADR 0057 amendment, tree search): a
+/// [`NodeKind::Symbol`] row's own name (matching what
+/// `crate::row_view::entry_row_line` actually displays for that row — its
+/// `node.path` is its *containing file's* path, not a name of its own, per
+/// [`Row`]'s own doc comment), or `node.path` for every other row kind
+/// (`Dir`/`File`/`Section`/`TestGroup`), which is unique per row and gives a
+/// reviewer more to match against than the truncated relative label
+/// `crate::row_view::relative_labels` computes purely for on-screen display.
+fn row_search_text(row: &Row<'_>) -> String {
+    match &row.node.kind {
+        NodeKind::Symbol(symbol_ref) => symbol_ref.name.clone(),
+        _ => row.node.path.clone(),
+    }
+}
+
+/// [`row_search_text`] applied to every row in `rows`, in the same order —
+/// the flat `Vec<String>` [`crate::search::find_matches`] searches over for
+/// tree search, the `Nav::rows`-index-space counterpart of `Screen::Source`'s
+/// own `Vec<String>` of file lines. A match's position in this vec is a
+/// valid [`Action::CursorTo`] index into the *same* `rows` list it was
+/// computed from — the caller must recompute `rows`/`row_search_texts`
+/// together (from the same `Nav`/`Tree` pair) rather than reusing a stale
+/// pair, the same "recomputed together, not cached across a fold state
+/// change" discipline [`Nav::rows`]'s own doc comment already establishes.
+pub fn row_search_texts(rows: &[Row<'_>]) -> Vec<String> {
+    rows.iter().map(row_search_text).collect()
 }
 
 /// Every path in `tree` that has at least one child — i.e. every

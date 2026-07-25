@@ -81,7 +81,7 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
             };
             let keys = match app.focus() {
                 crate::app::Focus::Tree => {
-                    "j/k: move  ctrl-d/u: half  gg/G: top/bot  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
+                    "j/k: move  ctrl-d/u: half  gg/G: top/bot  /: search  n/N: next/prev match  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
                 }
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
                     "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  v: split  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
@@ -256,10 +256,10 @@ mod tests {
         let app = App::new(&report);
         // Wider than the default 80 columns used elsewhere in this test
         // module: the full help text (order mode + Tree-focus key hints,
-        // ADR 0020/0022/0026 amendment) is ~191 columns and would
-        // otherwise be truncated (the status line intentionally does not
-        // wrap), hiding the "quit" fragment this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(200, 20)).expect("terminal");
+        // ADR 0020/0022/0026 amendment/0057 amendment) is ~224 columns and
+        // would otherwise be truncated (the status line intentionally does
+        // not wrap), hiding the "quit" fragment this test checks for.
+        let mut terminal = Terminal::new(TestBackend::new(230, 20)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -293,7 +293,7 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "order: topological  |  j/k: move  ctrl-d/u: half  gg/G: top/bot  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: move  ctrl-d/u: half  gg/G: top/bot  /: search  n/N: next/prev match  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
                 .to_string(),
             actual
         );

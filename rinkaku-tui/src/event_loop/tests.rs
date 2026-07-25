@@ -649,3 +649,43 @@ fn should_cancel_the_search_when_source_content_is_absent() {
     assert_eq!(&crate::search::SearchMode::Inactive, actual.search().mode());
     assert_eq!(None, actual.search().query());
 }
+
+// ADR 0057 amendment: `dispatch_search_confirm`'s `Screen::Entry` branch
+// (tree search) — needs no `source_content` at all, unlike the
+// `Screen::Source` branch above, since the tree's rows are already on
+// `App` itself.
+
+#[test]
+fn should_confirm_and_jump_the_tree_cursor_to_first_match_on_entry_screen() {
+    let report = report_with_one_symbol();
+    // report_with_one_symbol()'s expanded row order: lib.rs(0, File),
+    // foo(1, Symbol).
+    let app = App::new(&report)
+        .handle_key(InputKey::SearchStart)
+        .handle_key(InputKey::SearchChar('f'))
+        .handle_key(InputKey::SearchChar('o'))
+        .handle_key(InputKey::SearchChar('o'));
+
+    let actual = dispatch_search_confirm(app, None);
+
+    assert_eq!(
+        Some("foo".to_string()),
+        actual.search().query().map(str::to_string)
+    );
+    assert_eq!(&[1], actual.search().matches());
+    assert_eq!(1, actual.nav().cursor());
+}
+
+#[test]
+fn should_leave_the_tree_cursor_untouched_when_confirming_a_tree_search_with_no_matches() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report)
+        .handle_key(InputKey::SearchStart)
+        .handle_key(InputKey::SearchChar('z'))
+        .handle_key(InputKey::SearchChar('z'));
+    assert_eq!(0, app.nav().cursor());
+
+    let actual = dispatch_search_confirm(app, None);
+
+    assert_eq!(0, actual.nav().cursor());
+}

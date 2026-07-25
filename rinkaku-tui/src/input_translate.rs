@@ -81,18 +81,25 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         review::ReviewMode::Idle => {}
     }
 
-    // Search composing (ADR 0057) is checked next, mirroring the review
-    // overlay's own early-return shape just above: while composing a
-    // query, every printable character (including keys that would
-    // otherwise mean something else, like `?`) must land in the query
-    // buffer. Only reachable on `Screen::Source` — `InputKey::SearchStart`
-    // is likewise only ever emitted there (below), so this branch is
-    // unreachable on `Screen::Entry` in practice, but gated on
-    // `on_source_screen` defensively rather than relying on that
-    // invariant, the same defensive style `FocusLeft`'s Esc arm below
-    // already uses.
+    // Search composing (ADR 0057, extended to tree search by amendment) is
+    // checked next, mirroring the review overlay's own early-return shape
+    // just above: while composing a query, every printable character
+    // (including keys that would otherwise mean something else, like `?`)
+    // must land in the query buffer. Only reachable on `Screen::Source` or
+    // `Screen::Entry` + `Focus::Tree` — `InputKey::SearchStart` is likewise
+    // only ever emitted in those two contexts (below), so this branch is
+    // unreachable elsewhere in practice, but gated on
+    // `on_source_screen`/`tree_focused_entry` defensively rather than
+    // relying on that invariant, the same defensive style `FocusLeft`'s Esc
+    // arm below already uses. `tree_focused_entry` cannot go stale mid-
+    // compose: composing swallows every key (this very branch), so nothing
+    // can change `app.focus()` while it is active.
     let on_source_screen = matches!(app.screen(), Screen::Source { .. });
-    if on_source_screen && matches!(app.search().mode(), SearchMode::Composing { .. }) {
+    let tree_focused_entry =
+        matches!(app.screen(), Screen::Entry) && app.focus() == app::Focus::Tree;
+    if (on_source_screen || tree_focused_entry)
+        && matches!(app.search().mode(), SearchMode::Composing { .. })
+    {
         return match code {
             KeyCode::Enter => Some(InputKey::SearchConfirm),
             KeyCode::Esc => Some(InputKey::SearchCancel),
@@ -246,17 +253,20 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         KeyCode::Char(']') => Some(InputKey::NextHunk),
         KeyCode::Char('[') => Some(InputKey::PrevHunk),
         KeyCode::Char('s') => Some(InputKey::Source),
-        // `/` (ADR 0057): starts composing a Source-view search query.
-        // Source-screen-only — unbound on the entry screen, where a diff
-        // pane search is future work (ADR 0057's own Alternatives).
-        KeyCode::Char('/') if on_source_screen => Some(InputKey::SearchStart),
-        // `n`/`N` (ADR 0057): jump to the next/previous search match.
-        // Source-screen-only — ADR 0058 freed these on the entry screen
-        // (moving the annotation bindings below to `a`/`A`) precisely so
-        // a future Entry-screen search can reuse them without colliding
-        // with anything.
-        KeyCode::Char('n') if on_source_screen => Some(InputKey::SearchNext),
-        KeyCode::Char('N') if on_source_screen => Some(InputKey::SearchPrev),
+        // `/` (ADR 0057, extended to tree search by amendment): starts
+        // composing a search query. Valid on `Screen::Source` (searches its
+        // lines) or `Screen::Entry` + `Focus::Tree` (searches the tree's
+        // file/symbol names) — unbound on `Focus::Right`, where a Diff/
+        // Detail pane search is still future work (ADR 0057's own
+        // Alternatives).
+        KeyCode::Char('/') if on_source_screen || tree_focused_entry => Some(InputKey::SearchStart),
+        // `n`/`N` (ADR 0057, extended to tree search by amendment): jump to
+        // the next/previous search match. ADR 0058 freed these on the
+        // entry screen (moving the annotation bindings below to `a`/`A`)
+        // precisely so this tree search could reuse them — still unbound
+        // while `Focus::Right`, mirroring `/`'s own scoping just above.
+        KeyCode::Char('n') if on_source_screen || tree_focused_entry => Some(InputKey::SearchNext),
+        KeyCode::Char('N') if on_source_screen || tree_focused_entry => Some(InputKey::SearchPrev),
         // `a` (ADR 0048, rebound from `n` by ADR 0058): opens the review
         // annotation compose overlay over the row under the cursor. `A`
         // (rebound from `N`): opens the review annotations list overlay.
@@ -281,13 +291,19 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // sets `pending_prefix` from this variant unconditionally.
         KeyCode::Char('g') => Some(InputKey::PendingGoto),
         KeyCode::Char('?') => Some(InputKey::ToggleHelp),
-        // ADR 0057: Esc's first press clears an active confirmed search
-        // (matching vim's own `/`-then-Esc convention of dismissing the
-        // highlight before leaving) rather than immediately returning to
-        // the entry view — checked ahead of the plain `Back` arm just
-        // below so a reviewer backing out of a search does not also lose
-        // their place in the file.
-        KeyCode::Esc if on_source_screen && app.search().query().is_some() => {
+        // ADR 0057 (extended to tree search by amendment): Esc's first
+        // press clears an active confirmed search (matching vim's own
+        // `/`-then-Esc convention of dismissing the highlight before
+        // leaving) rather than immediately returning to the entry view —
+        // checked ahead of the plain `Back` arm just below so a reviewer
+        // backing out of a search does not also lose their place in the
+        // file/tree. `tree_focused_entry`'s Esc has no `Back`/`FocusLeft`
+        // meaning of its own to preempt (there is nowhere to "go back" to
+        // from the tree), so widening this guard only adds behavior, never
+        // shadows an existing one.
+        KeyCode::Esc
+            if (on_source_screen || tree_focused_entry) && app.search().query().is_some() =>
+        {
             Some(InputKey::SearchCancel)
         }
         KeyCode::Esc if on_source_screen => Some(InputKey::Back),

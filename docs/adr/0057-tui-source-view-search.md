@@ -251,3 +251,83 @@ screen where they are silently swallowed.
   breaking changes to any real user.
 - Future work (not this ADR): extending search to the Entry screen's
   Diff pane, and an opt-in regex mode.
+
+## Amendment: tree search on the entry screen
+
+A user report ("`/` does nothing on the entry screen") surfaced while
+implementing ADR 0026's own tree-cursor amendment in the same session.
+This ADR's Context already flagged the Entry screen's *Diff pane* as
+out of scope (shaped/grouped content, unresolved match-semantics
+questions) — but the entry view's other pane, the file/symbol tree on
+the left, has neither of those problems: it is already a flat,
+per-frame-recomputed list of rows (`Nav::rows`), the same shape
+`Vec<String>` of source lines this ADR already searches. Filling in
+that specific gap does not require answering any of the Diff-pane
+questions this ADR deferred.
+
+**Scope: tree rows only, `Focus::Tree`-only.** `/`/`n`/`N`/Esc-cancel
+now also fire on `Screen::Entry` while `Focus::Tree` (previously:
+`Screen::Source` only). `Focus::Right` is deliberately left
+untranslated — the Diff/Detail pane search this ADR's Context already
+declined to design is still undesigned, and reserving `/` there keeps
+that door open rather than accidentally claiming the key for tree
+search's own keyspace.
+
+**Search text per row, not the rendered line.** A `NodeKind::Symbol`
+row's search text is its own name (`SymbolRef::name`); every other row
+kind (`Dir`/`File`/`Section`/`TestGroup`) uses `TreeNode::path` — not
+`crate::row_view::relative_labels`' on-screen-truncated label, which
+exists purely to avoid repeating an ancestor directory's name on
+screen and would make matching depend on scroll position/collapse
+state in a way full paths do not. `crate::nav::row_search_texts` computes
+this per-row text; `crate::search::find_matches`/`SearchState` are reused
+completely unchanged — `MatchLine` is already just "an index into
+whatever flat `Vec<String>` was searched," and the tree case just gives
+it a second meaning ("index into `Nav::rows`") alongside its original
+one ("line number in the source file"), never both at once since the
+two screens are mutually exclusive.
+
+**Matches only currently-visible rows — no auto-expand into collapsed
+subtrees.** A match hidden under a collapsed ancestor (most commonly a
+`TestGroup`, collapsed by default per `Nav::new_collapsing_test_groups`)
+is not found. This mirrors `move_cursor_to_path`'s existing "no-op
+under a collapsed ancestor" contract rather than `move_cursor_to_symbol`'s
+"expand whatever stands in the way" one (`nav.rs`'s own doc comments
+contrast the two) — expanding on a match is a real usability
+improvement but adds a second, more invasive code path (full-tree walk
+independent of collapse state, then expand-and-relocate) this
+amendment does not need to ship the core feature. Left as explicit
+future work, the same way this ADR's own Alternatives section already
+defers the Diff-pane case rather than trying to solve every case at
+once.
+
+**The "jump target" is the tree cursor, not a scroll offset.**
+`crate::ui::entry::draw_tree_pane` windows around the cursor at draw
+time (ADR 0026's own amendment already establishes this for
+`Ctrl-d`/`Ctrl-u`/`gg`/`G`) — there is no `scroll_top`/`right_pane_scroll`
+equivalent for the tree to write into. A new `nav::Action::CursorTo(usize)`
+jumps the cursor directly to a visible-row index (clamped, mirroring
+every other `Action` variant's own bounds discipline), and a new
+`App::with_nav_cursor` wither applies it from `crate::event_loop`, the
+same "`App` has no notion of X, caller folds the computed jump target
+back in" split `App::with_source_scroll_top`/`with_right_pane_scroll`
+already use.
+
+**`dispatch_search_confirm`/the renamed `jump_search_match_into_view`
+now branch on `app.screen()`.** The Source branch is unchanged
+(needs `source_content`, loaded outside `App`); the new Entry branch
+needs no external content at all — `Nav`/`Tree` already live on `App`,
+so [`InputKey::SearchConfirm`] for tree search is computed entirely
+from data `App` already owns, unlike the Source case's IO-loaded lines.
+
+**Bindings/help/status line.** `?` overlay's "Tree focus" group gains
+`/`/`n`/`N` entries, reusing this ADR's own `start_search`/
+`jump_next_prev_match` locale strings verbatim (the description is
+gesture-shaped, not target-shaped — "start a search" reads the same
+regardless of what is being searched). The Tree-focus status-line hint
+gains the matching `/: search  n/N: next/prev match` segment.
+
+No change to the Source-screen search this ADR originally shipped —
+this amendment only fills in the tree-row half of the Entry-screen gap
+the original Context section explicitly carved out, leaving the
+Diff/Detail-pane half exactly as undesigned as it was.

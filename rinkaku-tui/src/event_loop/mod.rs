@@ -13,6 +13,7 @@ mod scroll_sync;
 
 use crate::app::{App, BlastRadiusSelection, Focus, InputKey, Screen};
 use crate::locale::Locale;
+use crate::nav::row_search_texts;
 use crate::review::PrContext;
 use crate::review::ports::{BrowserOpener, ClipboardSink, ReviewSubmitter};
 use crate::review_flow::{
@@ -327,15 +328,16 @@ pub(crate) fn run_app(
                 // gated on load success.
                 app = dispatch_search_confirm(app, source_content.as_ref());
             } else if matches!(input_key, InputKey::SearchNext | InputKey::SearchPrev) {
-                // ADR 0057: `App::handle_key` already advances/retreats
-                // `SearchState`'s current match (no external data needed
-                // for that step); this loop's own job is folding the
-                // resulting match line into `Screen::Source::scroll_top`,
-                // the same split `InputKey::Source`'s own back-fill above
-                // uses between "what changed" (`App`) and "how that maps
-                // onto the viewport" (`run_app`).
+                // ADR 0057 (tree search by amendment): `App::handle_key`
+                // already advances/retreats `SearchState`'s current match
+                // (no external data needed for that step); this loop's own
+                // job is folding the resulting match into
+                // `Screen::Source::scroll_top` or the tree cursor, the same
+                // split `InputKey::Source`'s own back-fill above uses
+                // between "what changed" (`App`) and "how that maps onto
+                // the viewport" (`run_app`).
                 app = app.handle_key(input_key);
-                app = jump_source_scroll_to_current_match(app);
+                app = jump_search_match_into_view(app);
             } else if let InputKey::OpenPrInBrowser = input_key {
                 // ADR 0050: needs `review_ports.pr_context`/`.browser`,
                 // neither of which `App::handle_key` has access to (mirrors
@@ -624,43 +626,75 @@ fn should_recompute_diff_pane_content(app: &App) -> bool {
 /// [`App::with_source_scroll_top`] (already a no-op on [`Screen::Entry`],
 /// per that method's own doc comment) rather than inlined at each of this
 /// module's three call sites (`SearchConfirm`, `SearchNext`, `SearchPrev`)
-/// sharing the exact same "match line -> scroll target" mapping.
-fn jump_source_scroll_to_current_match(app: App) -> App {
-    match app.search().current_match() {
-        Some(line) => app.with_source_scroll_top(line),
-        None => app,
+/// sharing the exact same "match line/row -> jump target" mapping.
+///
+/// ADR 0057 amendment (tree search): on [`Screen::Entry`], the "jump
+/// target" is the tree cursor ([`App::with_nav_cursor`]) rather than a
+/// scroll offset — the two screens can never both be active at once, so
+/// branching on `app.screen()` here is one function covering both, not two
+/// parallel ones.
+fn jump_search_match_into_view(app: App) -> App {
+    match app.screen() {
+        Screen::Source { .. } => match app.search().current_match() {
+            Some(line) => app.with_source_scroll_top(line),
+            None => app,
+        },
+        Screen::Entry => match app.search().current_match() {
+            Some(index) => app.with_nav_cursor(index),
+            None => app,
+        },
     }
 }
 
-/// Applies [`InputKey::SearchConfirm`] against `source_content` — extracted
-/// from `run_app`'s inline dispatch so this branch is unit-testable without
-/// a live terminal (mirrors `jump_source_scroll_to_current_match`'s own
-/// "small wrapper, pulled out for the shared/testable step" precedent).
+/// Applies [`InputKey::SearchConfirm`] — extracted from `run_app`'s inline
+/// dispatch so this branch is unit-testable without a live terminal
+/// (mirrors [`jump_search_match_into_view`]'s own "small wrapper, pulled
+/// out for the shared/testable step" precedent).
 ///
-/// When `source_content` is not a loaded `Ok` view (the Source screen open
+/// On [`Screen::Source`]: confirms against `source_content`'s lines. When
+/// `source_content` is not a loaded `Ok` view (the Source screen open
 /// against a file that failed to read — e.g. deleted mid-review, or a
 /// permission error), confirming cancels the search instead of leaving it
 /// composing: `App::handle_key`'s own `SearchConfirm` arm is a documented
 /// no-op (it has no lines to match against), and letting Enter do nothing
 /// here trapped the reviewer in the minibuffer with no way out except Esc.
+///
+/// On [`Screen::Entry`] (ADR 0057 amendment, tree search): confirms
+/// against [`row_search_texts`] of the tree's *currently visible* rows
+/// (`App::nav`/`App::tree`, no external content needed — unlike the Source
+/// branch, everything this needs already lives on `App`) — a match under a
+/// collapsed ancestor (e.g. a `TestGroup`, collapsed by default per
+/// `Nav::new_collapsing_test_groups`) is not found; expanding into
+/// collapsed subtrees on a match is explicit future work, mirroring how
+/// ADR 0057 itself deferred Diff-pane search rather than trying to solve
+/// every case in one pass.
 fn dispatch_search_confirm(
     app: App,
     source_content: Option<&Result<source::HighlightedSourceView, String>>,
 ) -> App {
-    if let Some(Ok(highlighted)) = source_content {
-        let from_line = match app.screen() {
-            Screen::Source { scroll_top, .. } => *scroll_top,
-            Screen::Entry => 0,
-        };
-        let search = app
-            .search()
-            .clone()
-            .confirm(&highlighted.view.lines, from_line);
-        let app = app.with_search(search);
-        jump_source_scroll_to_current_match(app)
-    } else {
-        let search = app.search().clone().cancel();
-        app.with_search(search)
+    match app.screen() {
+        Screen::Source { scroll_top, .. } => {
+            if let Some(Ok(highlighted)) = source_content {
+                let from_line = *scroll_top;
+                let search = app
+                    .search()
+                    .clone()
+                    .confirm(&highlighted.view.lines, from_line);
+                let app = app.with_search(search);
+                jump_search_match_into_view(app)
+            } else {
+                let search = app.search().clone().cancel();
+                app.with_search(search)
+            }
+        }
+        Screen::Entry => {
+            let rows = app.nav().rows(app.tree());
+            let texts = row_search_texts(&rows);
+            let from_index = app.nav().cursor();
+            let search = app.search().clone().confirm(&texts, from_index);
+            let app = app.with_search(search);
+            jump_search_match_into_view(app)
+        }
     }
 }
 

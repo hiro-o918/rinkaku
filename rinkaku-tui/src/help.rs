@@ -109,6 +109,18 @@ fn tree_focus_bindings(locale: Locale) -> Vec<KeyBinding> {
             description: rust_i18n::t!("help.binding.jump_tree_top_bottom", locale = tag)
                 .into_owned(),
         },
+        // ADR 0057 amendment: tree search reuses Source view's own `/`/
+        // `n`/`N` bindings and descriptions (`source_screen_bindings`
+        // below) — same gesture, different search target.
+        KeyBinding {
+            keys: "/",
+            description: rust_i18n::t!("help.binding.start_search", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "n / N",
+            description: rust_i18n::t!("help.binding.jump_next_prev_match", locale = tag)
+                .into_owned(),
+        },
         KeyBinding {
             keys: "enter",
             description: rust_i18n::t!("help.binding.expand_collapse_open", locale = tag)

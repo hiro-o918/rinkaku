@@ -66,3 +66,19 @@ fn should_clamp_cursor_to_first_row_when_cursor_page_up_undershoots() {
 
     assert_eq!(0, nav.cursor());
 }
+
+#[test]
+fn should_move_cursor_to_the_given_index_when_cursor_to() {
+    let tree = deep_tree();
+    let nav = Nav::new().handle(Action::CursorTo(3), &tree);
+
+    assert_eq!(3, nav.cursor());
+}
+
+#[test]
+fn should_clamp_cursor_to_last_row_when_cursor_to_index_is_out_of_bounds() {
+    let tree = deep_tree();
+    let nav = Nav::new().handle(Action::CursorTo(100), &tree);
+
+    assert_eq!(4, nav.cursor());
+}

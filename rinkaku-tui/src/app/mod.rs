@@ -13,7 +13,7 @@ use crate::detail::{
     DetailView, DirDetail, FileDetail, SymbolMention, build_detail, build_dir_detail,
     build_file_detail,
 };
-use crate::nav::Nav;
+use crate::nav::{self, Nav};
 use crate::order::{DirRank, OrderMode, rank_directories};
 use crate::review::ReviewState;
 use crate::search::SearchState;
@@ -992,6 +992,20 @@ impl App {
                 scroll_top,
             };
         }
+        self
+    }
+
+    /// Jumps the tree cursor directly to visible-row `index` (ADR 0057
+    /// amendment: tree search) — `crate::event_loop::run_app` calls this
+    /// once a confirmed search's current match is known, the same
+    /// "`App` has no notion of X, caller computes it and folds it back"
+    /// split [`Self::with_source_scroll_top`]/[`Self::with_right_pane_scroll`]
+    /// already use for their own screen-specific jump targets. Delegates to
+    /// [`nav::Action::CursorTo`] rather than writing `self.nav` directly, so
+    /// the same out-of-bounds clamp every other cursor motion gets applies
+    /// here too.
+    pub fn with_nav_cursor(mut self, index: usize) -> Self {
+        self.nav = self.nav.handle(nav::Action::CursorTo(index), &self.tree);
         self
     }
 }
