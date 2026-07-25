@@ -31,10 +31,20 @@ Split "the string used for classification" from "the string shown to a
 reader":
 
 - `slice_signature` keeps the retained text's original line structure
-  (after comment/body stripping), dedented so the first line's own
-  indentation becomes the baseline. `ExtractedSymbol::signature` is now
-  a multi-line string for any definition whose kept range spans more
-  than one line.
+  (after comment/body stripping), dedented relative to the definition's
+  own starting column in the source (`node.start_position().column`) —
+  not the first line's own indentation as sliced text, which a
+  tree-sitter node never carries: a node's text starts exactly at its
+  first token, so a nested definition's first line always reads as
+  column 0 in the slice regardless of how deep it actually sits in the
+  file. Using the real starting column as the dedent baseline is what
+  lets a nested definition's continuation lines (which do keep their
+  absolute source column) get dedented back down to that depth, while a
+  top-level definition's continuation lines — genuinely indented
+  relative to its own body, not to an enclosing block outside the
+  slice — are left untouched. `ExtractedSymbol::signature` is now a
+  multi-line string for any definition whose kept range spans more than
+  one line.
 - `classify_symbols` normalizes both sides' signatures (collapse
   whitespace, same transform `slice_signature` used to bake in) at
   comparison time only, so a whitespace/line-reflow-only change still

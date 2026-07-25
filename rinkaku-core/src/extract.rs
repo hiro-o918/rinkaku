@@ -598,6 +598,8 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 /// change sanctioned by the ADR — some previously-reported signature strings
 /// that contained inline comments now omit them.
 fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
+    let first_line_column = node.start_position().column;
+
     if matches!(
         node.kind(),
         "class_definition" | "class_declaration" | "abstract_class_declaration"
@@ -605,7 +607,10 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
         let mut removed_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         collect_method_body_ranges(node, &mut removed_ranges);
         collect_comment_ranges(node, &removed_ranges.clone(), &mut removed_ranges);
-        return tidy_signature_lines(&text_with_ranges_removed(node, source, removed_ranges));
+        return tidy_signature_lines(
+            &text_with_ranges_removed(node, source, removed_ranges),
+            first_line_column,
+        );
     }
 
     // `variable_declarator`'s body (a TS arrow function's `{ ... }`) is
@@ -643,7 +648,7 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     }
 
     let raw = text_with_ranges_removed(node, source, removed_ranges);
-    tidy_signature_lines(&raw)
+    tidy_signature_lines(&raw, first_line_column)
 }
 
 /// Removes every byte range in `ranges` from `node`'s own text (`node`'s
@@ -758,27 +763,54 @@ fn normalize_whitespace(text: &str) -> String {
 }
 
 /// Shapes a raw, range-stripped declaration slice into the multi-line text
-/// stored on [`ExtractedSymbol::signature`] (ADR 0060): dedents every line
-/// relative to the least-indented non-blank line, trims trailing
-/// whitespace from each line, collapses runs of blank lines left behind by
-/// a stripped comment/body into a single blank line, and trims leading/
-/// trailing blank lines. A single-line input is returned trimmed, same as
-/// before ADR 0060.
-fn tidy_signature_lines(text: &str) -> String {
+/// stored on [`ExtractedSymbol::signature`] (ADR 0060): dedents every
+/// continuation line relative to the least-indented non-blank line
+/// (`first_line_column` standing in for the first line's own indentation,
+/// see below), trims trailing whitespace from each line, collapses runs
+/// of blank lines left behind by a stripped comment/body into a single
+/// blank line, and trims leading/trailing blank lines. A single-line
+/// input is returned trimmed, same as before ADR 0060.
+///
+/// `first_line_column` is the node's `start_position().column` in the
+/// original source — the column the declaration keyword (`fn`/`class`/...)
+/// actually starts at, which is *not* recoverable from the text alone: a
+/// tree-sitter node's text only ever contains that node's own span, so the
+/// first line of the sliced text never carries the leading whitespace
+/// before it, whether or not the definition is nested. Folding this column
+/// into the dedent-baseline calculation (as a stand-in for "line 0's own
+/// indent") is what tells a nested definition (`first_line_column` > 0,
+/// e.g. 4 inside an `impl` block) apart from a top-level one
+/// (`first_line_column` == 0): a nested method's continuation lines carry
+/// their real absolute column and must be dedented back down to
+/// `first_line_column`'s depth, while a top-level struct/class's
+/// continuation lines are indented *relative to that definition's own
+/// body* and must be left alone.
+fn tidy_signature_lines(text: &str, first_line_column: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
 
     let min_indent = lines
         .iter()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.len() - line.trim_start().len())
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            if index == 0 {
+                first_line_column
+            } else {
+                line.len() - line.trim_start().len()
+            }
+        })
         .min()
         .unwrap_or(0);
 
     let dedented: Vec<&str> = lines
         .iter()
-        .map(|line| {
+        .enumerate()
+        .map(|(index, line)| {
             if line.trim().is_empty() {
                 ""
+            } else if index == 0 {
+                // Never dedented: see `first_line_column`'s doc comment.
+                line.trim_end()
             } else {
                 line.get(min_indent..).unwrap_or(line).trim_end()
             }
