@@ -7,6 +7,7 @@
 use crate::detail::{DetailView, SignatureView};
 use crate::ui::detail_pane::detail_lines;
 
+use pretty_assertions::assert_eq;
 use rinkaku_core::extract::SymbolKind;
 
 fn detail_view(signature: SignatureView) -> DetailView {
@@ -24,22 +25,41 @@ fn detail_view(signature: SignatureView) -> DetailView {
     }
 }
 
+/// Renders `detail_lines`'s output down to its text content, one `String`
+/// per `Line` — styling (bold headings, red/green diff coloring) is
+/// covered by the render code's own visual intent rather than pinned
+/// here, since this suite's concern is which lines get pushed and in what
+/// order.
+fn rendered_text(detail: &DetailView) -> Vec<String> {
+    detail_lines(detail)
+        .iter()
+        .map(|line| line.to_string())
+        .collect()
+}
+
 #[test]
 fn should_push_one_line_per_source_line_for_current_multiline_signature() {
     let detail = detail_view(SignatureView::Current(
         "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
     ));
 
-    let lines = detail_lines(&detail);
-    let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    let actual = rendered_text(&detail);
 
-    assert!(rendered.contains(&"struct Point {".to_string()));
-    assert!(rendered.contains(&"    x: i32,".to_string()));
-    assert!(rendered.contains(&"    y: i32,".to_string()));
-    assert!(rendered.contains(&"}".to_string()));
-    // No line should carry an embedded newline — each source line is its
-    // own `Line`, not one `Line` with `\n` baked into its text.
-    assert!(rendered.iter().all(|line| !line.contains('\n')));
+    let expected = vec![
+        "Struct Point".to_string(),
+        "lib.rs".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "struct Point {".to_string(),
+        "    x: i32,".to_string(),
+        "    y: i32,".to_string(),
+        "}".to_string(),
+        "".to_string(),
+        "Used by (0)".to_string(),
+        "".to_string(),
+        "Callees (0)".to_string(),
+    ];
+    assert_eq!(expected, actual);
 }
 
 #[test]
@@ -49,15 +69,24 @@ fn should_push_one_line_per_source_line_for_each_side_of_a_changed_multiline_sig
         current: "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
     });
 
-    let lines = detail_lines(&detail);
-    let rendered: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    let actual = rendered_text(&detail);
 
-    assert!(rendered.contains(&"- struct Point {".to_string()));
-    assert!(rendered.contains(&"-     x: i32,".to_string()));
-    assert!(rendered.contains(&"- }".to_string()));
-    assert!(rendered.contains(&"+ struct Point {".to_string()));
-    assert!(rendered.contains(&"+     x: i32,".to_string()));
-    assert!(rendered.contains(&"+     y: i32,".to_string()));
-    assert!(rendered.contains(&"+ }".to_string()));
-    assert!(rendered.iter().all(|line| !line.contains('\n')));
+    let expected = vec![
+        "Struct Point".to_string(),
+        "lib.rs".to_string(),
+        "".to_string(),
+        "".to_string(),
+        "- struct Point {".to_string(),
+        "-     x: i32,".to_string(),
+        "- }".to_string(),
+        "+ struct Point {".to_string(),
+        "+     x: i32,".to_string(),
+        "+     y: i32,".to_string(),
+        "+ }".to_string(),
+        "".to_string(),
+        "Used by (0)".to_string(),
+        "".to_string(),
+        "Callees (0)".to_string(),
+    ];
+    assert_eq!(expected, actual);
 }
