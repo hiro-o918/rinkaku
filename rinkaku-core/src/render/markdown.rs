@@ -404,11 +404,14 @@ fn render_tree_node(
 ///
 /// The signature block is a plain fence for every classification except
 /// [`Classification::SignatureChanged`] (or classification not attempted),
-/// which instead gets a ` ```diff ` block showing the base signature as a
-/// `-` line and the head signature as a `+` line — the same before/after
-/// shape a reviewer already reads diffs in, applied to just the signature
-/// rather than the whole file. The container comment line, when present, is
-/// unchanged either way (not part of the diff, since it never differs
+/// which instead gets a ` ```diff ` block: every line of the base
+/// signature prefixed `-`, followed by every line of the head signature
+/// prefixed `+` (ADR 0060) — a whole-signature replacement rather than a
+/// paired line-by-line diff, so a multi-line signature's unchanged lines
+/// still repeat on both sides, but a struct/enum/trait/interface/class
+/// signature's changed field is at least visible on its own line instead of
+/// buried in one flattened line. The container comment line, when present,
+/// is unchanged either way (not part of the diff, since it never differs
 /// between base and head — `find_container`'s output depends only on
 /// enclosing-block structure, not on the signature text being compared).
 fn render_definition(
@@ -431,8 +434,12 @@ fn render_definition(
             if let Some(container_line) = &container_line {
                 writeln!(out, "{container_line}")?;
             }
-            writeln!(out, "-{previous_signature}")?;
-            writeln!(out, "+{}", symbol.signature)?;
+            for line in previous_signature.lines() {
+                writeln!(out, "-{line}")?;
+            }
+            for line in symbol.signature.lines() {
+                writeln!(out, "+{line}")?;
+            }
             writeln!(out, "{fence}")?;
         }
         _ => {
@@ -458,7 +465,14 @@ fn render_definition(
             // to break out of a single backtick span, and this is a
             // cosmetic-only failure mode (unlike the fenced blocks, which
             // without widening could make later content render as code).
-            writeln!(out, "- `{}`: `{}`", dependency.path, dependency.signature)?;
+            // A multi-line dependency signature (ADR 0060) is collapsed to
+            // one line here, since this list's shape is one entry per line.
+            writeln!(
+                out,
+                "- `{}`: `{}`",
+                dependency.path,
+                collapse_to_single_line(&dependency.signature)
+            )?;
         }
         if symbol.omitted_dependency_matches > 0 {
             writeln!(
@@ -732,6 +746,13 @@ fn longest_backtick_run(text: &str) -> Option<usize> {
         .map(str::len)
         .filter(|&len| len > 0)
         .max()
+}
+
+/// Collapses a possibly multi-line signature (ADR 0060) into one line for
+/// a render slot that must stay a single line — e.g. a "Depends on:"
+/// inline code span, which is one list entry per line.
+fn collapse_to_single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

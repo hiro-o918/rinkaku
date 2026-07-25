@@ -111,6 +111,67 @@ fn should_render_diff_block_and_marker_when_symbol_is_signature_changed() {
     assert_eq!(expected, actual);
 }
 
+// ADR 0060: a multi-line signature's diff block prefixes every line of
+// the base/head text with `-`/`+`, so a struct's changed field shows up
+// as one changed line among unchanged ones, not a full-signature
+// replacement.
+#[test]
+fn should_render_line_based_diff_block_when_multiline_signature_changed() {
+    let mut point = symbol(
+        "src/lib.rs::Point",
+        "Point",
+        SymbolKind::Struct,
+        "struct Point {\n    x: i32,\n    y: i32,\n}",
+    );
+    point.classification = Some(Classification::SignatureChanged);
+    point.previous_signature = Some("struct Point {\n    x: i32,\n}".to_string());
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![point],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![node("src/lib.rs::Point", "src/lib.rs", "Point")],
+            edges: vec![],
+            roots: vec!["src/lib.rs::Point".to_string()],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- struct Point (src/lib.rs) — signature changed
+
+## Definitions
+
+### struct Point (src/lib.rs) — signature changed
+
+```diff
+-struct Point {
+-    x: i32,
+-}
++struct Point {
++    x: i32,
++    y: i32,
++}
+```
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
 // A signature-changed symbol with a container gets the container
 // comment line rendered unchanged above the diff lines — it is not
 // itself part of the base/head comparison (see `render_definition`'s

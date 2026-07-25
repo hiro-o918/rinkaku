@@ -81,7 +81,8 @@ fn added_line(path: &str, symbol: &ExtractedSymbol) -> String {
 }
 
 /// Same ` ```diff ` convention `render_markdown`'s "Definitions" section
-/// uses for `SignatureChanged`.
+/// uses for `SignatureChanged`: every base signature line prefixed `-`,
+/// then every head signature line prefixed `+` (ADR 0060).
 ///
 /// `previous_signature` is expected to be `Some` whenever `classification`
 /// is `SignatureChanged` (`extract::classify_symbols`' invariant); falls
@@ -95,8 +96,12 @@ fn signature_changed_line(path: &str, symbol: &ExtractedSymbol) -> String {
         Some(previous_signature) => {
             let fence = fence_for_diff(previous_signature, &symbol.signature);
             writeln!(out, "  {fence}diff").expect("writing to a String cannot fail");
-            writeln!(out, "  -{previous_signature}").expect("writing to a String cannot fail");
-            writeln!(out, "  +{}", symbol.signature).expect("writing to a String cannot fail");
+            for line in previous_signature.lines() {
+                writeln!(out, "  -{line}").expect("writing to a String cannot fail");
+            }
+            for line in symbol.signature.lines() {
+                writeln!(out, "  +{line}").expect("writing to a String cannot fail");
+            }
             writeln!(out, "  {fence}").expect("writing to a String cannot fail");
         }
         None => {
@@ -267,6 +272,44 @@ mod tests {
   ```diff
   -fn foo(a: i32) -> i32
   +fn foo(a: i32, b: i32) -> i32
+  ```
+"
+        .to_string();
+        let actual = render(&report, OutputFormat::Digest).expect("digest render succeeds");
+
+        assert_eq!(expected, actual);
+    }
+
+    // ADR 0060: same line-based diff convention as `render_markdown`'s
+    // "Definitions" section — every base line prefixed `-`, every head
+    // line prefixed `+`.
+    #[test]
+    fn should_render_line_based_diff_block_when_multiline_signature_changed() {
+        let report = empty_report(
+            vec![FileReport {
+                path: "src/lib.rs".to_string(),
+                symbols: vec![symbol(
+                    "Point",
+                    "struct Point {\n    x: i32,\n    y: i32,\n}",
+                    Some(Classification::SignatureChanged),
+                    Some("struct Point {\n    x: i32,\n}"),
+                )],
+            }],
+            vec![],
+        );
+
+        let expected = "\
+### API changes
+
+- **Point (src/lib.rs)**
+  ```diff
+  -struct Point {
+  -    x: i32,
+  -}
+  +struct Point {
+  +    x: i32,
+  +    y: i32,
+  +}
   ```
 "
         .to_string();

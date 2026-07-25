@@ -119,6 +119,67 @@ Depends on:
     assert_eq!(expected, actual);
 }
 
+// ADR 0060: `Depends on:` is a one-line-per-dependency inline code span,
+// so a multi-line dependency signature (e.g. a struct with several
+// fields) must collapse to a single line here rather than breaking the
+// list's one-entry-per-line shape.
+#[test]
+fn should_collapse_multiline_dependency_signature_to_one_line() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![ExtractedSymbol {
+                dependencies: vec![crate::deps::ResolvedSymbol {
+                    signature: "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
+                    path: "src/point.rs".to_string(),
+                }],
+                ..symbol(
+                    "src/lib.rs::foo",
+                    "foo",
+                    SymbolKind::Function,
+                    "fn foo(p: Point) -> i32",
+                )
+            }],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+            edges: vec![],
+            roots: vec!["src/lib.rs::foo".to_string()],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Change graph
+
+1 changed symbol in 1 file
+
+- fn foo (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo(p: Point) -> i32
+```
+
+Depends on:
+- `src/point.rs`: `struct Point { x: i32, y: i32, }`
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencies() {
     let report = Report {
