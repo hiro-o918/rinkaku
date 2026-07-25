@@ -263,7 +263,7 @@ pub struct RemovedSymbol {
 /// in memory, no IO. `lang` is not needed here — `head_symbols` and
 /// `base_symbols` are both already the output of `extract_changed_symbols`/
 /// `extract_all_symbols`, whose signatures are already comment-stripped
-/// (ADR 0014). Signatures are compared with [`normalize_whitespace`]
+/// (ADR 0014). Signatures are compared with [`normalize_for_comparison`]
 /// applied to both sides (ADR 0060) rather than as plain strings: a
 /// signature now keeps its original line structure for display, so a
 /// reflow-only difference (indentation, line wrapping) must be normalized
@@ -291,8 +291,8 @@ pub fn classify_symbols(
             }
             Some(base_symbol) => {
                 matched_base_identities.insert(identity);
-                if normalize_whitespace(&base_symbol.signature)
-                    == normalize_whitespace(&symbol.signature)
+                if normalize_for_comparison(&base_symbol.signature)
+                    == normalize_for_comparison(&symbol.signature)
                 {
                     symbol.classification = Some(Classification::BodyOnly);
                 } else {
@@ -753,13 +753,51 @@ fn is_comment_node(node: tree_sitter::Node) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment" | "comment")
 }
 
-/// Collapses runs of whitespace (including newlines/indentation from the
-/// original source) into single spaces, and trims the result. Used only to
-/// compare two signatures for contract-impact classification
+/// Normalizes a signature for contract-impact comparison only
 /// ([`classify_symbols`], ADR 0014/0060) — display uses
-/// [`tidy_signature_lines`] instead, which keeps line structure.
-fn normalize_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+/// [`tidy_signature_lines`] instead, which keeps line structure, and other
+/// single-line render sites collapse whitespace unconditionally instead
+/// (each documented at its own call, e.g. `render::markdown`'s
+/// `collapse_to_single_line`; that transform is display-only and must stay
+/// unconditional so a struct like `Foo{x: i32}` still reads with a space
+/// after `{`, so it is not reused here).
+///
+/// Every maximal run of whitespace is replaced with a single space when
+/// both the character immediately before and immediately after the run are
+/// word characters (alphanumeric or `_`), and removed entirely otherwise.
+/// A naive `split_whitespace().join(" ")` (this function's predecessor)
+/// always inserts a space at a normalized run regardless of what the
+/// original text had there, so a reflow that introduces a line break right
+/// after a symbol like `(` or `,` — a position that never had a space in
+/// the original — would compare unequal to the un-reflowed form purely
+/// because of where the normalizer chose to put a space back. Restricting
+/// the collapse to word/word boundaries keeps a reflow-only change
+/// (whitespace inserted or moved next to punctuation) invisible to the
+/// comparison while still preserving whitespace that is itself meaningful
+/// content (e.g. the space in `a b` vs. no space in `ab`).
+fn normalize_for_comparison(text: &str) -> String {
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+    let chars: Vec<char> = text.chars().collect();
+
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            let run_start = i;
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+            let before = chars[..run_start].last().copied();
+            let after = chars.get(i).copied();
+            if before.is_some_and(is_word_char) && after.is_some_and(is_word_char) {
+                result.push(' ');
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    result
 }
 
 /// Shapes a raw, range-stripped declaration slice into the multi-line text

@@ -45,10 +45,26 @@ reader":
   slice — are left untouched. `ExtractedSymbol::signature` is now a
   multi-line string for any definition whose kept range spans more than
   one line.
-- `classify_symbols` normalizes both sides' signatures (collapse
-  whitespace, same transform `slice_signature` used to bake in) at
-  comparison time only, so a whitespace/line-reflow-only change still
-  classifies as `BodyOnly`, unchanged from today.
+- `classify_symbols` normalizes both sides' signatures at comparison time
+  only (`normalize_for_comparison`), so a whitespace/line-reflow-only
+  change still classifies as `BodyOnly`. This is a different transform
+  from the old single-line `normalize_whitespace`
+  (`split_whitespace().join(" ")`) it replaces: that transform always
+  inserted a space at every normalized whitespace run, so a reflow that
+  introduced a line break right after a symbol character (e.g. gofmt
+  wrapping a parameter list — a newline right after `(`, a position that
+  had no space in the original) compared unequal to the un-reflowed form,
+  a false `SignatureChanged` purely from where the normalizer chose to
+  put a space back. `normalize_for_comparison` instead collapses a
+  whitespace run to a single space only when both neighboring characters
+  are word characters (alphanumeric or `_`), and drops the run entirely
+  otherwise — a run next to punctuation carries no information the
+  comparison should key on. A whitespace run between two word characters
+  is still preserved as meaningful content (`a b` vs. `ab` continue to
+  compare unequal). This transform is comparison-only; every display
+  render site keeps the old unconditional single-line collapse (e.g.
+  `render::markdown`'s `collapse_to_single_line`) so a struct like `Foo{x:
+  i32}` still reads with a space after `{`.
 - Markdown's `SignatureChanged` block renders a line-based diff (each
   retained line prefixed `-`/`+`) instead of one `-`/`+` line per whole
   signature, so a single changed struct field shows up as one changed
@@ -101,3 +117,12 @@ ADR 0014 sanctioned its own comment-stripping output change.
   entries, TUI diff-pane section titles) now must explicitly collapse
   multi-line signatures rather than getting a single line for free;
   each such site is documented at its own collapse call.
+- Known limitation: a reflow that also adds or removes a trailing comma
+  (e.g. gofmt/rustfmt inserting one when a parameter list wraps onto
+  multiple lines) still classifies as `SignatureChanged`, since
+  `normalize_for_comparison` only touches whitespace runs and a comma is
+  a real token, not whitespace. This is judged correct rather than a gap
+  to close: the comma is an actual textual difference, so treating it as
+  "no contract change" would risk masking a case where a comma is added
+  or removed for a reason that isn't purely cosmetic (e.g. alongside a
+  parameter list edit that the diff hunk happens to also reflow).
