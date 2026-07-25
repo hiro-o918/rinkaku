@@ -172,7 +172,8 @@ class Point:
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
+        signature: "class Point:\n    x: int\n    y: int\n\n    def __init__(self, x, y):"
+            .to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
         // "int" is the shared field-annotation type of both `x`
@@ -211,7 +212,8 @@ class Point:
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
+        signature: "class Point:\n\n    x: int\n    y: int\n\n    def __init__(self, x, y):"
+            .to_string(),
         range: LineRange { start: 1, end: 8 },
         container: None,
         referenced_names: vec!["int".to_string()],

@@ -43,7 +43,7 @@ fn should_resolve_type_reference_when_type_is_defined_in_repo() {
     );
 
     let expected = vec![ResolvedSymbol {
-        signature: "struct Point { x: i32, }".to_string(),
+        signature: "struct Point {\n    x: i32,\n}".to_string(),
         path: "src/point.rs".to_string(),
     }];
     let actual = resolver.resolve("Point");

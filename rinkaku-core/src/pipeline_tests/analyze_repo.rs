@@ -74,7 +74,7 @@ struct Point {
                     id: "src/lib.rs::Point".to_string(),
                     name: "Point".to_string(),
                     kind: SymbolKind::Struct,
-                    signature: "struct Point { x: i32, }".to_string(),
+                    signature: "struct Point {\n    x: i32,\n}".to_string(),
                     range: LineRange { start: 5, end: 7 },
                     container: None,
                     referenced_names: vec!["Point".to_string()],

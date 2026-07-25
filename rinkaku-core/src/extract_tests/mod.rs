@@ -20,6 +20,9 @@
 //! - [`classification`] — `classify_symbols`: `Added` /
 //!   `SignatureChanged` / `BodyOnly` classification and `RemovedSymbol`
 //!   reporting (ADR 0014), matched by `(name, container)` identity.
+//! - [`tidy_lines`] — `tidy_signature_lines`: dedenting, trailing-
+//!   whitespace trimming, and blank-line collapsing applied to a
+//!   multi-line signature slice (ADR 0060).
 
 // Re-export `crate::extract`'s items so each topic submodule can pull them
 // in with the customary `use super::*;`, mirroring what the original
@@ -34,4 +37,5 @@ mod classification;
 mod go;
 mod python;
 mod rust;
+mod tidy_lines;
 mod typescript;

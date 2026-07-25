@@ -506,7 +506,9 @@ func (r *repoImpl) Save(id string) error {
 ### interface Repo (repo.go)
 
 ```
-Repo interface { Save(id string) (err error) }
+Repo interface {
+	Save(id string) (err error)
+}
 ```
 
 ### fn Save (repo.go)

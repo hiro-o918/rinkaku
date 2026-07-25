@@ -262,9 +262,13 @@ pub struct RemovedSymbol {
 /// Pure: takes both sides' already-extracted symbol lists and matches them
 /// in memory, no IO. `lang` is not needed here — `head_symbols` and
 /// `base_symbols` are both already the output of `extract_changed_symbols`/
-/// `extract_all_symbols`, whose signatures are already comment-stripped and
-/// normalized (ADR 0014's first change) — so signature comparison is a
-/// plain string comparison, not a second parse.
+/// `extract_all_symbols`, whose signatures are already comment-stripped
+/// (ADR 0014). Signatures are compared with [`normalize_whitespace`]
+/// applied to both sides (ADR 0060) rather than as plain strings: a
+/// signature now keeps its original line structure for display, so a
+/// reflow-only difference (indentation, line wrapping) must be normalized
+/// away here to avoid a false `SignatureChanged`, same as ADR 0014 already
+/// required before display signatures went multi-line.
 pub fn classify_symbols(
     head_symbols: &mut [ExtractedSymbol],
     base_symbols: &[ExtractedSymbol],
@@ -287,7 +291,9 @@ pub fn classify_symbols(
             }
             Some(base_symbol) => {
                 matched_base_identities.insert(identity);
-                if base_symbol.signature == symbol.signature {
+                if normalize_whitespace(&base_symbol.signature)
+                    == normalize_whitespace(&symbol.signature)
+                {
                     symbol.classification = Some(Classification::BodyOnly);
                 } else {
                     symbol.classification = Some(Classification::SignatureChanged);
@@ -555,7 +561,12 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 }
 
 /// Slices a definition's signature: the declaration text with implementation
-/// detail and comment nodes removed, whitespace normalized to single spaces.
+/// detail and comment nodes removed, keeping its original line structure
+/// (dedented — see [`tidy_signature_lines`], ADR 0060) rather than
+/// collapsing it to one line. Contract-impact comparison
+/// ([`classify_symbols`]) normalizes whitespace separately, at comparison
+/// time, so a reflow-only difference between two multi-line signatures
+/// still doesn't register as a contract change.
 ///
 /// - `function_item`, `function_declaration` (Go/TS), `method_declaration`
 ///   (Go), `function_definition` (Python), `method_definition` (TS),
@@ -594,7 +605,7 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
         let mut removed_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         collect_method_body_ranges(node, &mut removed_ranges);
         collect_comment_ranges(node, &removed_ranges.clone(), &mut removed_ranges);
-        return normalize_whitespace(&text_with_ranges_removed(node, source, removed_ranges));
+        return tidy_signature_lines(&text_with_ranges_removed(node, source, removed_ranges));
     }
 
     // `variable_declarator`'s body (a TS arrow function's `{ ... }`) is
@@ -632,7 +643,7 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     }
 
     let raw = text_with_ranges_removed(node, source, removed_ranges);
-    normalize_whitespace(&raw)
+    tidy_signature_lines(&raw)
 }
 
 /// Removes every byte range in `ranges` from `node`'s own text (`node`'s
@@ -738,9 +749,58 @@ fn is_comment_node(node: tree_sitter::Node) -> bool {
 }
 
 /// Collapses runs of whitespace (including newlines/indentation from the
-/// original source) into single spaces, and trims the result.
+/// original source) into single spaces, and trims the result. Used only to
+/// compare two signatures for contract-impact classification
+/// ([`classify_symbols`], ADR 0014/0060) — display uses
+/// [`tidy_signature_lines`] instead, which keeps line structure.
 fn normalize_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Shapes a raw, range-stripped declaration slice into the multi-line text
+/// stored on [`ExtractedSymbol::signature`] (ADR 0060): dedents every line
+/// relative to the least-indented non-blank line, trims trailing
+/// whitespace from each line, collapses runs of blank lines left behind by
+/// a stripped comment/body into a single blank line, and trims leading/
+/// trailing blank lines. A single-line input is returned trimmed, same as
+/// before ADR 0060.
+fn tidy_signature_lines(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+
+    let min_indent = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    let dedented: Vec<&str> = lines
+        .iter()
+        .map(|line| {
+            if line.trim().is_empty() {
+                ""
+            } else {
+                line.get(min_indent..).unwrap_or(line).trim_end()
+            }
+        })
+        .collect();
+
+    let mut collapsed: Vec<&str> = Vec::with_capacity(dedented.len());
+    for line in dedented {
+        if line.is_empty() && collapsed.last().is_some_and(|last: &&str| last.is_empty()) {
+            continue;
+        }
+        collapsed.push(line);
+    }
+
+    while collapsed.first().is_some_and(|line| line.is_empty()) {
+        collapsed.remove(0);
+    }
+    while collapsed.last().is_some_and(|line| line.is_empty()) {
+        collapsed.pop();
+    }
+
+    collapsed.join("\n")
 }
 
 /// Walks up from `node` to find an enclosing container (Rust

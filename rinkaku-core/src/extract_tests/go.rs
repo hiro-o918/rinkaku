@@ -96,7 +96,7 @@ type Repo struct {
         id: String::new(),
         name: "Repo".to_string(),
         kind: SymbolKind::Struct,
-        signature: "Repo struct { Name string Size int }".to_string(),
+        signature: "Repo struct {\n\tName string\n\tSize int\n}".to_string(),
         range: LineRange { start: 3, end: 6 },
         container: None,
         // "Repo" is the struct's own name (self-reference,
@@ -136,7 +136,7 @@ type Repo struct {
         id: String::new(),
         name: "Repo".to_string(),
         kind: SymbolKind::Struct,
-        signature: "Repo struct { Name string Size int }".to_string(),
+        signature: "Repo struct {\n\n\tName string\n\tSize int\n}".to_string(),
         range: LineRange { start: 3, end: 7 },
         container: None,
         referenced_names: vec!["Repo".to_string(), "int".to_string(), "string".to_string()],
@@ -167,7 +167,7 @@ type Fetcher interface {
         id: String::new(),
         name: "Fetcher".to_string(),
         kind: SymbolKind::Interface,
-        signature: "Fetcher interface { Fetch(id string) (string, error) }".to_string(),
+        signature: "Fetcher interface {\n\tFetch(id string) (string, error)\n}".to_string(),
         range: LineRange { start: 3, end: 5 },
         container: None,
         // "Fetch" is the interface's own method spec name (ADR
@@ -207,7 +207,8 @@ type Repo interface {
         id: String::new(),
         name: "Repo".to_string(),
         kind: SymbolKind::Interface,
-        signature: "Repo interface { Save(id string) error Delete(id string) error }".to_string(),
+        signature: "Repo interface {\n\tSave(id string) error\n\tDelete(id string) error\n}"
+            .to_string(),
         range: LineRange { start: 3, end: 6 },
         container: None,
         referenced_names: vec![

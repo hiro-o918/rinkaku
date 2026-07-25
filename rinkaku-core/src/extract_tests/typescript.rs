@@ -134,7 +134,8 @@ interface Shape {
         id: String::new(),
         name: "Shape".to_string(),
         kind: SymbolKind::Interface,
-        signature: "interface Shape { area(): number; perimeter(): number; }".to_string(),
+        signature: "interface Shape {\n    area(): number;\n    perimeter(): number;\n}"
+            .to_string(),
         range: LineRange { start: 1, end: 4 },
         container: None,
         // The interface's own name is a `type_identifier` (self-
@@ -179,7 +180,8 @@ interface Repo {
         id: String::new(),
         name: "Repo".to_string(),
         kind: SymbolKind::Interface,
-        signature: "interface Repo { id: string; save(item: string): void; }".to_string(),
+        signature: "interface Repo {\n    id: string;\n    save(item: string): void;\n}"
+            .to_string(),
         range: LineRange { start: 1, end: 4 },
         container: None,
         // "id" (a `property_signature` name) is deliberately
@@ -213,7 +215,7 @@ type Point = {
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::TypeAlias,
-        signature: "type Point = { x: number; y: number; };".to_string(),
+        signature: "type Point = {\n    x: number;\n    y: number;\n};".to_string(),
         range: LineRange { start: 1, end: 4 },
         container: None,
         referenced_names: vec!["Point".to_string()],
@@ -245,7 +247,7 @@ enum Color {
         id: String::new(),
         name: "Color".to_string(),
         kind: SymbolKind::Enum,
-        signature: "enum Color { Red, Green, Blue, }".to_string(),
+        signature: "enum Color {\n    Red,\n    Green,\n    Blue,\n}".to_string(),
         range: LineRange { start: 1, end: 5 },
         container: None,
         referenced_names: vec![],
@@ -280,7 +282,7 @@ class Circle {
         id: String::new(),
         name: "Circle".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Circle { radius: number; area(): number }".to_string(),
+        signature: "class Circle {\n    radius: number;\n\n    area(): number\n}".to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
         referenced_names: vec!["Circle".to_string()],
@@ -317,7 +319,7 @@ class Circle {
         id: String::new(),
         name: "Circle".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Circle { radius: number; area(): number }".to_string(),
+        signature: "class Circle {\n\n    radius: number;\n\n    area(): number\n}".to_string(),
         range: LineRange { start: 1, end: 8 },
         container: None,
         referenced_names: vec!["Circle".to_string()],
@@ -555,7 +557,7 @@ abstract class Shape {
         name: "Shape".to_string(),
         kind: SymbolKind::Class,
         signature:
-            "abstract class Shape { abstract area(): number; abstract perimeter(): number; }"
+            "abstract class Shape {\n    abstract area(): number;\n    abstract perimeter(): number;\n}"
                 .to_string(),
         range: LineRange { start: 1, end: 4 },
         container: None,
@@ -594,7 +596,8 @@ class Circle {
         id: String::new(),
         name: "Circle".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Circle { radius: number; area = (): number => ; }".to_string(),
+        signature: "class Circle {\n    radius: number;\n\n    area = (): number => ;\n}"
+            .to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
         // The reference query runs over the full node (including

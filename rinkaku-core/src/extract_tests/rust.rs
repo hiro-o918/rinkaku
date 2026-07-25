@@ -53,7 +53,7 @@ struct Point {
             id: String::new(),
             name: "Point".to_string(),
             kind: SymbolKind::Struct,
-            signature: "struct Point { x: i32, }".to_string(),
+            signature: "struct Point {\n    x: i32,\n}".to_string(),
             range: LineRange { start: 5, end: 7 },
             container: None,
             referenced_names: vec!["Point".to_string()],
@@ -354,7 +354,7 @@ struct Point {
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Struct,
-        signature: "struct Point { x: i32, y: i32, }".to_string(),
+        signature: "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
         range: LineRange { start: 1, end: 4 },
         container: None,
         // The struct's own name appears as a `type_identifier` too
@@ -393,7 +393,7 @@ struct Point {
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Struct,
-        signature: "struct Point { x: i32, y: i32, }".to_string(),
+        signature: "struct Point {\n\n    x: i32,\n    y: i32,\n}".to_string(),
         range: LineRange { start: 1, end: 5 },
         container: None,
         referenced_names: vec!["Point".to_string()],
@@ -525,7 +525,7 @@ enum Color {
         id: String::new(),
         name: "Color".to_string(),
         kind: SymbolKind::Enum,
-        signature: "enum Color { Red, Green, Blue, }".to_string(),
+        signature: "enum Color {\n    Red,\n    Green,\n    Blue,\n}".to_string(),
         range: LineRange { start: 1, end: 5 },
         container: None,
         // Same self-reference note as the struct case above: the
@@ -591,7 +591,7 @@ trait Greeter {
         id: String::new(),
         name: "Greeter".to_string(),
         kind: SymbolKind::Trait,
-        signature: "trait Greeter { fn greet(&self) -> String; }".to_string(),
+        signature: "trait Greeter {\n    fn greet(&self) -> String;\n}".to_string(),
         range: LineRange { start: 1, end: 3 },
         container: None,
         // The trait's own name, its "greet" method name (ADR 0012
@@ -635,9 +635,8 @@ trait Repo {
         id: String::new(),
         name: "Repo".to_string(),
         kind: SymbolKind::Trait,
-        signature:
-            "trait Repo { fn save(&self, id: &str); fn label(&self) -> String { String::new() } }"
-                .to_string(),
+        signature: "trait Repo {\n    fn save(&self, id: &str);\n\n    fn label(&self) -> String {\n        String::new()\n    }\n}"
+            .to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
         // Both the bodiless `save` signature and the default-body
