@@ -13,6 +13,9 @@
 //!   total
 //! - `size_warning` — ADR 0028 `file_detail_lines` size-warning line
 //!   rendering (Warn vs Split label / trailing hint)
+//! - `signature_view` — ADR 0060: `detail_lines`'s `SignatureView`
+//!   rendering pushes one `Line` per source line for a multi-line
+//!   signature, instead of one `Line` with an embedded `\n`
 
 use super::file_detail_lines;
 use crate::app::{App, BlastRadiusSelection};
@@ -28,6 +31,7 @@ use rinkaku_core::render::{FileReport, Report};
 
 mod content_by_row_kind;
 mod scroll_behavior;
+mod signature_view;
 mod size_warning;
 mod wrap_reachability;
 

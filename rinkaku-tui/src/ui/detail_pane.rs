@@ -293,17 +293,25 @@ pub(crate) fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     match &detail.signature {
         SignatureView::Current(signature) => {
-            lines.push(Line::raw(signature.clone()));
+            // A multi-line signature (ADR 0060) needs one `Line` per source
+            // line — `Line` never splits on an embedded `\n` itself.
+            for line in signature.lines() {
+                lines.push(Line::raw(line.to_string()));
+            }
         }
         SignatureView::Changed { previous, current } => {
-            lines.push(Line::styled(
-                format!("- {previous}"),
-                Style::default().fg(Color::Red),
-            ));
-            lines.push(Line::styled(
-                format!("+ {current}"),
-                Style::default().fg(Color::Green),
-            ));
+            for line in previous.lines() {
+                lines.push(Line::styled(
+                    format!("- {line}"),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+            for line in current.lines() {
+                lines.push(Line::styled(
+                    format!("+ {line}"),
+                    Style::default().fg(Color::Green),
+                ));
+            }
         }
     }
 
