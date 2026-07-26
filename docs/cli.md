@@ -196,11 +196,22 @@ terminal and `--yes` is not given, `self-update` refuses to run rather
 than silently proceeding.
 
 `--tui` also checks for a newer release in the background on startup.
-When one is found, the status line shows an `update vX.Y.Z: U` hint;
-press `U` to open a confirmation popup, and `Enter` to update and quit
-(the update itself runs after the TUI has exited, reusing the same
-`self-update` path). The check is silent on any failure and never
-blocks TUI startup. Set `RINKAKU_UPDATE_CHECK=0` to skip it entirely.
+The check gets up to 300ms to answer before analysis begins; if it
+finds a newer release in that window and stdin is a terminal, `rinkaku`
+asks on the terminal whether to update, and answering `y` installs the
+release and re-runs the same command with the updated binary. Piped
+input (`gh pr diff 123 | rinkaku --tui`) is never asked, since a re-run
+could not read the already-consumed diff.
+
+If the check answers too late for that window, nothing is printed and
+analysis proceeds; the result still reaches the TUI, where the status
+line shows an `update vX.Y.Z: U` hint. Press `U` to open a
+confirmation popup and `Enter` to update and quit (the update runs
+after the TUI has exited, and does not re-run the analysis).
+
+The check is silent on any failure and never blocks TUI startup for
+longer than the 300ms window. Set `RINKAKU_UPDATE_CHECK=0` to skip it
+entirely.
 
 ## Known limitations
 
