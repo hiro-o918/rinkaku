@@ -36,6 +36,9 @@ pub(crate) fn expand_tabs(content: &str, spans: &[TokenSpan]) -> (String, Vec<To
             column += padding;
         } else {
             expanded.push(ch);
+            // `unwrap_or(0)`, unlike `crate::ui::scroll`'s `unwrap_or(1)`:
+            // this column count only feeds the next tab stop, which a
+            // zero-width character must not advance.
             column += ch.width().unwrap_or(0);
         }
     }
@@ -68,6 +71,10 @@ pub(crate) fn expand_tabs_text(content: &str) -> String {
 /// the query didn't capture) becomes an unstyled-foreground span with just
 /// `bg` applied, so the line's background tint is always contiguous even
 /// where token coloring has gaps.
+///
+/// Both arguments are in `content`'s pre-expansion coordinates: this
+/// function applies [`expand_tabs`] itself, so the bytes it slices are not
+/// the bytes the caller passed in (ADR 0061).
 pub(crate) fn styled_content_spans(
     content: &str,
     spans: &[TokenSpan],
