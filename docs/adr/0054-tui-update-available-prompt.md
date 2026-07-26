@@ -1,6 +1,10 @@
 # 0054. TUI: prompt to self-update when a newer release is available
 
-- Status: Accepted
+- Status: partly superseded by
+  [ADR 0062](0062-update-prompt-before-analysis.md) (the confirmation is now
+  offered on the ordinary terminal before analysis, and a successful update
+  re-execs the same command; the background check, the status-line hint, the
+  `u` key, and the post-teardown `run_self_update(true)` call are unchanged)
 - Date: 2026-07-15
 
 ## Context
