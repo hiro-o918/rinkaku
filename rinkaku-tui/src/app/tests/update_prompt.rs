@@ -1,26 +1,25 @@
 use super::empty_report;
 use crate::app::{App, InputKey, JumpCandidate};
 use pretty_assertions::assert_eq;
-use rstest::rstest;
 
-// Update-available prompt tests (ADR 0054, amended to auto-open at
-// startup): `notify_update_available`, `OpenUpdatePrompt`'s gating on
-// `update_available`, and the popup's own `PopupConfirm`/`PopupCancel`
+// Update-available prompt tests (ADR 0054, amended by ADR 0062 to drop
+// the auto-open): `notify_update_available`, `OpenUpdatePrompt`'s gating
+// on `update_available`, and the popup's own `PopupConfirm`/`PopupCancel`
 // handling.
 
 #[test]
-fn should_set_update_available_and_auto_open_prompt_when_notified() {
+fn should_set_update_available_without_opening_prompt_when_notified() {
     let report = empty_report();
     let mut app = App::new(&report);
 
     app.notify_update_available("1.2.3");
 
     assert_eq!(Some("1.2.3"), app.update_available());
-    assert_eq!(true, app.update_prompt_open());
+    assert_eq!(false, app.update_prompt_open());
 }
 
 #[test]
-fn should_not_auto_open_prompt_when_notified_while_help_overlay_is_open() {
+fn should_leave_help_overlay_untouched_when_notified_while_it_is_open() {
     let report = empty_report();
     let mut app = App::new(&report).handle_key(InputKey::ToggleHelp);
 
@@ -32,7 +31,7 @@ fn should_not_auto_open_prompt_when_notified_while_help_overlay_is_open() {
 }
 
 #[test]
-fn should_not_auto_open_prompt_when_notified_while_jump_popup_is_open() {
+fn should_leave_jump_popup_untouched_when_notified_while_it_is_open() {
     let report = empty_report();
     let mut app = App::new(&report).open_jump_popup(vec![JumpCandidate {
         id: "lib.rs::foo".to_string(),
@@ -48,11 +47,10 @@ fn should_not_auto_open_prompt_when_notified_while_jump_popup_is_open() {
 }
 
 #[test]
-fn should_not_reopen_prompt_when_notified_again_after_dismissal() {
+fn should_replace_the_version_without_opening_prompt_when_notified_again() {
     let report = empty_report();
     let mut app = App::new(&report);
     app.notify_update_available("1.2.3");
-    let mut app = app.handle_key(InputKey::PopupCancel);
 
     app.notify_update_available("1.2.4");
 
@@ -75,7 +73,9 @@ fn should_reopen_update_prompt_when_open_update_prompt_is_pressed_after_dismissa
     let report = empty_report();
     let mut app = App::new(&report);
     app.notify_update_available("1.2.3");
-    let app = app.handle_key(InputKey::PopupCancel);
+    let app = app
+        .handle_key(InputKey::OpenUpdatePrompt)
+        .handle_key(InputKey::PopupCancel);
 
     let app = app.handle_key(InputKey::OpenUpdatePrompt);
 
@@ -127,25 +127,4 @@ fn should_ignore_other_keys_while_update_prompt_is_open() {
 
     assert_eq!(true, app.update_prompt_open());
     assert_eq!(false, app.should_quit());
-}
-
-#[rstest]
-#[case::should_open_when_available_and_not_dismissed_and_no_other_modal(true, false, true, true)]
-#[case::should_not_open_when_unavailable(false, false, true, false)]
-#[case::should_not_reopen_when_already_dismissed(true, true, true, false)]
-#[case::should_not_open_when_unavailable_and_dismissed(false, true, true, false)]
-#[case::should_not_open_when_other_modal_active(true, false, false, false)]
-fn should_decide_auto_open_from_availability_dismissal_and_other_modal(
-    #[case] update_available: bool,
-    #[case] update_prompt_dismissed: bool,
-    #[case] no_other_modal_active: bool,
-    #[case] expected: bool,
-) {
-    let actual = super::super::should_auto_open_update_prompt(
-        update_available,
-        update_prompt_dismissed,
-        no_other_modal_active,
-    );
-
-    assert_eq!(expected, actual);
 }
