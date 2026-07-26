@@ -18,6 +18,9 @@
 //!   signature, instead of one `Line` with an embedded `\n`
 //! - `skip_reason` — the skipped-file arm's explanation line, split on
 //!   `row_view::has_no_readable_content` like the entry tree's dimming
+//! - `tab_expansion` — ADR 0061: signature lines reach the buffer with
+//!   their tabs expanded to tab stops, on both the current and the
+//!   changed-signature paths
 
 use super::file_detail_lines;
 use crate::app::{App, BlastRadiusSelection};
@@ -36,6 +39,7 @@ mod scroll_behavior;
 mod signature_view;
 mod size_warning;
 mod skip_reason;
+mod tab_expansion;
 mod wrap_reachability;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {

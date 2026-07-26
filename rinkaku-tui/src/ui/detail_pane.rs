@@ -4,7 +4,7 @@
 //! (`DetailView`, `DirDetail`, `FileDetail`) come from `crate::detail`.
 
 use super::scroll::{Body, render_scrollable_pane};
-use super::style::pane_border_style;
+use super::style::{expand_tabs_text, pane_border_style};
 use crate::app::{App, Focus, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
 use ratatui::Frame;
@@ -307,19 +307,19 @@ pub(crate) fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
             // A multi-line signature (ADR 0060) needs one `Line` per source
             // line — `Line` never splits on an embedded `\n` itself.
             for line in signature.lines() {
-                lines.push(Line::raw(line.to_string()));
+                lines.push(Line::raw(expand_tabs_text(line)));
             }
         }
         SignatureView::Changed { previous, current } => {
             for line in previous.lines() {
                 lines.push(Line::styled(
-                    format!("- {line}"),
+                    format!("- {}", expand_tabs_text(line)),
                     Style::default().fg(Color::Red),
                 ));
             }
             for line in current.lines() {
                 lines.push(Line::styled(
-                    format!("+ {line}"),
+                    format!("+ {}", expand_tabs_text(line)),
                     Style::default().fg(Color::Green),
                 ));
             }
