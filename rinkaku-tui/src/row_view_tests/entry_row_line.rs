@@ -1,4 +1,5 @@
 use super::*;
+use rstest::rstest;
 
 #[test]
 fn should_render_plain_text_for_zero_badges_and_no_classification() {
@@ -100,9 +101,14 @@ fn should_append_skip_reason_for_a_skipped_file_row() {
     assert_eq!("  assets/logo.png  (skipped: binary)", line_text(&line));
 }
 
-#[test]
-fn should_dim_label_for_a_skipped_file_row() {
-    let node = skipped_file_node("assets/logo.png", rinkaku_core::render::SkipReason::Binary);
+#[rstest]
+#[case::binary(rinkaku_core::render::SkipReason::Binary)]
+#[case::deleted(rinkaku_core::render::SkipReason::Deleted)]
+#[case::generated(rinkaku_core::render::SkipReason::Generated)]
+fn should_dim_label_for_a_skipped_file_row_when_the_file_has_no_readable_content(
+    #[case] reason: rinkaku_core::render::SkipReason,
+) {
+    let node = skipped_file_node("assets/logo.png", reason);
     let row = Row {
         node: &node,
         depth: 0,
@@ -117,8 +123,66 @@ fn should_dim_label_for_a_skipped_file_row() {
         false,
     );
 
-    // The label span is the third span: indent, expand marker, label.
-    assert_eq!(Some(Color::DarkGray), line.spans[2].style.fg);
+    assert_eq!(
+        Some(Color::DarkGray),
+        fg_of_span_with_content(&line, "assets/logo.png")
+    );
+}
+
+#[test]
+fn should_not_dim_label_for_a_skipped_file_row_when_the_language_is_unsupported() {
+    let node = skipped_file_node(
+        "deploy/values.yaml",
+        rinkaku_core::render::SkipReason::UnsupportedLanguage,
+    );
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(
+        &row,
+        "deploy/values.yaml",
+        &HashMap::new(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
+        false,
+    );
+
+    assert_eq!(None, fg_of_span_with_content(&line, "deploy/values.yaml"));
+}
+
+#[rstest]
+#[case::unsupported_language(
+    rinkaku_core::render::SkipReason::UnsupportedLanguage,
+    "(skipped: unsupported language)"
+)]
+#[case::binary(rinkaku_core::render::SkipReason::Binary, "(skipped: binary)")]
+#[case::deleted(rinkaku_core::render::SkipReason::Deleted, "(skipped: deleted)")]
+#[case::generated(rinkaku_core::render::SkipReason::Generated, "(skipped: generated)")]
+fn should_dim_skip_reason_annotation_when_a_file_row_is_skipped_for_any_reason(
+    #[case] reason: rinkaku_core::render::SkipReason,
+    #[case] annotation: &str,
+) {
+    let node = skipped_file_node("assets/logo.png", reason);
+    let row = Row {
+        node: &node,
+        depth: 0,
+        expanded: false,
+    };
+
+    let line = entry_row_line(
+        &row,
+        "assets/logo.png",
+        &HashMap::new(),
+        &crate::annotation_markers::AnnotationMarkers::default(),
+        false,
+    );
+
+    assert_eq!(
+        Some(Color::DarkGray),
+        fg_of_span_with_content(&line, annotation)
+    );
 }
 
 #[test]

@@ -16,6 +16,8 @@
 //! - `signature_view` — ADR 0060: `detail_lines`'s `SignatureView`
 //!   rendering pushes one `Line` per source line for a multi-line
 //!   signature, instead of one `Line` with an embedded `\n`
+//! - `skip_reason` — the skipped-file arm's explanation line, split on
+//!   `row_view::has_no_readable_content` like the entry tree's dimming
 
 use super::file_detail_lines;
 use crate::app::{App, BlastRadiusSelection};
@@ -33,6 +35,7 @@ mod content_by_row_kind;
 mod scroll_behavior;
 mod signature_view;
 mod size_warning;
+mod skip_reason;
 mod wrap_reachability;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {

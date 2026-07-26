@@ -156,7 +156,7 @@ pub(crate) fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
             ),
             Style::default().fg(Color::DarkGray),
         ));
-        lines.push(Line::raw("rinkaku did not extract symbols from this file."));
+        lines.push(Line::raw(skip_explanation(reason)));
         return lines;
     }
 
@@ -249,6 +249,17 @@ fn file_size_warning_line(warning: &rinkaku_core::file_size::FileSizeWarning) ->
             "Split: {} lines \u{2014} over the {SPLIT_LINE_THRESHOLD}-line split threshold",
             warning.line_count,
         ),
+    }
+}
+
+/// The sentence under a skipped file's `Skipped: <reason>` line, split on
+/// [`crate::row_view::has_no_readable_content`] so the pane never tells a
+/// reviewer to move on from a file the entry tree still shows undimmed.
+fn skip_explanation(reason: rinkaku_core::render::SkipReason) -> &'static str {
+    if crate::row_view::has_no_readable_content(reason) {
+        "rinkaku did not extract symbols from this file."
+    } else {
+        "rinkaku has no parser for this file type, so review its diff directly."
     }
 }
 

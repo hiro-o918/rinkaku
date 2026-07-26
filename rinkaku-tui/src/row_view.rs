@@ -410,19 +410,30 @@ pub(crate) fn band_style(band: FileSizeBand) -> Style {
     }
 }
 
-/// A `File` row's label style: dimmed for a skipped file (nothing was
-/// extracted from it, so it reads visually as "less relevant" than an
-/// analyzed file, same intent as `symbol_name_style`'s dimming of a removed
-/// symbol), plain otherwise — including a whole-test-file row, which is
-/// still an ordinarily-styled label with its own `[test]` badge rendered
-/// separately (see `test_badge_span`) rather than dimmed, since a test file
-/// is not "uninteresting", just excluded from the default symbol-level view
-/// (ADR 0009).
+/// A `File` row's label style. A whole-test-file row stays undimmed and
+/// carries its own `[test]` badge (see `test_badge_span`) instead, since a
+/// test file is not "uninteresting", just excluded from the default
+/// symbol-level view (ADR 0009).
 fn file_label_style(node: &crate::tree::TreeNode) -> Style {
-    if node.skip_reason.is_some() {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default()
+    match node.skip_reason {
+        Some(reason) if has_no_readable_content(reason) => Style::default().fg(Color::DarkGray),
+        _ => Style::default(),
+    }
+}
+
+/// Whether a skipped file has nothing left for a reviewer to read — what
+/// ADR 0043's "read bright rows, skim dimmed ones" protocol encodes as
+/// dimming. `UnsupportedLanguage` is excluded: lacking a grammar says
+/// nothing about a file's review importance, and dimming it would steer
+/// the reviewer away from the one case rinkaku cannot help with.
+///
+/// `pub(crate)`: `crate::ui::detail_pane` splits on the same distinction.
+pub(crate) fn has_no_readable_content(reason: rinkaku_core::render::SkipReason) -> bool {
+    match reason {
+        rinkaku_core::render::SkipReason::UnsupportedLanguage => false,
+        rinkaku_core::render::SkipReason::Binary
+        | rinkaku_core::render::SkipReason::Deleted
+        | rinkaku_core::render::SkipReason::Generated => true,
     }
 }
 
