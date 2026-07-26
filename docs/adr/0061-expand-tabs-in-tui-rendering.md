@@ -69,12 +69,9 @@ width, and that width matches what the terminal will draw.
 ### Why true tab stops, and why 4
 
 A tab is a *move to the next tab stop*, not an *insert N spaces*. Column
-position determines how far it advances. Honoring that matters here
-beyond pedantry: `gofmt` uses tabs **mid-line** — to align struct field
-types and trailing comments into columns — not only for leading
-indentation. Expanding each tab to a fixed run of spaces would break
-exactly the alignment the author's formatter created, turning tidy
-columns into ragged ones. True tab stops preserve the alignment intent.
+position determines how far it advances, and honoring that is what makes
+the rendered line match how the same file looks in the author's editor —
+which is the whole point of expanding at all.
 
 Width 4 rather than the traditional 8 is driven by the split view.
 `MIN_SPLIT_VIEW_WIDTH` is 100 columns, leaving roughly 49 usable columns
@@ -88,13 +85,11 @@ conventional editor default.
 **Expand only inside `gap_span`.** The minimal change: leave `content`
 and the token offsets untouched, and expand tabs only in the
 uncaptured-byte spans, where leading indentation usually lands. Rejected
-on two counts. First, it is not reliably true that indentation falls in
-a gap — a tree-sitter capture may begin at byte 0 of a line, which pulls
-the leading whitespace inside a token's range where `gap_span` never
-sees it. Second, it cannot handle `gofmt`'s mid-line alignment tabs,
-which sit between tokens whose surrounding capture coverage varies by
-grammar. The premise "indentation is always in a gap" does not hold, so
-the fix would be correct only by coincidence.
+because it is not reliably true that indentation falls in a gap — a
+tree-sitter capture may begin at byte 0 of a line, which pulls the
+leading whitespace inside a token's range where `gap_span` never sees
+it. The premise "indentation is always in a gap" does not hold, so the
+fix would be correct only by coincidence.
 
 **Expand at ingestion, in `crate::source` and the diff parser.**
 Normalizing tabs when file content and hunks are first read would place
