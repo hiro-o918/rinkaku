@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.17](https://github.com/hiro-o918/rinkaku/compare/v0.6.16...v0.6.17) (2026-07-26)
+
+
+### Features
+
+* preserve line structure in displayed signatures ([#187](https://github.com/hiro-o918/rinkaku/issues/187)) ([7374f79](https://github.com/hiro-o918/rinkaku/commit/7374f797601839f038ade0ed133ecf00f86d5f85))
+
+
+### Miscellaneous
+
+* release main ([#184](https://github.com/hiro-o918/rinkaku/issues/184)) ([2ca8589](https://github.com/hiro-o918/rinkaku/commit/2ca8589d947227e30e70118bc9b4442b63f5f204))
+
 ## [0.6.16](https://github.com/hiro-o918/rinkaku/compare/v0.6.15...v0.6.16) (2026-07-26)
 
 
