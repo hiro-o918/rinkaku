@@ -2182,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "rinkaku"
-version = "0.6.16"
+version = "0.6.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "rinkaku-core"
-version = "0.6.15"
+version = "0.6.16"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2220,7 +2220,7 @@ dependencies = [
 
 [[package]]
 name = "rinkaku-tui"
-version = "0.6.15"
+version = "0.6.16"
 dependencies = [
  "crossterm",
  "pretty_assertions",
