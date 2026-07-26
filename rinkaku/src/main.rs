@@ -53,6 +53,7 @@ mod progress;
 mod self_update;
 mod spinner;
 mod splash_progress;
+mod update_prompt;
 
 #[cfg(test)]
 mod test_util;
@@ -174,6 +175,15 @@ fn main() -> anyhow::Result<()> {
             } else {
                 None
             };
+            // ADR 0062: the confirmation is offered here — on the ordinary
+            // terminal, before the alternate screen opens and before the
+            // ~1.9s analysis an accepted update would otherwise discard.
+            // Accepting never returns from this call (the process re-execs
+            // itself with the updated binary).
+            let update_check = match update_prompt::offer_pre_analysis_update(update_check)? {
+                update_prompt::PreAnalysisOutcome::NotAsked(receiver) => receiver,
+                update_prompt::PreAnalysisOutcome::Declined => None,
+            };
 
             // No stderr spinner in this branch (ADR 0033 decision 1): the
             // splash screen drawn on the alternate screen is this run's
@@ -290,8 +300,10 @@ fn main() -> anyhow::Result<()> {
             release_log_sink(&log_sink);
             flush_notes(buffered_notes);
             let update_requested = run_result.map_err(anyhow::Error::from)?;
-            // ADR 0054: the update itself runs only after the block above
-            // has already restored the terminal — `yes: true` since the
+            // ADR 0054: reached only when the pre-analysis prompt did not
+            // run (ADR 0062) and the reviewer opened the popup with `u`
+            // instead. The update runs only after the block above has
+            // already restored the terminal — `yes: true` since the
             // reviewer already confirmed inside the TUI's own popup, so
             // `run_self_update` skips straight to downloading rather than
             // prompting a second time on the now-restored terminal.
