@@ -31,6 +31,7 @@ mod header_lines;
 mod row_kinds;
 mod split_view;
 mod styling;
+mod tab_expansion;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {
     ExtractedSymbol {
