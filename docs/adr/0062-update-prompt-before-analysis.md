@@ -80,18 +80,40 @@ missed for weeks, and a pre-analysis terminal prompt cannot be missed.
 `PopupConfirm`/`PopupCancel` handling all stay — the popup is still
 reachable via `u`.
 
-**A successful update re-execs the same command.** After
-`run_self_update` reports success, `main` replaces the current process
-image with the freshly installed binary, passing `std::env::args_os()`
-through unchanged, so the reviewer gets the analysis they asked for
-instead of a "please run it again" message. On Unix this is
-`std::os::unix::process::CommandExt::exec`, which never returns on
-success and therefore cannot loop: the new image starts from `main`
-with a *newer* version, so its own check finds nothing newer and no
-second prompt is possible. On non-Unix targets (none are built today —
-see `build-and-publish.yaml`'s target list) the `#[cfg(not(unix))]`
-fallback prints the same "updated, re-run rinkaku" message the old flow
-effectively produced.
+**An update that actually replaced the binary re-execs the same
+command.** `main` replaces the current process image with the freshly
+installed binary, passing `std::env::args_os()` through unchanged, so
+the reviewer gets the analysis they asked for instead of a "please run
+it again" message. On Unix this is
+`std::os::unix::process::CommandExt::exec`; on non-Unix targets (none
+are built today — see `build-and-publish.yaml`'s target list) the
+`#[cfg(not(unix))]` fallback prints the same "updated, re-run rinkaku"
+message the old flow effectively produced.
+
+The re-exec is gated on the update having *happened*, not on
+`run_self_update` merely having succeeded. `run_self_update` returns
+`Ok` without updating on three paths (the version comparison finds
+nothing newer, the confirmation is cancelled, and `updater.update()`
+reports `updated() == false`), and re-execing on any of them would put
+the *same* version back at `main`, where it would find the same release
+newer and ask the same question again — a loop for as long as the user
+keeps answering `y`. So `run_self_update` returns an `UpdateOutcome`
+(`Updated` / `NotUpdated`) rather than `()`, and only `Updated` reaches
+the `exec`; `NotUpdated` falls through to analysis exactly like a
+declined prompt. The mapping is the pure `decide_after_update`, unit
+tested for both outcomes.
+
+**`exec` runs no destructors, so the deferred log sink is drained
+explicitly before it.** ADR 0033's `--tui` branch buffers `log::`
+records in a `DeferredLogSink` and relies on a `ReleaseGuard`'s `Drop`
+as its safety net for abrupt exits. Replacing the process image skips
+every `Drop` in the stack, that guard included, so anything buffered
+during the pre-analysis check (`run_self_update` does network IO, and
+its dependencies may log) would vanish silently. `main` therefore hands
+`offer_pre_analysis_update` a `before_reexec` callback that releases
+the sink, invoked on the accept-and-updated path only — the paths that
+continue into the TUI must keep deferring until the alternate screen is
+gone.
 
 **stdin-piped input can never reach the re-exec.** `gh pr diff 123 |
 rinkaku` consumes stdin on the way in; a re-exec'd process would find
@@ -152,8 +174,17 @@ skip the check (and therefore this whole path) entirely.
   closed, which is what ADR 0054's original tests asserted.
 - `run_self_update`'s own confirmation is untouched — the pre-analysis
   prompt is a separate, differently-worded question asked at a
-  different time, and the subsequent `run_self_update(true)` call still
-  skips the redundant second prompt exactly as ADR 0054 arranged.
+  different time, and the subsequent `run_self_update(true, ..)` call
+  still skips the redundant second prompt exactly as ADR 0054 arranged.
+  Its signature does change: it takes an `Announcement` (so the
+  pre-analysis caller, which already printed the version, can suppress
+  the duplicate "New release found" line) and returns `UpdateOutcome`.
+  The `self-update` subcommand and the TUI's `u` path both pass
+  `Announcement::Print` and ignore the outcome, keeping their output
+  and behavior identical.
+- `is_affirmative` is shared rather than duplicated: `update_prompt`
+  calls `self_update`'s, so there is one rule for what counts as
+  consent to replace the running binary.
 - No output format changed. `docs/tui.md`, `docs/cli.md`, and
   `README.md` are updated to describe the new confirmation point; the
   `?` help overlay's `U` row is unchanged, since the key still does the

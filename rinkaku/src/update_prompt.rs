@@ -8,7 +8,7 @@
 //! function ([`decide_pre_analysis_prompt`]); the channel receive, the
 //! terminal read, and the `exec` are the thin IO shell around it.
 
-use crate::self_update;
+use crate::self_update::{self, Announcement, UpdateOutcome};
 use anyhow::Result;
 use std::io::{IsTerminal, Write};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -39,26 +39,38 @@ fn decide_pre_analysis_prompt(update_available: bool, stdin_is_tty: bool) -> Pre
     }
 }
 
-/// Requires an explicit `y`/`yes`, matching `self_update`'s own
-/// `is_affirmative`, so a stray newline can never be read as consent to
-/// replace the running binary.
-fn is_affirmative(answer: &str) -> bool {
-    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
-}
-
-pub(crate) enum PreAnalysisOutcome {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PreAnalysisOutcome<R = Receiver<String>> {
     /// The receiver is handed back when it may still deliver, so the
     /// TUI's status-line hint and `u` key remain the fallback path.
-    NotAsked(Option<Receiver<String>>),
+    NotAsked(Option<R>),
     /// The receiver is deliberately dropped, so the TUI cannot ask the
     /// same question a second time in one run.
     Declined,
 }
 
-/// Accepting never returns: the update runs and the process re-execs
-/// itself (see [`update_and_reexec`]).
+impl PreAnalysisOutcome {
+    /// A `Debug + PartialEq` stand-in for whole-value assertions, which
+    /// `Receiver` blocks by implementing neither usefully.
+    #[cfg(test)]
+    fn shape(&self) -> PreAnalysisOutcome<()> {
+        match self {
+            Self::NotAsked(receiver) => PreAnalysisOutcome::NotAsked(receiver.as_ref().map(|_| ())),
+            Self::Declined => PreAnalysisOutcome::Declined,
+        }
+    }
+}
+
+/// Accepting runs the update and, *only if the binary was actually
+/// replaced*, re-execs — in which case this never returns. An accepted
+/// prompt that ends up not updating (the release vanished, the crate
+/// reported no change) falls through to analysis like a declined one.
+///
+/// `before_reexec` runs on the one path this function does not return
+/// from; see [`reexec_current_command`].
 pub(crate) fn offer_pre_analysis_update(
     update_check: Option<Receiver<String>>,
+    before_reexec: impl FnOnce(),
 ) -> Result<PreAnalysisOutcome> {
     let Some(receiver) = update_check else {
         return Ok(PreAnalysisOutcome::NotAsked(None));
@@ -82,22 +94,45 @@ pub(crate) fn offer_pre_analysis_update(
     std::io::stdout().flush()?;
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
-    if !is_affirmative(&answer) {
+    if !self_update::is_affirmative(&answer) {
         return Ok(PreAnalysisOutcome::Declined);
     }
 
-    update_and_reexec()
+    update_and_reexec(before_reexec)
 }
 
-/// `yes: true` since the question was already answered above. On success
-/// the `exec` never returns, so there is no re-check loop to guard
-/// against: the replacement image is a newer version, and its own check
-/// finds nothing newer.
-fn update_and_reexec() -> Result<PreAnalysisOutcome> {
-    self_update::run_self_update(true)?;
-    reexec_current_command()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AfterUpdate {
+    Reexec,
+    ContinueToAnalysis,
 }
 
+/// Re-execing on a merely *successful* `run_self_update` rather than an
+/// *updating* one would loop: the replacement image would be the same
+/// version, would find the same release newer, and would ask again.
+fn decide_after_update(outcome: UpdateOutcome) -> AfterUpdate {
+    match outcome {
+        UpdateOutcome::Updated => AfterUpdate::Reexec,
+        UpdateOutcome::NotUpdated => AfterUpdate::ContinueToAnalysis,
+    }
+}
+
+/// `yes: true` since the question was already answered above, and
+/// `AlreadyAnnounced` since the version was printed above too.
+fn update_and_reexec(before_reexec: impl FnOnce()) -> Result<PreAnalysisOutcome> {
+    let outcome = self_update::run_self_update(true, Announcement::AlreadyAnnounced)?;
+    match decide_after_update(outcome) {
+        AfterUpdate::Reexec => {
+            before_reexec();
+            reexec_current_command()
+        }
+        AfterUpdate::ContinueToAnalysis => Ok(PreAnalysisOutcome::NotAsked(None)),
+    }
+}
+
+/// `exec` replaces the process image, so no `Drop` in this thread's stack
+/// ever runs. Whatever needs releasing must be released before this call,
+/// which is what `offer_pre_analysis_update`'s `before_reexec` is for.
 #[cfg(unix)]
 fn reexec_current_command() -> Result<PreAnalysisOutcome> {
     use std::os::unix::process::CommandExt;
@@ -145,35 +180,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::should_accept_lowercase_y("y", true)]
-    #[case::should_accept_uppercase_y("Y", true)]
-    #[case::should_accept_lowercase_yes("yes", true)]
-    #[case::should_accept_mixed_case_yes("Yes", true)]
-    #[case::should_accept_y_with_surrounding_whitespace("  y  \n", true)]
-    #[case::should_reject_empty_string("", false)]
-    #[case::should_reject_whitespace_only_string("   \n", false)]
-    #[case::should_reject_n("n", false)]
-    #[case::should_reject_no("no", false)]
-    #[case::should_reject_y_as_prefix_of_longer_word("yesterday", false)]
-    fn should_check_is_affirmative(#[case] answer: &str, #[case] expected: bool) {
-        let actual = is_affirmative(answer);
+    #[case::should_reexec_when_the_binary_was_replaced(UpdateOutcome::Updated, AfterUpdate::Reexec)]
+    #[case::should_continue_to_analysis_when_nothing_was_replaced(
+        UpdateOutcome::NotUpdated,
+        AfterUpdate::ContinueToAnalysis
+    )]
+    fn should_decide_what_follows_an_accepted_update(
+        #[case] outcome: UpdateOutcome,
+        #[case] expected: AfterUpdate,
+    ) {
+        let actual = decide_after_update(outcome);
 
         assert_eq!(expected, actual);
     }
 
     #[test]
-    fn should_wait_at_most_300ms_for_the_background_check() {
-        assert_eq!(Duration::from_millis(300), CHECK_WAIT);
-    }
-
-    #[test]
     fn should_not_ask_when_there_is_no_version_check_at_all() {
-        let actual = offer_pre_analysis_update(None);
+        let actual = offer_pre_analysis_update(None, || {}).expect("offer");
 
-        assert_eq!(
-            true,
-            matches!(actual, Ok(PreAnalysisOutcome::NotAsked(None)))
-        );
+        assert_eq!(PreAnalysisOutcome::NotAsked(None), actual.shape());
     }
 
     #[test]
@@ -182,12 +207,12 @@ mod tests {
         // takes the `Timeout` branch rather than `Disconnected`.
         let (sender, receiver) = std::sync::mpsc::channel::<String>();
 
-        let actual = offer_pre_analysis_update(Some(receiver));
+        let started_at = std::time::Instant::now();
+        let actual = offer_pre_analysis_update(Some(receiver), || {}).expect("offer");
+        let waited = started_at.elapsed();
 
-        assert_eq!(
-            true,
-            matches!(actual, Ok(PreAnalysisOutcome::NotAsked(Some(_))))
-        );
+        assert_eq!(PreAnalysisOutcome::NotAsked(Some(())), actual.shape());
+        assert_eq!(true, waited >= CHECK_WAIT, "waited {waited:?}");
         drop(sender);
     }
 
@@ -196,12 +221,9 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel::<String>();
         drop(sender);
 
-        let actual = offer_pre_analysis_update(Some(receiver));
+        let actual = offer_pre_analysis_update(Some(receiver), || {}).expect("offer");
 
-        assert_eq!(
-            true,
-            matches!(actual, Ok(PreAnalysisOutcome::NotAsked(None)))
-        );
+        assert_eq!(PreAnalysisOutcome::NotAsked(None), actual.shape());
     }
 
     // `cargo test` runs with a non-TTY stdin, which is exactly the state
@@ -213,11 +235,8 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel::<String>();
         sender.send("9.9.9".to_string()).expect("send");
 
-        let actual = offer_pre_analysis_update(Some(receiver));
+        let actual = offer_pre_analysis_update(Some(receiver), || {}).expect("offer");
 
-        assert_eq!(
-            true,
-            matches!(actual, Ok(PreAnalysisOutcome::NotAsked(None)))
-        );
+        assert_eq!(PreAnalysisOutcome::NotAsked(None), actual.shape());
     }
 }
