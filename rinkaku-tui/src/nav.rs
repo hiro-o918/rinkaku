@@ -274,7 +274,10 @@ impl Nav {
                 return self;
             }
             Action::CursorTop => {
-                self.cursor = 0;
+                let row_count = self.rows(tree).len();
+                if row_count > 0 {
+                    self.cursor = 0;
+                }
                 return self;
             }
             Action::CursorBottom => {

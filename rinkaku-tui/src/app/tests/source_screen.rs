@@ -63,11 +63,11 @@ fn should_scroll_source_screen_and_not_move_tree_cursor_when_down_is_pressed() {
     let app = App::new(&report)
         .handle_key(InputKey::Down)
         .handle_key(InputKey::Source);
-    let cursor_before = app.nav().cursor();
+    let nav_before = app.nav().clone();
 
     let app = app.handle_key(InputKey::Down);
 
-    assert_eq!(cursor_before, app.nav().cursor());
+    assert_eq!(&nav_before, app.nav());
     assert_eq!(
         Screen::Source {
             symbol_id: "lib.rs::foo".to_string(),
@@ -256,6 +256,11 @@ fn should_leave_right_pane_scroll_untouched_when_focus_tree_and_scroll_half_page
 // `report_with_two_directories` (6 rows: a(0), a/one.rs(1), foo(2), b(3),
 // b/two.rs(4), bar(5)) so half-page motion has more than one row of
 // headroom to exercise.
+//
+// Each assert compares the whole `Nav` against `App::with_nav_cursor`'s
+// (cursor moved, collapse state untouched), not just the cursor index —
+// a scroll key that corrupted collapse state on the way would otherwise
+// pass.
 
 #[test]
 fn should_move_tree_cursor_down_by_half_viewport_when_focus_tree_scroll_half_page_down() {
@@ -267,7 +272,8 @@ fn should_move_tree_cursor_down_by_half_viewport_when_focus_tree_scroll_half_pag
     // Viewport height 4 -> step size 2.
     let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 4);
 
-    assert_eq!(2, app.nav().cursor());
+    let expected = App::new(&report).with_nav_cursor(2);
+    assert_eq!(expected.nav(), app.nav());
 }
 
 #[test]
@@ -277,7 +283,8 @@ fn should_clamp_tree_cursor_to_last_row_when_focus_tree_scroll_half_page_down_ov
 
     let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 100);
 
-    assert_eq!(5, app.nav().cursor());
+    let expected = App::new(&report).with_nav_cursor(5);
+    assert_eq!(expected.nav(), app.nav());
 }
 
 #[rstest]
@@ -292,7 +299,8 @@ fn should_move_tree_cursor_by_one_row_when_viewport_is_too_short_for_a_half_page
 
     let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, viewport_height);
 
-    assert_eq!(1, app.nav().cursor());
+    let expected = App::new(&report).with_nav_cursor(1);
+    assert_eq!(expected.nav(), app.nav());
 }
 
 #[test]
@@ -304,7 +312,8 @@ fn should_move_tree_cursor_up_by_half_viewport_when_focus_tree_scroll_half_page_
     // Viewport height 4 -> step size 2.
     let app = app.handle_scroll_key(InputKey::ScrollHalfPageUp, 4);
 
-    assert_eq!(3, app.nav().cursor());
+    let expected = App::new(&report).with_nav_cursor(3);
+    assert_eq!(expected.nav(), app.nav());
 }
 
 #[test]
@@ -315,7 +324,8 @@ fn should_move_tree_cursor_to_first_row_when_focus_tree_scroll_to_top() {
 
     let app = app.handle_scroll_key(InputKey::ScrollToTop, 4);
 
-    assert_eq!(0, app.nav().cursor());
+    let expected = App::new(&report).with_nav_cursor(0);
+    assert_eq!(expected.nav(), app.nav());
 }
 
 #[test]
@@ -326,7 +336,8 @@ fn should_move_tree_cursor_to_last_row_when_focus_tree_scroll_to_bottom() {
 
     let app = app.handle_scroll_key(InputKey::ScrollToBottom, 4);
 
-    assert_eq!(5, app.nav().cursor());
+    let expected = App::new(&report).with_nav_cursor(5);
+    assert_eq!(expected.nav(), app.nav());
 }
 
 #[test]

@@ -669,12 +669,17 @@ fn should_confirm_and_jump_the_tree_cursor_to_first_match_on_entry_screen() {
 
     let actual = dispatch_search_confirm(app, None);
 
-    assert_eq!(
-        Some("foo".to_string()),
-        actual.search().query().map(str::to_string)
-    );
-    assert_eq!(&[1], actual.search().matches());
-    assert_eq!(1, actual.nav().cursor());
+    // The whole confirmed `SearchState` (query, matches, current match),
+    // built by confirming against the same row texts the dispatch sees.
+    let expected_search = crate::search::SearchState::default()
+        .start()
+        .push_char('f')
+        .push_char('o')
+        .push_char('o')
+        .confirm(&["lib.rs".to_string(), "foo".to_string()], 0);
+    assert_eq!(&expected_search, actual.search());
+    let expected_nav = App::new(&report).with_nav_cursor(1);
+    assert_eq!(expected_nav.nav(), actual.nav());
 }
 
 #[test]
@@ -684,9 +689,9 @@ fn should_leave_the_tree_cursor_untouched_when_confirming_a_tree_search_with_no_
         .handle_key(InputKey::SearchStart)
         .handle_key(InputKey::SearchChar('z'))
         .handle_key(InputKey::SearchChar('z'));
-    assert_eq!(0, app.nav().cursor());
+    let nav_before = app.nav().clone();
 
     let actual = dispatch_search_confirm(app, None);
 
-    assert_eq!(0, actual.nav().cursor());
+    assert_eq!(&nav_before, actual.nav());
 }
