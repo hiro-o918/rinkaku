@@ -30,13 +30,15 @@ impl PrArg {
 /// Extracts a validated `--pr` argument: either a bare number (`"76"`) or
 /// a GitHub PR URL
 /// (`https://github.com/<owner>/<repo>/pull/<number>`, tolerating a
-/// trailing slash or extra path segments like `/files`).
+/// trailing slash, extra path segments like `/files`, an `http://`
+/// scheme, and any capitalization of the scheme/host — browsers and chat
+/// clients produce all of these, and rejecting them helps no one).
 ///
 /// `0` is rejected even though it parses as a `u64`: GitHub PR numbers
 /// are 1-indexed, so `0` can only be a typo, and failing fast here beats
 /// a confusing `gh pr view 0` error downstream.
 pub(crate) fn parse_pr_arg(value: &str) -> anyhow::Result<PrArg> {
-    match value.trim().strip_prefix("https://github.com/") {
+    match strip_github_url_prefix(value.trim()) {
         Some(rest) => {
             // Expect `<owner>/<repo>/pull/<number>[/...]`.
             let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
@@ -57,6 +59,19 @@ pub(crate) fn parse_pr_arg(value: &str) -> anyhow::Result<PrArg> {
             value,
         )?)),
     }
+}
+
+/// Strips a GitHub PR URL's `http(s)://github.com/` prefix, matching the
+/// scheme and host case-insensitively while leaving the returned
+/// owner/repo path slice untouched (owner/repo capitalization is
+/// preserved for display; matching against a clone's `origin` is
+/// case-insensitive anyway, per `super::remote::github_remote_matches`).
+/// `None` when `value` does not start with either prefix.
+fn strip_github_url_prefix(value: &str) -> Option<&str> {
+    let lower = value.to_ascii_lowercase();
+    ["https://github.com/", "http://github.com/"]
+        .iter()
+        .find_map(|prefix| lower.starts_with(prefix).then(|| &value[prefix.len()..]))
 }
 
 /// Parses `candidate` as a positive `u64` PR number, reporting errors
@@ -102,6 +117,22 @@ mod tests {
         PrArg::Url {
             owner: "octocat".to_string(),
             repo: "hello-world".to_string(),
+            number: 123,
+        }
+    )]
+    #[case::should_parse_http_pull_url(
+        "http://github.com/octocat/hello-world/pull/123",
+        PrArg::Url {
+            owner: "octocat".to_string(),
+            repo: "hello-world".to_string(),
+            number: 123,
+        }
+    )]
+    #[case::should_parse_mixed_case_scheme_and_host_preserving_owner_and_repo_case(
+        "HTTPS://GitHub.com/Octocat/Hello-World/pull/123",
+        PrArg::Url {
+            owner: "Octocat".to_string(),
+            repo: "Hello-World".to_string(),
             number: 123,
         }
     )]

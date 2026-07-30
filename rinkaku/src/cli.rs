@@ -34,7 +34,8 @@ pub(crate) struct Cli {
     /// number (`76`). A bare number must be run inside a local clone of
     /// the target repository; a URL also works from any other directory
     /// by auto-cloning into a cache. Requires `gh` installed and
-    /// authenticated.
+    /// authenticated. Mutually exclusive with `--base`/`--head`, which
+    /// diff local refs instead.
     // See ADR 0004 for the resolve-then-fetch design and ADR 0005 for the
     // auto-clone-into-cache behavior this drives in `main`.
     #[arg(long)]

@@ -70,7 +70,7 @@ use github::base_sha::{
     fetch_branch_head, fetch_oid, fetch_pr_head, object_exists_locally, resolve_pr_base_sha,
 };
 use github::pr_arg::{PrArg, parse_pr_arg};
-use github::pr_info::fetch_pr_info;
+use github::pr_info::{ensure_fetched_head_matches, fetch_pr_info};
 use github::remote::{git_remote_origin_url, parse_github_remote};
 use github::review::GhReviewSubmitter;
 use github::workdir::resolve_pr_workdir;
@@ -450,15 +450,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         log::debug!("fetching PR #{number} head");
         let head_sha = fetch_pr_head(number, cwd)?;
         pr_head_sha = Some(head_sha.clone());
-        if head_sha != pr_info.head_ref_oid {
-            anyhow::bail!(
-                "fetched PR #{number} head ({head_sha}) does not match `gh`'s reported head \
-                 ({expected}); this usually means the PR belongs to a different repository than \
-                 the target clone's `origin` remote, or the PR was updated between resolving it \
-                 and fetching it — verify `origin` points at the PR's repository and re-run",
-                expected = pr_info.head_ref_oid,
-            );
-        }
+        ensure_fetched_head_matches(number, &head_sha, &pr_info.head_ref_oid)?;
         log::debug!("resolving PR #{number} base commit");
         let (base_sha, used_fallback) = resolve_pr_base_sha(
             &pr_info.base_ref_oid,

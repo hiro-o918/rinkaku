@@ -24,6 +24,30 @@ pub(crate) fn parse_pr_view_json(json: &str) -> anyhow::Result<PrInfo> {
     Ok(serde_json::from_str(json)?)
 }
 
+/// Checks that the head commit `git fetch refs/pull/<number>/head`
+/// actually retrieved (`fetched_head`) is the one `gh pr view` reported
+/// (`reported_head`). A mismatch usually means the PR belongs to a
+/// different repository than the target clone's `origin` remote (see
+/// [`fetch_pr_info`]'s doc comment on why `gh` and `git` are deliberately
+/// allowed to disagree so this check can catch it), or that the PR was
+/// updated between resolving and fetching. Extracted from `main` as a
+/// pure function so the check is unit-testable without `gh`/`git`.
+pub(crate) fn ensure_fetched_head_matches(
+    number: u64,
+    fetched_head: &str,
+    reported_head: &str,
+) -> anyhow::Result<()> {
+    if fetched_head == reported_head {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "fetched PR #{number} head ({fetched_head}) does not match `gh`'s reported head \
+         ({reported_head}); this usually means the PR belongs to a different repository than \
+         the target clone's `origin` remote, or the PR was updated between resolving it \
+         and fetching it — verify `origin` points at the PR's repository and re-run",
+    );
+}
+
 /// Runs `gh pr view <arg> --json number,baseRefName,baseRefOid,headRefOid`
 /// and parses the result.
 ///
@@ -88,5 +112,26 @@ mod tests {
         let actual = parse_pr_view_json(json);
 
         assert!(actual.is_err());
+    }
+
+    #[test]
+    fn should_accept_fetched_head_when_it_matches_the_reported_head() {
+        let actual = ensure_fetched_head_matches(76, "abc123", "abc123");
+
+        assert!(actual.is_ok());
+    }
+
+    #[test]
+    fn should_reject_fetched_head_with_a_repository_hint_when_it_differs_from_the_reported_head() {
+        let actual = ensure_fetched_head_matches(76, "abc123", "def456");
+
+        let message = actual.expect_err("expected a mismatch error").to_string();
+        assert_eq!(
+            "fetched PR #76 head (abc123) does not match `gh`'s reported head (def456); this \
+             usually means the PR belongs to a different repository than the target clone's \
+             `origin` remote, or the PR was updated between resolving it and fetching it — \
+             verify `origin` points at the PR's repository and re-run",
+            message
+        );
     }
 }
