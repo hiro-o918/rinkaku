@@ -641,6 +641,11 @@ impl App {
                         self.nav = nav;
                         self.right_pane_scroll = entry.right_pane_scroll;
                         preserve_scroll_after_jump = true;
+                        // Restoring a jumplist entry can expand collapsed
+                        // ancestors, reshaping the row list a confirmed tree
+                        // search's frozen indices were built against — same
+                        // invariant as `App::jump_to_symbol`'s own cancel.
+                        self.search = self.search.clone().cancel();
                     } else {
                         self.status = Some(format!(
                             "note: symbol {} is no longer present",
@@ -665,6 +670,9 @@ impl App {
                         self.nav = nav;
                         self.right_pane_scroll = entry.right_pane_scroll;
                         preserve_scroll_after_jump = true;
+                        // Same reshaping invariant as the `JumpBack` arm
+                        // above.
+                        self.search = self.search.clone().cancel();
                     } else {
                         self.status = Some(format!(
                             "note: symbol {} is no longer present",

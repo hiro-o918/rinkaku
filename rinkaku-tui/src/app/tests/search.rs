@@ -8,7 +8,9 @@
 //! `Screen::Entry` + `Focus::Tree` instead, and staying a no-op on
 //! `Focus::Right`, and the search being cancelled by every key that
 //! reshapes the tree's row list or leaves the entry screen (the frozen
-//! row-index invariant `App::handle_key`'s `Select` arm documents).
+//! row-index invariant `App::handle_key`'s `Select` arm documents),
+//! including successful `gd`/`gr` jumps (`App::jump_to_symbol`) and
+//! jumplist restores, which can expand collapsed ancestors.
 //! `App::with_nav_cursor` (the tree-search jump primitive) is also pinned
 //! here, alongside the dispatch it backs.
 
@@ -312,6 +314,73 @@ fn should_clear_a_confirmed_tree_search_when_open_expands_a_directory_row() {
     assert_eq!(Focus::Tree, app.focus());
 
     let actual = app.handle_key(InputKey::Open);
+
+    assert_eq!(&SearchState::default(), actual.search());
+}
+
+#[test]
+fn should_clear_a_confirmed_tree_search_when_jump_to_symbol_expands_a_collapsed_ancestor() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report).handle_key(InputKey::CollapseAll);
+    let search = SearchState::default()
+        .start()
+        .push_char('a')
+        .confirm(&["a".to_string(), "b".to_string()], 0);
+    let app = app.with_search(search);
+    assert_eq!(Some("a"), app.search().query());
+
+    let actual = app.jump_to_symbol("b/two.rs::bar");
+
+    assert_eq!(&SearchState::default(), actual.search());
+}
+
+#[test]
+fn should_keep_a_confirmed_tree_search_when_jump_to_symbol_target_does_not_exist() {
+    let report = super::report_with_two_directories();
+    let search = SearchState::default()
+        .start()
+        .push_char('a')
+        .confirm(&["a".to_string(), "b".to_string()], 0);
+    let expected = search.clone();
+    let app = App::new(&report).with_search(search);
+
+    let actual = app.jump_to_symbol("no/such::id");
+
+    assert_eq!(&expected, actual.search());
+}
+
+#[test]
+fn should_clear_a_confirmed_tree_search_when_jump_back_expands_a_collapsed_ancestor() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report)
+        .with_nav_cursor(2)
+        .jump_to_symbol("b/two.rs::bar")
+        .handle_key(InputKey::CollapseAll);
+    let search = SearchState::default()
+        .start()
+        .push_char('a')
+        .confirm(&["a".to_string(), "b".to_string()], 0);
+    let app = app.with_search(search);
+
+    let actual = app.handle_key(InputKey::JumpBack);
+
+    assert_eq!(&SearchState::default(), actual.search());
+}
+
+#[test]
+fn should_clear_a_confirmed_tree_search_when_jump_forward_restores_a_jump() {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report)
+        .with_nav_cursor(2)
+        .jump_to_symbol("b/two.rs::bar")
+        .handle_key(InputKey::JumpBack);
+    let search = SearchState::default()
+        .start()
+        .push_char('o')
+        .confirm(&["foo".to_string(), "bar".to_string()], 0);
+    let app = app.with_search(search);
+
+    let actual = app.handle_key(InputKey::JumpForward);
 
     assert_eq!(&SearchState::default(), actual.search());
 }

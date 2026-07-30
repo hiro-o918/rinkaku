@@ -843,6 +843,14 @@ impl App {
     /// expected to have already confirmed the id exists via
     /// `crate::detail::symbol_mentions`, but `App` does not trust that
     /// blindly).
+    ///
+    /// A successful jump also cancels any confirmed tree search: expanding
+    /// collapsed ancestors reshapes the visible row list a confirmed
+    /// search's frozen row indices were built against — the same invariant
+    /// `Self::handle_key`'s `Select`/`ExpandAll`/`CollapseAll`/`ToggleOrder`
+    /// arms enforce (ADR 0057 decision 2's "cancel means stop searching
+    /// altogether"). The failed-jump early return above deliberately keeps
+    /// the search: nothing moved, so the frozen indices are still valid.
     pub fn jump_to_symbol(mut self, symbol_id: &str) -> Self {
         let current_id = self.selected_symbol_id().map(str::to_string);
 
@@ -861,6 +869,7 @@ impl App {
         }
         self.nav = nav;
         self.right_pane_scroll = 0;
+        self.search = self.search.clone().cancel();
         self
     }
 
