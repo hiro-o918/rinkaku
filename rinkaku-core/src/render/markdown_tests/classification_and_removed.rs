@@ -141,6 +141,7 @@ fn should_render_line_based_diff_block_when_multiline_signature_changed() {
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],

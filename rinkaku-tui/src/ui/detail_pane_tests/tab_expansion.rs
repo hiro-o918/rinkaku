@@ -29,6 +29,7 @@ fn draw_detail_for_signature(signature: &str, previous_signature: Option<&str>) 
         },
         tests: vec![],
         fan_ins: vec![],
+        test_coverage: vec![],
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],

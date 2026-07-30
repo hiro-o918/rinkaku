@@ -510,6 +510,7 @@ mod tests {
             },
             tests: vec![],
             fan_ins: vec![],
+            test_coverage: vec![],
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
@@ -553,6 +554,7 @@ mod tests {
   },
   \"tests\": [],
   \"fan_ins\": [],
+  \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
   \"removed\": []
