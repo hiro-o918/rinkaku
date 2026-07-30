@@ -284,8 +284,22 @@ this per-row text; `crate::search::find_matches`/`SearchState` are reused
 completely unchanged — `MatchLine` is already just "an index into
 whatever flat `Vec<String>` was searched," and the tree case just gives
 it a second meaning ("index into `Nav::rows`") alongside its original
-one ("line number in the source file"), never both at once since the
-two screens are mutually exclusive.
+one ("line number in the source file").
+
+**The two meanings are kept apart by cancelling, not by screen
+exclusivity.** The screens are mutually exclusive but `SearchState` is a
+single field on `App` that outlives a screen transition, so the
+separation has to be enforced: `App::handle_key` cancels the search on
+the `Screen::Entry` -> `Screen::Source` transition, mirroring the
+`Back` arm that already cancelled the other direction. For the same
+reason — the indices are frozen at confirm time — every arm that
+reshapes the visible row list (`Select`/`Open` on a collapsible row,
+`ExpandAll`, `CollapseAll`, `ToggleOrder`) cancels too, per decision 2's
+"cancel means stop searching altogether". Recomputing the matches
+against the new row list was the alternative, and was rejected here: it
+would silently relocate the reviewer's current match to a row they never
+chose. Re-anchoring a search across a fold is left as future work
+alongside the collapsed-ancestor case below.
 
 **Matches only currently-visible rows — no auto-expand into collapsed
 subtrees.** A match hidden under a collapsed ancestor (most commonly a
