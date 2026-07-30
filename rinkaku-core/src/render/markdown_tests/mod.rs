@@ -17,9 +17,9 @@
 //!   with no matching `ExtractedSymbol` in `files`.
 //! - [`classification_and_removed`] — ADR 0014 classification markers,
 //!   the diff-signature block, and the "Removed symbols" section.
-//! - [`untested_changes`] — ADR 0059's "## Untested changes" section:
-//!   omit-when-empty and its placement between "High fan-in symbols"
-//!   and "File sizes".
+//! - [`untested_changes`] — ADR 0059's "no referencing tests" section:
+//!   omit-when-empty, its origin-dependent heading, and its placement
+//!   between "High fan-in symbols" and "File sizes".
 
 use super::*;
 use crate::diff::LineRange;

@@ -1,7 +1,7 @@
-//! "## Untested changes" (ADR 0059): the fan-in mirror — every changed,
-//! non-test symbol with `test_count == 0`, in the same "omit when empty"
-//! and "sits between the other graph-derived sections" shape
-//! `sections_skipped_fan_in_filesize` already pins for
+//! "## Changes with no referencing tests" (ADR 0059): the fan-in mirror —
+//! every changed, non-test symbol with `test_count == 0`, in the same
+//! "omit when empty" and "sits between the other graph-derived sections"
+//! shape `sections_skipped_fan_in_filesize` already pins for
 //! "## High fan-in symbols".
 
 use super::*;
@@ -12,7 +12,7 @@ use crate::render::{OutputFormat, render};
 use pretty_assertions::assert_eq;
 
 #[test]
-fn should_omit_untested_changes_section_when_test_coverage_is_empty() {
+fn should_omit_no_referencing_tests_section_when_test_coverage_is_empty() {
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![FileReport {
@@ -61,7 +61,7 @@ fn foo()
 }
 
 #[test]
-fn should_omit_untested_changes_section_when_every_symbol_has_coverage() {
+fn should_omit_no_referencing_tests_section_when_every_symbol_has_coverage() {
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![FileReport {
@@ -118,12 +118,7 @@ Tests: 1 (`src/lib.rs::spec_foo`)
 }
 
 #[test]
-fn should_render_untested_changes_section_between_high_fan_in_symbols_and_file_sizes() {
-    // Two changed symbols: "foo" has a covering test (test_count 1, must
-    // not appear in the list), "bar" has none (test_count 0, must
-    // appear). "bar" also clears `HIGH_FAN_IN_THRESHOLD` so both
-    // sections render, pinning the order: Change graph, High fan-in
-    // symbols, Untested changes, File sizes, Definitions.
+fn should_render_no_referencing_tests_section_between_high_fan_in_symbols_and_file_sizes() {
     let report = Report {
         origin: ReportOrigin::Diff,
         files: vec![FileReport {
@@ -193,24 +188,123 @@ fn should_render_untested_changes_section_between_high_fan_in_symbols_and_file_s
         removed: vec![],
     };
 
+    let expected = "\
+## Change graph
+
+4 changed symbols in 1 file
+
+- fn foo (src/lib.rs)
+- fn a (src/lib.rs)
+  - fn bar (src/lib.rs)
+- fn b (src/lib.rs)
+  - fn bar (src/lib.rs) (see above)
+
+## High fan-in symbols
+
+- fn bar (src/lib.rs) — used by 2: a, b
+
+## Changes with no referencing tests
+
+- fn bar (src/lib.rs)
+
+## File sizes
+
+- `src/lib.rs` (10 lines)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+Tests: 1 (`src/lib.rs::spec_foo`)
+
+### fn a (src/lib.rs)
+
+```
+fn a()
+```
+
+### fn bar (src/lib.rs)
+
+```
+fn bar()
+```
+
+Tests: 0
+
+### fn b (src/lib.rs)
+
+```
+fn b()
+```
+
+"
+    .to_string();
     let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
 
-    let high_fan_in_pos = actual
-        .find("## High fan-in symbols")
-        .expect("has fan-in section");
-    let untested_pos = actual
-        .find("## Untested changes")
-        .expect("has untested changes section");
-    let file_sizes_pos = actual
-        .find("## File sizes")
-        .expect("has file sizes section");
+    assert_eq!(expected, actual);
+}
 
-    assert!(
-        high_fan_in_pos < untested_pos && untested_pos < file_sizes_pos,
-        "expected order Change graph < High fan-in symbols < Untested changes < File sizes, got:\n{actual}"
-    );
-    assert!(
-        actual.contains("- fn bar (src/lib.rs)\n\n## File sizes"),
-        "expected \"## Untested changes\" to list only \"bar\" (test_count 0), not \"foo\" (test_count 1), got:\n{actual}"
-    );
+#[test]
+fn should_render_repo_outline_heading_when_origin_is_repo_outline() {
+    let report = Report {
+        origin: ReportOrigin::RepoOutline,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![symbol(
+                "src/lib.rs::foo",
+                "foo",
+                SymbolKind::Function,
+                "fn foo()",
+            )],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![node("src/lib.rs::foo", "src/lib.rs", "foo")],
+            edges: vec![],
+            roots: vec!["src/lib.rs::foo".to_string()],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![TestCoverage {
+            id: "src/lib.rs::foo".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "foo".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        }],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Repository graph
+
+1 symbol in 1 file
+
+- fn foo (src/lib.rs)
+
+## Symbols with no referencing tests
+
+- fn foo (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo()
+```
+
+Tests: 0
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
 }

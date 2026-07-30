@@ -114,7 +114,11 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
             .filter(|coverage| coverage.test_count == 0)
             .collect();
         if !untested.is_empty() {
-            writeln!(out, "## Untested changes")?;
+            let heading = match report.origin {
+                ReportOrigin::Diff => "## Changes with no referencing tests",
+                ReportOrigin::RepoOutline => "## Symbols with no referencing tests",
+            };
+            writeln!(out, "{heading}")?;
             writeln!(out)?;
             for coverage in &untested {
                 writeln!(out, "- {}", test_coverage_label(coverage, &lookup))?;
@@ -564,7 +568,7 @@ fn fan_in_label(fan_in: &FanIn, lookup: &SymbolLookup) -> String {
     }
 }
 
-/// Builds the "## Untested changes" line label for a [`TestCoverage`],
+/// Builds the "no referencing tests" line label for a [`TestCoverage`],
 /// the same shape [`fan_in_label`] builds for "## High fan-in symbols" —
 /// see that function's doc comment for the lookup-miss fallback rationale.
 fn test_coverage_label(coverage: &TestCoverage, lookup: &SymbolLookup) -> String {
@@ -574,32 +578,48 @@ fn test_coverage_label(coverage: &TestCoverage, lookup: &SymbolLookup) -> String
     }
 }
 
+/// Maximum number of covering-test names listed inline on a definition's
+/// "Tests:" line, the rest collapsed into a `+N more` suffix: a
+/// well-tested symbol can be referenced by dozens of tests, and spelling
+/// them all out drowns the signature the entry exists to show (JSON keeps
+/// the full list). Matches `deps::MAX_MATCHES_PER_NAME`, the same cap for
+/// the same reason on the "Depends on" list.
+const MAX_COVERING_TESTS_LISTED: usize = 3;
+
 /// Builds a definition entry's "Tests: N" line (ADR 0059): `Tests: 0` when
 /// nothing covers the symbol, or `Tests: N (\`name\`, ...)` with each
 /// covering test's name resolved via `lookup` (falling back to the raw id
-/// on a lookup miss, same defensive fallback [`fan_in_label`] uses).
+/// on a lookup miss, same defensive fallback [`fan_in_label`] uses), capped
+/// at [`MAX_COVERING_TESTS_LISTED`] names.
 fn test_coverage_line(coverage: &TestCoverage, lookup: &SymbolLookup) -> String {
     if coverage.covering_tests.is_empty() {
         return "Tests: 0".to_string();
     }
-    let names: Vec<&str> = coverage
+    let listed: Vec<String> = coverage
         .covering_tests
         .iter()
+        .take(MAX_COVERING_TESTS_LISTED)
         .map(|id| {
-            lookup
+            let name = lookup
                 .get(id)
                 .map(|(_, symbol)| symbol.name.as_str())
-                .unwrap_or(id.as_str())
+                .unwrap_or(id.as_str());
+            format!("`{name}`")
         })
         .collect();
+    let omitted = coverage
+        .covering_tests
+        .len()
+        .saturating_sub(MAX_COVERING_TESTS_LISTED);
+    let more = if omitted > 0 {
+        format!(", +{omitted} more")
+    } else {
+        String::new()
+    };
     format!(
-        "Tests: {} ({})",
+        "Tests: {} ({}{more})",
         coverage.test_count,
-        names
-            .iter()
-            .map(|name| format!("`{name}`"))
-            .collect::<Vec<_>>()
-            .join(", ")
+        listed.join(", ")
     )
 }
 
