@@ -141,7 +141,8 @@ inherently transitive ("does *any* test end up here").
   symbol named `default` (the two shapes are syntactically
   indistinguishable without type resolution). Extending capture to the
   scoped name is a precision/noise tradeoff (`new`, `default`, `get`
-  collide across files) left to a follow-up ADR; the rest of the
+  collide across files) left to a follow-up ADR — resolved by [ADR
+  0064](0064-scoped-and-method-call-references.md); the rest of the
   surviving 22% is genuinely test-light wiring (`main.rs`, TUI event
   glue).
 - The ADR 0059 amendment's decision to keep the `!` risk-marker
