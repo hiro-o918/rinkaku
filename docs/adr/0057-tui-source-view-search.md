@@ -345,3 +345,11 @@ No change to the Source-screen search this ADR originally shipped —
 this amendment only fills in the tree-row half of the Entry-screen gap
 the original Context section explicitly carved out, leaving the
 Diff/Detail-pane half exactly as undesigned as it was.
+
+## Amendment: status-line hints trimmed (see ADR 0026)
+
+The `/: search  n/N: next/prev match` status-line segment the amendment
+above added pushed the Tree-focus line past every realistic terminal
+width. Per ADR 0026's own trimming amendment (#196), the always-on line
+now carries only `/: search`; `n`/`N` remain discoverable via the `?`
+overlay and the confirmed-search `N/M` match-position prefix.

@@ -239,3 +239,19 @@ rule.
 
 No change to the `Screen::Source`/`Focus::Right` cases — this
 amendment only fills in the previously-unhandled third branch.
+
+## Amendment: status-line hints trimmed to an 80-column budget
+
+The amendment above (and ADR 0057's tree-search amendment after it)
+kept growing the always-on status-line hint set until the Tree-focus
+line reached ~224 columns. `draw_status_line` renders a single
+unwrapped row, so on any realistic terminal width the tail — including
+`?: help  q: quit`, the only on-screen pointer to the full reference —
+was silently cut (#196).
+
+The status-line half of this amendment's discoverability consequence is
+therefore superseded: each hint set is now a subset sized so the whole
+line (order-mode prefix included) fits 80 columns, and the `?` overlay
+alone carries the full keymap, which is what decision 6's
+discoverability rule actually requires. `ctrl-d`/`ctrl-u` and `gg`/`G`
+keep their `?` overlay entries; only their always-on hints are gone.

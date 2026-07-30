@@ -31,18 +31,22 @@ pub(crate) fn draw_status_line(frame: &mut Frame, app: &App, report: &Report, ar
 /// keymap/glossary overlay is always one keypress away. [`Screen::Source`]
 /// keeps its own short hint, unaffected by focus (drilling into source is
 /// reached only via `Focus::Right` already, so a focus distinction there
-/// would be redundant); it now also advertises `v: split` (ADR 0049),
-/// since the same toggle applies to the source view's diff overlay.
+/// would be redundant).
 ///
-/// The `]/[: next/prev hunk` hint only appears while Right-focused *and*
+/// Each hint set is deliberately a *subset* of the bindings, sized so the
+/// whole line (order-mode prefix included) fits an 80-column terminal —
+/// `draw_status_line` renders a single unwrapped row, so anything past the
+/// frame edge is silently cut, and the tail is where `?: help  q: quit`
+/// live (#196). The `?` overlay is the full keymap reference (ADR 0020's
+/// discoverability rule); the always-on line only advertises the primary
+/// movement/action keys plus the way into that overlay.
+///
+/// The `]/[: hunk` hint only appears while Right-focused *and*
 /// [`crate::app::RightPane::Diff`] is showing — `crate::run_app` only wires up the
 /// `]`/`[` jump for that pane/focus combination (it needs the Diff pane's
 /// shaped hunk-offset table, which Detail/BlastRadius have no equivalent
 /// of), so advertising the key while Detail/BlastRadius is showing would
-/// describe a binding that does nothing there. `v: split`
-/// ([`crate::app::InputKey::ToggleSplitView`], ADR 0044/0049) is scoped
-/// the same way on [`Screen::Entry`]: the toggle is global, but it only
-/// has a visible effect while the Diff pane is on screen there.
+/// describe a binding that does nothing there.
 ///
 /// Extracted as its own pure function (no `ratatui` types) so the text
 /// itself — not just that *something* renders — is unit-testable, mirroring
@@ -80,21 +84,15 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
                 crate::order::OrderMode::AlphaNumeric => "alphabetical",
             };
             let keys = match app.focus() {
-                crate::app::Focus::Tree => {
-                    "j/k: move  ctrl-d/u: half  gg/G: top/bot  /: search  n/N: next/prev match  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
-                }
+                crate::app::Focus::Tree => "j/k: move  /: search  enter: open  ?: help  q: quit",
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
-                    "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  v: split  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+                    "j/k: scroll  h/esc: back  ]/[: hunk  ?: help  q: quit"
                 }
-                crate::app::Focus::Right => {
-                    "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
-                }
+                crate::app::Focus::Right => "j/k: scroll  h/esc: back  ?: help  q: quit",
             };
             format!("order: {order}  |  {keys}")
         }
-        Screen::Source { .. } => {
-            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  /: search  n/N: next/prev match  esc/q: back".to_string()
-        }
+        Screen::Source { .. } => "j/k: scroll  v: split  /: search  esc/q: back".to_string(),
     };
 
     // ADR 0057 decision 7: once a query is confirmed, its match position
@@ -256,12 +254,10 @@ mod tests {
     fn should_draw_status_line_help_text_on_entry_screen() {
         let report = report_with_one_symbol();
         let app = App::new(&report);
-        // Wider than the default 80 columns used elsewhere in this test
-        // module: the full help text (order mode + Tree-focus key hints,
-        // ADR 0020/0022/0026 amendment/0057 amendment) is ~224 columns and
-        // would otherwise be truncated (the status line intentionally does
-        // not wrap), hiding the "quit" fragment this test checks for.
-        let mut terminal = Terminal::new(TestBackend::new(230, 20)).expect("terminal");
+        // 80 columns on purpose: the status line renders a single unwrapped
+        // row, so the trailing "quit" hint only survives here if the whole
+        // Tree-focus line actually fits a realistic terminal width (#196).
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
 
         terminal
             .draw(|frame| {
@@ -295,9 +291,30 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "order: topological  |  j/k: move  ctrl-d/u: half  gg/G: top/bot  /: search  n/N: next/prev match  enter: open  space: expand  e/c: expand/collapse  o: order  d: diff  r: blast radius  s: source  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: move  /: search  enter: open  ?: help  q: quit"
                 .to_string(),
             actual
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::tree_focus(vec![])]
+    #[case::tree_focus_alphabetical(vec![crate::app::InputKey::ToggleOrder])]
+    #[case::right_focus_diff(vec![crate::app::InputKey::Open])]
+    #[case::right_focus_detail(vec![crate::app::InputKey::Open, crate::app::InputKey::ToggleDiff])]
+    #[case::source_screen(vec![crate::app::InputKey::Down, crate::app::InputKey::Source])]
+    fn should_fit_the_default_hint_line_within_80_columns(#[case] keys: Vec<crate::app::InputKey>) {
+        let report = report_with_one_symbol();
+        let app = keys
+            .into_iter()
+            .fold(App::new(&report), |app, key| app.handle_key(key));
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            actual.chars().count() <= 80,
+            "hint line is {} columns, over the 80-column budget (#196): {actual}",
+            actual.chars().count(),
         );
     }
 
@@ -323,7 +340,7 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  ]/[: next/prev hunk  v: split  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
+            "order: topological  |  j/k: scroll  h/esc: back  ]/[: hunk  ?: help  q: quit"
                 .to_string(),
             actual
         );
@@ -344,8 +361,7 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "order: topological  |  j/k: scroll  ctrl-d/u: half  gg/G: top/bot  h/esc: back  d: diff  r: blast radius  gd/gr: jump  ?: help  q: quit"
-                .to_string(),
+            "order: topological  |  j/k: scroll  h/esc: back  ?: help  q: quit".to_string(),
             actual
         );
     }
@@ -367,8 +383,7 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "j/k: scroll  ctrl-d/u: half  gg/G: top/bot  v: split  /: search  n/N: next/prev match  esc/q: back"
-                .to_string(),
+            "j/k: scroll  v: split  /: search  esc/q: back".to_string(),
             actual
         );
     }
