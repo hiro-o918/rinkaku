@@ -150,19 +150,11 @@ impl SectionKind {
 ///   `Normal`/`Watch` files contribute to neither — those two bands are
 ///   shown per-file only, not aggregated, since they are not
 ///   "attention-worthy" the way `Warn`/`Split` are.
-/// - `test_count`: (ADR 0059) `Some(n)` for a leaf symbol
-///   `compute_test_coverage` produced an entry for — a `Report.test_coverage`
-///   lookup by id, `None` when there is no entry (the symbol is itself
-///   test code, or was removed — both excluded from
-///   `compute_test_coverage` by construction, see `symbol_badges`).
-///   `Some(0)` (not the bare absence of coverage) is the "untested" signal
-///   `row_view` renders a `tests:0` badge and the `!` risk marker for; a
-///   `None` symbol has nothing meaningful to say about coverage at all, so
-///   it renders neither. Deliberately **not** aggregated upward the way
-///   `fan_in` is (same reasoning as `own_file_size_band` below): summing an
-///   `Option<usize>` across a subtree has no agreed meaning yet, and
-///   nothing renders a directory/file-level coverage total today — add
-///   aggregation if that need materializes, per an ADR amendment.
+/// - `test_count`: (ADR 0059) a leaf symbol's `Report.test_coverage` entry
+///   count, see `symbol_badges`. Deliberately **not** aggregated upward the
+///   way `fan_in` is: summing an `Option<usize>` across a subtree has no
+///   agreed meaning yet, and nothing renders a directory/file-level
+///   coverage total today — add aggregation only per an ADR amendment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Badges {
     pub changed_symbols: usize,
@@ -777,12 +769,9 @@ fn test_group_insert_index(
 /// graph node) contributes zero fan-in, same as `FanIn`'s own >= 2
 /// threshold. `test_count_by_id` is `report.test_coverage` keyed by id
 /// (ADR 0059), same lookup shape, but kept as `Option` rather than
-/// defaulted to zero (unlike `fan_in`): `compute_test_coverage` only
-/// produces entries for non-test, non-removed nodes, and `0` is itself a
-/// meaningful, renderable value here (`Badges::test_count`'s own doc
-/// comment), so collapsing "no entry" and "entry says zero" into the same
-/// number would make the untested signal indistinguishable from "not
-/// applicable".
+/// defaulted to zero (unlike `fan_in`): `0` is itself the renderable
+/// "untested" signal, so collapsing "no entry" into it would make that
+/// signal indistinguishable from "coverage does not apply here".
 fn symbol_badges(
     symbol_ref: &SymbolRef,
     fan_in_by_id: &HashMap<&str, usize>,

@@ -284,6 +284,25 @@ fn should_leave_test_count_none_when_symbol_has_no_matching_test_coverage_entry(
     assert_eq!(None, symbol_node.badges.test_count);
 }
 
+#[test]
+fn should_leave_parent_test_count_none_when_merging_a_child_with_a_test_count() {
+    let mut parent = Badges::default();
+
+    parent.merge(Badges {
+        changed_symbols: 1,
+        test_count: Some(0),
+        ..Badges::default()
+    });
+
+    assert_eq!(
+        Badges {
+            changed_symbols: 1,
+            ..Badges::default()
+        },
+        parent
+    );
+}
+
 // The following tests pin ADR 0035's `SymbolRef::is_test` propagation: a
 // mixed file (real + test symbols in `report.files`, ADR 0025's default)
 // nests its test symbols under a synthetic `TestGroup` child (visual-

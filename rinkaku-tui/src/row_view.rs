@@ -383,13 +383,8 @@ fn push_annotation_badge_span(spans: &mut Vec<Span<'static>>, count: Option<usiz
 
 /// Appends a `tests:0` badge (ADR 0059) to a symbol row — the inverse of
 /// [`push_annotation_badge_span`]'s "only nonzero renders" rule: zero is
-/// the signal here (no covering tests), so the badge is a no-op unless
-/// `test_count` is exactly `Some(0)`. A `None` (the symbol is itself test
-/// code, or was removed — `crate::tree::symbol_badges`'s own doc comment)
-/// or `Some(n > 0)` both render nothing, keeping the common "this symbol
-/// has coverage" row exactly as terse as before this ADR. Yellow, the
-/// same "pay attention" color [`warning_badge_style`] already uses for
-/// `api:`/`warn:`.
+/// the signal here (no test symbol references this one), so only an exact
+/// `Some(0)` renders.
 fn push_test_coverage_badge_span(spans: &mut Vec<Span<'static>>, test_count: Option<usize>) {
     if test_count != Some(0) {
         return;
@@ -546,17 +541,17 @@ fn is_high_risk(badges: &Badges) -> bool {
 /// The symbol-row equivalent of [`is_high_risk`]: a signature-changed
 /// symbol whose own fan-in (already test-referrer-excluded, see
 /// `rinkaku_core::graph::compute_fan_ins`) clears the high-fan-in
-/// threshold, **or** (ADR 0059) has zero covering tests
-/// (`Badges::test_count == Some(0)`) — untested contract changes are at
-/// least as worth a second look as widely-referenced ones. Unlike
-/// `Dir`/`File`'s aggregated `Badges::fan_in` (a sum across every
-/// high-fan-in symbol in the subtree), a symbol's own badge only ever
-/// holds *its own* fan-in/test-count (`crate::tree::symbol_badges`), so
-/// both comparisons are meaningful without aggregation.
+/// threshold. Unlike `Dir`/`File`'s aggregated `Badges::fan_in` (a sum
+/// across every high-fan-in symbol in the subtree), a symbol's own badge
+/// only ever holds *its own* fan-in (`crate::tree::symbol_badges`), so the
+/// comparison is meaningful without aggregation.
+///
+/// ADR 0059's `tests:0` signal deliberately does **not** escalate to this
+/// marker: it fires on most changed symbols in practice, and the marker
+/// only earns attention by staying rare (ADR 0043).
 fn is_high_risk_symbol(symbol_ref: &SymbolRef, badges: &Badges) -> bool {
     symbol_ref.classification == Some(Classification::SignatureChanged)
-        && (badges.fan_in >= rinkaku_core::graph::HIGH_FAN_IN_THRESHOLD
-            || badges.test_count == Some(0))
+        && badges.fan_in >= rinkaku_core::graph::HIGH_FAN_IN_THRESHOLD
 }
 
 /// Appends the `!` risk marker span (bold red) followed by a space, or
