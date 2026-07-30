@@ -740,11 +740,10 @@ impl App {
             // above this match already intercepts it and opens the popup
             // otherwise. A no-op either way: nothing to confirm yet.
             (Screen::Entry, _, InputKey::OpenUpdatePrompt) => {}
-            // ADR 0057: search is Source-screen-only —
-            // `crate::input_translate::translate_key` never emits any of
-            // these six variants while `Screen::Entry`, so this arm is a
-            // no-op stub kept only for match exhaustiveness, mirroring
-            // `OpenPrInBrowser`'s own precedent just above.
+            // The `Focus::Tree` half of these variants is handled by the
+            // dedicated arms above (ADR 0057 amendment, tree search); this
+            // arm is the `Focus::Right` fallthrough, where search is not
+            // offered and every variant is a no-op.
             (
                 Screen::Entry,
                 _,
