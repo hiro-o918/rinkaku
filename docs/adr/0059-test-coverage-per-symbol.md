@@ -1,6 +1,6 @@
 # 0059. Surface per-symbol test coverage alongside fan-in
 
-- Status: Proposed
+- Status: accepted
 - Date: 2026-07-20
 - Relates to: [ADR 0013](0013-hotspots-fan-in-section.md) (fan-in
   aggregation), [ADR 0042](0042-exclude-test-referrers-from-fan-in.md)
@@ -71,9 +71,11 @@ Rendering, one per output surface:
   symbol with `tests:0` gets the same `!` risk marker treatment
   `is_high_risk_symbol` already applies to `SignatureChanged` +
   high-fan-in (`row_view.rs`) — untested contract changes are at least
-  as worth a second look as widely-referenced ones.
+  as worth a second look as widely-referenced ones. (Withdrawn by the
+  amendment below.)
 - **Markdown**: add a `covering_tests` count next to each definition
-  entry, and a `## Untested changes` section listing every changed,
+  entry, and a `## Untested changes` section (renamed by the amendment
+  below) listing every changed,
   non-test symbol with `test_count == 0`, mirroring the shape of the
   existing `## High fan-in symbols` section (ADR 0013). Unlike
   fan-in, today's `render_definition` has no existing inline count to
@@ -81,10 +83,13 @@ Rendering, one per output surface:
   placement (heading line vs. before the signature block) is an
   implementation detail to settle during the change, not fixed by this
   ADR.
-- **JSON**: add `test_coverage: [{ symbol, test_count, covering_tests:
-  [...] }]` as a new top-level array, parallel to the existing
+- **JSON**: add `test_coverage: [{ id, path, name, covering_tests: [...],
+  test_count }]` as a new top-level array, parallel to the existing
   `fan_ins` array, so a consumer that only wants the empty-coverage
-  set can filter `test_count == 0` without recomputing anything.
+  set can filter `test_count == 0` without recomputing anything. The
+  entry shape mirrors `fan_ins`' `{id, path, name, ...}` rather than
+  carrying a single `symbol` field, so both arrays are keyed the same
+  way.
 - **Mermaid**: no change in this ADR. Mermaid's node labels are already
   dense (ADR 0039) with the `(in:N)` fan-in suffix and diff markers
   (ADR 0041); a `tests:N` suffix competes for the same space. Mermaid
@@ -98,6 +103,10 @@ symbols are dropped from the graph entirely (ADR 0009/0025), so
 `compute_test_coverage` naturally reports `test_count: 0` for every
 symbol — the same "no visible test coverage" signal, for the same
 reason (there is no data to say otherwise). No special-casing needed.
+
+> **Superseded by the amendment below.** "No data to say otherwise" is
+> not the same signal as "no tests"; the amendment suppresses the
+> aggregate entirely when the graph holds no test node.
 
 ## Alternatives
 
@@ -129,12 +138,11 @@ reason (there is no data to say otherwise). No special-casing needed.
 
 ## Consequences
 
-- **Breaking change** to Markdown (new `## Untested changes` section),
-  JSON (new `test_coverage` array), and the TUI (new `tests:0` badge on
-  symbol rows, shown only for uncovered symbols, and transitively the
-  `!` risk marker for untested contract changes). Consistent with this
-  project's pre-1.0 stance on output-format changes (ADR
-  0013/0034/0042's own precedent).
+- **Breaking change** to Markdown (a new section, named per the
+  amendment below), JSON (new `test_coverage` array), and the TUI (new
+  `tests:0` badge on symbol rows, shown only for uncovered symbols).
+  Consistent with this project's pre-1.0 stance on output-format
+  changes (ADR 0013/0034/0042's own precedent).
 - Reuses `Node::is_test` exactly as ADR 0042 anticipated ("available
   for any future aggregation that needs the same production/test
   split") — no new classification logic, no new `LanguageSupport`
@@ -145,10 +153,65 @@ reason (there is no data to say otherwise). No special-casing needed.
   CLAUDE.md's process-weight guidance (a new pure function plus a
   rendering rule), not a large one — no dogfooding three-angle review
   required, one map-assisted pass is enough.
-- Under `--exclude-tests`, every symbol reports `test_count: 0` by
-  construction (no test data survives that flag). This is expected and
-  documented above, not a bug to special-case.
+- Under `--exclude-tests`, no test data survives the flag, so nothing
+  is reported at all (see the amendment below; the original text here
+  claimed every symbol would report `test_count: 0`).
 - Sets up, but does not implement, a natural follow-up: a
   `--fail-on-untested-contract-change` CI gate once the Action
   (ADR 0036) wants to enforce "contract changes ship with tests" rather
   than just surface it for human/LLM review.
+
+## Amendment (2026-07-30): measured precision, and what it costs
+
+Dogfooding the implementation on its own PR showed the signal is far
+weaker than the Decision above assumed. `test_count == 0` does not mean
+"this symbol has no tests"; it means "no test symbol *present as a node
+in this graph* directly references this symbol by name". Three
+mechanisms produce false positives, each confirmed by a minimal
+repro:
+
+- **No transitive closure.** Coverage counts direct references only. A
+  test that calls `outer()`, which calls `inner()`, leaves `inner` at
+  `test_count: 0`.
+- **References inside macro bodies are not extracted.** `let v =
+  plain_only();` in a test body produces an edge; `assert_eq!(macro_only(),
+  3);` produces none. This is not an edge case here: CLAUDE.md mandates
+  `pretty_assertions::assert_eq!` as the house assertion idiom, so the
+  majority of this repo's test bodies reference their subject only from
+  inside a macro invocation.
+- **Diff scope.** In diff mode the graph holds only changed symbols, so
+  a symbol whose tests exist but were not touched by the diff has no
+  test node to be referenced by, and reports zero.
+
+Measured: on this PR's own diff, every entry in the section was a false
+positive (17 of 17 at the time of measurement). In whole-repo outline
+mode — where diff scope does not apply — 513 of 763 entries (67%)
+report zero, dominated by the macro-body mechanism.
+
+Three decisions follow.
+
+- **Suppress the aggregate when the graph holds no test node at all.**
+  `compute_test_coverage` returns an empty `Vec` in that case, replacing
+  the Decision's "`--exclude-tests` naturally reports zero for
+  everything" reading: absence of data is *unknown*, not *zero*.
+  Deciding this once in the aggregation makes the Markdown section, the
+  JSON array, and the TUI badge all fall silent together, without any
+  per-surface special-casing.
+- **Cap the inline covering-test list** in Markdown at 3 names plus a
+  `+N more` suffix, matching `deps::MAX_MATCHES_PER_NAME`'s existing
+  cap on the "Depends on" list. Unbounded, the line reached 8 287
+  characters on this PR's own diff (22 974 in outline mode), burying
+  the signature the entry exists to show. JSON keeps the full list.
+- **Withdraw the `!` risk-marker escalation** for `SignatureChanged` +
+  `tests:0` symbol rows. Promoting a signal this noisy into the TUI's
+  scarcest visual channel would dilute the marker's meaning for the
+  high-fan-in case it already serves. Revisit once precision is measured
+  and improved, not before.
+
+The section heading is `## Changes with no referencing tests`
+(`## Symbols with no referencing tests` in outline mode) rather than
+`## Untested changes`, because "untested" is a claim the data does not
+support.
+
+Improving precision — resolving references inside macro bodies, or
+walking the reference graph transitively — is left to a follow-up ADR.
