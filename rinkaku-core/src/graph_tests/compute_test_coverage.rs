@@ -225,6 +225,109 @@ fn should_sort_covering_tests_by_id_ascending_regardless_of_edge_order() {
 }
 
 #[test]
+fn should_count_transitive_coverage_when_test_reaches_symbol_through_intermediate() {
+    // spec → outer → inner: the test exercises inner through outer, so
+    // both get spec in covering_tests (ADR 0063), not just the directly
+    // referenced outer.
+    let mut spec = symbol("spec", vec!["outer"]);
+    spec.is_test = true;
+    let files = vec![FileReport {
+        path: "src/lib.rs".to_string(),
+        symbols: vec![
+            spec,
+            symbol("outer", vec!["inner"]),
+            symbol("inner", vec![]),
+        ],
+    }];
+    let graph = build_graph(&files);
+
+    let expected = vec![
+        TestCoverage {
+            id: "src/lib.rs::inner".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "inner".to_string(),
+            covering_tests: vec!["src/lib.rs::spec".to_string()],
+            test_count: 1,
+        },
+        TestCoverage {
+            id: "src/lib.rs::outer".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "outer".to_string(),
+            covering_tests: vec!["src/lib.rs::spec".to_string()],
+            test_count: 1,
+        },
+    ];
+    let actual = compute_test_coverage(&graph);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_count_coverage_reached_through_a_test_helper() {
+    // spec → helper (both test code) → shared: the walk passes through
+    // test intermediates, and the helper itself also counts as a
+    // covering test (it did under the direct-edge rule too).
+    let mut spec = symbol("spec", vec!["helper"]);
+    spec.is_test = true;
+    let mut helper = symbol("helper", vec!["shared"]);
+    helper.is_test = true;
+    let files = vec![FileReport {
+        path: "src/lib.rs".to_string(),
+        symbols: vec![spec, helper, symbol("shared", vec![])],
+    }];
+    let graph = build_graph(&files);
+
+    let expected = vec![TestCoverage {
+        id: "src/lib.rs::shared".to_string(),
+        path: "src/lib.rs".to_string(),
+        name: "shared".to_string(),
+        covering_tests: vec![
+            "src/lib.rs::helper".to_string(),
+            "src/lib.rs::spec".to_string(),
+        ],
+        test_count: 2,
+    }];
+    let actual = compute_test_coverage(&graph);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_terminate_and_cover_all_members_when_reference_graph_has_cycle() {
+    let mut spec = symbol("spec", vec!["alpha"]);
+    spec.is_test = true;
+    let files = vec![FileReport {
+        path: "src/lib.rs".to_string(),
+        symbols: vec![
+            spec,
+            symbol("alpha", vec!["beta"]),
+            symbol("beta", vec!["alpha"]),
+        ],
+    }];
+    let graph = build_graph(&files);
+
+    let expected = vec![
+        TestCoverage {
+            id: "src/lib.rs::alpha".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "alpha".to_string(),
+            covering_tests: vec!["src/lib.rs::spec".to_string()],
+            test_count: 1,
+        },
+        TestCoverage {
+            id: "src/lib.rs::beta".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "beta".to_string(),
+            covering_tests: vec!["src/lib.rs::spec".to_string()],
+            test_count: 1,
+        },
+    ];
+    let actual = compute_test_coverage(&graph);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_sort_results_by_test_count_ascending_then_path_name_id() {
     // "tested" has coverage (test_count 1); "untested_b" and
     // "untested_a" both have zero coverage — the untested symbols must

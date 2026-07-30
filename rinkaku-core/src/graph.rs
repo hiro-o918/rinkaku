@@ -206,12 +206,16 @@ pub struct TestCoverage {
     pub test_count: usize,
 }
 
-/// Aggregates `graph.edges` by target node into [`TestCoverage`]s: the
-/// inverse filter of [`compute_fan_ins`] (keeps only edges whose referrer
-/// *is* `Node::is_test`, ADR 0042's classification) over every changed,
-/// non-test node — including nodes with zero test referrers, since an
-/// empty `covering_tests` list is the untested-symbol signal this
-/// aggregation exists to surface, not a case to omit.
+/// Computes [`TestCoverage`] for every changed, non-test node: which test
+/// nodes (`Node::is_test`, ADR 0042's classification) *reach* it through
+/// the reference graph. Coverage is transitive (ADR 0063): a test walking
+/// into `outer()` exercises everything `outer` references, so the walk
+/// follows outgoing edges from each test node through any intermediate —
+/// reachability over-approximates execution, but for a signal whose job is
+/// flagging *zero* coverage, a false "covered" is the cheaper error. Nodes
+/// with zero reaching tests are included, since an empty `covering_tests`
+/// list is the untested-symbol signal this aggregation exists to surface,
+/// not a case to omit.
 ///
 /// A graph holding no test node at all is the one exception: coverage is
 /// then *unknown* rather than zero (`--exclude-tests` drops test symbols
@@ -226,19 +230,23 @@ pub fn compute_test_coverage(graph: &SymbolGraph) -> Vec<TestCoverage> {
 
     let node_by_id: HashMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
-    let mut covering_tests_by_target: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
     for edge in &graph.edges {
-        if !node_by_id
-            .get(edge.from.as_str())
-            .is_some_and(|referrer| referrer.is_test)
-        {
-            continue;
-        }
-        let covering_tests = covering_tests_by_target
-            .entry(edge.to.as_str())
-            .or_default();
-        if !covering_tests.contains(&edge.from.as_str()) {
-            covering_tests.push(edge.from.as_str());
+        outgoing
+            .entry(edge.from.as_str())
+            .or_default()
+            .push(edge.to.as_str());
+    }
+
+    let mut covering_tests_by_target: HashMap<&str, Vec<&str>> = HashMap::new();
+    for test_node in graph.nodes.iter().filter(|node| node.is_test) {
+        for reached in reachable_from(test_node.id.as_str(), &outgoing) {
+            if node_by_id.get(reached).is_some_and(|node| !node.is_test) {
+                covering_tests_by_target
+                    .entry(reached)
+                    .or_default()
+                    .push(test_node.id.as_str());
+            }
         }
     }
 
@@ -273,6 +281,25 @@ pub fn compute_test_coverage(graph: &SymbolGraph) -> Vec<TestCoverage> {
     });
 
     test_coverage
+}
+
+/// Every node reachable from `start` by following `outgoing` edges,
+/// excluding `start` itself. Cycle edges are followed like any other edge
+/// (they are real references); the visited set bounds the walk.
+fn reachable_from<'a>(start: &'a str, outgoing: &HashMap<&'a str, Vec<&'a str>>) -> Vec<&'a str> {
+    let mut visited: HashSet<&str> = HashSet::from([start]);
+    let mut queue: Vec<&str> = vec![start];
+    while let Some(current) = queue.pop() {
+        for &next in outgoing.get(current).into_iter().flatten() {
+            if visited.insert(next) {
+                queue.push(next);
+            }
+        }
+    }
+    visited.remove(start);
+    let mut reached: Vec<&str> = visited.into_iter().collect();
+    reached.sort_unstable();
+    reached
 }
 
 /// Builds a [`SymbolGraph`] over every symbol in `files`.
