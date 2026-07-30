@@ -897,7 +897,10 @@ impl App {
     /// `Focus::Right` branch and silently scroll the right pane *behind*
     /// the overlay while it looked closed to the reviewer.
     pub fn handle_scroll_key(mut self, key: InputKey, viewport_height: usize) -> Self {
-        let step = viewport_height / 2;
+        // Floored at 1 so a viewport too short to have a half page still
+        // moves by a row, matching vim's own `Ctrl-d`/`Ctrl-u`; without it
+        // these keys are silently inert on 3-4 row terminals.
+        let step = (viewport_height / 2).max(1);
         if self.help_open {
             match key {
                 InputKey::ScrollHalfPageDown => {

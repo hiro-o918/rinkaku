@@ -1,6 +1,7 @@
 use super::report_with_one_symbol;
 use crate::app::{App, Focus, InputKey, Screen};
 use pretty_assertions::assert_eq;
+use rstest::rstest;
 
 #[test]
 fn should_open_source_screen_when_source_key_is_pressed_on_a_symbol_row() {
@@ -277,6 +278,21 @@ fn should_clamp_tree_cursor_to_last_row_when_focus_tree_scroll_half_page_down_ov
     let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, 100);
 
     assert_eq!(5, app.nav().cursor());
+}
+
+#[rstest]
+#[case::zero_row_viewport(0)]
+#[case::one_row_viewport(1)]
+fn should_move_tree_cursor_by_one_row_when_viewport_is_too_short_for_a_half_page(
+    #[case] viewport_height: usize,
+) {
+    let report = super::report_with_two_directories();
+    let app = App::new(&report);
+    assert_eq!(0, app.nav().cursor());
+
+    let app = app.handle_scroll_key(InputKey::ScrollHalfPageDown, viewport_height);
+
+    assert_eq!(1, app.nav().cursor());
 }
 
 #[test]
