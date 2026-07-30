@@ -6,8 +6,12 @@
 //! - [`rust`] — Rust `LanguageSupport`: pins `extract_changed_symbols` /
 //!   `extract_all_symbols` behavior on Rust sources (function/struct/enum/
 //!   trait/impl containers, comment stripping, `#[cfg(test)]` / `#[test]`
-//!   detection, noise-name filtering, and the shared Rust end-to-end
-//!   pipeline path via `parse_unified_diff` + `language_for_path`).
+//!   detection, and the shared Rust end-to-end pipeline path via
+//!   `parse_unified_diff` + `language_for_path`).
+//! - [`rust_references`] — reference-name collection on Rust sources:
+//!   noise-name filtering, scoped-path captures, macro-body walking
+//!   (ADR 0063), and module-scoped / method-call captures with the
+//!   ubiquitous-name stoplist (ADR 0064).
 //! - [`go`] — Go `LanguageSupport`: struct/interface/type_spec handling,
 //!   pointer- vs. value-receiver container naming, and Go end-to-end.
 //! - [`python`] — Python `LanguageSupport`: class signature slicing with
@@ -41,5 +45,6 @@ mod go;
 mod normalize_for_comparison;
 mod python;
 mod rust;
+mod rust_references;
 mod tidy_lines;
 mod typescript;
