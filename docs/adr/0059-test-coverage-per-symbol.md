@@ -214,4 +214,5 @@ The section heading is `## Changes with no referencing tests`
 support.
 
 Improving precision — resolving references inside macro bodies, or
-walking the reference graph transitively — is left to a follow-up ADR.
+walking the reference graph transitively — is left to a follow-up ADR:
+[ADR 0063](0063-macro-body-references-and-transitive-test-coverage.md).
