@@ -418,8 +418,15 @@ impl App {
             (Screen::Entry, Focus::Right, InputKey::Down) => {
                 self.right_pane_scroll = self.right_pane_scroll.saturating_add(1);
             }
+            // A confirmed tree search holds row *indices* frozen at confirm
+            // time, so every arm that reshapes the visible row list must
+            // cancel it, per ADR 0057 decision 2's "cancel means stop
+            // searching altogether". Recomputing the matches against the new
+            // rows was rejected: it would silently relocate the reviewer's
+            // current match to a row they never chose.
             (Screen::Entry, Focus::Tree, InputKey::Select) => {
                 self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
+                self.search = self.search.clone().cancel();
             }
             // Gated on `Focus::Tree`, matching `InputKey::Open`'s own focus
             // requirement (finding: Space used to fire regardless of focus,
@@ -466,6 +473,7 @@ impl App {
                     | Some(NodeKind::Section(_))
                     | Some(NodeKind::TestGroup { .. }) => {
                         self.nav = self.nav.handle(Action::ToggleExpand, &self.tree);
+                        self.search = self.search.clone().cancel();
                     }
                     // File and symbol rows behave identically (dogfooding
                     // fix, `Self::Open`'s own doc comment): switch to the
@@ -489,9 +497,11 @@ impl App {
             }
             (Screen::Entry, _, InputKey::ExpandAll) => {
                 self.nav = self.nav.handle(Action::ExpandAll, &self.tree);
+                self.search = self.search.clone().cancel();
             }
             (Screen::Entry, _, InputKey::CollapseAll) => {
                 self.nav = self.nav.handle(Action::CollapseAll, &self.tree);
+                self.search = self.search.clone().cancel();
             }
             (Screen::Entry, _, InputKey::ToggleOrder) => {
                 self.order_mode = match self.order_mode {
@@ -499,6 +509,7 @@ impl App {
                     OrderMode::AlphaNumeric => OrderMode::Topological,
                 };
                 crate::order::order_tree(&mut self.tree, &self.ranks, self.order_mode);
+                self.search = self.search.clone().cancel();
             }
             (Screen::Entry, _, InputKey::Source) => {
                 let rows = self.nav.rows(&self.tree);
@@ -520,6 +531,7 @@ impl App {
                         symbol_id: symbol_ref.id.clone(),
                         scroll_top: 0,
                     };
+                    self.search = self.search.clone().cancel();
                 }
             }
             (Screen::Entry, _, InputKey::ToggleDiff) => {
