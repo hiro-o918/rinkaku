@@ -2,24 +2,55 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn should_report_zero_test_count_when_symbol_has_no_referrers() {
-    // A lone symbol with no referrers at all is still "changed and
-    // untested" — compute_test_coverage must report it with an empty
-    // covering_tests list, not omit it (unlike compute_fan_ins, which
-    // only emits nodes that clear a threshold).
+fn should_return_no_coverage_when_graph_has_no_test_nodes() {
+    // No test node anywhere means coverage is unknown, not zero — every
+    // symbol would otherwise be reported as untested purely because the
+    // graph has no test data to say otherwise (ADR 0059 amendment).
     let files = vec![FileReport {
         path: "src/lib.rs".to_string(),
-        symbols: vec![symbol("foo", vec![])],
+        symbols: vec![symbol("foo", vec![]), symbol("bar", vec!["foo"])],
     }];
     let graph = build_graph(&files);
 
-    let expected = vec![TestCoverage {
-        id: "src/lib.rs::foo".to_string(),
+    let expected: Vec<TestCoverage> = vec![];
+    let actual = compute_test_coverage(&graph);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_report_zero_test_count_when_symbol_has_no_covering_test() {
+    // A symbol with no test referrer is still reported with an empty
+    // covering_tests list, not omitted (unlike compute_fan_ins, which
+    // only emits nodes that clear a threshold).
+    let mut spec_covered = symbol("spec_covered", vec!["covered"]);
+    spec_covered.is_test = true;
+    let files = vec![FileReport {
         path: "src/lib.rs".to_string(),
-        name: "foo".to_string(),
-        covering_tests: vec![],
-        test_count: 0,
+        symbols: vec![
+            symbol("foo", vec![]),
+            symbol("covered", vec![]),
+            spec_covered,
+        ],
     }];
+    let graph = build_graph(&files);
+
+    let expected = vec![
+        TestCoverage {
+            id: "src/lib.rs::foo".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "foo".to_string(),
+            covering_tests: vec![],
+            test_count: 0,
+        },
+        TestCoverage {
+            id: "src/lib.rs::covered".to_string(),
+            path: "src/lib.rs".to_string(),
+            name: "covered".to_string(),
+            covering_tests: vec!["src/lib.rs::spec_covered".to_string()],
+            test_count: 1,
+        },
+    ];
     let actual = compute_test_coverage(&graph);
 
     assert_eq!(expected, actual);

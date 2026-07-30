@@ -189,21 +189,20 @@ pub fn compute_fan_ins(graph: &SymbolGraph) -> Vec<FanIn> {
 /// the *production* referrers a symbol worries about, `covering_tests`
 /// lists the *test* referrers a reviewer can trust to have exercised it.
 /// Unlike `FanIn`, every changed non-test node gets an entry regardless of
-/// count — a `test_count` of 0 (no test referrers at all) is the signal
-/// this aggregation exists to surface, so it cannot be filtered out the
-/// way `compute_fan_ins` filters out low fan-in.
+/// count — a `test_count` of 0 is the signal this aggregation exists to
+/// surface, so it cannot be filtered out the way `compute_fan_ins` filters
+/// out low fan-in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TestCoverage {
     pub id: NodeId,
     pub path: String,
     pub name: String,
-    /// Ids (not names, unlike `FanIn::used_by`) of every test symbol
-    /// covering this node, sorted ascending — an id lets a consumer (the
-    /// TUI in particular) jump straight to the covering test, which a
+    /// Ids rather than names (unlike `FanIn::used_by`) so a consumer (the
+    /// TUI in particular) can jump straight to the covering test, which a
     /// name alone cannot do when two test symbols share a name.
     pub covering_tests: Vec<NodeId>,
-    /// Redundant with `covering_tests.len()`, kept as its own field so a
-    /// JSON consumer can filter `test_count == 0` without recomputing it.
+    /// Kept as its own field so a JSON consumer can filter
+    /// `test_count == 0` without recomputing it.
     pub test_count: usize,
 }
 
@@ -214,12 +213,17 @@ pub struct TestCoverage {
 /// empty `covering_tests` list is the untested-symbol signal this
 /// aggregation exists to surface, not a case to omit.
 ///
-/// Results are sorted by `test_count` ascending (untested symbols first —
-/// the opposite direction from `compute_fan_ins`'s descending sort, since
-/// here the low end of the range is what a reviewer should see first),
-/// ties broken by `(path, name, id)` ascending for the same determinism
-/// reason `compute_fan_ins` breaks its own ties that way.
+/// A graph holding no test node at all is the one exception: coverage is
+/// then *unknown* rather than zero (`--exclude-tests` drops test symbols
+/// outright, and a diff need not touch any test file), so reporting every
+/// symbol as untested would be a fabricated signal. Suppressing it here
+/// rather than per output surface keeps the decision in one place (ADR
+/// 0059 amendment).
 pub fn compute_test_coverage(graph: &SymbolGraph) -> Vec<TestCoverage> {
+    if !graph.nodes.iter().any(|node| node.is_test) {
+        return Vec::new();
+    }
+
     let node_by_id: HashMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
     let mut covering_tests_by_target: HashMap<&str, Vec<&str>> = HashMap::new();
