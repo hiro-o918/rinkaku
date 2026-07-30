@@ -4,6 +4,9 @@
 //! - `entry_row_line` — general `entry_row_line` behavior: indent,
 //!   badges, skip-reason, test-file badge, per-symbol `test` badge (ADR
 //!   0035), cycle marker, classification markers, selection modifier
+//! - `risk_marker` — the `!` risk co-occurrence marker on dir, file and
+//!   symbol rows
+//! - `test_coverage_badge` — ADR 0059's `tests:0` symbol-row badge
 //! - `relative_labels` — `relative_labels`' ancestor-prefix stripping
 //! - `file_size_badges` — ADR 0028 file-size warning badges on file and
 //!   dir rows (`lines:N`, `warn:N split:N`)
@@ -18,6 +21,8 @@ mod entry_row_line;
 mod file_size_badges;
 mod label_badges;
 mod relative_labels;
+mod risk_marker;
+mod test_coverage_badge;
 
 pub(super) fn dir_node(path: &str, badges: Badges, children: Vec<TreeNode>) -> TreeNode {
     TreeNode {
