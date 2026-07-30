@@ -114,13 +114,23 @@ pub(crate) fn draw_tree_pane(
             .zip(labels[start..end].iter())
             .enumerate()
             .map(|(offset, (row, label))| {
-                entry_row_line(
-                    row,
-                    label,
-                    ranks,
-                    annotation_markers,
-                    start + offset == cursor,
-                )
+                let index = start + offset;
+                let line = entry_row_line(row, label, ranks, annotation_markers, index == cursor);
+                // A confirmed tree search's matches carry the same bg tint
+                // as the Source view's (ADR 0057 amendment) — except on the
+                // cursor row, whose REVERSED style already marks it and
+                // would render the tint inverted.
+                if index == cursor {
+                    return line;
+                }
+                match super::source_screen::search_match_bg(
+                    index,
+                    app.search().matches(),
+                    app.search().current_match(),
+                ) {
+                    Some(bg) => line.patch_style(Style::default().bg(bg)),
+                    None => line,
+                }
             }),
     );
     if let Some(below) = below {
@@ -588,5 +598,103 @@ mod tests {
             cell_style.add_modifier.contains(Modifier::REVERSED),
             "cursor row cell should stay reversed after truncation, got {cell_style:?}"
         );
+    }
+
+    // --- tree search match highlighting (ADR 0057 amendment, #197) ---
+    //
+    // NOTE: these tests assert only the rendered cell's `bg` (and the
+    // cursor test `add_modifier`) rather than the whole `Style` — same
+    // partial-comparison reason as the border tests above: a rendered
+    // `Cell`'s `Style` always carries ratatui's own defaults filled in.
+
+    fn drawn_tree_with_confirmed_search(query: &[char]) -> Terminal<TestBackend> {
+        let report = report_with_many_files(3);
+        // Expanded row order: f0.rs(0), sym0(1), f1.rs(2), sym1(3),
+        // f2.rs(4), sym2(5) — texts mirror what each row displays so the
+        // confirmed match indices line up with these row indices.
+        let texts = ["f0.rs", "sym0", "f1.rs", "sym1", "f2.rs", "sym2"].map(str::to_string);
+        let search = query
+            .iter()
+            .fold(crate::search::SearchState::default().start(), |s, c| {
+                s.push_char(*c)
+            })
+            .confirm(&texts, 0);
+        let app = App::new(&report).with_search(search);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &app,
+                    &report,
+                    &crate::diff_shape::DiffPaneContent::Empty,
+                    &[],
+                    &BlastRadiusSelection::NotApplicable,
+                    None,
+                    &[],
+                    &crate::annotation_markers::AnnotationMarkers::default(),
+                    Locale::English,
+                );
+            })
+            .expect("draw");
+
+        terminal
+    }
+
+    fn tree_row_cell_style(terminal: &Terminal<TestBackend>, token: &str) -> ratatui::style::Style {
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area;
+        for y in 0..area.height {
+            let row: String = (0..area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect();
+            if let Some(byte_offset) = row.find(token) {
+                let column = row[..byte_offset].chars().count() as u16;
+                return buffer[(column, y)].style();
+            }
+        }
+        panic!("expected to find {token:?} in the rendered tree pane");
+    }
+
+    #[test]
+    fn should_apply_current_match_background_to_the_current_tree_match_row() {
+        let terminal = drawn_tree_with_confirmed_search(&['s', 'y', 'm']);
+
+        // "sym" matches rows 1/3/5; confirming from row 0 makes row 1
+        // (sym0) the current match, while the cursor stays on row 0.
+        let style = tree_row_cell_style(&terminal, "sym0");
+        assert_eq!(
+            Some(crate::ui::source_screen::SEARCH_CURRENT_MATCH_BG),
+            style.bg
+        );
+    }
+
+    #[test]
+    fn should_apply_plain_match_background_to_a_non_current_tree_match_row() {
+        let terminal = drawn_tree_with_confirmed_search(&['s', 'y', 'm']);
+
+        let style = tree_row_cell_style(&terminal, "sym1");
+        assert_eq!(Some(crate::ui::source_screen::SEARCH_MATCH_BG), style.bg);
+    }
+
+    #[test]
+    fn should_not_tint_a_non_matching_tree_row() {
+        let terminal = drawn_tree_with_confirmed_search(&['s', 'y', 'm']);
+
+        let style = tree_row_cell_style(&terminal, "f1.rs");
+        assert_eq!(Some(Color::Reset), style.bg);
+    }
+
+    #[test]
+    fn should_keep_the_cursor_row_reversed_without_match_tint_when_it_is_the_current_match() {
+        // "f0" matches only row 0, where the cursor already sits — the
+        // REVERSED cursor style must stay the row's only marker (a bg tint
+        // under REVERSED would render inverted).
+        let terminal = drawn_tree_with_confirmed_search(&['f', '0']);
+
+        let style = tree_row_cell_style(&terminal, "f0.rs");
+        assert_eq!(Some(Color::Reset), style.bg);
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
     }
 }

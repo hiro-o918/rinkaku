@@ -320,8 +320,11 @@ pub(crate) fn source_lines(
 
 /// Extracted so [`source_lines`]'s three call sites share one definition of
 /// "is this line a match" (ADR 0057 decision 6) rather than repeating the
-/// check inline at each.
-fn search_match_bg(
+/// check inline at each. `pub(crate)` since the entry tree pane
+/// (`super::entry::draw_tree_pane`) tints its matched rows with the very
+/// same colors — a tree search's frozen indices are row indices, so the
+/// index-based check is identical (ADR 0057 amendment).
+pub(crate) fn search_match_bg(
     line_index: usize,
     search_matches: &[MatchLine],
     search_current: Option<MatchLine>,
