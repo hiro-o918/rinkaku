@@ -173,6 +173,116 @@ fn should_collect_scoped_identifier_path_references(
     assert_eq!(expected, actual);
 }
 
+#[rstest]
+#[case::should_collect_call_and_path_identifiers_inside_macro_body(
+    "\
+fn build() -> Format {
+    assert_eq!(inner(), Config::V1)
+}
+",
+    vec![
+        "Config".to_string(),
+        "Format".to_string(),
+        "V1".to_string(),
+        "inner".to_string(),
+    ],
+)]
+#[case::should_skip_nested_macro_name_inside_macro_body(
+    "\
+fn build() -> Format {
+    assert!(matches!(value, Foo::Bar))
+}
+",
+    vec![
+        "Bar".to_string(),
+        "Foo".to_string(),
+        "Format".to_string(),
+        "value".to_string(),
+    ],
+)]
+#[case::should_collect_identifiers_inside_bracket_macro_body(
+    "\
+fn build() -> Format {
+    vec![make_thing(input)]
+}
+",
+    vec![
+        "Format".to_string(),
+        "input".to_string(),
+        "make_thing".to_string(),
+    ],
+)]
+#[case::should_keep_identifier_before_not_equal_operator_inside_macro_body(
+    "\
+fn build() -> Format {
+    assert!(left != right)
+}
+",
+    vec![
+        "Format".to_string(),
+        "left".to_string(),
+        "right".to_string(),
+    ],
+)]
+fn should_collect_macro_body_references(
+    #[case] source: &str,
+    #[case] referenced_names: Vec<String>,
+) {
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "build".to_string(),
+        kind: SymbolKind::Function,
+        signature: "fn build() -> Format".to_string(),
+        range: LineRange { start: 1, end: 3 },
+        container: None,
+        referenced_names,
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_not_collect_attribute_arguments_as_referenced_names() {
+    // `#[derive(...)]`/`#[cfg(...)]` arguments are token_trees too, but
+    // under an `attribute` node — the macro-body walk (ADR 0063) must not
+    // turn derive names into references.
+    let source = "\
+#[derive(Debug, Clone)]
+struct Point {
+    x: i32,
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Point".to_string(),
+        kind: SymbolKind::Struct,
+        signature: "struct Point {\n    x: i32,\n}".to_string(),
+        range: LineRange { start: 2, end: 4 },
+        container: None,
+        referenced_names: vec!["Point".to_string()],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn should_mark_symbol_as_test_when_nested_inside_cfg_test_mod() {
     let source = "\
