@@ -6,7 +6,7 @@
 
 use super::diff_pane::{ADDED_BG, MIN_SPLIT_VIEW_WIDTH, REMOVED_BG, marker_span};
 use super::scroll::{Body, render_scrollable_pane};
-use super::style::{gap_span, pane_border_style, styled_content_spans};
+use super::style::{expand_tabs_text, gap_span, pane_border_style, styled_content_spans};
 use crate::app::DiffViewMode;
 use crate::diff_view::{DiffLineKind, FileHunks};
 use crate::search::MatchLine;
@@ -376,7 +376,7 @@ fn unchanged_line(
         Some(token_spans) => {
             spans.extend(styled_content_spans(text, &token_spans, bg));
         }
-        None => spans.push(gap_span(text, bg)),
+        None => spans.push(gap_span(&expand_tabs_text(text), bg)),
     }
     Line::from(spans)
 }
@@ -394,7 +394,7 @@ fn removed_line(content: &str) -> Line<'static> {
         gap_span("     ", bg),
         marker_span(DiffLineKind::Removed, bg),
         gap_span("| ", bg),
-        gap_span(content, bg),
+        gap_span(&expand_tabs_text(content), bg),
     ])
 }
 
@@ -490,7 +490,7 @@ fn source_split_side_line(
             .flatten()
     }) {
         Some(token_spans) => spans.extend(styled_content_spans(&cell.content, &token_spans, bg)),
-        None => spans.push(gap_span(&cell.content, bg)),
+        None => spans.push(gap_span(&expand_tabs_text(&cell.content), bg)),
     }
     Line::from(spans)
 }

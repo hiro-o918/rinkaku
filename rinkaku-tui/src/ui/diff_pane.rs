@@ -6,7 +6,7 @@
 use super::scroll::{
     Body, render_scrollable_pane, truncate_line_to_width, truncate_to_width_keeping_tail,
 };
-use super::style::{pane_border_style, styled_content_spans};
+use super::style::{expand_tabs_text, pane_border_style, styled_content_spans};
 use crate::app::{App, DiffTarget, DiffViewMode, Focus};
 use crate::diff_shape::DiffSection;
 use crate::diff_view::{DiffLine, DiffLineKind};
@@ -642,16 +642,17 @@ pub(crate) fn diff_line(line: &DiffLine, token_spans: Option<Vec<TokenSpan>>) ->
 /// plus the same `ADDED_BG`/`REMOVED_BG` tint — a context line stays
 /// unstyled since it carries no diff signal either way.
 pub(crate) fn plain_diff_line(line: &DiffLine) -> Line<'static> {
+    let content = expand_tabs_text(&line.content);
     match line.kind {
         DiffLineKind::Added => Line::styled(
-            format!("+{}", line.content),
+            format!("+{content}"),
             added_removed_style(DiffLineKind::Added),
         ),
         DiffLineKind::Removed => Line::styled(
-            format!("-{}", line.content),
+            format!("-{content}"),
             added_removed_style(DiffLineKind::Removed),
         ),
-        DiffLineKind::Context => Line::raw(format!(" {}", line.content)),
+        DiffLineKind::Context => Line::raw(format!(" {content}")),
     }
 }
 

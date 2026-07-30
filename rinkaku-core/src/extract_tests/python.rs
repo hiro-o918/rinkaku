@@ -172,7 +172,8 @@ class Point:
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
+        signature: "class Point:\n    x: int\n    y: int\n\n    def __init__(self, x, y):"
+            .to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
         // "int" is the shared field-annotation type of both `x`
@@ -211,7 +212,8 @@ class Point:
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Point: x: int y: int def __init__(self, x, y):".to_string(),
+        signature: "class Point:\n\n    x: int\n    y: int\n\n    def __init__(self, x, y):"
+            .to_string(),
         range: LineRange { start: 1, end: 8 },
         container: None,
         referenced_names: vec!["int".to_string()],
@@ -273,6 +275,46 @@ class Point:
         kind: SymbolKind::Function,
         signature: "def __init__(self, x):".to_string(),
         range: LineRange { start: 2, end: 3 },
+        container: Some("class Point".to_string()),
+        referenced_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// Regression for the dedent bug ADR 0060 shipped with: a nested method's
+// node text starts mid-line (no leading indentation on its own first
+// line) while its continuation lines still carry their absolute source
+// column, so computing `min_indent` over every line (including the
+// unindented first one) always floored it at 0 and left continuation
+// lines at their raw source indentation instead of dedented.
+#[test]
+fn should_dedent_continuation_lines_when_multiline_method_signature_is_nested_in_class() {
+    let source = "\
+class Point:
+    def __init__(
+        self,
+        x,
+        y,
+    ):
+        self.x = x
+";
+    let lang = PythonSupport;
+    // Line 7 (`self.x = x`) is inside `__init__`'s body.
+    let changed_ranges = vec![LineRange { start: 7, end: 7 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "__init__".to_string(),
+        kind: SymbolKind::Function,
+        signature: "def __init__(\n    self,\n    x,\n    y,\n):".to_string(),
+        range: LineRange { start: 2, end: 7 },
         container: Some("class Point".to_string()),
         referenced_names: vec![],
         dependencies: vec![],

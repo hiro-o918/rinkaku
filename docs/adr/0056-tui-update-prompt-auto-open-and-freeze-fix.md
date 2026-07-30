@@ -1,6 +1,10 @@
 # 0056. TUI: auto-open the update prompt at startup, fix its dead keys, and stop the silent self-update stall
 
-- Status: Accepted
+- Status: partly superseded by
+  [ADR 0062](0062-update-prompt-before-analysis.md) (the auto-open decision
+  is reverted — the confirmation moved ahead of analysis, onto the ordinary
+  terminal; the `translate_key` short-circuit and the `Spinner` around
+  `updater.update()` are unchanged)
 - Date: 2026-07-16
 
 ## Context

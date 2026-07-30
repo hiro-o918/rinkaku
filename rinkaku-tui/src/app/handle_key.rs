@@ -179,7 +179,6 @@ impl App {
                 }
                 InputKey::PopupCancel => {
                     self.update_prompt_open = false;
-                    self.update_prompt_dismissed = true;
                 }
                 _ => {}
             }

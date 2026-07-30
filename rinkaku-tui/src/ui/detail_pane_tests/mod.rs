@@ -13,6 +13,14 @@
 //!   total
 //! - `size_warning` — ADR 0028 `file_detail_lines` size-warning line
 //!   rendering (Warn vs Split label / trailing hint)
+//! - `signature_view` — ADR 0060: `detail_lines`'s `SignatureView`
+//!   rendering pushes one `Line` per source line for a multi-line
+//!   signature, instead of one `Line` with an embedded `\n`
+//! - `skip_reason` — the skipped-file arm's explanation line, split on
+//!   `row_view::has_no_readable_content` like the entry tree's dimming
+//! - `tab_expansion` — ADR 0061: signature lines reach the buffer with
+//!   their tabs expanded to tab stops, on both the current and the
+//!   changed-signature paths
 
 use super::file_detail_lines;
 use crate::app::{App, BlastRadiusSelection};
@@ -28,7 +36,10 @@ use rinkaku_core::render::{FileReport, Report};
 
 mod content_by_row_kind;
 mod scroll_behavior;
+mod signature_view;
 mod size_warning;
+mod skip_reason;
+mod tab_expansion;
 mod wrap_reachability;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {

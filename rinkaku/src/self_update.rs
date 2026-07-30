@@ -20,6 +20,23 @@ const REPO_OWNER: &str = "hiro-o918";
 const REPO_NAME: &str = "rinkaku";
 const BIN_NAME: &str = "rinkaku";
 
+/// Whether [`run_self_update`] actually replaced the binary on disk. A
+/// plain `Ok(())` cannot say this: the "already up to date", "cancelled",
+/// and "the crate reported no update" paths all succeed without updating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateOutcome {
+    Updated,
+    NotUpdated,
+}
+
+/// Whether [`run_self_update`] should print its own "New release found"
+/// line, or stay quiet because the caller already announced the version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Announcement {
+    Print,
+    AlreadyAnnounced,
+}
+
 /// How the update prompt should behave, decided up front from `--yes` and
 /// whether stdin is a terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,9 +81,9 @@ fn confirm_mode(yes: bool, stdin_is_tty: bool) -> ConfirmMode {
     }
 }
 
-/// Whether a confirmation answer counts as "yes": trimmed and compared
-/// case-insensitively against `y` / `yes`. Everything else — including an
-/// empty string — is not affirmative.
+/// Whether a confirmation answer counts as "yes". The single rule for
+/// consent across every update prompt in this binary, including
+/// `update_prompt`'s pre-analysis one.
 ///
 /// This is the deliberate opposite of the `self_update` crate's own
 /// `confirm()` helper, which treats an *empty* response as "yes" (see
@@ -74,7 +91,7 @@ fn confirm_mode(yes: bool, stdin_is_tty: bool) -> ConfirmMode {
 /// requiring an explicit `y`/`yes` means a stray newline or a
 /// misunderstood prompt can never be read as consent to replace the
 /// running binary.
-fn is_affirmative(answer: &str) -> bool {
+pub(crate) fn is_affirmative(answer: &str) -> bool {
     matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
@@ -131,7 +148,13 @@ fn build_updater(
 /// `yes` corresponds to the `--yes`/`-y` flag; TTY detection (the other
 /// input to `confirm_mode`) is read here at the composition-root boundary
 /// rather than passed in, since it is itself a form of environment IO.
-pub fn run_self_update(yes: bool) -> Result<()> {
+/// `announcement` lets a caller that has already told the user which
+/// version is available suppress the duplicate line.
+///
+/// Returns [`UpdateOutcome`] rather than `()` because "no error" and "the
+/// binary on disk was replaced" are different facts: `update_prompt`'s
+/// re-exec is only sound for the latter.
+pub fn run_self_update(yes: bool, announcement: Announcement) -> Result<UpdateOutcome> {
     let confirm_mode = confirm_mode(yes, std::io::stdin().is_terminal());
     if confirm_mode == ConfirmMode::RefuseNonInteractive {
         anyhow::bail!("refusing to self-update non-interactively; pass --yes to proceed");
@@ -153,13 +176,15 @@ pub fn run_self_update(yes: bool) -> Result<()> {
         })?;
     if !is_newer {
         println!("{BIN_NAME} is already up to date (v{current_version})");
-        return Ok(());
+        return Ok(UpdateOutcome::NotUpdated);
     }
 
-    println!(
-        "New release found: v{current_version} -> v{}",
-        latest.version
-    );
+    if announcement == Announcement::Print {
+        println!(
+            "New release found: v{current_version} -> v{}",
+            latest.version
+        );
+    }
 
     if confirm_mode == ConfirmMode::Prompt {
         print!("Update to v{}? [y/N]: ", latest.version);
@@ -168,7 +193,7 @@ pub fn run_self_update(yes: bool) -> Result<()> {
         std::io::stdin().read_line(&mut answer)?;
         if !is_affirmative(&answer) {
             println!("Update cancelled");
-            return Ok(());
+            return Ok(UpdateOutcome::NotUpdated);
         }
     }
 
@@ -189,11 +214,11 @@ pub fn run_self_update(yes: bool) -> Result<()> {
             "Updated {BIN_NAME} from v{current_version} to {}",
             status.version()
         );
+        Ok(UpdateOutcome::Updated)
     } else {
         println!("{BIN_NAME} is already up to date (v{current_version})");
+        Ok(UpdateOutcome::NotUpdated)
     }
-
-    Ok(())
 }
 
 /// Checks GitHub for a newer released version than the running binary,

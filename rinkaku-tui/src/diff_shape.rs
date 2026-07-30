@@ -315,7 +315,7 @@ fn build_file_content(report: &Report, diff_files: &[FileHunks], path: &str) -> 
     let mut sections: Vec<DiffSection> = symbols
         .iter()
         .map(|symbol| DiffSection {
-            title: symbol.signature.clone(),
+            title: collapse_to_single_line(&symbol.signature),
             symbol_id: Some(symbol.id.clone()),
             contract_header: contract_header_for_symbol(symbol),
             hunks: Vec::new(),
@@ -391,11 +391,19 @@ fn contract_header_for_symbol(
 ) -> Option<ContractHeader> {
     match (symbol.classification, &symbol.previous_signature) {
         (Some(Classification::SignatureChanged), Some(previous)) => Some(ContractHeader {
-            previous_signature: previous.clone(),
-            signature: symbol.signature.clone(),
+            previous_signature: collapse_to_single_line(previous),
+            signature: collapse_to_single_line(&symbol.signature),
         }),
         _ => None,
     }
+}
+
+/// Collapses a possibly multi-line signature (ADR 0060) into one line for
+/// [`DiffSection::title`]/[`ContractHeader`]'s fields, both of which the
+/// diff pane renders as a single anchor [`ratatui::text::Line`]
+/// (`crate::ui::diff_pane::section_anchor_lines`/`section_anchor_split_row`).
+fn collapse_to_single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The distinct changed-line ranges across `sections`' hunks, for the

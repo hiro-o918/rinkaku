@@ -111,8 +111,10 @@ Press `w` from anywhere to open the PR's page in your web browser
 | From source | `cargo install rinkaku` |
 | Manual | Grab a tarball from the [latest release](https://github.com/hiro-o918/rinkaku/releases/latest) and put `rinkaku` on your `PATH`. Targets: `{x86_64,aarch64}-{unknown-linux-musl,unknown-linux-gnu,apple-darwin}` (Linux tooling picks the statically linked musl build). |
 
-Update with `rinkaku self-update`, or press `U` in `--tui` once it
-notices a newer release (see
+Update with `rinkaku self-update`. `--tui` also offers it for you: when
+its startup check finds a newer release, it asks before analysis starts
+and re-runs your command with the updated binary, falling back to a
+status-line hint and the `U` key if the check answers too late (see
 [`docs/cli.md#self-update`](docs/cli.md#self-update) for the
 interactive / `--yes` / non-TTY behavior).
 

@@ -4,7 +4,7 @@
 //! (`DetailView`, `DirDetail`, `FileDetail`) come from `crate::detail`.
 
 use super::scroll::{Body, render_scrollable_pane};
-use super::style::pane_border_style;
+use super::style::{expand_tabs_text, pane_border_style};
 use crate::app::{App, Focus, SelectedDetail};
 use crate::detail::{DetailView, DirDetail, FileDetail, SignatureView};
 use ratatui::Frame;
@@ -156,7 +156,7 @@ pub(crate) fn file_detail_lines(detail: &FileDetail) -> Vec<Line<'static>> {
             ),
             Style::default().fg(Color::DarkGray),
         ));
-        lines.push(Line::raw("rinkaku did not extract symbols from this file."));
+        lines.push(Line::raw(skip_explanation(reason)));
         return lines;
     }
 
@@ -252,6 +252,17 @@ fn file_size_warning_line(warning: &rinkaku_core::file_size::FileSizeWarning) ->
     }
 }
 
+/// The sentence under a skipped file's `Skipped: <reason>` line, split on
+/// [`crate::row_view::has_no_readable_content`] so the pane never tells a
+/// reviewer to move on from a file the entry tree still shows undimmed.
+fn skip_explanation(reason: rinkaku_core::render::SkipReason) -> &'static str {
+    if crate::row_view::has_no_readable_content(reason) {
+        "rinkaku did not extract symbols from this file."
+    } else {
+        "rinkaku has no parser for this file type, so review its diff directly."
+    }
+}
+
 pub(crate) fn kind_abbrev(kind: rinkaku_core::extract::SymbolKind) -> &'static str {
     use rinkaku_core::extract::SymbolKind;
     match kind {
@@ -293,17 +304,25 @@ pub(crate) fn detail_lines(detail: &DetailView) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     match &detail.signature {
         SignatureView::Current(signature) => {
-            lines.push(Line::raw(signature.clone()));
+            // A multi-line signature (ADR 0060) needs one `Line` per source
+            // line — `Line` never splits on an embedded `\n` itself.
+            for line in signature.lines() {
+                lines.push(Line::raw(expand_tabs_text(line)));
+            }
         }
         SignatureView::Changed { previous, current } => {
-            lines.push(Line::styled(
-                format!("- {previous}"),
-                Style::default().fg(Color::Red),
-            ));
-            lines.push(Line::styled(
-                format!("+ {current}"),
-                Style::default().fg(Color::Green),
-            ));
+            for line in previous.lines() {
+                lines.push(Line::styled(
+                    format!("- {}", expand_tabs_text(line)),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+            for line in current.lines() {
+                lines.push(Line::styled(
+                    format!("+ {}", expand_tabs_text(line)),
+                    Style::default().fg(Color::Green),
+                ));
+            }
         }
     }
 

@@ -62,6 +62,133 @@ fn should_classify_as_added_when_no_base_side_match_exists() {
     assert_eq!(expected_removed, removed);
 }
 
+// Regression: a reflow-only edit that inserts a newline right after an
+// opening `(` — no space in the original text at that position, e.g.
+// gofmt wrapping a long parameter list — must not register as a contract
+// change. `normalize_whitespace`'s old `split_whitespace().join(" ")`
+// always inserts a space at a normalized whitespace run regardless of
+// whether the original had one, so it disagreed on this exact case
+// (`...F(alpha,...` vs `...F( alpha,...`) even though nothing in the
+// contract changed. No trailing comma before the closing `)` here — that
+// is a separate, real token difference (see the trailing-comma test
+// below), not reflow, so it is deliberately excluded from this case.
+#[test]
+fn should_classify_as_body_only_when_reflow_inserts_newline_right_after_opening_paren() {
+    let mut head = vec![symbol(
+        "LongArgs",
+        None,
+        "func LongArgs(\n\talpha, beta, gamma, delta string\n) string",
+        LineRange { start: 1, end: 3 },
+    )];
+    let base = vec![symbol(
+        "LongArgs",
+        None,
+        "func LongArgs(alpha, beta, gamma, delta string) string",
+        LineRange { start: 1, end: 1 },
+    )];
+
+    let removed = classify_symbols(&mut head, &base, &[], "src/lib.go");
+
+    let mut expected = head.clone();
+    expected[0].classification = Some(Classification::BodyOnly);
+    let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+    assert_eq!(expected, head);
+    assert_eq!(expected_removed, removed);
+}
+
+// Companion to the test above: a reflow that moves a line break right
+// after a comma (rather than an opening paren) must also stay `BodyOnly`
+// — this is the shape the un-normalized comparison already handled
+// correctly before ADR 0060's multi-line signatures existed, and must
+// keep handling correctly now.
+#[test]
+fn should_classify_as_body_only_when_reflow_inserts_newline_right_after_comma() {
+    let mut head = vec![symbol(
+        "foo",
+        None,
+        "fn foo(\n    a: i32,\n    b: i32\n) -> i32",
+        LineRange { start: 1, end: 4 },
+    )];
+    let base = vec![symbol(
+        "foo",
+        None,
+        "fn foo(a: i32, b: i32) -> i32",
+        LineRange { start: 1, end: 1 },
+    )];
+
+    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+    let mut expected = head.clone();
+    expected[0].classification = Some(Classification::BodyOnly);
+    let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+    assert_eq!(expected, head);
+    assert_eq!(expected_removed, removed);
+}
+
+// Scope note (task spec): a trailing comma introduced by reflow (e.g.
+// gofmt/rustfmt adding one when wrapping a parameter list onto multiple
+// lines) is a real extra token, not a whitespace-only difference —
+// `normalize_for_comparison` only touches whitespace runs, so this
+// legitimately still classifies as `SignatureChanged`, not a false
+// negative to fix.
+#[test]
+fn should_classify_as_signature_changed_when_reflow_adds_a_trailing_comma() {
+    let mut head = vec![symbol(
+        "foo",
+        None,
+        "fn foo(\n    a: i32,\n    b: i32,\n) -> i32",
+        LineRange { start: 1, end: 4 },
+    )];
+    let base = vec![symbol(
+        "foo",
+        None,
+        "fn foo(a: i32, b: i32) -> i32",
+        LineRange { start: 1, end: 1 },
+    )];
+
+    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+
+    let mut expected = head.clone();
+    expected[0].classification = Some(Classification::SignatureChanged);
+    expected[0].previous_signature = Some("fn foo(a: i32, b: i32) -> i32".to_string());
+    let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+    assert_eq!(expected, head);
+    assert_eq!(expected_removed, removed);
+}
+
+// Guards against over-normalizing: removing whitespace runs unconditionally
+// (rather than only when adjacent to a non-word character) would make
+// `F(a b string)` and `F(ab string)` compare equal, hiding a genuine
+// signature change.
+#[test]
+fn should_classify_as_signature_changed_when_signatures_differ_only_by_a_word_boundary_space() {
+    let mut head = vec![symbol(
+        "F",
+        None,
+        "func F(ab string)",
+        LineRange { start: 1, end: 1 },
+    )];
+    let base = vec![symbol(
+        "F",
+        None,
+        "func F(a b string)",
+        LineRange { start: 1, end: 1 },
+    )];
+
+    let removed = classify_symbols(&mut head, &base, &[], "src/lib.go");
+
+    let mut expected = head.clone();
+    expected[0].classification = Some(Classification::SignatureChanged);
+    expected[0].previous_signature = Some("func F(a b string)".to_string());
+    let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+    assert_eq!(expected, head);
+    assert_eq!(expected_removed, removed);
+}
+
 #[test]
 fn should_classify_as_signature_changed_when_base_signature_differs() {
     let mut head = vec![symbol(

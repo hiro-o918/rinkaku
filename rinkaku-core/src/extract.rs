@@ -262,9 +262,13 @@ pub struct RemovedSymbol {
 /// Pure: takes both sides' already-extracted symbol lists and matches them
 /// in memory, no IO. `lang` is not needed here — `head_symbols` and
 /// `base_symbols` are both already the output of `extract_changed_symbols`/
-/// `extract_all_symbols`, whose signatures are already comment-stripped and
-/// normalized (ADR 0014's first change) — so signature comparison is a
-/// plain string comparison, not a second parse.
+/// `extract_all_symbols`, whose signatures are already comment-stripped
+/// (ADR 0014). Signatures are compared with [`normalize_for_comparison`]
+/// applied to both sides (ADR 0060) rather than as plain strings: a
+/// signature now keeps its original line structure for display, so a
+/// reflow-only difference (indentation, line wrapping) must be normalized
+/// away here to avoid a false `SignatureChanged`, same as ADR 0014 already
+/// required before display signatures went multi-line.
 pub fn classify_symbols(
     head_symbols: &mut [ExtractedSymbol],
     base_symbols: &[ExtractedSymbol],
@@ -287,7 +291,9 @@ pub fn classify_symbols(
             }
             Some(base_symbol) => {
                 matched_base_identities.insert(identity);
-                if base_symbol.signature == symbol.signature {
+                if normalize_for_comparison(&base_symbol.signature)
+                    == normalize_for_comparison(&symbol.signature)
+                {
                     symbol.classification = Some(Classification::BodyOnly);
                 } else {
                     symbol.classification = Some(Classification::SignatureChanged);
@@ -555,7 +561,12 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 }
 
 /// Slices a definition's signature: the declaration text with implementation
-/// detail and comment nodes removed, whitespace normalized to single spaces.
+/// detail and comment nodes removed, keeping its original line structure
+/// (dedented — see [`tidy_signature_lines`], ADR 0060) rather than
+/// collapsing it to one line. Contract-impact comparison
+/// ([`classify_symbols`]) normalizes whitespace separately, at comparison
+/// time, so a reflow-only difference between two multi-line signatures
+/// still doesn't register as a contract change.
 ///
 /// - `function_item`, `function_declaration` (Go/TS), `method_declaration`
 ///   (Go), `function_definition` (Python), `method_definition` (TS),
@@ -587,6 +598,8 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 /// change sanctioned by the ADR — some previously-reported signature strings
 /// that contained inline comments now omit them.
 fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
+    let first_line_column = node.start_position().column;
+
     if matches!(
         node.kind(),
         "class_definition" | "class_declaration" | "abstract_class_declaration"
@@ -594,7 +607,10 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
         let mut removed_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         collect_method_body_ranges(node, &mut removed_ranges);
         collect_comment_ranges(node, &removed_ranges.clone(), &mut removed_ranges);
-        return normalize_whitespace(&text_with_ranges_removed(node, source, removed_ranges));
+        return tidy_signature_lines(
+            &text_with_ranges_removed(node, source, removed_ranges),
+            first_line_column,
+        );
     }
 
     // `variable_declarator`'s body (a TS arrow function's `{ ... }`) is
@@ -632,7 +648,7 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     }
 
     let raw = text_with_ranges_removed(node, source, removed_ranges);
-    normalize_whitespace(&raw)
+    tidy_signature_lines(&raw, first_line_column)
 }
 
 /// Removes every byte range in `ranges` from `node`'s own text (`node`'s
@@ -737,10 +753,124 @@ fn is_comment_node(node: tree_sitter::Node) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment" | "comment")
 }
 
-/// Collapses runs of whitespace (including newlines/indentation from the
-/// original source) into single spaces, and trims the result.
-fn normalize_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Normalizes a signature for contract-impact comparison only
+/// ([`classify_symbols`], ADR 0014/0060) — display uses
+/// [`tidy_signature_lines`] instead, which keeps line structure, and other
+/// single-line render sites collapse whitespace unconditionally instead
+/// (each documented at its own call, e.g. `render::markdown`'s
+/// `collapse_to_single_line`; that transform is display-only and must stay
+/// unconditional so a struct like `Foo{x: i32}` still reads with a space
+/// after `{`, so it is not reused here).
+///
+/// Every maximal run of whitespace is replaced with a single space when
+/// both the character immediately before and immediately after the run are
+/// word characters (alphanumeric or `_`), and removed entirely otherwise.
+/// A naive `split_whitespace().join(" ")` (this function's predecessor)
+/// always inserts a space at a normalized run regardless of what the
+/// original text had there, so a reflow that introduces a line break right
+/// after a symbol like `(` or `,` — a position that never had a space in
+/// the original — would compare unequal to the un-reflowed form purely
+/// because of where the normalizer chose to put a space back. Restricting
+/// the collapse to word/word boundaries keeps a reflow-only change
+/// (whitespace inserted or moved next to punctuation) invisible to the
+/// comparison while still preserving whitespace that is itself meaningful
+/// content (e.g. the space in `a b` vs. no space in `ab`).
+fn normalize_for_comparison(text: &str) -> String {
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+    let chars: Vec<char> = text.chars().collect();
+
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            let run_start = i;
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+            let before = chars[..run_start].last().copied();
+            let after = chars.get(i).copied();
+            if before.is_some_and(is_word_char) && after.is_some_and(is_word_char) {
+                result.push(' ');
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Shapes a raw, range-stripped declaration slice into the multi-line text
+/// stored on [`ExtractedSymbol::signature`] (ADR 0060): dedents every
+/// continuation line relative to the least-indented non-blank line
+/// (`first_line_column` standing in for the first line's own indentation,
+/// see below), trims trailing whitespace from each line, collapses runs
+/// of blank lines left behind by a stripped comment/body into a single
+/// blank line, and trims leading/trailing blank lines. A single-line
+/// input is returned trimmed, same as before ADR 0060.
+///
+/// `first_line_column` is the node's `start_position().column` in the
+/// original source — the column the declaration keyword (`fn`/`class`/...)
+/// actually starts at, which is *not* recoverable from the text alone: a
+/// tree-sitter node's text only ever contains that node's own span, so the
+/// first line of the sliced text never carries the leading whitespace
+/// before it, whether or not the definition is nested. Folding this column
+/// into the dedent-baseline calculation (as a stand-in for "line 0's own
+/// indent") is what tells a nested definition (`first_line_column` > 0,
+/// e.g. 4 inside an `impl` block) apart from a top-level one
+/// (`first_line_column` == 0): a nested method's continuation lines carry
+/// their real absolute column and must be dedented back down to
+/// `first_line_column`'s depth, while a top-level struct/class's
+/// continuation lines are indented *relative to that definition's own
+/// body* and must be left alone.
+fn tidy_signature_lines(text: &str, first_line_column: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+
+    let min_indent = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            if index == 0 {
+                first_line_column
+            } else {
+                line.len() - line.trim_start().len()
+            }
+        })
+        .min()
+        .unwrap_or(0);
+
+    let dedented: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if line.trim().is_empty() {
+                ""
+            } else if index == 0 {
+                // Never dedented: see `first_line_column`'s doc comment.
+                line.trim_end()
+            } else {
+                line.get(min_indent..).unwrap_or(line).trim_end()
+            }
+        })
+        .collect();
+
+    let mut collapsed: Vec<&str> = Vec::with_capacity(dedented.len());
+    for line in dedented {
+        if line.is_empty() && collapsed.last().is_some_and(|last: &&str| last.is_empty()) {
+            continue;
+        }
+        collapsed.push(line);
+    }
+
+    while collapsed.first().is_some_and(|line| line.is_empty()) {
+        collapsed.remove(0);
+    }
+    while collapsed.last().is_some_and(|line| line.is_empty()) {
+        collapsed.pop();
+    }
+
+    collapsed.join("\n")
 }
 
 /// Walks up from `node` to find an enclosing container (Rust

@@ -28,6 +28,7 @@ mod highlighting;
 mod overlay;
 mod search;
 mod split_view;
+mod tab_expansion;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {
     ExtractedSymbol {

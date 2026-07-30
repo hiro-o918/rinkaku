@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.6.17](https://github.com/hiro-o918/rinkaku/compare/v0.6.16...v0.6.17) (2026-07-26)
+
+
+### Features
+
+* preserve line structure in displayed signatures ([#187](https://github.com/hiro-o918/rinkaku/issues/187)) ([7374f79](https://github.com/hiro-o918/rinkaku/commit/7374f797601839f038ade0ed133ecf00f86d5f85))
+* **tui:** stop dimming unsupported-language file rows ([#188](https://github.com/hiro-o918/rinkaku/issues/188)) ([72fb44e](https://github.com/hiro-o918/rinkaku/commit/72fb44e754b6dd891dcc5227fede8bb519a93504))
+
+
+### Bug Fixes
+
+* **tui:** expand tabs when rendering diff and source lines ([#190](https://github.com/hiro-o918/rinkaku/issues/190)) ([c89c38f](https://github.com/hiro-o918/rinkaku/commit/c89c38f359c26e18b240ddfbd04f1a953d21dbbf))
+
+
+### Miscellaneous
+
+* release main ([#184](https://github.com/hiro-o918/rinkaku/issues/184)) ([2ca8589](https://github.com/hiro-o918/rinkaku/commit/2ca8589d947227e30e70118bc9b4442b63f5f204))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.16 to 0.6.17
+
+## [0.6.16](https://github.com/hiro-o918/rinkaku/compare/v0.6.15...v0.6.16) (2026-07-26)
+
+
+### Features
+
+* preserve line structure in displayed signatures ([#187](https://github.com/hiro-o918/rinkaku/issues/187)) ([7374f79](https://github.com/hiro-o918/rinkaku/commit/7374f797601839f038ade0ed133ecf00f86d5f85))
+* **tui:** rebind review annotations from n/N to a/A ([#183](https://github.com/hiro-o918/rinkaku/issues/183)) ([6933471](https://github.com/hiro-o918/rinkaku/commit/6933471e9dbef5fbe52e5384f588940488d799d5))
+* **tui:** stop dimming unsupported-language file rows ([#188](https://github.com/hiro-o918/rinkaku/issues/188)) ([72fb44e](https://github.com/hiro-o918/rinkaku/commit/72fb44e754b6dd891dcc5227fede8bb519a93504))
+* **tui:** vim-like search in source view + help overlay Global group split ([#182](https://github.com/hiro-o918/rinkaku/issues/182)) ([3f89f05](https://github.com/hiro-o918/rinkaku/commit/3f89f05d0b02d438a9a8e982b5eb24a467490058))
+
+
+### Miscellaneous
+
+* release main ([#181](https://github.com/hiro-o918/rinkaku/issues/181)) ([90544ca](https://github.com/hiro-o918/rinkaku/commit/90544ca7744fda83b046a8959276b9bb4fec7abd))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.15 to 0.6.16
+
 ## [0.6.15](https://github.com/hiro-o918/rinkaku/compare/v0.6.14...v0.6.15) (2026-07-15)
 
 

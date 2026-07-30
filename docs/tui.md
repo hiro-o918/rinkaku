@@ -107,7 +107,7 @@ Press `?` in the TUI for the always-up-to-date table.
 | `ctrl-o` / `ctrl-i` | Jump back / forward through the jumplist |
 | `n` / `N` | Compose a review note / open the notes list ([ADR 0048](adr/0048-tui-review-actions.md)) |
 | `w` / `W` | Open the current PR's page in a web browser, `--pr` mode only ([ADR 0050](adr/0050-tui-open-pr-in-browser.md)) |
-| `U` | Prompt to self-update; opens automatically once a newer release is found, or reopens it after a dismissal ([ADR 0054](adr/0054-tui-update-available-prompt.md), [ADR 0056](adr/0056-tui-update-prompt-auto-open-and-freeze-fix.md)) |
+| `U` | Prompt to self-update, once the background check has found a newer release ([ADR 0054](adr/0054-tui-update-available-prompt.md), [ADR 0062](adr/0062-update-prompt-before-analysis.md)) |
 | `?` | Toggle the help overlay |
 | `q` / `ctrl-c` | Quit (from the entry view); `esc`/`q` also returns from the source view |
 

@@ -76,6 +76,52 @@ fn should_group_file_selection_hunks_under_per_symbol_sections() {
     assert_eq!(expected, actual);
 }
 
+// ADR 0060: `DiffSection::title` is a single anchor line, so a symbol
+// whose signature keeps its original multi-line structure (e.g. a
+// struct) must be collapsed to one line here rather than expanding the
+// section header into several lines.
+#[test]
+fn should_collapse_multiline_signature_to_one_line_title() {
+    let report = Report {
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![ExtractedSymbol {
+                signature: "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
+                ..symbol("lib.rs::Point", "Point", LineRange { start: 1, end: 4 })
+            }],
+        }],
+        ..empty_report()
+    };
+    let diff_files = vec![FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![hunk(
+            "@@ -1,4 +1,4 @@",
+            Some((1, 4)),
+            vec!["struct Point {", "    x: i32,", "    y: i32,", "}"],
+        )],
+    }];
+    let target = DiffTarget::File {
+        path: "lib.rs".to_string(),
+    };
+
+    let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+    let expected = DiffPaneContent::File(vec![DiffSection {
+        title: "struct Point { x: i32, y: i32, }".to_string(),
+        symbol_id: Some("lib.rs::Point".to_string()),
+        contract_header: None,
+        hunks: vec![attributed(
+            0,
+            hunk(
+                "@@ -1,4 +1,4 @@",
+                Some((1, 4)),
+                vec!["struct Point {", "    x: i32,", "    y: i32,", "}"],
+            ),
+        )],
+    }]);
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn should_attribute_pure_deletion_hunk_to_owning_symbol_instead_of_module_level() {
     // Finding-2 regression: `hunk_intersects` always returning `false`
@@ -472,6 +518,57 @@ fn should_include_contract_header_on_the_owning_section_in_a_file_selection() {
         hunks: vec![attributed(
             0,
             hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo(a, b) {}"]),
+        )],
+    }]);
+    assert_eq!(expected, actual);
+}
+
+// ADR 0060: `ContractHeader`'s two fields are each a single anchor line
+// (`section_anchor_lines`/`section_anchor_split_row` render them as one
+// `Line` apiece), so a multi-line struct/class signature change must
+// collapse both sides to one line here too, not just `title`.
+#[test]
+fn should_collapse_multiline_contract_header_signatures_to_one_line_each() {
+    let report = Report {
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![ExtractedSymbol {
+                classification: Some(Classification::SignatureChanged),
+                previous_signature: Some("struct Point {\n    x: i32,\n}".to_string()),
+                signature: "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
+                ..symbol("lib.rs::Point", "Point", LineRange { start: 1, end: 4 })
+            }],
+        }],
+        ..empty_report()
+    };
+    let diff_files = vec![FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![hunk(
+            "@@ -1,3 +1,4 @@",
+            Some((1, 4)),
+            vec!["struct Point {", "    x: i32,", "    y: i32,", "}"],
+        )],
+    }];
+    let target = DiffTarget::File {
+        path: "lib.rs".to_string(),
+    };
+
+    let actual = build_diff_pane_content(&report, &diff_files, Some(&target));
+
+    let expected = DiffPaneContent::File(vec![DiffSection {
+        title: "struct Point { x: i32, y: i32, }".to_string(),
+        symbol_id: Some("lib.rs::Point".to_string()),
+        contract_header: Some(ContractHeader {
+            previous_signature: "struct Point { x: i32, }".to_string(),
+            signature: "struct Point { x: i32, y: i32, }".to_string(),
+        }),
+        hunks: vec![attributed(
+            0,
+            hunk(
+                "@@ -1,3 +1,4 @@",
+                Some((1, 4)),
+                vec!["struct Point {", "    x: i32,", "    y: i32,", "}"],
+            ),
         )],
     }]);
     assert_eq!(expected, actual);
