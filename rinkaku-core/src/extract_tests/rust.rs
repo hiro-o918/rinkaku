@@ -174,6 +174,85 @@ fn should_collect_scoped_identifier_path_references(
 }
 
 #[rstest]
+#[case::should_capture_called_name_when_path_is_a_lowercase_module(
+    "\
+fn build() -> Format {
+    markdown::render_markdown(report)
+}
+",
+    vec![
+        "Format".to_string(),
+        "markdown".to_string(),
+        "render_markdown".to_string(),
+    ],
+)]
+#[case::should_capture_called_name_when_path_is_super(
+    "\
+fn build() -> Format {
+    super::helper(1)
+}
+",
+    vec!["Format".to_string(), "helper".to_string()],
+)]
+#[case::should_capture_called_name_when_path_is_crate(
+    "\
+fn build() -> Format {
+    crate::helper(1)
+}
+",
+    vec!["Format".to_string(), "helper".to_string()],
+)]
+#[case::should_capture_method_name_when_called_on_a_receiver(
+    "\
+fn build() -> Format {
+    state.advance_cursor()
+}
+",
+    vec!["Format".to_string(), "advance_cursor".to_string()],
+)]
+#[case::should_skip_ubiquitous_method_name_when_called_on_a_receiver(
+    "\
+fn build() -> Format {
+    state.clone()
+}
+",
+    vec!["Format".to_string()],
+)]
+#[case::should_keep_ubiquitous_name_when_called_as_a_free_function(
+    "\
+fn build() -> Format {
+    get(1)
+}
+",
+    vec!["Format".to_string(), "get".to_string()],
+)]
+fn should_collect_scoped_and_method_call_references(
+    #[case] source: &str,
+    #[case] referenced_names: Vec<String>,
+) {
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "build".to_string(),
+        kind: SymbolKind::Function,
+        signature: "fn build() -> Format".to_string(),
+        range: LineRange { start: 1, end: 3 },
+        container: None,
+        referenced_names,
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[rstest]
 #[case::should_collect_call_and_path_identifiers_inside_macro_body(
     "\
 fn build() -> Format {

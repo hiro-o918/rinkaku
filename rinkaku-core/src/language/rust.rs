@@ -22,10 +22,15 @@ const DEFINITION_QUERY: &str = "\
 ///
 /// - `call_expression function: (identifier)` captures free function calls
 ///   (`helper(x)`) and tuple-struct/enum-variant constructors used as
-///   calls. Method/UFCS calls (`function: (field_expression ...)` for
-///   `x.bar()`) are intentionally not captured: their callee is not a bare
-///   identifier, and resolving them would need type information v1 does
-///   not have (ADR 0003).
+///   calls.
+/// - `call_expression function: (field_expression field:
+///   (field_identifier))` captures method-call names (`x.bar()` → `bar`)
+///   under the distinct `@reference.method` capture (ADR 0064), which
+///   `extract::collect_referenced_names` filters through a stoplist of
+///   ubiquitous std trait/idiom method names — a name-only match for
+///   `.clone()`/`.get()` against a same-named repo symbol is more likely
+///   wrong than right, and one such symbol drew 143 false referrers when
+///   measured unfiltered.
 /// - `type_identifier` captures every named type reference (parameter
 ///   types, return types, struct field types, generic type arguments,
 ///   ...), matched anywhere in the tree rather than only in specific
@@ -37,8 +42,13 @@ const DEFINITION_QUERY: &str = "\
 /// - `scoped_identifier path: (identifier)` captures the left-hand type of
 ///   a scoped path — `OutputFormat` in `OutputFormat::Markdown`, `Type` in
 ///   a UFCS call's `Type::method()` — without capturing the `name` field
-///   (the method/variant/associated-item on the right), which stays
-///   unresolved for the same reason UFCS callees are excluded above. A
+///   here. Whether the name is also a reference depends on what the path
+///   is: `markdown::render_markdown(x)` references a symbol,
+///   `Format::default()`'s `default` is an associated item name-only
+///   resolution must not touch (every `X::new()` would otherwise edge to
+///   every `fn new`, measured at 142 false referrers per node). A query
+///   cannot test identifier case, so that split lives in
+///   `extract::collect_module_scoped_call_names` (ADR 0064), not here. A
 ///   path with three or more segments nests an inner `scoped_identifier`
 ///   in `path` instead of a bare identifier, so only its outermost
 ///   segment is reached this way; deeper segments are a known, accepted
@@ -59,6 +69,7 @@ const DEFINITION_QUERY: &str = "\
 const REFERENCE_QUERY: &str = "\
 [
   (call_expression function: (identifier) @reference.call)
+  (call_expression function: (field_expression field: (field_identifier) @reference.method))
   (type_identifier) @reference.type
   (scoped_identifier path: (identifier) @reference.type)
   (trait_item body: (declaration_list (function_signature_item name: (identifier) @reference.call)))
