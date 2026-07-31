@@ -16,8 +16,10 @@ on:
   #
   # publish-crates guards itself against re-publishing a version that's
   # already on crates.io, so a full re-run is safe even after a partial
-  # success; publish-release's `--clobber` makes re-uploading release
-  # assets safe too.
+  # success; publish-release skips assets that already exist on the
+  # release, so a re-run never rewrites a published artifact's checksum
+  # (issue #22 -- the v0.2.0 --clobber re-upload changed the tarball
+  # sha256 while the Homebrew formula kept the old one).
   workflow_dispatch:
     inputs:
       tag:
@@ -128,11 +130,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # --clobber makes this safe to re-run via workflow_dispatch
-          # against a tag whose assets were already uploaded.
-          gh release upload "${{ env.RELEASE_TAG }}" dist/* \
+          # Published assets are immutable (issue #22): a re-run must
+          # never replace an already-uploaded asset -- Rust builds are
+          # not bit-for-bit reproducible, so a rewritten tarball changes
+          # the sha256 the Homebrew formula was bumped with, while the
+          # formula bump itself is skipped on a re-run (version string
+          # unchanged). Skipping keeps re-runs useful for filling in
+          # *missing* assets only; a racing concurrent upload fails the
+          # non-clobber `gh release upload`, which also preserves
+          # immutability.
+          existing=$(gh release view "${{ env.RELEASE_TAG }}" \
             --repo "${{ github.repository }}" \
-            --clobber
+            --json assets --jq '.assets[].name')
+          for file in dist/*; do
+            name=$(basename "$file")
+            if printf '%s\n' "$existing" | grep -Fqx "$name"; then
+              echo "skipping ${name}: already published, kept immutable"
+            else
+              gh release upload "${{ env.RELEASE_TAG }}" "$file" \
+                --repo "${{ github.repository }}"
+            fi
+          done
 
   publish-crates:
     needs: [rust-test]
