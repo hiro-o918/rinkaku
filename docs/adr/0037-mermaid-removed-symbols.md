@@ -173,4 +173,5 @@ graph.
   symbols appears via `report.removed`. A PR that deletes a file
   outright shows nothing for that file in `--format mermaid` — not
   even a `removed`-classed node — which this ADR does not fix, only
-  documents and tracks.
+  documents and tracks. *Resolved by ADR 0065: whole-file deletions
+  now populate `report.removed` whenever a base reader is available.*

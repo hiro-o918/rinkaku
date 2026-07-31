@@ -181,6 +181,12 @@ pub fn analyze_diff(
         // function's doc comment).
         'file: {
             if changed_file.kind == ChangeKind::Deleted {
+                removed.extend(removed_symbols_from_deleted_file(
+                    &changed_file,
+                    read_base_file,
+                    generated_paths,
+                    include_generated,
+                ));
                 skipped.push(SkippedFile {
                     path: changed_file.path,
                     reason: SkipReason::Deleted,
@@ -615,6 +621,47 @@ fn classify_against_base(
     };
     let base_symbols = extract_all_symbols(&base_source, lang);
     classify_symbols(head_symbols, &base_symbols, old_changed_ranges, report_path)
+}
+
+/// Every base-side symbol of a whole-file deletion, as [`RemovedSymbol`]s
+/// (ADR 0065): the whole file is the removal, so — unlike
+/// [`classify_against_base`]'s range-overlap path for a still-alive file —
+/// every top-level base symbol is removed by definition and no
+/// head-vs-base matching is needed. Empty when the live pipeline would
+/// not have analyzed the file either (binary, `generated_paths`, a
+/// generated content marker unless `include_generated`, unsupported
+/// language), or when there is no base content to read (`read_base_file`
+/// absent or failing — ADR 0014's "never guess" contract).
+fn removed_symbols_from_deleted_file(
+    changed_file: &crate::diff::ChangedFile,
+    read_base_file: Option<ReadBaseFile>,
+    generated_paths: &std::collections::HashSet<String>,
+    include_generated: bool,
+) -> Vec<RemovedSymbol> {
+    if changed_file.is_binary || generated_paths.contains(&changed_file.path) {
+        return Vec::new();
+    }
+    let Some(lang) = language_for_path(&changed_file.path) else {
+        return Vec::new();
+    };
+    let Some(read_base_file) = read_base_file else {
+        return Vec::new();
+    };
+    let Ok(base_source) = read_base_file(&changed_file.path) else {
+        return Vec::new();
+    };
+    if !include_generated && is_generated_content(&base_source) {
+        return Vec::new();
+    }
+    extract_all_symbols(&base_source, lang)
+        .into_iter()
+        .map(|base_symbol| RemovedSymbol {
+            name: base_symbol.name,
+            kind: base_symbol.kind,
+            path: changed_file.path.clone(),
+            signature: base_symbol.signature,
+        })
+        .collect()
 }
 
 /// Splits `files` into (non-test symbols, per-file test-symbol counts) for

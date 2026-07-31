@@ -199,4 +199,5 @@ it (see Consequences).
   any symbol that file used to contain; only a file that survives the
   diff with some or all of its symbols individually removed is
   represented. Not a regression introduced by this ADR — tracked at
-  the same issue.
+  the same issue. *Resolved by ADR 0065: whole-file deletions now
+  populate `report.removed` whenever a base reader is available.*
