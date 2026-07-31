@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.18](https://github.com/hiro-o918/rinkaku/compare/v0.6.17...v0.6.18) (2026-07-31)
+
+
+### Features
+
+* capture module-scoped and method call references (ADR 0064) ([#201](https://github.com/hiro-o918/rinkaku/issues/201)) ([5921317](https://github.com/hiro-o918/rinkaku/commit/5921317072d73356705578d3bf28c780b7e0cfcb))
+* report whole-file deletions in report.removed (ADR 0065) ([#205](https://github.com/hiro-o918/rinkaku/issues/205)) ([a1b3338](https://github.com/hiro-o918/rinkaku/commit/a1b3338242647ed9847bf4eba43915130265f854)), closes [#115](https://github.com/hiro-o918/rinkaku/issues/115)
+* surface per-symbol test coverage (ADR 0059) ([#185](https://github.com/hiro-o918/rinkaku/issues/185)) ([da17b97](https://github.com/hiro-o918/rinkaku/commit/da17b97b77407023ceeb1e44da3dc7fbc7ca8410))
+
+
+### Bug Fixes
+
+* extract macro-body references and count transitive test coverage (ADR 0063) ([#194](https://github.com/hiro-o918/rinkaku/issues/194)) ([7b83f84](https://github.com/hiro-o918/rinkaku/commit/7b83f845557b84eb95e52e9e452ecb61a4b2ac0d))
+
+
+### Miscellaneous
+
+* release main ([#189](https://github.com/hiro-o918/rinkaku/issues/189)) ([b939e1d](https://github.com/hiro-o918/rinkaku/commit/b939e1dbe7d0d2afce24a5ab0218323adf40619b))
+
 ## [0.6.17](https://github.com/hiro-o918/rinkaku/compare/v0.6.16...v0.6.17) (2026-07-26)
 
 

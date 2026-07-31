@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.19](https://github.com/hiro-o918/rinkaku/compare/v0.6.18...v0.6.19) (2026-07-31)
+
+
+### Features
+
+* confirm the update before analysis and re-exec after it ([#193](https://github.com/hiro-o918/rinkaku/issues/193)) ([ec3e66f](https://github.com/hiro-o918/rinkaku/commit/ec3e66f80000c641fe9d872ef8e611d3b405a534))
+* surface per-symbol test coverage (ADR 0059) ([#185](https://github.com/hiro-o918/rinkaku/issues/185)) ([da17b97](https://github.com/hiro-o918/rinkaku/commit/da17b97b77407023ceeb1e44da3dc7fbc7ca8410))
+
+
+### Bug Fixes
+
+* harden --pr mode ergonomics and extract the head mismatch check ([#204](https://github.com/hiro-o918/rinkaku/issues/204)) ([79737d6](https://github.com/hiro-o918/rinkaku/commit/79737d67873e374cefe17c6607aaa12c1034f350)), closes [#24](https://github.com/hiro-o918/rinkaku/issues/24)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.17 to 0.6.18
+    * rinkaku-tui bumped from 0.6.17 to 0.6.18
+
 ## [0.6.18](https://github.com/hiro-o918/rinkaku/compare/v0.6.17...v0.6.18) (2026-07-26)
 
 

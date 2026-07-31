@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.6.18](https://github.com/hiro-o918/rinkaku/compare/v0.6.17...v0.6.18) (2026-07-31)
+
+
+### Features
+
+* confirm the update before analysis and re-exec after it ([#193](https://github.com/hiro-o918/rinkaku/issues/193)) ([ec3e66f](https://github.com/hiro-o918/rinkaku/commit/ec3e66f80000c641fe9d872ef8e611d3b405a534))
+* surface per-symbol test coverage (ADR 0059) ([#185](https://github.com/hiro-o918/rinkaku/issues/185)) ([da17b97](https://github.com/hiro-o918/rinkaku/commit/da17b97b77407023ceeb1e44da3dc7fbc7ca8410))
+* **tui:** highlight tree search matches in the tree pane ([#202](https://github.com/hiro-o918/rinkaku/issues/202)) ([35a537e](https://github.com/hiro-o918/rinkaku/commit/35a537ec5dc5a08959f3dc7eff478cd4e21e9347)), closes [#197](https://github.com/hiro-o918/rinkaku/issues/197)
+* **tui:** tree cursor gg/G/Ctrl-d/Ctrl-u and entry-screen / search ([#186](https://github.com/hiro-o918/rinkaku/issues/186)) ([88e0312](https://github.com/hiro-o918/rinkaku/commit/88e0312a84185e964b308361c7692c5bb11b8149))
+
+
+### Bug Fixes
+
+* **tui:** cancel confirmed tree search on gd/gr and jumplist jumps ([#199](https://github.com/hiro-o918/rinkaku/issues/199)) ([bc9a3e8](https://github.com/hiro-o918/rinkaku/commit/bc9a3e8bd6c3ea868f35aca59ea1285f777c9335)), closes [#195](https://github.com/hiro-o918/rinkaku/issues/195)
+* **tui:** expand tabs when rendering diff and source lines ([#190](https://github.com/hiro-o918/rinkaku/issues/190)) ([c89c38f](https://github.com/hiro-o918/rinkaku/commit/c89c38f359c26e18b240ddfbd04f1a953d21dbbf))
+* **tui:** keep every status-line hint set within 80 columns ([#200](https://github.com/hiro-o918/rinkaku/issues/200)) ([cba0eb5](https://github.com/hiro-o918/rinkaku/commit/cba0eb5e5529c544da26c66a78c4cf10846e5dd1)), closes [#196](https://github.com/hiro-o918/rinkaku/issues/196)
+* **tui:** split the packed annotations-list help row into per-key rows ([#208](https://github.com/hiro-o918/rinkaku/issues/208)) ([50579e5](https://github.com/hiro-o918/rinkaku/commit/50579e502d91882f1c19c27eb0b17f9f9124ceb7)), closes [#207](https://github.com/hiro-o918/rinkaku/issues/207)
+
+
+### Miscellaneous
+
+* release main ([#189](https://github.com/hiro-o918/rinkaku/issues/189)) ([b939e1d](https://github.com/hiro-o918/rinkaku/commit/b939e1dbe7d0d2afce24a5ab0218323adf40619b))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.17 to 0.6.18
+
 ## [0.6.17](https://github.com/hiro-o918/rinkaku/compare/v0.6.16...v0.6.17) (2026-07-26)
 
 
