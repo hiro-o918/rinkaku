@@ -351,7 +351,7 @@ impl ReviewState {
         self
     }
 
-    /// Opens the export menu (`x` from the annotations list) — a no-op outside
+    /// Opens the export menu (Enter from the annotations list) — a no-op outside
     /// [`ReviewMode::List`].
     pub fn open_export_menu(mut self) -> Self {
         if matches!(self.mode, ReviewMode::List { .. }) {
