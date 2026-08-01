@@ -7,11 +7,13 @@
 
 use crate::diff::LineRange;
 use crate::language::LanguageSupport;
+use hcl::{build_hcl_locals_symbols, hcl_block_name, hcl_block_type};
 use references::collect_referenced_names;
 use serde::Serialize;
 use std::collections::HashMap;
 use tree_sitter::StreamingIterator;
 
+mod hcl;
 mod references;
 
 /// The kind of symbol a definition node represents, expressed in
@@ -471,83 +473,6 @@ fn build_symbol(
         classification: None,
         previous_signature: None,
     })
-}
-
-fn hcl_block_type(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor)
-        .find(|child| child.kind() == "identifier")
-        .and_then(|ident| ident.utf8_text(source).ok())
-        .map(|s| s.to_string())
-}
-
-fn hcl_string_lit_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor)
-        .find_map(|child| match child.kind() {
-            "template_literal" => child.utf8_text(source).ok().map(|s| s.to_string()),
-            "quoted_template_start" | "quoted_template_end" => None,
-            _ => hcl_string_lit_text(child, source),
-        })
-}
-
-fn hcl_block_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let block_type = hcl_block_type(node, source)?;
-    let mut cursor = node.walk();
-    let labels: Vec<String> = node
-        .children(&mut cursor)
-        .filter(|child| child.kind() == "string_lit")
-        .filter_map(|label| hcl_string_lit_text(label, source))
-        .collect();
-    match (block_type.as_str(), labels.as_slice()) {
-        ("resource", [type_label, name]) => Some(format!("{type_label}.{name}")),
-        ("data", [type_label, name]) => Some(format!("data.{type_label}.{name}")),
-        ("module", [name]) => Some(format!("module.{name}")),
-        ("variable", [name]) => Some(format!("var.{name}")),
-        ("output", [name]) => Some(format!("output.{name}")),
-        ("provider", [name]) => Some(format!("provider.{name}")),
-        _ => None,
-    }
-}
-
-fn build_hcl_locals_symbols(
-    node: tree_sitter::Node,
-    source: &[u8],
-    reference_query: &tree_sitter::Query,
-    lang: &dyn LanguageSupport,
-) -> Vec<ExtractedSymbol> {
-    let mut block_cursor = node.walk();
-    let Some(body) = node
-        .children(&mut block_cursor)
-        .find(|c| c.kind() == "body")
-    else {
-        return Vec::new();
-    };
-    let mut cursor = body.walk();
-    body.children(&mut cursor)
-        .filter(|child| child.kind() == "attribute")
-        .filter_map(|attribute| {
-            let mut attribute_cursor = attribute.walk();
-            let name_node = attribute
-                .children(&mut attribute_cursor)
-                .find(|c| c.kind() == "identifier")?;
-            let name = name_node.utf8_text(source).ok()?;
-            Some(ExtractedSymbol {
-                id: String::new(),
-                name: format!("local.{name}"),
-                kind: SymbolKind::Block,
-                signature: slice_signature(attribute, source),
-                range: node_to_line_range(attribute),
-                container: None,
-                referenced_names: collect_referenced_names(attribute, source, reference_query),
-                dependencies: Vec::new(),
-                omitted_dependency_matches: 0,
-                is_test: lang.is_test_definition(attribute, source),
-                classification: None,
-                previous_signature: None,
-            })
-        })
-        .collect()
 }
 
 /// Maps a captured definition node to a language-neutral [`SymbolKind`].
