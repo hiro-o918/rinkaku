@@ -122,9 +122,14 @@ static REGISTRY: &[RegistryEntry] = &[
         suffixes: &[".tsx"],
         support: || &typescript::TsxSupport,
     },
+    RegistryEntry {
+        suffixes: &[".tf", ".tofu", ".tftest.hcl"],
+        support: || &hcl::HclSupport,
+    },
 ];
 
 pub mod go;
+pub mod hcl;
 pub mod python;
 pub mod rust;
 pub mod typescript;
@@ -196,6 +201,24 @@ mod tests {
     #[case::should_return_none_when_filename_is_bare_tsx("tsx")]
     fn bare_extension_filenames_do_not_route(#[case] path: &str) {
         let actual = language_for_path(path);
+
+        assert!(actual.is_none());
+    }
+
+    #[rstest]
+    #[case::should_return_hcl_support_when_path_has_tf_suffix("envs/prod/main.tf")]
+    #[case::should_return_hcl_support_when_path_has_tofu_suffix("envs/prod/main.tofu")]
+    #[case::should_return_hcl_support_when_path_has_tftest_hcl_suffix("tests/plan.tftest.hcl")]
+    fn hcl_paths_route_to_hcl_support(#[case] path: &str) {
+        let actual = language_for_path(path);
+
+        let support = actual.expect("expected Some(&dyn LanguageSupport) for a Terraform path");
+        assert_eq!("hcl", support.name());
+    }
+
+    #[test]
+    fn should_return_none_when_path_is_plain_hcl_dialect() {
+        let actual = language_for_path("nomad/job.hcl");
 
         assert!(actual.is_none());
     }
