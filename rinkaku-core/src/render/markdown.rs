@@ -316,7 +316,7 @@ fn render_change_graph(
 /// rather than rendered as its own nested line (ADR 0012 decision 1) —
 /// when both hold:
 /// - its symbol's kind is not [`SymbolKind::Function`] (i.e. it is a data
-///   shape: struct/enum/trait/interface/class/type-alias), and
+///   shape: struct/enum/trait/interface/class/type-alias/block), and
 /// - it has no outgoing edges at all in the graph, including cycle edges —
 ///   a node whose only children are cycle edges is *not* foldable, so the
 ///   cycle warning stays visible rather than being silently swallowed.
@@ -715,6 +715,7 @@ fn symbol_kind_prefix(kind: SymbolKind) -> &'static str {
         SymbolKind::Class => "class",
         SymbolKind::Interface => "interface",
         SymbolKind::TypeAlias => "type",
+        SymbolKind::Block => "block",
     }
 }
 

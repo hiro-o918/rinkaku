@@ -42,6 +42,10 @@ pub enum SymbolKind {
     Class,
     Interface,
     TypeAlias,
+    /// A named HCL block or `locals` attribute (ADR 0066): the name
+    /// carries the Terraform-specific role (`aws_instance.web`,
+    /// `var.region`), so one language-neutral kind suffices.
+    Block,
 }
 
 /// A changed symbol's contract impact (ADR 0014), classified by comparing

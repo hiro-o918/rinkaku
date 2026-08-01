@@ -595,6 +595,7 @@ fn kind_abbrev(kind: SymbolKind) -> &'static str {
         SymbolKind::Class => "class",
         SymbolKind::Interface => "iface",
         SymbolKind::TypeAlias => "type",
+        SymbolKind::Block => "block",
     }
 }
 

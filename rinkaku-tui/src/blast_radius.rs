@@ -169,6 +169,7 @@ fn kind_word(kind: rinkaku_core::extract::SymbolKind) -> &'static str {
         SymbolKind::Class => "class",
         SymbolKind::Interface => "interface",
         SymbolKind::TypeAlias => "type",
+        SymbolKind::Block => "block",
     }
 }
 
