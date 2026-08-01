@@ -4,10 +4,12 @@
 //! - [`empty_and_ordering`] — the empty-report short-circuit, and the
 //!   ordering of the "Tests" / "Other changed files" / "Skipped files"
 //!   sections relative to each other.
+//! - [`change_graph_fold`] — ADR 0012 decision 1's `— uses: ...`
+//!   folding rule and its root, repetition, and cycle-edge exceptions.
 //! - [`change_graph_summary`] — the one-line summary under "## Change
 //!   graph" / "## Repository graph" and the origin-driven wording.
 //! - [`change_graph_tree`] — tree rendering: nesting, DFS order,
-//!   `(see above)`, cycle warnings, and `— uses:` folding.
+//!   `(see above)` for functions, and cycle warnings.
 //! - [`definition_body`] — one symbol's "### ..." entry: container
 //!   comment, `Depends on:` list, and the fence-widening rules.
 //! - [`sections_skipped_fan_in_filesize`] — the "Skipped files",
@@ -26,6 +28,7 @@ use crate::diff::LineRange;
 use crate::extract::SymbolKind;
 use crate::graph::Node;
 
+mod change_graph_fold;
 mod change_graph_summary;
 mod change_graph_tree;
 mod classification_and_removed;
