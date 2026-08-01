@@ -415,7 +415,7 @@ fn build_symbol(
     reference_query: &tree_sitter::Query,
     lang: &dyn LanguageSupport,
 ) -> Option<ExtractedSymbol> {
-    let kind = symbol_kind(node)?;
+    let kind = symbol_kind(node, source)?;
     let name = definition_name(node, source)?;
     let signature = slice_signature(node, source);
     let container = find_container(node, source);
@@ -446,15 +446,19 @@ fn build_symbol(
 }
 
 /// Maps a captured definition node to a language-neutral [`SymbolKind`].
-/// Node kind strings are unique across the grammars this module supports
-/// (Rust, Go, Python, TypeScript/TSX), so a single flat match is sufficient
-/// without needing to know which `LanguageSupport` a node came from.
+/// Node kind strings are matched flat across every supported grammar;
+/// kinds that collide across grammars (`block` also names ordinary
+/// braced blocks in the Rust/Go/Python grammars) are safe because this
+/// function only ever receives nodes captured by some language's
+/// `definition_query`, and only HCL's query captures `block` (ADR
+/// 0066). The source bytes are here for kinds whose classification
+/// needs identifier text rather than node shape alone.
 ///
 /// Takes the node rather than just its kind string because Go's
 /// `type_spec` needs to inspect its `type` field to tell a struct from an
 /// interface — the definition query captures `type_spec` for both (see
 /// `language/go.rs`), so the node kind alone is ambiguous for Go.
-fn symbol_kind(node: tree_sitter::Node) -> Option<SymbolKind> {
+fn symbol_kind(node: tree_sitter::Node, _source: &[u8]) -> Option<SymbolKind> {
     match node.kind() {
         // Rust.
         "function_item" | "function_signature_item" => Some(SymbolKind::Function),
