@@ -39,6 +39,38 @@ resource \"aws_instance\" \"web\" {
 }
 
 #[test]
+fn should_normalize_traversal_references_when_resource_body_changed() {
+    let source = "\
+resource \"aws_instance\" \"web\" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  subnet_id     = module.vpc.public_subnet_id
+  name          = local.name_prefix
+  peer          = aws_instance.other.id
+  count_alias   = count.index
+  each_alias    = each.value
+  self_alias    = self.public_ip
+}
+";
+    let lang = HclSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 9 }];
+
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    // Partial comparison: pins referenced-name normalization only; the
+    // full symbol shape is pinned by
+    // should_extract_resource_header_signature_when_body_line_changed.
+    let expected_names = vec![
+        "aws_instance.other".to_string(),
+        "data.aws_ami.ubuntu".to_string(),
+        "local.name_prefix".to_string(),
+        "module.vpc".to_string(),
+        "var.instance_type".to_string(),
+    ];
+    assert_eq!(expected_names, actual[0].referenced_names);
+}
+
+#[test]
 fn should_expand_locals_block_into_per_attribute_symbols_when_one_attribute_changed() {
     let source = "\
 locals {
@@ -68,6 +100,25 @@ locals {
     let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_collect_traversals_inside_string_interpolation_when_local_value_changed() {
+    let source = "\
+locals {
+  name = \"x-${var.env}\"
+}
+";
+    let lang = HclSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    // Partial comparison: pins referenced-name normalization only; the
+    // full `local.<attr>` symbol shape is pinned by
+    // should_expand_locals_block_into_per_attribute_symbols_when_one_attribute_changed.
+    let expected_names = vec!["var.env".to_string()];
+    assert_eq!(expected_names, actual[0].referenced_names);
 }
 
 #[test]

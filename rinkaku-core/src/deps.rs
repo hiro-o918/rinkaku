@@ -169,17 +169,33 @@ impl TagsResolver {
         on_progress: Option<OnProgress>,
     ) -> Self {
         let mut index: HashMap<String, Vec<ResolvedSymbol>> = HashMap::new();
+        // A dotted reference name (HCL: `var.region`, ADR 0066) never
+        // appears literally in its defining file — `variable "region"`
+        // contains only the components. Adding each dot-separated
+        // component as its own pattern preserves the prefilter's
+        // zero-recall-loss guarantee (see `should_parse_file`); the only
+        // cost is parsing more candidate files. Every component is added,
+        // including single-character ones: a one-character pattern makes
+        // the prefilter pass more files, which costs parsing time, never
+        // recall.
+        let mut patterns: Vec<String> = Vec::new();
+        for name in reference_names {
+            patterns.push(name.clone());
+            if name.contains('.') {
+                patterns.extend(name.split('.').map(str::to_string));
+            }
+        }
+
         // `AhoCorasick::new` only errors on pathological inputs this call
         // site cannot produce: an empty pattern set is handled gracefully
         // (matches nothing, not an error), and the automaton construction
         // itself only fails on internal overflow at pattern counts/lengths
-        // far beyond what a diff's `reference_names` (identifier-sized
-        // strings, at most a few hundred per run) could realistically
-        // reach. `.expect()` here documents "this is not expected to fail
-        // in practice" rather than a genuinely handled error path — there
-        // is no meaningful fallback if it somehow did (the resolver simply
-        // could not be built).
-        let matcher = aho_corasick::AhoCorasick::new(reference_names)
+        // far beyond what a diff's expanded reference-name patterns could
+        // realistically reach. `.expect()` here documents "this is not
+        // expected to fail in practice" rather than a genuinely handled
+        // error path — there is no meaningful fallback if it somehow did
+        // (the resolver simply could not be built).
+        let matcher = aho_corasick::AhoCorasick::new(&patterns)
             .expect("reference_names must build a valid AhoCorasick matcher");
 
         let files: Vec<(String, String)> = files.into_iter().collect();
@@ -241,7 +257,9 @@ impl TagsResolver {
 /// therefore never cause `resolve()` to miss a real definition, since any
 /// file containing the definition's own name as text necessarily passes
 /// this filter (a definition's name always appears literally in its own
-/// declaration) — the prefilter can only save work, not recall.
+/// declaration — or, for dotted names, its components do, which
+/// `TagsResolver::new`'s pattern expansion covers) — the prefilter can
+/// only save work, not recall.
 fn should_parse_file(matcher: &aho_corasick::AhoCorasick, content: &str) -> bool {
     matcher.is_match(content)
 }

@@ -1,9 +1,10 @@
 //! Reference-name collection: the identifiers a definition mentions,
 //! gathered from the language's `reference_query` captures plus the
-//! Rust-specific code walks (macro bodies, ADR 0063; module-scoped
-//! calls, ADR 0064) that a tree-sitter query cannot express. Split
-//! out of the module root along this responsibility boundary when
-//! the two walks pushed it over the warn threshold (ADR 0028).
+//! language-specific code walks (Rust macro bodies, ADR 0063; Rust
+//! module-scoped calls, ADR 0064; HCL traversals, ADR 0066) that a
+//! tree-sitter query cannot express. Split out of the module root along
+//! this responsibility boundary when the walks pushed it over the warn
+//! threshold (ADR 0028).
 
 use tree_sitter::StreamingIterator;
 
@@ -56,8 +57,86 @@ pub(super) fn collect_referenced_names(
 
     collect_macro_body_names(node, source, &mut names);
     collect_module_scoped_call_names(node, source, &mut names);
+    collect_hcl_traversal_names(node, source, &mut names);
 
     names.into_iter().collect()
+}
+
+/// HCL references are traversals — `(variable_expr (identifier))`
+/// followed by sibling `(get_attr (identifier))` nodes — which no
+/// single-capture query pattern can render in the normalized
+/// `var.x`/`data.t.n` form rinkaku's name-keyed resolution needs (ADR
+/// 0066). `variable_expr` is an HCL-only node kind, so the walk is
+/// inert for every other grammar (same cross-grammar reasoning as
+/// [`collect_macro_body_names`]).
+fn collect_hcl_traversal_names(
+    node: tree_sitter::Node,
+    source: &[u8],
+    names: &mut std::collections::BTreeSet<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "variable_expr"
+            && let Some(name) = hcl_traversal_name(child, source)
+        {
+            names.insert(name);
+        }
+        collect_hcl_traversal_names(child, source, names);
+    }
+}
+
+/// Assembles the normalized reference for one traversal rooted at
+/// `variable_expr`: the root identifier plus however many following
+/// `get_attr` components the root's namespace needs — `var.`/`local.`/
+/// `module.` take one, `data.` takes two (type + name), and any other
+/// root is a managed-resource reference taking one (`aws_instance.web`
+/// from `aws_instance.web.id`). Meta-roots (`each`, `count`, `self`,
+/// `path`, `terraform`) and bare roots with no `get_attr` (locally
+/// bound iteration/function names) reference nothing resolvable.
+fn hcl_traversal_name(variable_expr: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let root = {
+        let mut cursor = variable_expr.walk();
+        variable_expr
+            .children(&mut cursor)
+            .find(|c| c.kind() == "identifier")?
+            .utf8_text(source)
+            .ok()?
+            .to_string()
+    };
+    if matches!(
+        root.as_str(),
+        "each" | "count" | "self" | "path" | "terraform"
+    ) {
+        return None;
+    }
+
+    let parent = variable_expr.parent()?;
+    let mut cursor = parent.walk();
+    let attrs: Vec<String> = parent
+        .children(&mut cursor)
+        .skip_while(|sibling| *sibling != variable_expr)
+        .skip(1)
+        .take_while(|sibling| sibling.kind() == "get_attr")
+        .filter_map(|get_attr| {
+            let mut attr_cursor = get_attr.walk();
+            get_attr
+                .children(&mut attr_cursor)
+                .find(|c| c.kind() == "identifier")
+                .and_then(|ident| ident.utf8_text(source).ok())
+                .map(str::to_string)
+        })
+        .collect();
+
+    let wanted = match root.as_str() {
+        "data" => 2,
+        _ => 1,
+    };
+    if attrs.len() < wanted {
+        return None;
+    }
+    let mut parts = vec![root];
+    parts.extend(attrs.into_iter().take(wanted));
+    Some(parts.join("."))
 }
 
 /// Method names so common across std traits and container/`Option`/

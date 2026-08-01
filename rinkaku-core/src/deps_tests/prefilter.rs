@@ -116,3 +116,57 @@ fn should_index_nothing_when_reference_names_is_empty() {
 
     assert_eq!(expected, actual);
 }
+
+#[test]
+fn should_resolve_dotted_reference_when_definition_file_only_contains_its_components() {
+    let files = [(
+        "envs/prod/vars.tf".to_string(),
+        "variable \"region\" {\n  type = string\n}\n".to_string(),
+    )];
+    let reference_names: HashSet<String> = ["var.region".to_string()].into_iter().collect();
+
+    let resolver = TagsResolver::new(
+        files,
+        crate::language::language_for_path,
+        &reference_names,
+        true,
+        &HashSet::new(),
+        false,
+        None,
+    );
+
+    let expected = vec![ResolvedSymbol {
+        signature: "variable \"region\" {\n  type = string\n}".to_string(),
+        path: "envs/prod/vars.tf".to_string(),
+    }];
+    let actual = resolver.resolve("var.region");
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_resolve_single_character_variable_name_when_referenced() {
+    let files = [(
+        "envs/prod/x.tf".to_string(),
+        "variable \"x\" {\n  type = string\n}\n".to_string(),
+    )];
+    let reference_names: HashSet<String> = ["var.x".to_string()].into_iter().collect();
+
+    let resolver = TagsResolver::new(
+        files,
+        crate::language::language_for_path,
+        &reference_names,
+        true,
+        &HashSet::new(),
+        false,
+        None,
+    );
+
+    let expected = vec![ResolvedSymbol {
+        signature: "variable \"x\" {\n  type = string\n}".to_string(),
+        path: "envs/prod/x.tf".to_string(),
+    }];
+    let actual = resolver.resolve("var.x");
+
+    assert_eq!(expected, actual);
+}
