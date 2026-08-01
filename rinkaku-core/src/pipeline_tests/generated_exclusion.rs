@@ -48,6 +48,82 @@ index e69de29..4b825dc 100644
     assert_eq!(expected, report.skipped);
 }
 
+#[test]
+fn should_skip_terraform_lock_file_as_generated_when_changed() {
+    let diff = "\
+diff --git a/.terraform.lock.hcl b/.terraform.lock.hcl
+index e69de29..4b825dc 100644
+--- a/.terraform.lock.hcl
++++ b/.terraform.lock.hcl
+@@ -1,1 +1,1 @@
+-  version = \"5.0.0\"
++  version = \"5.1.0\"
+";
+    let source = "\
+provider \"registry.terraform.io/hashicorp/aws\" {
+  version = \"5.1.0\"
+  hashes = [\"h1:abc123\"]
+}
+";
+    let read_file = fake_reader(HashMap::from([(".terraform.lock.hcl", source)]));
+
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        false,
+        None,
+    )
+    .expect("analyze should succeed");
+
+    let expected = vec![SkippedFile {
+        path: ".terraform.lock.hcl".to_string(),
+        reason: SkipReason::Generated,
+    }];
+    assert_eq!(expected, report.skipped);
+}
+
+#[test]
+fn should_keep_unsupported_language_label_for_lock_file_when_include_generated() {
+    let diff = "\
+diff --git a/.terraform.lock.hcl b/.terraform.lock.hcl
+index e69de29..4b825dc 100644
+--- a/.terraform.lock.hcl
++++ b/.terraform.lock.hcl
+@@ -1,1 +1,1 @@
+-  version = \"5.0.0\"
++  version = \"5.1.0\"
+";
+    let source = "\
+provider \"registry.terraform.io/hashicorp/aws\" {
+  version = \"5.1.0\"
+  hashes = [\"h1:abc123\"]
+}
+";
+    let read_file = fake_reader(HashMap::from([(".terraform.lock.hcl", source)]));
+
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
+
+    let expected = vec![SkippedFile {
+        path: ".terraform.lock.hcl".to_string(),
+        reason: SkipReason::UnsupportedLanguage,
+    }];
+    assert_eq!(expected, report.skipped);
+}
+
 // Regression test: a file that is both deleted and marked
 // generated (e.g. a lockfile removed from a repo that also
 // declares it `-diff`) must be reported as `Deleted`, not

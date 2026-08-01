@@ -7,7 +7,9 @@
 //! pure and testable: `main.rs` supplies a closure that reads the working
 //! tree, tests supply a closure backed by an in-memory map.
 
-use crate::deps::{Resolver, is_generated_content, resolve_dependencies};
+use crate::deps::{
+    Resolver, is_generated_content, is_generated_lockfile_path, resolve_dependencies,
+};
 use crate::diff::{ChangeKind, parse_unified_diff};
 use crate::extract::{
     ExtractedSymbol, RemovedSymbol, classify_symbols, extract_all_symbols, extract_changed_symbols,
@@ -89,9 +91,15 @@ pub enum AnalyzeError {
 /// (checked first): the fact that a file was removed is more important
 /// information for a reviewer than an attribute the file no longer carries
 /// any content for, and `read_file` is never called either way.
+/// ADR 0066 additionally classifies `.terraform.lock.hcl` as generated via
+/// [`is_generated_lockfile_path`], independently of `generated_paths`.
+/// Unlike `generated_paths.contains`, which relies on the caller passing an
+/// empty set for `--include-generated`, this path check carries an explicit
+/// `!include_generated` guard so the flag restores normal unsupported-language
+/// handling for the lock file.
 ///
 /// `include_generated` gates both `generated_paths` (the caller passes an
-/// empty set when it's `false`, so this parameter does not duplicate that
+/// empty set when it's `true`, so this parameter does not duplicate that
 /// gating — see `main.rs`'s `resolve_generated_paths`) and, newly, content
 /// marker detection (ADR 0011): once a file's source is read (only reached
 /// when neither `generated_paths` nor any earlier check already skipped
@@ -193,7 +201,9 @@ pub fn analyze_diff(
                 });
                 break 'file;
             }
-            if generated_paths.contains(&changed_file.path) {
+            if generated_paths.contains(&changed_file.path)
+                || (!include_generated && is_generated_lockfile_path(&changed_file.path))
+            {
                 skipped.push(SkippedFile {
                     path: changed_file.path,
                     reason: SkipReason::Generated,

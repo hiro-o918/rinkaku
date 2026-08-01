@@ -8,6 +8,8 @@
 //!   / unsupported-language filters on `TagsResolver::new`'s index
 //!   (test-path exclusion, AST-detected test-def exclusion, generated
 //!   marker exclusion, multi-language passthrough)
+//! - `generated_lockfile_path` — path-only Terraform dependency lock-file
+//!   detection
 //! - `prefilter` — `should_parse_file`'s aho-corasick substring prefilter
 //!   (index/skip/incidental-hit/empty-names cases), previously the
 //!   `mod prefilter_tests` nested module
@@ -20,6 +22,7 @@ use super::*;
 use crate::language::go::GoSupport;
 use crate::language::rust::RustSupport;
 
+mod generated_lockfile_path;
 mod prefilter;
 mod resolve_dependencies;
 mod tags_resolver_exclusions;
