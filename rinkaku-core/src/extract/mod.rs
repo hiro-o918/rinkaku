@@ -195,7 +195,8 @@ pub fn extract_changed_symbols(
                     .iter()
                     .any(|other| other != *node && is_descendant_of(*other, **node))
             })
-            .filter_map(|node| build_symbol(*node, source_bytes, reference_query, lang))
+            .flat_map(|node| build_symbols(*node, source_bytes, reference_query, lang))
+            .filter(|symbol| overlaps_any(symbol.range, changed_ranges))
             .collect()
     })
 }
@@ -216,7 +217,7 @@ pub fn extract_all_symbols(source: &str, lang: &dyn LanguageSupport) -> Vec<Extr
     with_definition_nodes(source, lang, |all_nodes, source_bytes, reference_query| {
         all_nodes
             .iter()
-            .filter_map(|node| build_symbol(*node, source_bytes, reference_query, lang))
+            .flat_map(|node| build_symbols(*node, source_bytes, reference_query, lang))
             .collect()
     })
 }
@@ -403,6 +404,25 @@ fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
     others
         .iter()
         .any(|other| range.start <= other.end && other.start <= range.end)
+}
+
+/// Builds every symbol a captured definition node yields. One node is
+/// one symbol for every current kind; kinds that expand a single
+/// captured node into several symbols (HCL `locals` blocks, one symbol
+/// per attribute — ADR 0066) get their own branch here rather than in
+/// `build_symbol`, whose single-`Option` shape they cannot fit.
+/// `extract_changed_symbols` re-filters the expansion by changed-range
+/// overlap — a no-op for single-node symbols, whose range is the
+/// already-touched captured node's own.
+fn build_symbols(
+    node: tree_sitter::Node,
+    source: &[u8],
+    reference_query: &tree_sitter::Query,
+    lang: &dyn LanguageSupport,
+) -> Vec<ExtractedSymbol> {
+    build_symbol(node, source, reference_query, lang)
+        .into_iter()
+        .collect()
 }
 
 /// Builds an [`ExtractedSymbol`] from a captured definition node, or
