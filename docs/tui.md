@@ -53,7 +53,9 @@ only becomes load-bearing when the output would otherwise not be TUI
   without any per-symbol badge, since group membership already says
   "this is test code".
 - **Diff pane (right, default)** — the raw unified-diff hunks touching
-  the selected row, syntax-highlighted for the four built-in languages
+  the selected row, syntax-highlighted for four of rinkaku's five
+  built-in languages (HCL renders unhighlighted because its tree-sitter
+  grammar publishes no highlights query)
   ([ADR 0018](adr/0018-syntax-highlight-diff-pane-via-tree-sitter.md)).
   Opens in a split (side-by-side old/new) view by default — useful for
   edits where seeing the old and new lines aligned next to each other is

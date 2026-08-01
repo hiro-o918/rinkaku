@@ -83,6 +83,52 @@ fn should_render_subgraph_per_file_with_class_assignments_when_report_has_classi
 }
 
 #[test]
+fn should_render_hcl_style_dotted_names_inside_quoted_labels_only() {
+    let report = empty_report(
+        SymbolGraph {
+            nodes: vec![
+                node("main.tf::aws_instance.web", "main.tf", "aws_instance.web"),
+                node("main.tf::var.region", "main.tf", "var.region"),
+            ],
+            edges: vec![Edge {
+                from: "main.tf::aws_instance.web".to_string(),
+                to: "main.tf::var.region".to_string(),
+                is_cycle: false,
+            }],
+            roots: vec!["main.tf::aws_instance.web".to_string()],
+        },
+        vec![FileReport {
+            path: "main.tf".to_string(),
+            symbols: vec![
+                symbol(
+                    "main.tf::aws_instance.web",
+                    "aws_instance.web",
+                    SymbolKind::Block,
+                    Some(Classification::Added),
+                ),
+                symbol("main.tf::var.region", "var.region", SymbolKind::Block, None),
+            ],
+        }],
+    );
+
+    let expected = concat!(
+        "flowchart LR\n",
+        "  subgraph sub0[\"main.tf\"]\n",
+        "    n0[\"+ aws_instance.web\"]\n",
+        "    n1[\"var.region\"]\n",
+        "  end\n",
+        "  n0 --> n1\n",
+        "  class n0 added\n",
+        "  class n1 referenced\n",
+    )
+    .to_string()
+        + CLASS_DEFS;
+    let actual = render(&report, OutputFormat::Mermaid).expect("mermaid render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_render_dashed_arrow_when_edge_is_a_cycle() {
     let report = empty_report(
         SymbolGraph {

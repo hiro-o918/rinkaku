@@ -760,6 +760,100 @@ fn bar()
 }
 
 #[test]
+fn should_fold_hcl_block_dependency_repeated_across_multiple_parents() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "main.tf".to_string(),
+            symbols: vec![
+                symbol(
+                    "main.tf::aws_instance.web",
+                    "aws_instance.web",
+                    SymbolKind::Function,
+                    "resource \"aws_instance\" \"web\" { ... }",
+                ),
+                symbol(
+                    "main.tf::aws_instance.db",
+                    "aws_instance.db",
+                    SymbolKind::Function,
+                    "resource \"aws_instance\" \"db\" { ... }",
+                ),
+                symbol(
+                    "main.tf::var.region",
+                    "var.region",
+                    SymbolKind::Block,
+                    "variable \"region\" { ... }",
+                ),
+            ],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![
+                node("main.tf::aws_instance.web", "main.tf", "aws_instance.web"),
+                node("main.tf::aws_instance.db", "main.tf", "aws_instance.db"),
+                node("main.tf::var.region", "main.tf", "var.region"),
+            ],
+            edges: vec![
+                Edge {
+                    from: "main.tf::aws_instance.web".to_string(),
+                    to: "main.tf::var.region".to_string(),
+                    is_cycle: false,
+                },
+                Edge {
+                    from: "main.tf::aws_instance.db".to_string(),
+                    to: "main.tf::var.region".to_string(),
+                    is_cycle: false,
+                },
+            ],
+            roots: vec![
+                "main.tf::aws_instance.web".to_string(),
+                "main.tf::aws_instance.db".to_string(),
+            ],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn aws_instance.web (main.tf) — uses: var.region
+- fn aws_instance.db (main.tf) — uses: var.region
+
+## Definitions
+
+### fn aws_instance.web (main.tf)
+
+```
+resource \"aws_instance\" \"web\" { ... }
+```
+
+### block var.region (main.tf)
+
+```
+variable \"region\" { ... }
+```
+
+### fn aws_instance.db (main.tf)
+
+```
+resource \"aws_instance\" \"db\" { ... }
+```
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_render_childless_non_function_root_as_top_level_line_when_it_would_otherwise_be_foldable()
 {
     // `Config` is a childless struct — foldable by the structural

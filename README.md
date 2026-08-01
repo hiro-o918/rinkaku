@@ -28,7 +28,7 @@ Two ways to look at it:
 
 Both share one engine: tree-sitter extraction of changed symbols, 1-hop
 dependency expansion, fan-in / contract-change / entry-point
-summarizers. Rust, Go, Python, and TypeScript out of the box.
+summarizers. Rust, Go, Python, TypeScript, and HCL (Terraform) out of the box.
 
 ## Try it in 30 seconds
 

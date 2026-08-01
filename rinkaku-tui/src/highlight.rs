@@ -5,9 +5,10 @@
 //! parses, not a change to the extraction pipeline. `rinkaku-core`'s
 //! `LanguageSupport` port stays untouched (ADR 0018's rejected
 //! "extend core" alternative) — this module keeps its own small
-//! extension -> grammar/query table for the same four built-in languages,
+//! extension -> grammar/query table for Rust, Go, Python, and TypeScript,
 //! mirroring `rinkaku_core::language`'s registry style without depending
-//! on it.
+//! on it. HCL is deliberately excluded and renders unhighlighted because
+//! its tree-sitter grammar publishes no highlights query (ADR 0066).
 //!
 //! Pipeline per hunk (`highlight_hunk`):
 //! 1. Reconstruct the hunk's new-side text (context + added lines) and
