@@ -424,6 +424,10 @@ fn build_symbols(
     reference_query: &tree_sitter::Query,
     lang: &dyn LanguageSupport,
 ) -> Vec<ExtractedSymbol> {
+    if node.kind() == "block" && hcl_block_type(node, source).as_deref() == Some("locals") {
+        return build_hcl_locals_symbols(node, source, reference_query, lang);
+    }
+
     build_symbol(node, source, reference_query, lang)
         .into_iter()
         .collect()
@@ -469,6 +473,83 @@ fn build_symbol(
     })
 }
 
+fn hcl_block_type(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find(|child| child.kind() == "identifier")
+        .and_then(|ident| ident.utf8_text(source).ok())
+        .map(|s| s.to_string())
+}
+
+fn hcl_string_lit_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find_map(|child| match child.kind() {
+            "template_literal" => child.utf8_text(source).ok().map(|s| s.to_string()),
+            "quoted_template_start" | "quoted_template_end" => None,
+            _ => hcl_string_lit_text(child, source),
+        })
+}
+
+fn hcl_block_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let block_type = hcl_block_type(node, source)?;
+    let mut cursor = node.walk();
+    let labels: Vec<String> = node
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "string_lit")
+        .filter_map(|label| hcl_string_lit_text(label, source))
+        .collect();
+    match (block_type.as_str(), labels.as_slice()) {
+        ("resource", [type_label, name]) => Some(format!("{type_label}.{name}")),
+        ("data", [type_label, name]) => Some(format!("data.{type_label}.{name}")),
+        ("module", [name]) => Some(format!("module.{name}")),
+        ("variable", [name]) => Some(format!("var.{name}")),
+        ("output", [name]) => Some(format!("output.{name}")),
+        ("provider", [name]) => Some(format!("provider.{name}")),
+        _ => None,
+    }
+}
+
+fn build_hcl_locals_symbols(
+    node: tree_sitter::Node,
+    source: &[u8],
+    reference_query: &tree_sitter::Query,
+    lang: &dyn LanguageSupport,
+) -> Vec<ExtractedSymbol> {
+    let mut block_cursor = node.walk();
+    let Some(body) = node
+        .children(&mut block_cursor)
+        .find(|c| c.kind() == "body")
+    else {
+        return Vec::new();
+    };
+    let mut cursor = body.walk();
+    body.children(&mut cursor)
+        .filter(|child| child.kind() == "attribute")
+        .filter_map(|attribute| {
+            let mut attribute_cursor = attribute.walk();
+            let name_node = attribute
+                .children(&mut attribute_cursor)
+                .find(|c| c.kind() == "identifier")?;
+            let name = name_node.utf8_text(source).ok()?;
+            Some(ExtractedSymbol {
+                id: String::new(),
+                name: format!("local.{name}"),
+                kind: SymbolKind::Block,
+                signature: slice_signature(attribute, source),
+                range: node_to_line_range(attribute),
+                container: None,
+                referenced_names: collect_referenced_names(attribute, source, reference_query),
+                dependencies: Vec::new(),
+                omitted_dependency_matches: 0,
+                is_test: lang.is_test_definition(attribute, source),
+                classification: None,
+                previous_signature: None,
+            })
+        })
+        .collect()
+}
+
 /// Maps a captured definition node to a language-neutral [`SymbolKind`].
 /// Node kind strings are matched flat across every supported grammar;
 /// kinds that collide across grammars (`block` also names ordinary
@@ -482,7 +563,7 @@ fn build_symbol(
 /// `type_spec` needs to inspect its `type` field to tell a struct from an
 /// interface — the definition query captures `type_spec` for both (see
 /// `language/go.rs`), so the node kind alone is ambiguous for Go.
-fn symbol_kind(node: tree_sitter::Node, _source: &[u8]) -> Option<SymbolKind> {
+fn symbol_kind(node: tree_sitter::Node, source: &[u8]) -> Option<SymbolKind> {
     match node.kind() {
         // Rust.
         "function_item" | "function_signature_item" => Some(SymbolKind::Function),
@@ -510,6 +591,15 @@ fn symbol_kind(node: tree_sitter::Node, _source: &[u8]) -> Option<SymbolKind> {
         // style arrow-function bindings (see the TypeScript definition
         // query); other declarators are never captured.
         "variable_declarator" => Some(SymbolKind::Function),
+        // HCL (ADR 0066): every definition is a `block`; the block-type
+        // keyword decides whether it is reported. `locals` blocks are
+        // expanded per attribute in `build_symbols` instead.
+        "block" => match hcl_block_type(node, source).as_deref() {
+            Some("resource" | "data" | "module" | "variable" | "output" | "provider") => {
+                Some(SymbolKind::Block)
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -523,6 +613,10 @@ fn symbol_kind(node: tree_sitter::Node, _source: &[u8]) -> Option<SymbolKind> {
 /// its own `name` field too, so the generic path already covers it — kept
 /// as a fallthrough rather than a special case.
 fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if node.kind() == "block" {
+        return hcl_block_name(node, source);
+    }
+
     node.child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .map(|s| s.to_string())
@@ -596,6 +690,17 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
             | "method_definition"
     ) {
         node.child_by_field_name("body")
+    } else if node.kind() == "block" {
+        match hcl_block_type(node, source).as_deref() {
+            // variable/output bodies (type, default, value, ...) are
+            // the contract itself (ADR 0066) — keep the whole block.
+            Some("variable" | "output") => None,
+            _ => {
+                let mut cursor = node.walk();
+                node.children(&mut cursor)
+                    .find(|child| child.kind() == "block_start")
+            }
+        }
     } else {
         None
     };
@@ -710,13 +815,11 @@ fn collect_comment_ranges(
     }
 }
 
-/// Whether `node` is a tree-sitter comment node under any of the four
+/// Whether `node` is a tree-sitter comment node under any of the five
 /// grammars this module supports: Rust splits line/block comments into two
-/// distinct kinds (`line_comment`, `block_comment`); Go, Python, and
-/// TypeScript each use a single `comment` kind for both forms (verified
-/// against each grammar directly — Go's grammar has no such split and
-/// Python/TypeScript comments are line-oriented `#`/`//`/`/* */` all
-/// captured under the same node kind).
+/// distinct kinds (`line_comment`, `block_comment`); Go, HCL, Python, and
+/// TypeScript each use a single `comment` kind (verified against each grammar
+/// directly).
 fn is_comment_node(node: tree_sitter::Node) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment" | "comment")
 }

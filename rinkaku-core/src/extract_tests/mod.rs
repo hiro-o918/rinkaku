@@ -14,6 +14,9 @@
 //!   ubiquitous-name stoplist (ADR 0064).
 //! - [`go`] — Go `LanguageSupport`: struct/interface/type_spec handling,
 //!   pointer- vs. value-receiver container naming, and Go end-to-end.
+//! - [`hcl`] — HCL / Terraform `LanguageSupport`: top-level block naming,
+//!   header- vs. whole-block signatures, `locals` expansion, and HCL
+//!   end-to-end.
 //! - [`python`] — Python `LanguageSupport`: class signature slicing with
 //!   method bodies stripped, decorator/nested-function edge cases, and
 //!   Python end-to-end.
@@ -42,6 +45,7 @@ pub(crate) use super::*;
 
 mod classification;
 mod go;
+mod hcl;
 mod normalize_for_comparison;
 mod python;
 mod rust;
