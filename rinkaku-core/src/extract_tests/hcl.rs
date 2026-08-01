@@ -50,10 +50,12 @@ resource \"aws_instance\" \"web\" {
   count_alias   = count.index
   each_alias    = each.value
   self_alias    = self.public_ip
+  mod_path      = path.module
+  ws            = terraform.workspace
 }
 ";
     let lang = HclSupport;
-    let changed_ranges = vec![LineRange { start: 2, end: 9 }];
+    let changed_ranges = vec![LineRange { start: 2, end: 11 }];
 
     let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
@@ -282,11 +284,19 @@ moved {
   from = \"old\"
   to   = \"new\"
 }
+
+import {
+}
+
+check \"x\" {
+}
 ";
     let lang = HclSupport;
     let changed_ranges = vec![
         LineRange { start: 2, end: 2 },
         LineRange { start: 6, end: 7 },
+        LineRange { start: 10, end: 11 },
+        LineRange { start: 13, end: 14 },
     ];
 
     let expected: Vec<ExtractedSymbol> = vec![];
