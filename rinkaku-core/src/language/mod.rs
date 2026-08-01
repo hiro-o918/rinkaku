@@ -59,27 +59,32 @@ pub trait LanguageSupport {
     }
 }
 
-/// Looks up the `LanguageSupport` registered for a file path, based on its
-/// extension. Returns `None` for unrecognized extensions so callers can
-/// skip files rinkaku doesn't understand yet, rather than erroring out.
+/// Looks up the `LanguageSupport` registered for a file path, based on
+/// its path suffix. Returns `None` for unrecognized paths so callers
+/// can skip files rinkaku doesn't understand yet, rather than erroring
+/// out.
 pub fn language_for_path(path: &str) -> Option<&'static dyn LanguageSupport> {
-    let extension = path.rsplit('.').next()?;
     REGISTRY
         .iter()
-        .find(|lang| lang.extensions().contains(&extension))
+        .find(|lang| lang.suffixes().iter().any(|suffix| path.ends_with(suffix)))
         .map(|lang| lang.support())
 }
 
-/// One entry in the built-in language registry: the file extensions that
-/// route to a `LanguageSupport` impl.
+/// One entry in the built-in language registry: the path suffixes that
+/// route to a `LanguageSupport` impl. Suffixes rather than final
+/// `.`-separated segments (ADR 0066): an entry can then name a
+/// multi-segment convention (`.tftest.hcl`) without claiming every
+/// file whose final segment merely coincides (plain `.hcl`). Entries
+/// list more-specific suffixes first by convention; the first matching
+/// entry wins.
 struct RegistryEntry {
-    extensions: &'static [&'static str],
+    suffixes: &'static [&'static str],
     support: fn() -> &'static dyn LanguageSupport,
 }
 
 impl RegistryEntry {
-    fn extensions(&self) -> &'static [&'static str] {
-        self.extensions
+    fn suffixes(&self) -> &'static [&'static str] {
+        self.suffixes
     }
 
     fn support(&self) -> &'static dyn LanguageSupport {
@@ -87,7 +92,7 @@ impl RegistryEntry {
     }
 }
 
-/// Built-in languages, keyed by file extension. Adding a language means
+/// Built-in languages, keyed by path suffix. Adding a language means
 /// adding an entry here plus its `LanguageSupport` impl module — the
 /// extraction pipeline itself does not change (ADR 0002).
 ///
@@ -98,23 +103,23 @@ impl RegistryEntry {
 /// TS-specific constructs. Revisit once there's a concrete need.
 static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
-        extensions: &["rs"],
+        suffixes: &[".rs"],
         support: || &rust::RustSupport,
     },
     RegistryEntry {
-        extensions: &["go"],
+        suffixes: &[".go"],
         support: || &go::GoSupport,
     },
     RegistryEntry {
-        extensions: &["py"],
+        suffixes: &[".py"],
         support: || &python::PythonSupport,
     },
     RegistryEntry {
-        extensions: &["ts"],
+        suffixes: &[".ts"],
         support: || &typescript::TypeScriptSupport,
     },
     RegistryEntry {
-        extensions: &["tsx"],
+        suffixes: &[".tsx"],
         support: || &typescript::TsxSupport,
     },
 ];
@@ -127,6 +132,7 @@ pub mod typescript;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn should_return_rust_support_when_path_has_rs_extension() {
@@ -178,6 +184,18 @@ mod tests {
     #[test]
     fn should_return_none_when_path_has_no_extension() {
         let actual = language_for_path("Makefile");
+
+        assert!(actual.is_none());
+    }
+
+    #[rstest]
+    #[case::should_return_none_when_filename_is_bare_rs("rs")]
+    #[case::should_return_none_when_filename_is_bare_go("go")]
+    #[case::should_return_none_when_filename_is_bare_py("py")]
+    #[case::should_return_none_when_filename_is_bare_ts("ts")]
+    #[case::should_return_none_when_filename_is_bare_tsx("tsx")]
+    fn bare_extension_filenames_do_not_route(#[case] path: &str) {
+        let actual = language_for_path(path);
 
         assert!(actual.is_none());
     }
