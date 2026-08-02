@@ -1,11 +1,14 @@
 name: Release
 
 on:
-  pull_request:
+  # `push` rather than `pull_request: closed`: workflows triggered by a
+  # pull_request event whose head lives in a fork run without repository
+  # secrets, so the app-token step below aborted on every fork-PR merge
+  # (issue #221). A push to main always runs in the base repo with
+  # secrets, wherever the merged PR came from.
+  push:
     branches:
       - main
-    types:
-      - closed
   # Manual re-run, e.g. when release-please-action aborts without creating
   # a tag/release (see the manifest/GitHub-Releases reconciliation issue
   # fixed by this workflow's tag-scheme change) and `gh run rerun` doesn't
@@ -19,7 +22,6 @@ concurrency:
 
 jobs:
   release-please:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
