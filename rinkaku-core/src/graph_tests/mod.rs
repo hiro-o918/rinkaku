@@ -4,6 +4,10 @@
 //! - `build_graph` — `build_graph`'s structural coverage: empty, single
 //!   node, edge, self-reference exclusion, and (path, name) id
 //!   disambiguation with `@line` suffixes
+//! - `container_aware_edges` — `collect_edges`'s container-matching rule
+//!   (ADR 0068): a bare `referenced_names` match is restricted to a
+//!   `None`-or-same-container target, while a `referenced_method_names`
+//!   match stays unrestricted
 //! - `roots_and_cycles` — `find_roots` (via SCC condensation) and
 //!   `mark_cycle_edges`, including multi-cycle and shared-descendant
 //!   non-cycle cases
@@ -24,6 +28,7 @@ use crate::extract::{ExtractedSymbol, SymbolKind};
 mod build_graph;
 mod compute_fan_ins;
 mod compute_test_coverage;
+mod container_aware_edges;
 mod pivot;
 mod roots_and_cycles;
 mod stamp_ids;

@@ -1,9 +1,10 @@
 //! Top-level [`analyze_diff`] behavior: empty input, per-file skip cases
 //! (deleted / binary / unsupported-language / pure rename), diff-parse
 //! and read-file error paths, multi-file mixed outcomes, Go
-//! interface/receiver nesting end-to-end (ADR 0012 decision 2), resolver
-//! invocation contract (`Some`/`None`), and fan-in wiring (ADR 0013,
-//! named per ADR 0034, end-to-end).
+//! interface/receiver nesting end-to-end (ADR 0012 decision 2),
+//! container-aware bare-reference edge matching end-to-end (ADR 0068),
+//! resolver invocation contract (`Some`/`None`), and fan-in wiring (ADR
+//! 0013, named per ADR 0034, end-to-end).
 
 use super::{empty_graph, fake_reader};
 use crate::diff::LineRange;
@@ -527,6 +528,111 @@ Repo interface {
 ```
 // repoImpl
 func (r *repoImpl) Save(id string) error
+```
+
+"
+    .to_string();
+
+    assert_eq!(expected, markdown);
+}
+
+/// End-to-end regression test for ADR 0068: a bare Python call
+/// (`Foo()`, no receiver) must not link to a same-named method nested
+/// inside an unrelated class, even when both the top-level function and
+/// the class method change in the same diff. Runs through the whole
+/// pipeline (`analyze_diff` then `render::render`) so the real
+/// `PythonSupport::reference_query` output drives the graph, not a
+/// hand-built one.
+#[test]
+fn should_not_nest_bare_call_referrer_under_an_unrelated_containers_same_named_method() {
+    let diff = "\
+diff --git a/a.py b/a.py
+index e69de29..4b825dc 100644
+--- a/a.py
++++ b/a.py
+@@ -1,6 +1,6 @@
+ def Foo():
+-    return 0
++    return 1
+
+ class Baz:
+     def Foo(self):
+-        return 0
++        return 2
+diff --git a/b.py b/b.py
+index e69de29..4b825dc 100644
+--- a/b.py
++++ b/b.py
+@@ -1,2 +1,2 @@
+ def use_foo():
+-    return 0
++    return Foo()
+";
+    let a_source = "\
+def Foo():
+    return 1
+
+class Baz:
+    def Foo(self):
+        return 2
+";
+    let b_source = "\
+def use_foo():
+    return Foo()
+";
+    let read_file = fake_reader(HashMap::from([("a.py", a_source), ("b.py", b_source)]));
+
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
+    let markdown = crate::render::render(&report, crate::render::OutputFormat::Markdown)
+        .expect("markdown render should succeed");
+
+    // Two independent roots: `Baz.Foo` (a.py:5) and `use_foo`, which
+    // nests the top-level `Foo` (a.py:1) — never `Baz.Foo` — under it.
+    // The `@line`-disambiguated node ids (both symbols are named `Foo` in
+    // the same file) surface here as `(a.py:5)`/`(a.py:1)` suffixes.
+    let expected = "\
+## Change graph
+
+3 changed symbols in 2 files — most in a.py (2)
+
+- fn Foo (a.py:5)
+- fn use_foo (b.py)
+  - fn Foo (a.py:1)
+
+## File sizes
+
+- `a.py` (6 lines)
+- `b.py` (2 lines)
+
+## Definitions
+
+### fn Foo (a.py:5)
+
+```
+// class Baz
+def Foo(self):
+```
+
+### fn use_foo (b.py)
+
+```
+def use_foo():
+```
+
+### fn Foo (a.py:1)
+
+```
+def Foo():
 ```
 
 "
