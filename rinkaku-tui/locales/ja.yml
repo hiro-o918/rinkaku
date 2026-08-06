@@ -30,7 +30,7 @@ help:
     start_search: "検索を開始"
     jump_next_prev_match: "次/前の検索結果へジャンプ"
     return_to_entry_view: "エントリービューに戻る"
-    compose_annotation: "カーソル位置のシンボルにレビューアノテーションを作成"
+    compose_annotation: "カーソル位置の行にレビューアノテーションを作成"
     open_annotations_list: "レビューアノテーション一覧を開く"
     annotations_list_move: "アノテーション一覧: カーソル移動"
     annotations_list_export: "アノテーション一覧: エクスポートメニューを開く"

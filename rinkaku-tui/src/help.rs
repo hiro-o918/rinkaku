@@ -371,8 +371,9 @@ fn keymap_groups(locale: Locale) -> Vec<KeyBindingGroup> {
 /// bindings are only ever dispatched under their matching [`Focus`];
 /// [`HelpGroup::SourceView`] only under [`Screen::Source`];
 /// [`HelpGroup::Review`]'s `a`/`A` only under [`Screen::Entry`] (regardless
-/// of `Focus`, per `review_flow::derive_selection_snapshot` and
-/// `App::handle_key`'s own `AnnotationsList` arm); [`HelpGroup::Global`] always;
+/// of `Focus`, per `review_flow::derive_selection_snapshot` — which as of
+/// ADR 0067 resolves a snapshot for most row kinds, not only present
+/// symbols — and `App::handle_key`'s own `AnnotationsList` arm); [`HelpGroup::Global`] always;
 /// [`HelpGroup::EntryOnly`] (ADR 0057) only under [`Screen::Entry`] —
 /// `d`/`r`/`o`/`s`/`ctrl-o`/`ctrl-i` are no-ops on [`Screen::Source`]
 /// (`App::handle_key`'s own Source-screen catch-all arm).

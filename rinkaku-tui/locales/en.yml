@@ -30,7 +30,7 @@ help:
     start_search: "Start a search"
     jump_next_prev_match: "Jump to the next / previous search match"
     return_to_entry_view: "Return to the entry view"
-    compose_annotation: "Compose an annotation over the symbol under the cursor"
+    compose_annotation: "Compose an annotation over the row under the cursor"
     open_annotations_list: "Open the review annotations list"
     annotations_list_move: "Annotations list: move the cursor"
     annotations_list_export: "Annotations list: open the export menu"
