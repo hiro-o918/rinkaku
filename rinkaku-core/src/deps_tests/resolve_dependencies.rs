@@ -122,6 +122,36 @@ fn should_exclude_self_reference_from_dependencies() {
 }
 
 #[test]
+fn should_exclude_self_reference_when_symbol_and_candidate_containers_match() {
+    // Guards the (name, container, path) key against a regression where a
+    // contained symbol's self-reference (e.g. a recursive method) would
+    // survive exclusion because own_key and the candidate disagree on
+    // container.
+    let files = vec![FileReport {
+        path: "a.py".to_string(),
+        symbols: vec![symbol_with_container("area", "class Circle", vec!["area"])],
+    }];
+    let resolver = FakeResolver {
+        matches: HashMap::from([(
+            "area",
+            vec![ResolvedSymbol {
+                signature: "def area(self):".to_string(),
+                path: "a.py".to_string(),
+                container: Some("class Circle".to_string()),
+            }],
+        )]),
+    };
+
+    let expected = vec![FileReport {
+        path: "a.py".to_string(),
+        symbols: vec![symbol_with_container("area", "class Circle", vec!["area"])],
+    }];
+    let actual = resolve_dependencies(files, &resolver);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_exclude_dependency_already_reported_elsewhere_in_the_diff() {
     // "helper" is itself a changed symbol reported in this diff
     // (a different file than "foo"), so it must not be repeated
