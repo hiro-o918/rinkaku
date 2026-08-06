@@ -56,24 +56,26 @@ const DEFINITION_QUERY: &str = "\
 /// - `trait_item body: (declaration_list (function_signature_item name:
 ///   (identifier)))` and the same shape for `function_item` capture a
 ///   trait's method names — both the common bodiless `fn name(...);` form
-///   and a default-body `fn name(...) { ... }` form (ADR 0012 decision 2):
-///   feeding these into the trait symbol's `referenced_names` makes
-///   `graph::collect_edges`'s existing name-based matching link the trait
-///   to a same-named changed impl method, so the two stop appearing as
-///   independent roots in the change graph. Scoped to a `trait_item`'s own
-///   `body` field (rather than matching `function_signature_item`/
-///   `function_item` anywhere) so an `impl_item`'s or free function's name
-///   is never captured this way — those are already covered by
-///   `definition_query` capturing the function/method itself, not via this
-///   path.
+///   and a default-body `fn name(...) { ... }` form (ADR 0012 decision 2)
+///   — under `@reference.method` (ADR 0068, not a new capture prefix: a
+///   trait method name plays the same "may denote a container member"
+///   role as a receiver-based method call). Feeding these into the trait
+///   symbol's `referenced_method_names` makes `graph::collect_edges`'s
+///   name-based matching link the trait to a same-named changed impl
+///   method, so the two stop appearing as independent roots in the change
+///   graph. Scoped to a `trait_item`'s own `body` field (rather than
+///   matching `function_signature_item`/`function_item` anywhere) so an
+///   `impl_item`'s or free function's name is never captured this way —
+///   those are already covered by `definition_query` capturing the
+///   function/method itself, not via this path.
 const REFERENCE_QUERY: &str = "\
 [
   (call_expression function: (identifier) @reference.call)
   (call_expression function: (field_expression field: (field_identifier) @reference.method))
   (type_identifier) @reference.type
   (scoped_identifier path: (identifier) @reference.type)
-  (trait_item body: (declaration_list (function_signature_item name: (identifier) @reference.call)))
-  (trait_item body: (declaration_list (function_item name: (identifier) @reference.call)))
+  (trait_item body: (declaration_list (function_signature_item name: (identifier) @reference.method)))
+  (trait_item body: (declaration_list (function_item name: (identifier) @reference.method)))
 ]";
 
 pub struct RustSupport;

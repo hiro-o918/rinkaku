@@ -51,6 +51,7 @@ pub(super) fn report_with_one_symbol() -> Report {
                 range: LineRange { start: 1, end: 1 },
                 container: None,
                 referenced_names: vec![],
+                referenced_method_names: vec![],
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
@@ -85,6 +86,7 @@ pub(super) fn report_with_symbols_and_edges(
                     range: LineRange { start: 1, end: 1 },
                     container: None,
                     referenced_names: vec![],
+                    referenced_method_names: vec![],
                     dependencies: vec![],
                     omitted_dependency_matches: 0,
                     is_test: false,
@@ -102,6 +104,7 @@ pub(super) fn report_with_symbols_and_edges(
                 id: format!("{path}::{name}"),
                 path: path.to_string(),
                 name: name.to_string(),
+                container: None,
                 is_test: false,
             })
         })

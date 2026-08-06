@@ -102,15 +102,38 @@ pub struct ExtractedSymbol {
     /// method's receiver type name, if the definition belongs to one (e.g.
     /// `Some("impl Foo")`, `Some("class Point")`, `Some("Repo")`).
     pub container: Option<String>,
-    /// Names this definition references (called functions, referenced
-    /// types), as captured by [`LanguageSupport::reference_query`].
+    /// Names this definition references as *bare* calls/types (no
+    /// receiver) — `@reference.call`/`@reference.type` captures, plus the
+    /// non-query code walks (macro bodies, module-scoped calls, HCL
+    /// traversals) — as captured by [`LanguageSupport::reference_query`].
     /// Deduplicated but otherwise unresolved — an intermediate pipeline
     /// artifact, not part of rinkaku's output shape, so it is excluded
     /// from serialization. [`crate::deps::resolve_dependencies`] resolves
     /// these against a repo-wide definition index to populate
     /// `dependencies`.
+    ///
+    /// A bare reference cannot syntactically denote a symbol nested inside
+    /// a container (impl/trait/class/interface) in Python, Go, or
+    /// TypeScript — member access there is a distinct grammar shape
+    /// (`obj.method()`), captured separately as
+    /// [`referenced_method_names`](Self::referenced_method_names) — so
+    /// `crate::graph::collect_edges` restricts a `referenced_names`
+    /// match to changed symbols with no container, or the same container
+    /// as the referencing symbol itself (ADR 0068).
     #[serde(skip)]
     pub referenced_names: Vec<String>,
+    /// Names this definition references via a receiver or method-spec
+    /// position — `@reference.method` captures: Rust's `x.foo()` calls and
+    /// trait method names, Go's interface method-spec names, TypeScript's
+    /// interface method-signature names (ADR 0068, extending ADR 0064's
+    /// `@reference.method` capture to the container-referring captures ADR
+    /// 0012 introduced). Unlike `referenced_names`, these may legitimately
+    /// denote a symbol nested inside any container, so
+    /// `crate::graph::collect_edges` matches them without the
+    /// same-container restriction. Same "intermediate pipeline artifact"
+    /// status as `referenced_names`, so also excluded from serialization.
+    #[serde(skip)]
+    pub referenced_method_names: Vec<String>,
     /// This symbol's 1-hop dependencies: `referenced_names` that resolved
     /// to a definition elsewhere in the repo (ADR 0003), excluding the
     /// symbol's own definition and any symbol already reported in the same
@@ -449,7 +472,7 @@ fn build_symbol(
     let name = definition_name(node, source)?;
     let signature = slice_signature(node, source);
     let container = find_container(node, source);
-    let referenced_names = collect_referenced_names(node, source, reference_query);
+    let references = collect_referenced_names(node, source, reference_query);
     let is_test = lang.is_test_definition(node, source);
 
     Some(ExtractedSymbol {
@@ -461,7 +484,8 @@ fn build_symbol(
         signature,
         range: node_to_line_range(node),
         container,
-        referenced_names,
+        referenced_names: references.bare,
+        referenced_method_names: references.method,
         // Populated later by `deps::resolve_dependencies`, once the full
         // set of a file's extracted symbols is known (needed to exclude
         // diff-internal symbols from the resolved dependency list).

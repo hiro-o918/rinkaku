@@ -218,6 +218,7 @@ fn should_return_blast_radius_view_when_cursor_is_on_a_directory_row() {
                 id: "src/lib.rs::foo".to_string(),
                 path: "src/lib.rs".to_string(),
                 name: "foo".to_string(),
+                container: None,
                 is_test: false,
             }],
             edges: vec![],

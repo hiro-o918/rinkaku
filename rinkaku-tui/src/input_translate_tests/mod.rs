@@ -53,6 +53,7 @@ pub(super) fn report_with_one_symbol() -> Report {
                 range: LineRange { start: 1, end: 1 },
                 container: None,
                 referenced_names: vec![],
+                referenced_method_names: vec![],
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,

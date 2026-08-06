@@ -8,19 +8,40 @@
 
 use tree_sitter::StreamingIterator;
 
+/// The two reference-name sets [`collect_referenced_names`] produces,
+/// split by whether the name could syntactically denote a symbol nested
+/// inside a container (impl/trait/class/interface) — see
+/// [`super::ExtractedSymbol::referenced_method_names`]'s doc comment (ADR
+/// 0068) for why `graph::collect_edges` needs this distinction.
+pub(super) struct ReferencedNames {
+    /// Bare references (`@reference.call`/`@reference.type` captures, plus
+    /// every non-query code walk below): cannot syntactically name a
+    /// contained symbol in Python/Go/TypeScript.
+    pub bare: Vec<String>,
+    /// `@reference.method` captures: Rust's receiver-based method calls
+    /// and trait method names, Go's interface method-spec names, and
+    /// TypeScript's interface method-signature names — all of which may
+    /// legitimately denote a symbol nested inside a container.
+    pub method: Vec<String>,
+}
+
 /// Runs `reference_query` (already compiled by `with_definition_nodes`,
 /// once per file rather than once per definition) over the subtree rooted
 /// at `node`, returning the deduplicated names it captures (called
-/// function/method names, referenced type names). Sorted for determinism
-/// — tree-sitter's match order is not a meaningful signal here, and
-/// downstream consumers (`deps.rs`, rendering) benefit from a stable
-/// order.
+/// function/method names, referenced type names), split into
+/// [`ReferencedNames::bare`]/[`ReferencedNames::method`] by capture kind.
+/// Each set is sorted for determinism — tree-sitter's match order is not a
+/// meaningful signal here, and downstream consumers (`deps.rs`, rendering)
+/// benefit from a stable order.
 ///
 /// Reads every capture whose name starts with `reference.` (see the doc
 /// comment on [`LanguageSupport::reference_query`]) rather than a single
 /// named capture, since each language's query alternation captures a
 /// different sub-node depending on which branch matched (the callee
 /// identifier for a call, the identifier itself for a type reference).
+/// The two sets are otherwise disjoint by construction: no name is ever
+/// captured under both `reference.method` and any other `reference.*`
+/// prefix at the same node.
 ///
 /// `_` and single-character identifiers are dropped before insertion
 /// (`is_noise_name`): they are near-universal across unrelated files
@@ -33,13 +54,14 @@ pub(super) fn collect_referenced_names(
     node: tree_sitter::Node,
     source: &[u8],
     reference_query: &tree_sitter::Query,
-) -> Vec<String> {
+) -> ReferencedNames {
     let capture_names = reference_query.capture_names();
 
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut matches = cursor.matches(reference_query, node, source);
 
-    let mut names = std::collections::BTreeSet::new();
+    let mut bare = std::collections::BTreeSet::new();
+    let mut method = std::collections::BTreeSet::new();
     while let Some(m) = matches.next() {
         for capture in m.captures {
             let capture_name = capture_names[capture.index as usize];
@@ -50,16 +72,23 @@ pub(super) fn collect_referenced_names(
                 && !is_noise_name(text)
                 && !(capture_name == "reference.method" && is_ubiquitous_method_name(text))
             {
-                names.insert(text.to_string());
+                if capture_name == "reference.method" {
+                    method.insert(text.to_string());
+                } else {
+                    bare.insert(text.to_string());
+                }
             }
         }
     }
 
-    collect_macro_body_names(node, source, &mut names);
-    collect_module_scoped_call_names(node, source, &mut names);
-    collect_hcl_traversal_names(node, source, &mut names);
+    collect_macro_body_names(node, source, &mut bare);
+    collect_module_scoped_call_names(node, source, &mut bare);
+    collect_hcl_traversal_names(node, source, &mut bare);
 
-    names.into_iter().collect()
+    ReferencedNames {
+        bare: bare.into_iter().collect(),
+        method: method.into_iter().collect(),
+    }
 }
 
 /// HCL references are traversals — `(variable_expr (identifier))`

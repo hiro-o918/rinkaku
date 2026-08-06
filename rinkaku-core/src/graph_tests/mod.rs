@@ -30,7 +30,9 @@ mod stamp_ids;
 
 /// Builds an `ExtractedSymbol` with a given `name`/`referenced_names`,
 /// filling every other field with a fixed placeholder — these tests
-/// only care about the graph-building fields.
+/// only care about the graph-building fields. `referenced_method_names`
+/// defaults empty; use struct-update syntax (`..symbol(...)`) to set it
+/// for a container-aware-matching test case.
 pub(super) fn symbol(name: &str, referenced_names: Vec<&str>) -> ExtractedSymbol {
     ExtractedSymbol {
         id: String::new(),
@@ -40,6 +42,7 @@ pub(super) fn symbol(name: &str, referenced_names: Vec<&str>) -> ExtractedSymbol
         range: LineRange { start: 1, end: 1 },
         container: None,
         referenced_names: referenced_names.into_iter().map(str::to_string).collect(),
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,

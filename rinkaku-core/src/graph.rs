@@ -32,6 +32,15 @@ pub struct Node {
     pub id: NodeId,
     pub path: String,
     pub name: String,
+    /// The enclosing impl/trait/class/interface block's descriptive name
+    /// (mirrors [`crate::extract::ExtractedSymbol::container`]), or `None`
+    /// for a top-level definition or a Go/TypeScript container declaration
+    /// itself. Needed by `collect_edges` to apply the same-container
+    /// restriction a bare reference is limited to (ADR 0068). Not part of
+    /// rinkaku's output shape, same rationale as `is_test`, so excluded
+    /// from serialization.
+    #[serde(skip)]
+    pub container: Option<String>,
     /// Whether this symbol counts as test code (ADR 0009's test-detection
     /// rule: [`crate::extract::ExtractedSymbol::is_test`] by AST context,
     /// or [`crate::language::LanguageSupport::is_test_path`] for the whole
@@ -470,6 +479,7 @@ fn collect_nodes(files: &[FileReport]) -> Vec<Node> {
                 id,
                 path: file.path.clone(),
                 name: symbol.name.clone(),
+                container: symbol.container.clone(),
                 is_test: is_test_path || symbol.is_test,
             });
         }
@@ -477,11 +487,11 @@ fn collect_nodes(files: &[FileReport]) -> Vec<Node> {
     nodes
 }
 
-/// Builds edges from each symbol's `referenced_names` to every changed
-/// symbol whose name matches, across the whole diff (not just within one
-/// file) — mirroring how `deps::resolve_dependencies` matches by name
-/// alone. Self-references (a node referencing its own name, e.g. a
-/// struct's name appearing inside its own definition — see
+/// Builds edges from each symbol's `referenced_names`/`referenced_method_names`
+/// to every changed symbol whose name matches, across the whole diff (not
+/// just within one file) — mirroring how `deps::resolve_dependencies`
+/// matches by name alone. Self-references (a node referencing its own
+/// name, e.g. a struct's name appearing inside its own definition — see
 /// `extract::collect_referenced_names`'s doc comment) are excluded, same
 /// rationale as `deps::resolve_dependencies`'s self-reference exclusion.
 /// A referenced name matching more than one changed symbol (possible once
@@ -489,6 +499,18 @@ fn collect_nodes(files: &[FileReport]) -> Vec<Node> {
 /// to each match, not just one — the caller has no way to disambiguate
 /// under v1's name-only matching (ADR 0003), so all plausible edges are
 /// kept rather than arbitrarily picking one.
+///
+/// The two reference sets are matched by different rules (ADR 0068): a
+/// `referenced_method_names` entry (a receiver-based call or method-spec
+/// name) may target a changed symbol in any container, same as before this
+/// ADR. A `referenced_names` entry (a bare call/type reference) may only
+/// target a changed symbol whose container is `None` (top-level) or equal
+/// to the referencing symbol's own container — a bare reference cannot
+/// syntactically denote an arbitrary container's member in Python, Go, or
+/// TypeScript (member access there is a distinct, separately-captured
+/// grammar shape), so matching it against every same-named symbol
+/// regardless of container produces false edges into unrelated classes/
+/// interfaces/traits.
 fn collect_edges(files: &[FileReport], nodes: &[Node]) -> Vec<Edge> {
     let mut nodes_by_name: HashMap<&str, Vec<&Node>> = HashMap::new();
     for node in nodes {
@@ -504,22 +526,72 @@ fn collect_edges(files: &[FileReport], nodes: &[Node]) -> Vec<Edge> {
         for symbol in &file.symbols {
             let from = &nodes[node_index];
             for referenced_name in &symbol.referenced_names {
-                if let Some(targets) = nodes_by_name.get(referenced_name.as_str()) {
-                    for target in targets {
-                        if target.id != from.id {
-                            edges.push(Edge {
-                                from: from.id.clone(),
-                                to: target.id.clone(),
-                                is_cycle: false,
-                            });
-                        }
-                    }
-                }
+                push_matching_edges(
+                    &nodes_by_name,
+                    referenced_name,
+                    from,
+                    ContainerRule::SameOrNone,
+                    &mut edges,
+                );
+            }
+            for referenced_method_name in &symbol.referenced_method_names {
+                push_matching_edges(
+                    &nodes_by_name,
+                    referenced_method_name,
+                    from,
+                    ContainerRule::Any,
+                    &mut edges,
+                );
             }
             node_index += 1;
         }
     }
     edges
+}
+
+/// The container-matching rule [`push_matching_edges`] applies to one
+/// reference set (ADR 0068).
+enum ContainerRule {
+    /// A target only matches if its container is `None`, or equal to the
+    /// referencing symbol's own container — the restriction bare
+    /// references (`referenced_names`) are limited to.
+    SameOrNone,
+    /// A target matches regardless of its container — the rule
+    /// `referenced_method_names` entries keep, same as before ADR 0068.
+    Any,
+}
+
+/// Pushes an edge from `from` to every node in `nodes_by_name[name]` that
+/// passes the self-reference exclusion and `rule`'s container check.
+fn push_matching_edges(
+    nodes_by_name: &HashMap<&str, Vec<&Node>>,
+    name: &str,
+    from: &Node,
+    rule: ContainerRule,
+    edges: &mut Vec<Edge>,
+) {
+    let Some(targets) = nodes_by_name.get(name) else {
+        return;
+    };
+    for target in targets {
+        if target.id == from.id {
+            continue;
+        }
+        let container_ok = match rule {
+            ContainerRule::Any => true,
+            ContainerRule::SameOrNone => {
+                target.container.is_none() || target.container == from.container
+            }
+        };
+        if !container_ok {
+            continue;
+        }
+        edges.push(Edge {
+            from: from.id.clone(),
+            to: target.id.clone(),
+            is_cycle: false,
+        });
+    }
 }
 
 /// Maps each node's [`NodeId`] to its position in `nodes`, letting the

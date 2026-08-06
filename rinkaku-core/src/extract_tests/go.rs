@@ -36,6 +36,7 @@ func foo(a int) int {
         // type, and is captured the same way (see the doc comment
         // on `REFERENCE_QUERY` in language/go.rs).
         referenced_names: vec!["int".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -67,6 +68,7 @@ func foo(a int, c int) int {
         range: LineRange { start: 3, end: 5 },
         container: None,
         referenced_names: vec!["int".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -105,6 +107,7 @@ type Repo struct {
         // from user types in Go (see REFERENCE_QUERY's doc
         // comment).
         referenced_names: vec!["Repo".to_string(), "int".to_string(), "string".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -140,6 +143,7 @@ type Repo struct {
         range: LineRange { start: 3, end: 7 },
         container: None,
         referenced_names: vec!["Repo".to_string(), "int".to_string(), "string".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -170,15 +174,18 @@ type Fetcher interface {
         signature: "Fetcher interface {\n\tFetch(id string) (string, error)\n}".to_string(),
         range: LineRange { start: 3, end: 5 },
         container: None,
-        // "Fetch" is the interface's own method spec name (ADR
-        // 0012 decision 2), alongside the interface's own name and
-        // its referenced parameter/return types.
+        // "Fetcher"/"error"/"string" are the interface's own name
+        // and its referenced parameter/return types (bare type
+        // references). "Fetch" is the interface's own method spec
+        // name (ADR 0012 decision 2), captured under
+        // `@reference.method` (ADR 0068) since it may denote a
+        // symbol nested inside a container (a receiver method).
         referenced_names: vec![
-            "Fetch".to_string(),
             "Fetcher".to_string(),
             "error".to_string(),
             "string".to_string(),
         ],
+        referenced_method_names: vec!["Fetch".to_string()],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -191,7 +198,8 @@ type Fetcher interface {
 }
 
 #[test]
-fn should_include_every_method_spec_name_in_referenced_names_when_interface_has_multiple_methods() {
+fn should_include_every_method_spec_name_in_referenced_method_names_when_interface_has_multiple_methods()
+ {
     let source = "\
 package main
 
@@ -212,12 +220,11 @@ type Repo interface {
         range: LineRange { start: 3, end: 6 },
         container: None,
         referenced_names: vec![
-            "Delete".to_string(),
             "Repo".to_string(),
-            "Save".to_string(),
             "error".to_string(),
             "string".to_string(),
         ],
+        referenced_method_names: vec!["Delete".to_string(), "Save".to_string()],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -283,6 +290,7 @@ func (r *Repo) Save(id string) error {
             "error".to_string(),
             "string".to_string(),
         ],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -319,6 +327,7 @@ func (r Repo) Label() string {
         range: LineRange { start: 7, end: 9 },
         container: Some("Repo".to_string()),
         referenced_names: vec!["Repo".to_string(), "string".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -396,6 +405,7 @@ func (r *Repo) Save(id string) error {
             "error".to_string(),
             "string".to_string(),
         ],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,

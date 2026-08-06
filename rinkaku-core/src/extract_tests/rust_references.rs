@@ -37,6 +37,7 @@ fn foo() -> i32 {
         range: LineRange { start: 1, end: 5 },
         container: None,
         referenced_names: vec!["bar".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -102,6 +103,7 @@ fn should_collect_scoped_identifier_path_references(
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names,
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -125,6 +127,7 @@ fn build() -> Format {
         "markdown".to_string(),
         "render_markdown".to_string(),
     ],
+    vec![],
 )]
 #[case::should_capture_called_name_when_path_is_super(
     "\
@@ -133,6 +136,7 @@ fn build() -> Format {
 }
 ",
     vec!["Format".to_string(), "helper".to_string()],
+    vec![],
 )]
 #[case::should_capture_called_name_when_path_is_crate(
     "\
@@ -141,6 +145,7 @@ fn build() -> Format {
 }
 ",
     vec!["Format".to_string(), "helper".to_string()],
+    vec![],
 )]
 #[case::should_capture_method_name_when_called_on_a_receiver(
     "\
@@ -148,7 +153,8 @@ fn build() -> Format {
     state.advance_cursor()
 }
 ",
-    vec!["Format".to_string(), "advance_cursor".to_string()],
+    vec!["Format".to_string()],
+    vec!["advance_cursor".to_string()],
 )]
 #[case::should_skip_ubiquitous_method_name_when_called_on_a_receiver(
     "\
@@ -157,6 +163,7 @@ fn build() -> Format {
 }
 ",
     vec!["Format".to_string()],
+    vec![],
 )]
 #[case::should_keep_ubiquitous_name_when_called_as_a_free_function(
     "\
@@ -165,10 +172,12 @@ fn build() -> Format {
 }
 ",
     vec!["Format".to_string(), "get".to_string()],
+    vec![],
 )]
 fn should_collect_scoped_and_method_call_references(
     #[case] source: &str,
     #[case] referenced_names: Vec<String>,
+    #[case] referenced_method_names: Vec<String>,
 ) {
     let lang = RustSupport;
     let changed_ranges = vec![LineRange { start: 1, end: 1 }];
@@ -181,6 +190,7 @@ fn should_collect_scoped_and_method_call_references(
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names,
+        referenced_method_names,
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -258,6 +268,7 @@ fn should_collect_macro_body_references(
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names,
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -291,6 +302,7 @@ struct Point {
         range: LineRange { start: 2, end: 4 },
         container: None,
         referenced_names: vec!["Point".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,

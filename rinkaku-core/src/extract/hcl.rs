@@ -81,6 +81,8 @@ pub(super) fn build_hcl_locals_symbols(
                 .children(&mut attribute_cursor)
                 .find(|c| c.kind() == "identifier")?;
             let name = name_node.utf8_text(source).ok()?;
+            let references =
+                super::references::collect_referenced_names(attribute, source, reference_query);
             Some(super::ExtractedSymbol {
                 id: String::new(),
                 name: format!("local.{name}"),
@@ -88,11 +90,8 @@ pub(super) fn build_hcl_locals_symbols(
                 signature: super::slice_signature(attribute, source),
                 range: super::node_to_line_range(attribute),
                 container: None,
-                referenced_names: super::references::collect_referenced_names(
-                    attribute,
-                    source,
-                    reference_query,
-                ),
+                referenced_names: references.bare,
+                referenced_method_names: references.method,
                 dependencies: Vec::new(),
                 omitted_dependency_matches: 0,
                 is_test: lang.is_test_definition(attribute, source),

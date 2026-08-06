@@ -723,10 +723,13 @@ fn partition_test_symbols(files: Vec<FileReport>) -> (Vec<FileReport>, Vec<TestF
 }
 
 /// Parses `diff_text` and collects every name referenced by any changed
-/// symbol across every changed file, reading each file's new-side content
-/// through `read_file` — the same walk `analyze_diff` performs, but
-/// stopping at `extract_changed_symbols` instead of going on to resolve
-/// dependencies or build a `Report`.
+/// symbol across every changed file — the union of `referenced_names` and
+/// `referenced_method_names` (ADR 0068: the prefilter this feeds doesn't
+/// need the container-aware distinction `graph::collect_edges` applies to
+/// the two sets, only "is this name referenced at all") — reading each
+/// file's new-side content through `read_file` — the same walk
+/// `analyze_diff` performs, but stopping at `extract_changed_symbols`
+/// instead of going on to resolve dependencies or build a `Report`.
 ///
 /// Exists so `main.rs` can compute the reference-name set a `TagsResolver`
 /// needs for its prefilter (`TagsResolver::new`'s `reference_names`
@@ -766,6 +769,7 @@ pub fn collect_referenced_names(
         })?;
         for symbol in extract_changed_symbols(&source, lang, &changed_file.changed_ranges) {
             names.extend(symbol.referenced_names);
+            names.extend(symbol.referenced_method_names);
         }
     }
 

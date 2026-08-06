@@ -29,6 +29,7 @@ fn symbol(
         range,
         container: container.map(str::to_string),
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,

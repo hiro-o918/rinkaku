@@ -43,6 +43,7 @@ struct Point {
             range: LineRange { start: 1, end: 3 },
             container: None,
             referenced_names: vec![],
+            referenced_method_names: vec![],
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
@@ -57,6 +58,7 @@ struct Point {
             range: LineRange { start: 5, end: 7 },
             container: None,
             referenced_names: vec!["Point".to_string()],
+            referenced_method_names: vec![],
             dependencies: vec![],
             omitted_dependency_matches: 0,
             is_test: false,
@@ -88,6 +90,7 @@ mod tests {
         range: LineRange { start: 3, end: 3 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: true,
@@ -122,6 +125,7 @@ fn should_add_two_numbers() {
         range: LineRange { start: 2, end: 4 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: true,
@@ -151,6 +155,7 @@ fn helper() -> i32 {
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -193,6 +198,7 @@ fn foo(a: i32) -> i32 {
         range: LineRange { start: 1, end: 4 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -223,6 +229,7 @@ fn foo(a: i32, c: i32) -> i32 {
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -258,6 +265,7 @@ struct Point {
         // as a reference the same as any other type mention. `deps.rs`
         // filters self-references before resolving.
         referenced_names: vec!["Point".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -294,6 +302,7 @@ struct Point {
         range: LineRange { start: 1, end: 5 },
         container: None,
         referenced_names: vec!["Point".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -327,6 +336,7 @@ fn foo(/* count */ a: i32) -> i32 {
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -361,6 +371,7 @@ impl Foo {
         range: LineRange { start: 4, end: 6 },
         container: Some("impl Foo".to_string()),
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -395,6 +406,7 @@ impl Foo {
         range: LineRange { start: 4, end: 6 },
         container: Some("impl Foo".to_string()),
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -439,6 +451,7 @@ impl Foo {
         range: LineRange { start: 4, end: 9 },
         container: Some("impl Foo".to_string()),
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -473,6 +486,7 @@ enum Color {
         // Same self-reference note as the struct case above: the
         // enum's own name is a `type_identifier`.
         referenced_names: vec!["Color".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -506,6 +520,7 @@ trait Greeter {
         range: LineRange { start: 2, end: 2 },
         container: Some("trait Greeter".to_string()),
         referenced_names: vec!["String".to_string()],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -536,14 +551,14 @@ trait Greeter {
         signature: "trait Greeter {\n    fn greet(&self) -> String;\n}".to_string(),
         range: LineRange { start: 1, end: 3 },
         container: None,
-        // The trait's own name, its "greet" method name (ADR 0012
-        // decision 2), and the referenced `String` return type of its
-        // method signature.
-        referenced_names: vec![
-            "Greeter".to_string(),
-            "String".to_string(),
-            "greet".to_string(),
-        ],
+        // The trait's own name and the referenced `String` return
+        // type of its method signature are bare references. Its
+        // "greet" method name (ADR 0012 decision 2) is captured
+        // under `@reference.method` (ADR 0068), since a trait method
+        // name may denote a symbol nested inside a container (an
+        // impl method).
+        referenced_names: vec!["Greeter".to_string(), "String".to_string()],
+        referenced_method_names: vec!["greet".to_string()],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -581,18 +596,15 @@ trait Repo {
             .to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
-        // Both the bodiless `save` signature and the default-body
-        // `label` method contribute their names (ADR 0012 decision 2),
-        // alongside the trait's own name and referenced types. `str`
-        // is a `primitive_type` node in this grammar, not
-        // `type_identifier`, so it is not captured as a reference (see
-        // REFERENCE_QUERY's doc comment).
-        referenced_names: vec![
-            "Repo".to_string(),
-            "String".to_string(),
-            "label".to_string(),
-            "save".to_string(),
-        ],
+        // The trait's own name and referenced types are bare
+        // references (`str` is a `primitive_type` node in this
+        // grammar, not `type_identifier`, so it is not captured at
+        // all — see REFERENCE_QUERY's doc comment). Both the
+        // bodiless `save` signature and the default-body `label`
+        // method contribute their names under `@reference.method`
+        // (ADR 0012 decision 2, ADR 0068).
+        referenced_names: vec!["Repo".to_string(), "String".to_string()],
+        referenced_method_names: vec!["label".to_string(), "save".to_string()],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -632,6 +644,7 @@ const X: i32 = 1;
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -695,6 +708,7 @@ fn foo(a: i32) -> i32 {
         range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,

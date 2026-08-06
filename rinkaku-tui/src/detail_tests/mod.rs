@@ -31,6 +31,7 @@ pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {
         range: LineRange { start: 1, end: 1 },
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
@@ -44,6 +45,7 @@ pub(super) fn node(id: &str, path: &str, name: &str) -> Node {
         id: id.to_string(),
         path: path.to_string(),
         name: name.to_string(),
+        container: None,
         is_test: false,
     }
 }

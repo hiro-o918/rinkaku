@@ -39,6 +39,7 @@ pub(super) fn symbol(id: &str, name: &str, range: LineRange) -> ExtractedSymbol 
         range,
         container: None,
         referenced_names: vec![],
+        referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
