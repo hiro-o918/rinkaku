@@ -2,9 +2,11 @@
 //! split out of `app/mod.rs` (ADR 0028) since the two together are the
 //! single largest responsibility on `App` — routing every [`InputKey`]
 //! against `Screen`/`Focus` state. Struct/enum definitions and state
-//! accessors stay in `app/mod.rs`; only the dispatch logic lives here.
+//! accessors stay in `app/mod.rs`/`app/state.rs`; only the dispatch logic
+//! lives here.
 
-use super::{App, DiffViewMode, Focus, InputKey, JumplistEntry, PendingPrefix, RightPane, Screen};
+use super::jump::JumplistEntry;
+use super::{App, DiffViewMode, Focus, InputKey, PendingPrefix, RightPane, Screen};
 use crate::nav::Action;
 use crate::order::OrderMode;
 use crate::tree::NodeKind;
