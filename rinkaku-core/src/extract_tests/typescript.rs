@@ -205,6 +205,41 @@ interface Repo {
 }
 
 #[test]
+fn should_drop_stoplisted_interface_method_name_from_referenced_method_names() {
+    // Pins ADR 0068's disclosed tradeoff (tracked in issue #230):
+    // routing interface method specs through the ADR 0064 stoplist
+    // costs the spec-to-implementation edge for names like `get`.
+    let source = "\
+interface Cache {
+    get(key: string): string;
+    store(key: string, value: string): void;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Cache".to_string(),
+        kind: SymbolKind::Interface,
+        signature: "interface Cache {\n    get(key: string): string;\n    store(key: string, value: string): void;\n}"
+            .to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        referenced_names: vec!["Cache".to_string()],
+        referenced_method_names: vec!["store".to_string()],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_extract_full_type_alias_signature_when_member_changed() {
     let source = "\
 type Point = {

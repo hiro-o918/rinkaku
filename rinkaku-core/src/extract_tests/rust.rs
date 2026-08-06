@@ -571,7 +571,7 @@ trait Greeter {
 }
 
 #[test]
-fn should_include_both_bodiless_and_default_body_method_names_in_trait_referenced_names() {
+fn should_include_both_bodiless_and_default_body_method_names_in_trait_referenced_method_names() {
     let source = "\
 trait Repo {
     fn save(&self, id: &str);

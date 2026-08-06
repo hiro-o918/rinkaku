@@ -143,7 +143,14 @@ matching:
   narrower filter scope — narrowing the filter to "only Rust
   `field_expression` captures" would need to thread capture-site
   provenance through `is_ubiquitous_method_name`, a second axis of
-  complexity this ADR does not have a measured case for yet.
+  complexity this ADR does not have a measured case for yet. Exposure
+  is uneven across languages: Go is largely shielded because the
+  stoplist is all-lowercase while exported interface methods are
+  capitalized, but TypeScript idiomatically uses lowercase method
+  names that sit on the stoplist (`get`, `set`, `has`, `delete`,
+  `clear`), so a TS interface-to-implementation link is the likeliest
+  place to lose an edge. Tracked in
+  [#230](https://github.com/hiro-o918/rinkaku/issues/230).
 - `ExtractedSymbol`'s field addition is mechanical but wide: every
   in-repo constructor of the struct (~20 test call sites plus
   `extract::build_symbol` itself) needs the new field.
