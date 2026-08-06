@@ -73,6 +73,7 @@ fn should_render_depends_on_list_when_symbol_has_dependencies() {
                 dependencies: vec![crate::deps::ResolvedSymbol {
                     signature: "struct Point { x: i32, y: i32 }".to_string(),
                     path: "src/point.rs".to_string(),
+                    container: None,
                 }],
                 ..symbol(
                     "src/lib.rs::foo",
@@ -135,6 +136,7 @@ fn should_collapse_multiline_dependency_signature_to_one_line() {
                 dependencies: vec![crate::deps::ResolvedSymbol {
                     signature: "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
                     path: "src/point.rs".to_string(),
+                    container: None,
                 }],
                 ..symbol(
                     "src/lib.rs::foo",
@@ -194,10 +196,12 @@ fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencie
                     crate::deps::ResolvedSymbol {
                         signature: "struct Point { x: i32 }".to_string(),
                         path: "src/a.rs".to_string(),
+                        container: None,
                     },
                     crate::deps::ResolvedSymbol {
                         signature: "struct Point { y: i32 }".to_string(),
                         path: "src/b.rs".to_string(),
+                        container: None,
                     },
                 ],
                 ..symbol(
@@ -258,6 +262,7 @@ fn should_render_omitted_matches_note_when_dependency_matches_were_capped() {
                 dependencies: vec![crate::deps::ResolvedSymbol {
                     signature: "struct Point { x: i32 }".to_string(),
                     path: "src/a.rs".to_string(),
+                    container: None,
                 }],
                 omitted_dependency_matches: 2,
                 ..symbol(

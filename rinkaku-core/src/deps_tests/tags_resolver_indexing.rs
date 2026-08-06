@@ -20,6 +20,7 @@ fn should_resolve_function_call_when_callee_is_defined_in_repo() {
     let expected = vec![ResolvedSymbol {
         signature: "fn helper(x: i32) -> i32".to_string(),
         path: "src/lib.rs".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("helper");
 
@@ -45,6 +46,7 @@ fn should_resolve_type_reference_when_type_is_defined_in_repo() {
     let expected = vec![ResolvedSymbol {
         signature: "struct Point {\n    x: i32,\n}".to_string(),
         path: "src/point.rs".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("Point");
 
@@ -109,10 +111,12 @@ fn should_return_all_matches_when_name_is_defined_multiple_times() {
         ResolvedSymbol {
             signature: "fn helper() -> i32".to_string(),
             path: "src/a.rs".to_string(),
+            container: None,
         },
         ResolvedSymbol {
             signature: "fn helper() -> i32".to_string(),
             path: "src/b.rs".to_string(),
+            container: None,
         },
     ];
     let mut actual = resolver.resolve("helper");

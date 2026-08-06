@@ -23,6 +23,7 @@ fn should_index_definitions_from_file_containing_a_referenced_name() {
     let expected = vec![ResolvedSymbol {
         signature: "fn helper(x: i32) -> i32".to_string(),
         path: "src/lib.rs".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("helper");
 
@@ -87,6 +88,7 @@ fn should_still_index_file_when_referenced_name_appears_incidentally_in_content(
     let expected = vec![ResolvedSymbol {
         signature: "fn helper() -> i32".to_string(),
         path: "src/lib.rs".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("helper");
 
@@ -138,6 +140,7 @@ fn should_resolve_dotted_reference_when_definition_file_only_contains_its_compon
     let expected = vec![ResolvedSymbol {
         signature: "variable \"region\" {\n  type = string\n}".to_string(),
         path: "envs/prod/vars.tf".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("var.region");
 
@@ -165,6 +168,7 @@ fn should_resolve_single_character_variable_name_when_referenced() {
     let expected = vec![ResolvedSymbol {
         signature: "variable \"x\" {\n  type = string\n}".to_string(),
         path: "envs/prod/x.tf".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("var.x");
 

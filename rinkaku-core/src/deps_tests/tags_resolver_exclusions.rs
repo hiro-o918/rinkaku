@@ -42,6 +42,7 @@ fn should_include_test_path_file_in_index_when_include_tests_is_true() {
     let expected = vec![ResolvedSymbol {
         signature: "func TestFoo(t *testing.T)".to_string(),
         path: "src/repo_test.go".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("TestFoo");
 
@@ -160,6 +161,7 @@ func Foo() int {
     let expected = vec![ResolvedSymbol {
         signature: "func Foo() int".to_string(),
         path: "models/user.go".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("Foo");
 
@@ -192,6 +194,7 @@ fn should_still_index_ordinary_files_when_a_generated_file_is_excluded() {
     let expected_helper = vec![ResolvedSymbol {
         signature: "fn helper() -> i32".to_string(),
         path: "src/lib.rs".to_string(),
+        container: None,
     }];
     assert_eq!(expected_foo, resolver.resolve("Foo"));
     assert_eq!(expected_helper, resolver.resolve("helper"));
@@ -232,6 +235,7 @@ fn should_add_two_numbers() {}
     let expected = vec![ResolvedSymbol {
         signature: "fn add(a: i32, b: i32) -> i32".to_string(),
         path: "src/lib.rs".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("add");
 
@@ -285,6 +289,7 @@ fn should_index_definitions_across_multiple_languages() {
     let expected = vec![ResolvedSymbol {
         signature: "func greet() string".to_string(),
         path: "repo.go".to_string(),
+        container: None,
     }];
     let actual = resolver.resolve("greet");
 

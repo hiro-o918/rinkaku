@@ -64,6 +64,15 @@ pub struct ResolvedSymbol {
     /// Path of the file the definition lives in, as provided to the
     /// resolver's file source (e.g. `TagsResolver::new`'s `files`).
     pub path: String,
+    /// The enclosing impl/trait/class block's descriptive name, mirroring
+    /// `ExtractedSymbol::container`. Carried through so `resolve_dependencies`
+    /// can key its diff-internal/self-reference exclusions on `(name,
+    /// container, path)`, matching how `extract::classify_symbols` already
+    /// identifies a symbol — a name and path alone collide whenever a diff
+    /// adds a same-named member under a different container (e.g. a new
+    /// class defining a method that shares its name with an unrelated
+    /// top-level definition).
+    pub container: Option<String>,
 }
 
 /// Resolves a referenced name (a called function, a referenced type, ...)
@@ -226,6 +235,7 @@ impl TagsResolver {
                     index.entry(symbol.name).or_default().push(ResolvedSymbol {
                         signature: symbol.signature,
                         path: path.clone(),
+                        container: symbol.container,
                     });
                 }
             }
@@ -348,16 +358,23 @@ impl Resolver for TagsResolver {
 ///   full elsewhere in the report; repeating it under "dependencies" adds
 ///   noise without adding information.
 ///
-/// Matching for both exclusions is keyed on `(name, path)`, not name
-/// alone: a `referenced_names` entry only carries a bare name, but each
-/// candidate it resolves to (`ResolvedSymbol`) carries its own `path`, so
-/// exclusion is checked per resolved candidate rather than by filtering
-/// `referenced_names` up front. Name-only matching would wrongly drop a
-/// dependency whenever the diff happens to also touch an unrelated,
-/// same-named symbol in a *different* file (e.g. a changed `a.rs::helper`
-/// coinciding with the actual dependency target `b.rs::helper`) — see
-/// ADR 0003 for why resolution itself stays name-based (no type info),
-/// but exclusion does not need to inherit that imprecision.
+/// Matching for both exclusions is keyed on `(name, container, path)`, not
+/// `(name, path)`: a `referenced_names` entry only carries a bare name, but
+/// each candidate it resolves to (`ResolvedSymbol`) carries its own
+/// `path`/`container`, so exclusion is checked per resolved candidate
+/// rather than by filtering `referenced_names` up front. Name-only or
+/// `(name, path)` matching would wrongly drop a dependency whenever the
+/// diff happens to also touch an unrelated, same-named symbol:
+/// - in a *different* file (e.g. a changed `a.rs::helper` coinciding with
+///   the actual dependency target `b.rs::helper`) — see ADR 0003 for why
+///   resolution itself stays name-based (no type info), but exclusion does
+///   not need to inherit that imprecision.
+/// - in the *same* file but a different container (e.g. the diff adds
+///   `class Baz { fn Foo() }` to `a.rs`, which shares a name and path with
+///   an actual dependency target `class Foo` defined elsewhere in
+///   `a.rs`). Keying on `container` too — mirroring how
+///   `extract::classify_symbols` already identifies a symbol — keeps these
+///   apart.
 ///
 /// Also caps same-name candidates at [`MAX_MATCHES_PER_NAME`] per
 /// referenced name, ranked by [`path_proximity_rank`] so the kept matches
@@ -379,12 +396,16 @@ pub fn resolve_dependencies(
     files: Vec<crate::render::FileReport>,
     resolver: &dyn Resolver,
 ) -> Vec<crate::render::FileReport> {
-    let diff_symbols: std::collections::HashSet<(String, String)> = files
+    let diff_symbols: std::collections::HashSet<(String, Option<String>, String)> = files
         .iter()
         .flat_map(|file| {
-            file.symbols
-                .iter()
-                .map(move |symbol| (symbol.name.clone(), file.path.clone()))
+            file.symbols.iter().map(move |symbol| {
+                (
+                    symbol.name.clone(),
+                    symbol.container.clone(),
+                    file.path.clone(),
+                )
+            })
         })
         .collect();
 
@@ -398,7 +419,11 @@ pub fn resolve_dependencies(
                     .symbols
                     .into_iter()
                     .map(|mut symbol| {
-                        let own_key = (symbol.name.clone(), file_path.clone());
+                        let own_key = (
+                            symbol.name.clone(),
+                            symbol.container.clone(),
+                            file_path.clone(),
+                        );
                         let mut dependencies = Vec::new();
                         let mut omitted = 0usize;
 
@@ -407,7 +432,11 @@ pub fn resolve_dependencies(
                                 .resolve(name)
                                 .into_iter()
                                 .filter(|resolved| {
-                                    let key = (name.clone(), resolved.path.clone());
+                                    let key = (
+                                        name.clone(),
+                                        resolved.container.clone(),
+                                        resolved.path.clone(),
+                                    );
                                     key != own_key && !diff_symbols.contains(&key)
                                 })
                                 .collect();
