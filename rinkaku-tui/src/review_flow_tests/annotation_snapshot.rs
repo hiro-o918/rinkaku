@@ -96,6 +96,7 @@ mod derive_selection_snapshot_tests {
 
         assert_eq!(
             Some(crate::review::SelectionSnapshot {
+                target: crate::review::AnnotationTarget::Symbol,
                 path: "lib.rs".to_string(),
                 symbol_id: Some("lib.rs::foo".to_string()),
                 symbol_name: Some("foo".to_string()),
@@ -120,6 +121,7 @@ mod derive_selection_snapshot_tests {
 
         assert_eq!(
             Some(crate::review::SelectionSnapshot {
+                target: crate::review::AnnotationTarget::Symbol,
                 path: "lib.rs".to_string(),
                 symbol_id: Some("lib.rs::foo".to_string()),
                 symbol_name: Some("foo".to_string()),
@@ -132,7 +134,7 @@ mod derive_selection_snapshot_tests {
     }
 
     #[test]
-    fn should_return_none_when_cursor_is_on_a_directory_row() {
+    fn should_build_a_dir_snapshot_when_cursor_is_on_a_directory_row() {
         let report = Report {
             files: vec![
                 rinkaku_core::render::FileReport {
@@ -150,6 +152,69 @@ mod derive_selection_snapshot_tests {
 
         let actual = derive_selection_snapshot(&app, &report, &[]);
 
+        assert_eq!(
+            Some(crate::review::SelectionSnapshot {
+                target: crate::review::AnnotationTarget::Dir,
+                path: "a".to_string(),
+                symbol_id: None,
+                symbol_name: None,
+                range: None,
+                anchor: None,
+                signature: None,
+            }),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_build_a_file_snapshot_when_cursor_is_on_a_file_row() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report);
+
+        let actual = derive_selection_snapshot(&app, &report, &[]);
+
+        assert_eq!(
+            Some(crate::review::SelectionSnapshot {
+                target: crate::review::AnnotationTarget::File,
+                path: "lib.rs".to_string(),
+                symbol_id: None,
+                symbol_name: None,
+                range: None,
+                anchor: None,
+                signature: None,
+            }),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_build_a_removed_symbol_snapshot_when_cursor_is_on_a_removed_symbol_row() {
+        let report = report_with_one_removed_symbol();
+        let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+
+        let actual = derive_selection_snapshot(&app, &report, &[]);
+
+        assert_eq!(
+            Some(crate::review::SelectionSnapshot {
+                target: crate::review::AnnotationTarget::RemovedSymbol,
+                path: "lib.rs".to_string(),
+                symbol_id: Some("lib.rs::gone".to_string()),
+                symbol_name: Some("gone".to_string()),
+                range: None,
+                anchor: None,
+                signature: None,
+            }),
+            actual
+        );
+    }
+
+    #[test]
+    fn should_return_none_when_cursor_is_on_a_tests_section_row() {
+        let report = report_with_one_test_file();
+        let app = App::new(&report);
+
+        let actual = derive_selection_snapshot(&app, &report, &[]);
+
         assert_eq!(None, actual);
     }
 
@@ -162,6 +227,7 @@ mod derive_selection_snapshot_tests {
 
         assert_eq!(
             Some(crate::review::SelectionSnapshot {
+                target: crate::review::AnnotationTarget::Symbol,
                 path: "lib.rs".to_string(),
                 symbol_id: Some("lib.rs::foo".to_string()),
                 symbol_name: Some("foo".to_string()),
@@ -196,11 +262,12 @@ mod dispatch_annotation_compose_key_tests {
     #[test]
     fn should_clear_pending_prefix_when_snapshot_is_none() {
         // Regression test (ADR 0022's `pending_prefix` bug, same class):
-        // pressing `a` over a row with no derivable snapshot (a directory
-        // row, or the source screen) must still discard a pending `g`
-        // prefix — otherwise a `g` press followed by an ineffective `a`
-        // leaves `pending_prefix` stuck at `Some(G)`, and the *next* `d`
-        // the reviewer types for its own ordinary reason (`ToggleDiff`)
+        // pressing `a` over a row with no derivable snapshot (a Section/
+        // TestGroup row, or the source screen — ADR 0067 narrowed this set
+        // to just those two) must still discard a pending `g` prefix —
+        // otherwise a `g` press followed by an ineffective `a` leaves
+        // `pending_prefix` stuck at `Some(G)`, and the *next* `d` the
+        // reviewer types for its own ordinary reason (`ToggleDiff`)
         // silently resolves as `GotoDefinition` instead.
         let report = empty_report();
         let app = App::new(&report).handle_key(crate::app::InputKey::PendingGoto);

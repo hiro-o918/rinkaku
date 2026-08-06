@@ -189,6 +189,31 @@ pub enum BlastRadiusSelection {
     View(crate::blast_radius::BlastRadiusView),
 }
 
+/// What [`App::selected_row`] resolved the cursor's row to (ADR 0067) —
+/// `crate::review_flow::derive_selection_snapshot`'s sole input for turning
+/// a tree row into a [`crate::review::SelectionSnapshot`]. A distinct type
+/// from [`crate::tree::NodeKind`] rather than exposing `NodeKind` itself:
+/// `review_flow` needs only the identity fields relevant to an annotation
+/// (path, symbol id/name), not the rest of `NodeKind`'s shape (badges,
+/// children, kind-specific data no annotation cares about).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SelectedRow {
+    Symbol {
+        id: String,
+    },
+    RemovedSymbol {
+        path: String,
+        id: String,
+        name: String,
+    },
+    File {
+        path: String,
+    },
+    Dir {
+        path: String,
+    },
+}
+
 /// A `g`-prefixed two-key sequence awaiting its second key (ADR 0022's
 /// minimal prefix state machine — not a general chord engine, see that
 /// ADR's own Alternatives). Today's only prefix is `g`; the variant exists
@@ -814,6 +839,37 @@ impl App {
         match &row.node.kind {
             NodeKind::Symbol(symbol_ref) if !symbol_ref.removed => Some(symbol_ref.id.as_str()),
             _ => None,
+        }
+    }
+
+    /// The tree row under the cursor, classified for annotation purposes
+    /// (ADR 0067) — the wider counterpart to [`Self::selected_symbol_id`],
+    /// which only ever reports a *present* symbol row and is kept as-is
+    /// since navigation (`gd`/`gr`) has no use for a removed symbol or a
+    /// `Dir`/`File` row. `None` on [`NodeKind::Section`]/[`NodeKind::TestGroup`]
+    /// (synthetic groupings with no real file-tree path — ADR 0067's
+    /// Decision 4) or when there are no rows at all.
+    pub(crate) fn selected_row(&self) -> Option<SelectedRow> {
+        let rows = self.nav.rows(&self.tree);
+        let row = rows.get(self.nav.cursor())?;
+        match &row.node.kind {
+            NodeKind::Symbol(symbol_ref) if symbol_ref.removed => {
+                Some(SelectedRow::RemovedSymbol {
+                    path: row.node.path.clone(),
+                    id: symbol_ref.id.clone(),
+                    name: symbol_ref.name.clone(),
+                })
+            }
+            NodeKind::Symbol(symbol_ref) => Some(SelectedRow::Symbol {
+                id: symbol_ref.id.clone(),
+            }),
+            NodeKind::File => Some(SelectedRow::File {
+                path: row.node.path.clone(),
+            }),
+            NodeKind::Dir => Some(SelectedRow::Dir {
+                path: row.node.path.clone(),
+            }),
+            NodeKind::Section(_) | NodeKind::TestGroup { .. } => None,
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::app::{App, BlastRadiusSelection};
 use crate::locale::Locale;
-use crate::review::{ReviewState, SelectionSnapshot};
+use crate::review::{AnnotationTarget, ReviewState, SelectionSnapshot};
 use crate::ui::draw;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -50,12 +50,25 @@ fn report_with_one_symbol() -> Report {
 
 fn snapshot() -> SelectionSnapshot {
     SelectionSnapshot {
+        target: AnnotationTarget::Symbol,
         path: "lib.rs".to_string(),
         symbol_id: Some("lib.rs::foo".to_string()),
         symbol_name: Some("foo".to_string()),
         range: Some((1, 5)),
         anchor: Some((1, 5)),
         signature: Some("fn foo()".to_string()),
+    }
+}
+
+fn dir_snapshot() -> SelectionSnapshot {
+    SelectionSnapshot {
+        target: AnnotationTarget::Dir,
+        path: "src".to_string(),
+        symbol_id: None,
+        symbol_name: None,
+        range: None,
+        anchor: None,
+        signature: None,
     }
 }
 
@@ -119,6 +132,22 @@ fn should_draw_compose_overlay_with_location_and_buffer_when_composing() {
     assert!(text.contains("lib.rs:1-5 foo"));
     assert!(text.contains("hi"));
     assert!(text.contains("Enter: save"));
+}
+
+#[test]
+fn should_draw_compose_overlay_with_trailing_slash_when_composing_over_a_dir_snapshot() {
+    let report = report_with_one_symbol();
+    let review = ReviewState::default()
+        .begin_compose(dir_snapshot())
+        .push_char('h')
+        .push_char('i');
+    let app = App::new(&report).with_review(review);
+
+    let text = draw_app(&app, &report);
+
+    assert!(text.contains("New annotation"));
+    assert!(text.contains("src/"));
+    assert!(text.contains("hi"));
 }
 
 #[test]

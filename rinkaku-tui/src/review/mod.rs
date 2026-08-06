@@ -15,7 +15,9 @@
 pub mod ports;
 mod render;
 
-pub use render::{render_agent_packet, render_review_comments};
+pub use render::{
+    partition_for_export, render_additional_notes, render_agent_packet, render_review_comments,
+};
 
 /// A destination-neutral annotation attached to a location in the diff (ADR
 /// 0048's primitive): nothing about an `Annotation` says who will eventually
@@ -27,16 +29,32 @@ pub struct Annotation {
     pub signature: Option<String>,
 }
 
+/// What kind of tree row an [`AnnotationLocation`]/[`SelectionSnapshot`] was
+/// taken against (ADR 0067): explicit data rather than something every
+/// consumer re-derives from which optional fields happen to be set, since a
+/// `None` `symbol_id` alone cannot distinguish "a File row" from "a Dir row".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationTarget {
+    Symbol,
+    RemovedSymbol,
+    File,
+    Dir,
+}
+
 /// Where a [`Annotation`] is anchored: a file path, the symbol it was taken
 /// against (if any), the symbol's own new-side line range, and the
 /// GitHub-comment anchor within that range (the first hunk-intersecting
 /// contiguous run — see [`crate::review::render_review_comments`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnnotationLocation {
+    pub target: AnnotationTarget,
     pub path: String,
     pub symbol_id: Option<String>,
     pub symbol_name: Option<String>,
-    /// The symbol's own new-side line range, 1-based inclusive.
+    /// The symbol's own new-side line range, 1-based inclusive. `None` for
+    /// every non-`Symbol` target (ADR 0067): a `File`/`Dir` row has no line
+    /// range at all, and a `RemovedSymbol` has no *new-side* range since it
+    /// no longer exists on the head side.
     pub range: Option<(usize, usize)>,
     /// The new-side hunk/`range` intersection's first contiguous run,
     /// 1-based inclusive — GitHub's review API only accepts inline
@@ -52,6 +70,7 @@ pub struct AnnotationLocation {
 /// already parsed for the session; `review` never derives this itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionSnapshot {
+    pub target: AnnotationTarget,
     pub path: String,
     pub symbol_id: Option<String>,
     pub symbol_name: Option<String>,
@@ -63,6 +82,7 @@ pub struct SelectionSnapshot {
 impl From<SelectionSnapshot> for AnnotationLocation {
     fn from(snapshot: SelectionSnapshot) -> Self {
         Self {
+            target: snapshot.target,
             path: snapshot.path,
             symbol_id: snapshot.symbol_id,
             symbol_name: snapshot.symbol_name,

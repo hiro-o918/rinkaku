@@ -6,10 +6,13 @@
 //!   `dispatch_annotation_compose_key`
 //! - `perform_export` — the clipboard sink's OSC 52 status passthrough
 //!   (ADR 0048 sink B)
+//! - `github_review_export` — sink A's summary + "Additional notes" body
+//!   composition (ADR 0067)
 //! - `open_pr_in_browser` — the no-`PrContext`/spawn-failure status-line
 //!   messages and the URL built from a `PrContext` (ADR 0050)
 
 mod annotation_snapshot;
+mod github_review_export;
 mod open_pr_in_browser;
 mod perform_export;
 
@@ -82,6 +85,65 @@ pub(super) fn report_with_one_symbol() -> Report {
                 dependencies: vec![],
                 omitted_dependency_matches: 0,
                 is_test: false,
+                classification: None,
+                previous_signature: None,
+            }],
+        }],
+        ..empty_report()
+    }
+}
+
+/// A report whose only file has one *removed* symbol and no present
+/// symbols (ADR 0067's `RemovedSymbol` annotation target) — `files` still
+/// carries an (empty-symbols) entry for `lib.rs` so the tree gets a `File`
+/// row to nest the removed symbol under, mirroring how `build_tree`
+/// merges `report.files`/`report.removed` on a shared path.
+pub(super) fn report_with_one_removed_symbol() -> Report {
+    use rinkaku_core::extract::{RemovedSymbol, SymbolKind};
+    use rinkaku_core::render::FileReport;
+
+    Report {
+        files: vec![FileReport {
+            path: "lib.rs".to_string(),
+            symbols: vec![],
+        }],
+        removed: vec![RemovedSymbol {
+            name: "gone".to_string(),
+            kind: SymbolKind::Function,
+            path: "lib.rs".to_string(),
+            signature: "fn gone()".to_string(),
+        }],
+        ..empty_report()
+    }
+}
+
+/// A report whose only file is a *whole* test file — every symbol flagged
+/// `is_test` (Rust's `#[cfg(test)]` convention, ADR 0035 Phase B) and no
+/// production symbols left over in the same file. `build_tree` lifts it out
+/// of the production tree entirely into a synthetic `Section::Tests` root
+/// (`crate::tree::tests_section::is_whole_test_file`'s own doc comment), so
+/// with no other content in the report, the cursor at position 0 lands on
+/// that `Section` row (ADR 0067's Decision 4: `Section`/`TestGroup` stay out
+/// of annotation scope).
+pub(super) fn report_with_one_test_file() -> Report {
+    use rinkaku_core::diff::LineRange;
+    use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
+    use rinkaku_core::render::FileReport;
+
+    Report {
+        files: vec![FileReport {
+            path: "tests.rs".to_string(),
+            symbols: vec![ExtractedSymbol {
+                id: "tests.rs::test_foo".to_string(),
+                name: "test_foo".to_string(),
+                kind: SymbolKind::Function,
+                signature: "fn test_foo()".to_string(),
+                range: LineRange { start: 1, end: 1 },
+                container: None,
+                referenced_names: vec![],
+                dependencies: vec![],
+                omitted_dependency_matches: 0,
+                is_test: true,
                 classification: None,
                 previous_signature: None,
             }],

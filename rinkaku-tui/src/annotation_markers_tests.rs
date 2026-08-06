@@ -1,9 +1,15 @@
 use super::*;
-use crate::review::AnnotationLocation;
+use crate::review::{AnnotationLocation, AnnotationTarget};
 
 fn annotation(path: &str, symbol_id: Option<&str>, range: Option<(usize, usize)>) -> Annotation {
+    let target = if symbol_id.is_some() {
+        AnnotationTarget::Symbol
+    } else {
+        AnnotationTarget::File
+    };
     Annotation {
         location: AnnotationLocation {
+            target,
             path: path.to_string(),
             symbol_id: symbol_id.map(str::to_string),
             symbol_name: None,

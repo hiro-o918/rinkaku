@@ -20,16 +20,15 @@ pub struct AnnotationMarkers {
     /// Annotation count per symbol id — consulted by a symbol tree row.
     pub symbol_counts: HashMap<String, usize>,
     /// Annotation count per file path — consulted by a `File` tree row.
-    /// Includes every annotation under that path regardless of whether it
-    /// carries a `symbol_id` (v1 only composes symbol-anchored annotations,
-    /// but this stays keyed by path rather than requiring a symbol so a
-    /// future file-level annotation is covered by construction rather than
-    /// needing a second field).
+    /// Includes every annotation under that path regardless of target kind
+    /// (ADR 0067: a `File`-target annotation increments this the same way a
+    /// `Symbol`-target one under that path already did, since this stays
+    /// keyed by path rather than requiring a `symbol_id`).
     pub file_counts: HashMap<String, usize>,
     /// Every annotation's new-side line range, keyed by path — consulted by
     /// the diff pane to mark individual lines. An annotation with no
-    /// `range` (v1: non-symbol locations only, out of scope per
-    /// `crate::review`'s module doc comment) contributes no entry.
+    /// `range` (a `File`/`Dir`/`RemovedSymbol` target, or a `Symbol` target
+    /// whose range never resolved — ADR 0067) contributes no entry.
     pub line_ranges: HashMap<String, Vec<(usize, usize)>>,
 }
 

@@ -5,10 +5,11 @@
 //! pressed over a row with no derivable snapshot.
 
 use super::*;
-use crate::review::{ReviewState, SelectionSnapshot};
+use crate::review::{AnnotationTarget, ReviewState, SelectionSnapshot};
 
 fn snapshot() -> SelectionSnapshot {
     SelectionSnapshot {
+        target: AnnotationTarget::Symbol,
         path: "lib.rs".to_string(),
         symbol_id: Some("lib.rs::foo".to_string()),
         symbol_name: Some("foo".to_string()),

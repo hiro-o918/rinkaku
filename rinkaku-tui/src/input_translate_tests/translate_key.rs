@@ -658,6 +658,7 @@ fn should_not_normalize_fullwidth_characters_while_composing_an_annotation() {
     // gestures are.
     let report = report_with_one_symbol();
     let snapshot = crate::review::SelectionSnapshot {
+        target: crate::review::AnnotationTarget::Symbol,
         path: "lib.rs".to_string(),
         symbol_id: Some("lib.rs::foo".to_string()),
         symbol_name: Some("foo".to_string()),

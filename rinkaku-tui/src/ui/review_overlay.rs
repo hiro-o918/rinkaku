@@ -69,8 +69,15 @@ fn draw_compose_overlay(
 /// fallback shape `crate::review`'s own annotation-heading formatting uses
 /// (kept separate rather than shared, since that formats an *annotation's*
 /// already-resolved anchor/range, while this formats a live
-/// [`crate::review::SelectionSnapshot`] still being composed against).
+/// [`crate::review::SelectionSnapshot`] still being composed against). A
+/// [`crate::review::AnnotationTarget::Dir`] snapshot is special-cased to a
+/// trailing `/` the same way `crate::review::render`'s `annotation_heading`
+/// is (ADR 0067) — both formatters degrade a `Dir` the same way so a
+/// directory title never reads identically to a same-path file's.
 fn compose_title_location(snapshot: &crate::review::SelectionSnapshot) -> String {
+    if matches!(snapshot.target, crate::review::AnnotationTarget::Dir) {
+        return format!("{}/", snapshot.path);
+    }
     let range = snapshot.anchor.or(snapshot.range).map(|(start, end)| {
         if start == end {
             format!("{start}")
@@ -138,21 +145,26 @@ fn draw_annotations_overlay(
 
 /// One annotations-list row's text: `"{path}:{anchor-or-range}
 /// {symbol_name}: {body's first line}"`, degrading the location half the
-/// same way [`compose_title_location`] does.
+/// same way [`compose_title_location`] does — including the same `Dir`
+/// trailing-`/` special case (ADR 0067).
 fn annotations_list_entry_text(annotation: &crate::review::Annotation) -> String {
     let location = &annotation.location;
-    let range = location.anchor.or(location.range).map(|(start, end)| {
-        if start == end {
-            format!("{start}")
-        } else {
-            format!("{start}-{end}")
+    let location_text = if matches!(location.target, crate::review::AnnotationTarget::Dir) {
+        format!("{}/", location.path)
+    } else {
+        let range = location.anchor.or(location.range).map(|(start, end)| {
+            if start == end {
+                format!("{start}")
+            } else {
+                format!("{start}-{end}")
+            }
+        });
+        match (range, &location.symbol_name) {
+            (Some(range), Some(name)) => format!("{}:{range} {name}", location.path),
+            (Some(range), None) => format!("{}:{range}", location.path),
+            (None, Some(name)) => format!("{} {name}", location.path),
+            (None, None) => location.path.clone(),
         }
-    });
-    let location_text = match (range, &location.symbol_name) {
-        (Some(range), Some(name)) => format!("{}:{range} {name}", location.path),
-        (Some(range), None) => format!("{}:{range}", location.path),
-        (None, Some(name)) => format!("{} {name}", location.path),
-        (None, None) => location.path.clone(),
     };
     let body_first_line = annotation.body.lines().next().unwrap_or("");
     format!("{location_text}: {body_first_line}")

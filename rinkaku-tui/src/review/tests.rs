@@ -2,6 +2,7 @@ use super::*;
 
 fn snapshot(path: &str) -> SelectionSnapshot {
     SelectionSnapshot {
+        target: AnnotationTarget::Symbol,
         path: path.to_string(),
         symbol_id: Some(format!("{path}::foo")),
         symbol_name: Some("foo".to_string()),

@@ -9,7 +9,7 @@
 //! `ratatui::DefaultTerminal` directly, which is what makes them
 //! unit-testable in isolation from `run_app` itself.
 
-use crate::app::{App, InputKey, Screen};
+use crate::app::{App, InputKey, Screen, SelectedRow};
 use crate::{ReviewPorts, diff_view, review};
 use rinkaku_core::render::Report;
 
@@ -111,8 +111,13 @@ pub(crate) fn perform_export(
             let Some(pr_context) = &ports.pr_context else {
                 return review.set_status("error: no PR context available to post a review");
             };
-            let comments = review::render_review_comments(review.annotations());
-            match submitter.submit_review(pr_context, verdict, REVIEW_SUMMARY, &comments) {
+            let (anchored, unanchored) = review::partition_for_export(review.annotations());
+            let comments = review::render_review_comments(&anchored);
+            let summary = format!(
+                "{REVIEW_SUMMARY}{}",
+                review::render_additional_notes(&unanchored)
+            );
+            match submitter.submit_review(pr_context, verdict, &summary, &comments) {
                 Ok(()) => review.set_status(format!(
                     "posted {} review comment(s) to PR #{}",
                     comments.len(),
@@ -139,22 +144,25 @@ pub(crate) fn perform_export(
 /// hunks (mirroring `InputKey::Source`'s own "IO/derivation stays outside
 /// `App`" precedent).
 ///
-/// `None` on [`Screen::Source`] (composing against a source-view line is
-/// out of v1's scope) and on any row that is not a present symbol
-/// (`app::NodeKind::Dir`/`File`/`Section`/`TestGroup`, or a removed
-/// symbol) — v1 only supports symbol-anchored annotations (module doc
-/// comment on `crate::review`), matching `App::selected_symbol_id`'s own
-/// row-kind scoping.
+/// `None` on [`Screen::Source`] (composing against a source-view line stays
+/// out of scope) and on `app::NodeKind::Section`/`TestGroup` rows (ADR
+/// 0067's Decision 4 — both are synthetic groupings with no real file-tree
+/// path to annotate). Every other row kind now resolves to a snapshot
+/// (ADR 0067): a present symbol row via [`App::selected_symbol_id`]'s same
+/// row-kind scoping (below), a removed symbol row, or a `Dir`/`File` row
+/// via the tree cursor directly.
 ///
-/// The anchor is the first contiguous new-side run where the symbol's own
-/// range intersects a diff hunk touching `path` — GitHub's review API only
-/// accepts inline comments on lines that are part of the PR's diff, so
+/// A present symbol's anchor is the first contiguous new-side run where its
+/// own range intersects a diff hunk touching `path` — GitHub's review API
+/// only accepts inline comments on lines that are part of the PR's diff, so
 /// this is what [`review::render_review_comments`] posts against. `None`
 /// when no hunk intersects the symbol's range at all (e.g. the symbol
 /// itself is unchanged but was pulled into view via dependency
 /// expansion) — the annotation still gets a location (`range`), just no
-/// GitHub-postable anchor; [`review::render_review_comments`] falls back
-/// to `range` in that case.
+/// GitHub-postable anchor; unanchored annotations are routed to the
+/// "Additional notes" export section instead (ADR 0067's Decision 3). A
+/// removed symbol, `File`, and `Dir` never resolve a `range`/`anchor` at
+/// all — none of the three has a new-side line to point at.
 pub(crate) fn derive_selection_snapshot(
     app: &App,
     report: &Report,
@@ -163,25 +171,57 @@ pub(crate) fn derive_selection_snapshot(
     if !matches!(app.screen(), Screen::Entry) {
         return None;
     }
-    let symbol_id = app.selected_symbol_id()?;
-    let (path, symbol) = report.files.iter().find_map(|file| {
-        file.symbols
-            .iter()
-            .find(|s| s.id == symbol_id)
-            .map(|s| (file.path.as_str(), s))
-    })?;
-    let range = (symbol.range.start, symbol.range.end);
-    let anchor = diff_view::file_hunks(diff_files, path)
-        .and_then(|file_hunks| first_anchor_run(file_hunks, range));
+    let row = app.selected_row()?;
+    match row {
+        SelectedRow::Symbol { id } => {
+            let (path, symbol) = report.files.iter().find_map(|file| {
+                file.symbols
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| (file.path.as_str(), s))
+            })?;
+            let range = (symbol.range.start, symbol.range.end);
+            let anchor = diff_view::file_hunks(diff_files, path)
+                .and_then(|file_hunks| first_anchor_run(file_hunks, range));
 
-    Some(review::SelectionSnapshot {
-        path: path.to_string(),
-        symbol_id: Some(symbol.id.clone()),
-        symbol_name: Some(symbol.name.clone()),
-        range: Some(range),
-        anchor,
-        signature: Some(symbol.signature.clone()),
-    })
+            Some(review::SelectionSnapshot {
+                target: review::AnnotationTarget::Symbol,
+                path: path.to_string(),
+                symbol_id: Some(symbol.id.clone()),
+                symbol_name: Some(symbol.name.clone()),
+                range: Some(range),
+                anchor,
+                signature: Some(symbol.signature.clone()),
+            })
+        }
+        SelectedRow::RemovedSymbol { path, id, name } => Some(review::SelectionSnapshot {
+            target: review::AnnotationTarget::RemovedSymbol,
+            path,
+            symbol_id: Some(id),
+            symbol_name: Some(name),
+            range: None,
+            anchor: None,
+            signature: None,
+        }),
+        SelectedRow::File { path } => Some(review::SelectionSnapshot {
+            target: review::AnnotationTarget::File,
+            path,
+            symbol_id: None,
+            symbol_name: None,
+            range: None,
+            anchor: None,
+            signature: None,
+        }),
+        SelectedRow::Dir { path } => Some(review::SelectionSnapshot {
+            target: review::AnnotationTarget::Dir,
+            path,
+            symbol_id: None,
+            symbol_name: None,
+            range: None,
+            anchor: None,
+            signature: None,
+        }),
+    }
 }
 
 /// The first contiguous new-side line run where `range` (a symbol's own
