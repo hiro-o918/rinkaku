@@ -171,6 +171,25 @@ fn should_draw_annotations_list_overlay_with_annotation_summary() {
 }
 
 #[test]
+fn should_draw_annotations_list_overlay_with_trailing_slash_for_a_dir_annotation() {
+    let report = report_with_one_symbol();
+    let review = ReviewState::default()
+        .begin_compose(dir_snapshot())
+        .push_char('m')
+        .push_char('e')
+        .push_char('s')
+        .push_char('s')
+        .confirm_compose()
+        .open_list();
+    let app = App::new(&report).with_review(review);
+
+    let text = draw_app(&app, &report);
+
+    assert!(text.contains("Review annotations"));
+    assert!(text.contains("src/: mess"));
+}
+
+#[test]
 fn should_draw_empty_annotations_list_placeholder_when_there_are_no_annotations() {
     let report = report_with_one_symbol();
     let review = ReviewState::default().open_list();
