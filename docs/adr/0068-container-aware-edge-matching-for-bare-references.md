@@ -148,4 +148,5 @@ matching:
   in-repo constructor of the struct (~20 test call sites plus
   `extract::build_symbol` itself) needs the new field.
 - The `deps.rs` candidate-enumeration gap (Decision point 5) remains
-  open; see the follow-up issue linked from the implementing PR.
+  open; tracked as
+  [#227](https://github.com/hiro-o918/rinkaku/issues/227).
