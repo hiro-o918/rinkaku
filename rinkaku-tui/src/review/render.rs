@@ -57,14 +57,13 @@ pub fn render_review_comments(annotations: &[&Annotation]) -> Vec<RenderedCommen
 }
 
 /// Renders sink A's "Additional notes" body section (ADR 0067) for the
-/// unanchored half of [`partition_for_export`]'s split — empty when
-/// `annotations` is empty, so `crate::review_flow::perform_export` can
+/// unanchored half of [`partition_for_export`]'s split. Returns an empty
+/// string for an empty slice so `crate::review_flow::perform_export` can
 /// unconditionally append this to [`super::ExportRequest::GithubReview`]'s
 /// fixed summary without an extra "any unanchored annotations?" branch of
-/// its own. One bullet per annotation, in order, using the same
-/// path[:range][ name] degrade [`annotation_heading`] already implements
-/// for sink B — the same location text, addressed to a human reviewer
-/// reading the review body instead of an AI agent reading a packet.
+/// its own. Reuses [`annotation_heading`] — the same location text sink B
+/// renders, just addressed to a human reviewer reading the review body
+/// instead of an AI agent reading a packet.
 pub fn render_additional_notes(annotations: &[&Annotation]) -> String {
     if annotations.is_empty() {
         return String::new();
