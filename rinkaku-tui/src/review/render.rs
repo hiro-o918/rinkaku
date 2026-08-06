@@ -112,7 +112,10 @@ pub fn render_agent_packet(annotations: &[Annotation]) -> String {
 /// to a trailing `/` rather than falling through to the bare-path case a
 /// `File`/`RemovedSymbol` location with no resolvable range would also hit —
 /// otherwise a directory heading would be textually indistinguishable from
-/// a same-path file heading.
+/// a same-path file heading. A [`AnnotationTarget::RemovedSymbol`] heading
+/// gets a trailing `(removed)` (ADR 0067 Decision 3) so it stays
+/// distinguishable from an unanchored present-`Symbol` heading, which
+/// degrades to the same `{path} {symbol_name}` text otherwise.
 fn annotation_heading(annotation: &Annotation) -> String {
     let location = &annotation.location;
     if matches!(location.target, AnnotationTarget::Dir) {
@@ -125,11 +128,16 @@ fn annotation_heading(annotation: &Annotation) -> String {
             format!("{start}-{end}")
         }
     });
-    match (range, &location.symbol_name) {
+    let heading = match (range, &location.symbol_name) {
         (Some(range), Some(name)) => format!("{}:{range} {name}", location.path),
         (Some(range), None) => format!("{}:{range}", location.path),
         (None, Some(name)) => format!("{} {name}", location.path),
         (None, None) => location.path.clone(),
+    };
+    if matches!(location.target, AnnotationTarget::RemovedSymbol) {
+        format!("{heading} (removed)")
+    } else {
+        heading
     }
 }
 

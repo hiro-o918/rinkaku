@@ -246,7 +246,7 @@ mod render_additional_notes_tests {
             "\n\n## Additional notes\n\
              - `src/lib.rs`: dead code now\n\
              - `src/legacy/`: structure is confusing\n\
-             - `src/lib.rs old_helper`: should not have been removed\n",
+             - `src/lib.rs old_helper (removed)`: should not have been removed\n",
             actual
         );
     }
@@ -358,7 +358,7 @@ mod render_agent_packet_tests {
         assert_eq!(
             "# Review annotations\n\n\
              Address each of the following review annotations.\n\n\
-             ## src/lib.rs old_helper\n\
+             ## src/lib.rs old_helper (removed)\n\
              this should not have been removed\n",
             actual
         );
