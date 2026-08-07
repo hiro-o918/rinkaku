@@ -47,26 +47,30 @@ const DEFINITION_QUERY: &str = "\
 ///   (see the trait doc comment on `reference_query`).
 /// - `interface_type (method_elem name: (field_identifier))` captures each
 ///   method spec's name inside an interface body (ADR 0012 decision 2)
-///   under `@reference.method` (ADR 0068): feeding these into the
-///   interface symbol's `referenced_method_names` makes
-///   `graph::collect_edges`'s name-based matching link the interface to a
-///   same-named changed receiver method, so the two stop appearing as
-///   independent roots in the change graph. Scoped to `interface_type`'s
-///   own `method_elem` children (rather than a bare `(method_elem name:
-///   (field_identifier) @reference.method)` pattern) so this cannot match
-///   anything else — `method_elem` only ever occurs inside an
-///   `interface_type` in this grammar, but the explicit parent keeps the
-///   intent legible. Captured under `reference.method`, not
-///   `reference.call`, since — unlike a free function call — a method
-///   spec name may denote a symbol nested inside a container (a receiver
-///   method), which `graph::collect_edges` matches without a
-///   same-container restriction (ADR 0068); a bare `reference.call` name
-///   cannot.
+///   under `@reference.methodspec` (ADR 0068, ADR 0064 amendment):
+///   feeding these into the interface symbol's `referenced_method_names`
+///   makes `graph::collect_edges`'s name-based matching link the
+///   interface to a same-named changed receiver method, so the two stop
+///   appearing as independent roots in the change graph. Scoped to
+///   `interface_type`'s own `method_elem` children (rather than a bare
+///   `(method_elem name: (field_identifier) @reference.methodspec)`
+///   pattern) so this cannot match anything else — `method_elem` only
+///   ever occurs inside an `interface_type` in this grammar, but the
+///   explicit parent keeps the intent legible. Captured under
+///   `reference.methodspec`, not `reference.call`, since — unlike a free
+///   function call — a method spec name may denote a symbol nested
+///   inside a container (a receiver method), which
+///   `graph::collect_edges` matches without a same-container restriction
+///   (ADR 0068); a bare `reference.call` name cannot. Kept distinct from
+///   Rust's receiver-call `@reference.method` capture so the ADR 0064
+///   ubiquitous-name stoplist — measured against high-fan-in receiver
+///   calls — does not also apply to this rare, declarative capture (ADR
+///   0064 amendment, issue #230).
 const REFERENCE_QUERY: &str = "\
 [
   (call_expression function: (identifier) @reference.call)
   (type_identifier) @reference.type
-  (interface_type (method_elem name: (field_identifier) @reference.method))
+  (interface_type (method_elem name: (field_identifier) @reference.methodspec))
 ]";
 
 pub struct GoSupport;

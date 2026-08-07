@@ -18,10 +18,15 @@ pub(super) struct ReferencedNames {
     /// every non-query code walk below): cannot syntactically name a
     /// contained symbol in Python/Go/TypeScript.
     pub bare: Vec<String>,
-    /// `@reference.method` captures: Rust's receiver-based method calls
-    /// and trait method names, Go's interface method-spec names, and
-    /// TypeScript's interface method-signature names — all of which may
-    /// legitimately denote a symbol nested inside a container.
+    /// `@reference.method` and `@reference.methodspec` captures: Rust's
+    /// receiver-based method calls (`@reference.method`), plus Rust's
+    /// trait method names, Go's interface method-spec names, and
+    /// TypeScript's interface method-signature names
+    /// (`@reference.methodspec`) — all of which may legitimately denote a
+    /// symbol nested inside a container. Merged into one set here since
+    /// `graph::collect_edges` treats them identically (ADR 0068); the two
+    /// capture names exist only so [`is_ubiquitous_method_name`]'s
+    /// stoplist can apply to the former and not the latter (issue #230).
     pub method: Vec<String>,
 }
 
@@ -72,7 +77,7 @@ pub(super) fn collect_referenced_names(
                 && !is_noise_name(text)
                 && !(capture_name == "reference.method" && is_ubiquitous_method_name(text))
             {
-                if capture_name == "reference.method" {
+                if capture_name == "reference.method" || capture_name == "reference.methodspec" {
                     method.insert(text.to_string());
                 } else {
                     bare.insert(text.to_string());
@@ -173,8 +178,13 @@ fn hcl_traversal_name(variable_expr: tree_sitter::Node, source: &[u8]) -> Option
 /// same-named repo symbol is more likely wrong than right: one repo `fn
 /// clone` drew 143 referrers, a `fn get` 138, when method captures ran
 /// unfiltered (ADR 0064's measurements). Applied only to
-/// `@reference.method` captures — the same name called as a free function
-/// (`get(x)`) or defined as a symbol stays fully visible.
+/// `@reference.method` captures — Rust's receiver-based method calls
+/// (`x.get()`), the shape those measurements were taken on. Not applied to
+/// `@reference.methodspec` captures (interface/trait method declarations):
+/// a spec name is a rare, deliberate declaration, not a high-fan-in call
+/// site, so the stoplist's rationale does not transfer (ADR 0064
+/// amendment, issue #230). The same name called as a free function
+/// (`get(x)`) or defined as a symbol stays fully visible regardless.
 ///
 /// The criterion for membership is "belongs to a std trait or ubiquitous
 /// std method idiom", not "observed colliding here" — pollution appears

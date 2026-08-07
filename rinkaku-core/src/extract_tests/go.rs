@@ -178,7 +178,7 @@ type Fetcher interface {
         // and its referenced parameter/return types (bare type
         // references). "Fetch" is the interface's own method spec
         // name (ADR 0012 decision 2), captured under
-        // `@reference.method` (ADR 0068) since it may denote a
+        // `@reference.methodspec` (ADR 0068) since it may denote a
         // symbol nested inside a container (a receiver method).
         referenced_names: vec![
             "Fetcher".to_string(),
@@ -225,6 +225,43 @@ type Repo interface {
             "string".to_string(),
         ],
         referenced_method_names: vec!["Delete".to_string(), "Save".to_string()],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_keep_stoplisted_interface_method_name_in_referenced_method_names() {
+    // Unexported (lowercase) interface method names are the case Go
+    // exposes to the ADR 0064 stoplist: the stoplist is scoped to
+    // receiver-call captures (issue #230), so a method spec still keeps
+    // its spec-to-implementation edge even when its name collides
+    // (`get`).
+    let source = "\
+package main
+
+type cache interface {
+	get(key string) string
+}
+";
+    let lang = GoSupport;
+    let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "cache".to_string(),
+        kind: SymbolKind::Interface,
+        signature: "cache interface {\n\tget(key string) string\n}".to_string(),
+        range: LineRange { start: 3, end: 5 },
+        container: None,
+        referenced_names: vec!["cache".to_string(), "string".to_string()],
+        referenced_method_names: vec!["get".to_string()],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,

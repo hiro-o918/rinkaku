@@ -108,3 +108,46 @@ ambiguity):
   whose tests exist but lie outside the diff, so the marker would
   still fire falsely on routine PRs. Re-evaluate if a future change
   closes the diff-scope gap.
+
+## Amendment (2026-08-07, fix/scope-stoplist-to-receiver-calls)
+
+ADR 0068 reclassified Go's interface method-spec capture and
+TypeScript's interface method-signature capture from `@reference.call`
+to `@reference.method` (and gave Rust's pre-existing trait-method
+captures the same name), so all three started routing through this
+ADR's stoplist alongside Rust's receiver-call capture. ADR 0068's
+Consequences section flagged this as an accepted-but-unmeasured
+tradeoff and deferred a fix to
+[issue #230](https://github.com/hiro-o918/rinkaku/issues/230), since
+the stoplist's membership criterion and its 138/143-referrer
+measurements (this ADR's Context table) were taken purely on Rust's
+`x.get()`/`x.clone()` receiver calls — a name-only match against a
+same-named repo symbol is more likely wrong than right precisely
+because a receiver call site is common. An interface/trait method
+*spec* is the opposite shape: a declaration, occurring once per method
+per container, with a deliberate spec-to-implementation link (ADR
+0012) the stoplist was never measured against and has no rationale to
+suppress.
+
+Change: the receiver-call capture keeps the `@reference.method` name
+this ADR defined and stays behind the stoplist. The three
+container-declaring captures ADR 0068 introduced or renamed — Go's
+`interface_type (method_elem ...)`, TypeScript's `interface_declaration
+... (method_signature ...)`, and Rust's `trait_item`-scoped
+`function_signature_item`/`function_item` — move to a new
+`@reference.methodspec` capture name, which `extract::references::
+collect_referenced_names` still merges into `referenced_method_names`
+(ADR 0068's edge-matching rule is unchanged; only the stoplist's
+capture-name test narrows from `@reference.method` to exactly
+`@reference.method`, now excluding `@reference.methodspec`). No output
+shape changes: `referenced_method_names` was and remains
+`#[serde(skip)]`.
+
+Exposure before this fix, per ADR 0068's Consequences section: Go is
+largely shielded (the stoplist is all-lowercase, exported interface
+methods are capitalized), TypeScript is the most exposed (idiomatic
+lowercase method names like `get`/`set`/`has`/`delete`/`clear` are all
+stoplist entries), and Rust's own trait methods were exposed too
+though less visibly documented. This amendment restores the
+spec-to-implementation edge in all three cases; a receiver call on a
+stoplisted name (`x.get()`) is unaffected and stays filtered.

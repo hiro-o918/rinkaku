@@ -202,6 +202,64 @@ fn should_collect_scoped_and_method_call_references(
     assert_eq!(expected, actual);
 }
 
+#[test]
+fn should_keep_stoplisted_trait_method_name_but_still_drop_it_from_a_receiver_call() {
+    // Contrasts the two `@reference.method`-family captures on the same
+    // stoplisted name (`get`, issue #230): a trait method spec is a
+    // declaration and keeps its edge, while a receiver call on the same
+    // name stays filtered by the ADR 0064 stoplist — scoping the filter
+    // to receiver-call captures only.
+    let source = "\
+trait Cache {
+    fn get(&self) -> Format;
+}
+fn build() -> Format {
+    state.get()
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![
+        LineRange { start: 1, end: 1 },
+        LineRange { start: 4, end: 4 },
+    ];
+
+    let expected = vec![
+        ExtractedSymbol {
+            id: String::new(),
+            name: "Cache".to_string(),
+            kind: SymbolKind::Trait,
+            signature: "trait Cache {\n    fn get(&self) -> Format;\n}".to_string(),
+            range: LineRange { start: 1, end: 3 },
+            container: None,
+            referenced_names: vec!["Cache".to_string(), "Format".to_string()],
+            referenced_method_names: vec!["get".to_string()],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+            classification: None,
+            previous_signature: None,
+        },
+        ExtractedSymbol {
+            id: String::new(),
+            name: "build".to_string(),
+            kind: SymbolKind::Function,
+            signature: "fn build() -> Format".to_string(),
+            range: LineRange { start: 4, end: 6 },
+            container: None,
+            referenced_names: vec!["Format".to_string()],
+            referenced_method_names: vec![],
+            dependencies: vec![],
+            omitted_dependency_matches: 0,
+            is_test: false,
+            classification: None,
+            previous_signature: None,
+        },
+    ];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
 #[rstest]
 #[case::should_collect_call_and_path_identifiers_inside_macro_body(
     "\

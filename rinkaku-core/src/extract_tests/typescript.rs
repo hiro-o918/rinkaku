@@ -205,10 +205,11 @@ interface Repo {
 }
 
 #[test]
-fn should_drop_stoplisted_interface_method_name_from_referenced_method_names() {
-    // Pins ADR 0068's disclosed tradeoff (tracked in issue #230):
-    // routing interface method specs through the ADR 0064 stoplist
-    // costs the spec-to-implementation edge for names like `get`.
+fn should_keep_stoplisted_interface_method_name_in_referenced_method_names() {
+    // The ADR 0064 stoplist is scoped to receiver-call captures
+    // (issue #230): an interface method spec is a declaration, not a
+    // high-fan-in call site, so a name colliding with the stoplist
+    // (`get`) still keeps its spec-to-implementation edge.
     let source = "\
 interface Cache {
     get(key: string): string;
@@ -227,7 +228,7 @@ interface Cache {
         range: LineRange { start: 1, end: 4 },
         container: None,
         referenced_names: vec!["Cache".to_string()],
-        referenced_method_names: vec!["store".to_string()],
+        referenced_method_names: vec!["get".to_string(), "store".to_string()],
         dependencies: vec![],
         omitted_dependency_matches: 0,
         is_test: false,
