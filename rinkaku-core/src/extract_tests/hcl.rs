@@ -9,6 +9,41 @@ use crate::language::hcl::HclSupport;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn should_dedent_attribute_after_consecutive_comments() {
+    let source = "\
+variable \"region\" {
+  # one
+  # two
+  # three
+  type    = string
+  default = \"us-east-1\"
+}
+";
+    let lang = HclSupport;
+    let changed_ranges = vec![LineRange { start: 5, end: 5 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "var.region".to_string(),
+        kind: SymbolKind::Block,
+        signature: "variable \"region\" {\n\n  type    = string\n  default = \"us-east-1\"\n}"
+            .to_string(),
+        range: LineRange { start: 1, end: 7 },
+        container: None,
+        referenced_names: vec![],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_extract_resource_header_signature_when_body_line_changed() {
     let source = "\
 resource \"aws_instance\" \"web\" {

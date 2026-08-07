@@ -11,6 +11,40 @@ use crate::language::typescript::TypeScriptSupport;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn should_dedent_field_after_consecutive_comments() {
+    let source = "\
+interface Foo {
+    // one
+    // two
+    // three
+    a: string;
+    b: string;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 5, end: 5 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Foo".to_string(),
+        kind: SymbolKind::Interface,
+        signature: "interface Foo {\n\n    a: string;\n    b: string;\n}".to_string(),
+        range: LineRange { start: 1, end: 7 },
+        container: None,
+        referenced_names: vec!["Foo".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_extract_function_signature_when_body_line_changed() {
     let source = "\
 function foo(a: number): number {

@@ -11,6 +11,42 @@ use crate::language::go::GoSupport;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn should_dedent_field_after_consecutive_comments() {
+    let source = "\
+package main
+
+type Foo struct {
+	// one
+	// two
+	// three
+	A string
+	B string
+}
+";
+    let lang = GoSupport;
+    let changed_ranges = vec![LineRange { start: 7, end: 7 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Foo".to_string(),
+        kind: SymbolKind::Struct,
+        signature: "Foo struct {\n\n\tA string\n\tB string\n}".to_string(),
+        range: LineRange { start: 3, end: 9 },
+        container: None,
+        referenced_names: vec!["Foo".to_string(), "string".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
 fn should_extract_function_signature_when_body_line_changed() {
     let source = "\
 package main

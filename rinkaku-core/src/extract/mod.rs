@@ -634,7 +634,7 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     ) {
         let mut removed_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         collect_method_body_ranges(node, &mut removed_ranges);
-        collect_comment_ranges(node, &removed_ranges.clone(), &mut removed_ranges);
+        collect_comment_ranges(node, source, &removed_ranges.clone(), &mut removed_ranges);
         return tidy_signature_lines(
             &text_with_ranges_removed(node, source, removed_ranges),
             first_line_column,
@@ -675,7 +675,7 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
         .map(|body| body.start_byte())
         .unwrap_or(node.end_byte());
     let mut comment_ranges: Vec<std::ops::Range<usize>> = Vec::new();
-    collect_comment_ranges(node, &[], &mut comment_ranges);
+    collect_comment_ranges(node, source, &[], &mut comment_ranges);
     // Comments at/after `text_end` fall inside the body, which is dropped
     // wholesale below anyway — only ones inside the kept declaration prefix
     // need to be individually removed.
@@ -760,13 +760,21 @@ fn collect_method_body_ranges(node: tree_sitter::Node, ranges: &mut Vec<std::ops
 /// would still handle an overlapping range correctly (it clamps against
 /// `cursor`), but skipping it here keeps `ranges` a non-overlapping set,
 /// matching that function's stated "not expected in practice" assumption.
+///
+/// Each comment's own range is widened by [`widen_to_whole_line_comment`]
+/// before being pushed, so a whole-line comment's leading indentation is
+/// removed along with it.
 fn collect_comment_ranges(
     node: tree_sitter::Node,
+    source: &[u8],
     already_removed: &[std::ops::Range<usize>],
     ranges: &mut Vec<std::ops::Range<usize>>,
 ) {
     if is_comment_node(node) {
-        ranges.push(node.start_byte()..node.end_byte());
+        ranges.push(widen_to_whole_line_comment(
+            node.start_byte()..node.end_byte(),
+            source,
+        ));
         return; // A comment node has no children worth descending into.
     }
     if already_removed
@@ -777,7 +785,38 @@ fn collect_comment_ranges(
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_comment_ranges(child, already_removed, ranges);
+        collect_comment_ranges(child, source, already_removed, ranges);
+    }
+}
+
+/// Extends a comment node's own byte range to also cover its leading
+/// horizontal whitespace back to (not including) the previous newline,
+/// when that whitespace is the only thing between the previous newline
+/// and the comment — i.e. the comment is the whole line's content.
+///
+/// Whether a grammar's comment token span includes its own trailing
+/// newline is not uniform (tree-sitter-rust's outer/inner line doc
+/// comments, `///`/`//!`, include it; every other comment kind this
+/// module handles does not), so leaving the leading indent out of the
+/// removed range is only safe for the grammars that exclude the
+/// newline. Folding the indent into the range here makes the result the
+/// same either way, without branching on which grammar produced the
+/// node.
+fn widen_to_whole_line_comment(
+    range: std::ops::Range<usize>,
+    source: &[u8],
+) -> std::ops::Range<usize> {
+    let line_start = source[..range.start]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |pos| pos + 1);
+    if source[line_start..range.start]
+        .iter()
+        .all(|&b| b == b' ' || b == b'\t')
+    {
+        line_start..range.end
+    } else {
+        range
     }
 }
 

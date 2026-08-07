@@ -348,6 +348,112 @@ fn foo(/* count */ a: i32) -> i32 {
     assert_eq!(expected, actual);
 }
 
+// tree-sitter-rust's `///`/`//!` doc comment tokens include their own
+// trailing newline in the node's byte range, unlike a plain `//` or block
+// comment. Stripping only the token left the leading indentation behind
+// with no newline after it, so it accumulated onto the next kept line.
+
+#[test]
+fn should_dedent_field_after_consecutive_doc_comments() {
+    let source = "\
+pub struct Foo {
+    /// one
+    /// two
+    /// three
+    pub a: String,
+    pub b: String,
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 5, end: 5 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Foo".to_string(),
+        kind: SymbolKind::Struct,
+        signature: "pub struct Foo {\n    pub a: String,\n    pub b: String,\n}".to_string(),
+        range: LineRange { start: 1, end: 7 },
+        container: None,
+        referenced_names: vec!["Foo".to_string(), "String".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_dedent_field_after_single_doc_comment() {
+    let source = "\
+pub struct Foo {
+    /// one
+    pub a: String,
+    pub b: String,
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Foo".to_string(),
+        kind: SymbolKind::Struct,
+        signature: "pub struct Foo {\n    pub a: String,\n    pub b: String,\n}".to_string(),
+        range: LineRange { start: 1, end: 5 },
+        container: None,
+        referenced_names: vec!["Foo".to_string(), "String".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// Pins the pre-existing (unchanged by this fix) behavior for a comment
+// that shares its line with kept code: only the comment token is
+// stripped, leaving the code and the line's own newline intact.
+
+#[test]
+fn should_keep_line_when_trailing_comment_shares_it_with_code() {
+    let source = "\
+struct Point {
+    x: i32, // trailing note
+    y: i32,
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Point".to_string(),
+        kind: SymbolKind::Struct,
+        signature: "struct Point {\n    x: i32,\n    y: i32,\n}".to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        referenced_names: vec!["Point".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
 #[test]
 fn should_set_container_when_method_inside_impl_block_changed() {
     let source = "\
