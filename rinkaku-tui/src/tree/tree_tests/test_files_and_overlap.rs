@@ -173,3 +173,42 @@ fn should_keep_real_symbols_when_file_is_also_in_tests() {
     assert_eq!(Some(3), tree.roots[0].test_symbol_count);
     assert_eq!(None, tree.roots[0].skip_reason);
 }
+
+// ADR 0065 regression: a whole-file deletion reports both a `removed`
+// entry per base-side symbol *and* a `skipped` entry (`SkipReason::Deleted`)
+// for the same path — the two records deliberately co-exist (ADR 0065's
+// Decision section), unlike the `files`/`skipped` and `tests`/`skipped`
+// overlaps guarded above, which `analyze_diff` never produces together.
+// `insert_removed` runs before `insert_skipped` in `build_tree`'s
+// discovery order, so this is exactly the case `insert_skipped`'s
+// `debug_assert` must not reject.
+#[test]
+fn should_keep_removed_symbols_when_file_is_also_skipped_as_deleted() {
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        removed: vec![RemovedSymbol {
+            name: "gone".to_string(),
+            kind: SymbolKind::Function,
+            path: "lib.rs".to_string(),
+            signature: "fn gone()".to_string(),
+        }],
+        skipped: vec![SkippedFile {
+            path: "lib.rs".to_string(),
+            reason: rinkaku_core::render::SkipReason::Deleted,
+        }],
+        ..empty_report()
+    };
+
+    let tree = build_tree(&report);
+
+    assert_eq!(1, tree.roots[0].children.len());
+    let NodeKind::Symbol(symbol_ref) = &tree.roots[0].children[0].kind else {
+        panic!("expected a Symbol child");
+    };
+    assert_eq!("gone", symbol_ref.name);
+    assert!(symbol_ref.removed);
+    assert_eq!(
+        Some(rinkaku_core::render::SkipReason::Deleted),
+        tree.roots[0].skip_reason
+    );
+}

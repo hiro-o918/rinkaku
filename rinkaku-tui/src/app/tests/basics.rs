@@ -3,8 +3,8 @@ use crate::app::{App, InputKey, Screen, SelectedDetail};
 use crate::detail::{DirDetail, FileDetail, FileSymbolSummary};
 use crate::order::OrderMode;
 use pretty_assertions::assert_eq;
-use rinkaku_core::extract::SymbolKind;
-use rinkaku_core::render::{FileReport, Report};
+use rinkaku_core::extract::{RemovedSymbol, SymbolKind};
+use rinkaku_core::render::{FileReport, Report, SkipReason, SkippedFile};
 
 #[test]
 fn should_start_on_entry_screen_with_topological_order_and_no_status() {
@@ -84,6 +84,47 @@ fn should_return_file_detail_when_cursor_is_on_a_file_row() {
             fan_in: 0,
         }],
         skip_reason: None,
+        test_symbol_count: None,
+        size_warning: None,
+    });
+    assert_eq!(Some(expected), actual);
+}
+
+#[test]
+fn should_return_file_detail_with_removed_symbols_when_file_was_wholly_deleted() {
+    // ADR 0065 regression, end-to-end through `App`: a whole-file deletion
+    // populates both `report.removed` and `report.skipped` for the same
+    // path, and the detail pane must surface both — the removed symbol
+    // list explaining *what* the deletion took away, `skip_reason`
+    // explaining *why* there is no head-side `FileReport`.
+    let report = Report {
+        origin: rinkaku_core::render::ReportOrigin::Diff,
+        removed: vec![RemovedSymbol {
+            name: "gone".to_string(),
+            kind: SymbolKind::Function,
+            path: "lib.rs".to_string(),
+            signature: "fn gone()".to_string(),
+        }],
+        skipped: vec![SkippedFile {
+            path: "lib.rs".to_string(),
+            reason: SkipReason::Deleted,
+        }],
+        ..empty_report()
+    };
+    let app = App::new(&report);
+
+    let actual = app.selected_detail(&report);
+
+    let expected = SelectedDetail::File(FileDetail {
+        path: "lib.rs".to_string(),
+        symbols: vec![FileSymbolSummary {
+            name: "gone".to_string(),
+            kind: SymbolKind::Function,
+            classification: None,
+            removed: true,
+            fan_in: 0,
+        }],
+        skip_reason: Some(SkipReason::Deleted),
         test_symbol_count: None,
         size_warning: None,
     });

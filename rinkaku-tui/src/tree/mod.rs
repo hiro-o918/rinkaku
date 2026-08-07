@@ -257,11 +257,13 @@ pub struct Tree {
 /// shared path, rather than producing a duplicate row. `files`/`tests`
 /// overlapping on a path is a real, expected case — `pipeline::partition_test_symbols`
 /// can emit both a `FileReport` and a `TestFileSummary` for one mixed file
-/// (`TreeNode::test_symbol_count`'s own doc comment) — but `skipped`
-/// overlapping either `files` or `tests` on the same path is not expected
-/// from `pipeline::analyze_diff`'s own invariants (a skipped file has no
-/// `FileReport`/`TestFileSummary` of its own), and is only debug-asserted
-/// against, not handled gracefully, by `insert_skipped`/`insert_test_file`.
+/// (`TreeNode::test_symbol_count`'s own doc comment). `removed`/`skipped`
+/// overlapping on a path is likewise expected — a whole-file deletion
+/// reports both (ADR 0065). `skipped` overlapping `files` or `tests`
+/// themselves is not expected from `pipeline::analyze_diff`'s own
+/// invariants (a skipped file has no `FileReport`/`TestFileSummary` of its
+/// own), and is only debug-asserted against, not handled gracefully, by
+/// `insert_skipped`/`insert_test_file`.
 ///
 /// **Single-child directory collapsing**: a directory whose only content is
 /// exactly one child directory (and nothing else — no files or symbols of
@@ -496,15 +498,24 @@ impl<'a> TreeBuilder<'a> {
     }
 
     /// Inserts a skipped-file entry (`report.skipped`, see
-    /// `TreeNode::skip_reason`'s doc comment) as a childless `File` node.
+    /// `TreeNode::skip_reason`'s doc comment). Usually a childless `File`
+    /// node, except for a `SkipReason::Deleted` path that also carries
+    /// `insert_removed` children (ADR 0065: a whole-file deletion reports
+    /// both, deliberately, per `pipeline::analyze_diff`'s own invariant).
     fn insert_skipped(&mut self, path: &str, reason: SkipReason) {
         let segments: Vec<&str> = path.split('/').collect();
         let file_builder = self.root.file_at(&segments);
-        // Same overlap contract as `insert_file`'s debug_assert: a skipped
-        // file has no `FileReport`/`TestFileSummary` entry of its own, so
-        // neither real symbols nor a test count should already be set here.
+        // Same overlap contract as `insert_file`'s debug_assert, amended for
+        // ADR 0065: a skipped file never has a `FileReport`/`TestFileSummary`
+        // of its own, so no *non-removed* symbol or test count should
+        // already be set here — but base-side `RemovedSymbol`s from
+        // `insert_removed` legitimately coexist with `SkipReason::Deleted`.
         debug_assert!(
-            file_builder.symbols.is_empty() && file_builder.test_symbol_count.is_none(),
+            file_builder
+                .symbols
+                .iter()
+                .all(|(symbol_ref, _)| symbol_ref.removed)
+                && file_builder.test_symbol_count.is_none(),
             "path {path:?} was already listed in report.files/report.tests but was also listed \
              in report.skipped — report.skipped must not overlap report.files/report.tests on \
              the same path"
