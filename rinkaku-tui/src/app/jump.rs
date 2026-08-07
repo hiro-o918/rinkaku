@@ -1,14 +1,16 @@
 //! The jump-target popup and jumplist (ADR 0022), split out of
-//! `app/mod.rs` (ADR 0028): the popup/jumplist types plus [`App`]'s own
-//! `jump_to_symbol`/`sync_tree_cursor_to_symbol`/`open_jump_popup` methods.
-//! Key dispatch that *drives* these (the `g`-prefix bookkeeping, popup
-//! `Up`/`Down`/`PopupConfirm`/`PopupCancel` handling) stays in
-//! `app/handle_key.rs`, mirroring that module's own "dispatch here, state
-//! elsewhere" split.
+//! `app/mod.rs` (ADR 0028): the popup/jumplist types, [`App`]'s own
+//! `jump_to_symbol`/`sync_tree_cursor_to_symbol`/`open_jump_popup` methods,
+//! and `handle_key_with_popup_open` (the popup's own `Up`/`Down`/
+//! `PopupConfirm`/`PopupCancel` dispatch, moved here from
+//! `app/handle_key.rs` since it acts on this module's own `jump_popup`
+//! state). The `g`-prefix bookkeeping that *opens* the popup stays in
+//! `app/handle_key.rs`, which calls into this module's methods once a
+//! candidate is resolved.
 
 use crate::detail::SymbolMention;
 
-use super::App;
+use super::{App, InputKey};
 
 /// A `g`-prefixed two-key sequence awaiting its second key (ADR 0022's
 /// minimal prefix state machine — not a general chord engine, see that
@@ -182,5 +184,47 @@ impl App {
             self.jump_back.remove(0);
         }
         self.jump_back.push(entry);
+    }
+
+    /// Handles one [`InputKey`] while the jump-target popup (ADR 0022) is
+    /// open — mirrors the help overlay's own "takes over the whole key
+    /// space" structure (`Self::handle_key`'s own doc comment): `Up`/`Down`
+    /// move the popup's own selection cursor (clamped, not wrapping, same
+    /// convention `Nav::handle`'s `CursorUp`/`CursorDown` already use),
+    /// `PopupConfirm` jumps to the highlighted candidate and closes the
+    /// popup, `PopupCancel` closes it without jumping, and every other key
+    /// is swallowed as a no-op.
+    pub(super) fn handle_key_with_popup_open(mut self, key: InputKey) -> Self {
+        let Some(popup) = self.jump_popup.clone() else {
+            // Unreachable: this method is only called from `Self::handle_key`
+            // when `self.jump_popup.is_some()`.
+            return self;
+        };
+
+        match key {
+            InputKey::Up => {
+                if let Some(popup) = &mut self.jump_popup {
+                    popup.cursor = popup.cursor.saturating_sub(1);
+                }
+            }
+            InputKey::Down => {
+                if let Some(popup) = &mut self.jump_popup {
+                    popup.cursor = (popup.cursor + 1).min(popup.candidates.len().saturating_sub(1));
+                }
+            }
+            InputKey::PopupConfirm => {
+                let target = popup.candidates.get(popup.cursor).map(|c| c.id.clone());
+                self.jump_popup = None;
+                if let Some(target) = target {
+                    self = self.jump_to_symbol(&target);
+                }
+            }
+            InputKey::PopupCancel => {
+                self.jump_popup = None;
+            }
+            _ => {}
+        }
+
+        self
     }
 }

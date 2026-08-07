@@ -12,6 +12,8 @@
 mod handle_key;
 mod input_key;
 mod jump;
+mod review_key;
+mod scroll_key;
 mod selection;
 mod state;
 
