@@ -48,7 +48,8 @@ fn should_classify_as_added_when_no_base_side_match_exists() {
     )];
     let base: Vec<ExtractedSymbol> = vec![];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.rs");
 
     let mut expected = vec![symbol(
         "foo",
@@ -88,7 +89,8 @@ fn should_classify_as_body_only_when_reflow_inserts_newline_right_after_opening_
         LineRange { start: 1, end: 1 },
     )];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.go");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.go");
 
     let mut expected = head.clone();
     expected[0].classification = Some(Classification::BodyOnly);
@@ -118,7 +120,8 @@ fn should_classify_as_body_only_when_reflow_inserts_newline_right_after_comma() 
         LineRange { start: 1, end: 1 },
     )];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.rs");
 
     let mut expected = head.clone();
     expected[0].classification = Some(Classification::BodyOnly);
@@ -149,7 +152,8 @@ fn should_classify_as_signature_changed_when_reflow_adds_a_trailing_comma() {
         LineRange { start: 1, end: 1 },
     )];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.rs");
 
     let mut expected = head.clone();
     expected[0].classification = Some(Classification::SignatureChanged);
@@ -179,7 +183,8 @@ fn should_classify_as_signature_changed_when_signatures_differ_only_by_a_word_bo
         LineRange { start: 1, end: 1 },
     )];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.go");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.go");
 
     let mut expected = head.clone();
     expected[0].classification = Some(Classification::SignatureChanged);
@@ -205,7 +210,8 @@ fn should_classify_as_signature_changed_when_base_signature_differs() {
         LineRange { start: 1, end: 3 },
     )];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.rs");
 
     let mut expected = vec![symbol(
         "foo",
@@ -236,7 +242,8 @@ fn should_classify_as_body_only_when_base_signature_is_identical() {
         LineRange { start: 1, end: 3 },
     )];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.rs");
 
     let mut expected = vec![symbol(
         "foo",
@@ -270,7 +277,8 @@ fn should_classify_as_added_when_base_match_has_different_container() {
         LineRange { start: 1, end: 3 },
     )];
 
-    let removed = classify_symbols(&mut head, &base, &[], "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "src/lib.rs");
 
     let mut expected = vec![symbol(
         "save",
@@ -301,7 +309,14 @@ fn should_report_removed_when_base_only_symbol_overlaps_old_changed_ranges() {
     )];
     let old_changed_ranges = vec![LineRange { start: 6, end: 6 }];
 
-    let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(
+        &mut head,
+        &base,
+        &all_head,
+        &old_changed_ranges,
+        "src/lib.rs",
+    );
 
     let expected_head: Vec<ExtractedSymbol> = vec![];
     let expected_removed = vec![RemovedSymbol {
@@ -329,7 +344,14 @@ fn should_not_report_removed_when_base_only_symbol_does_not_overlap_old_changed_
     // make every other base-only symbol show up as "removed".
     let old_changed_ranges = vec![LineRange { start: 6, end: 6 }];
 
-    let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(
+        &mut head,
+        &base,
+        &all_head,
+        &old_changed_ranges,
+        "src/lib.rs",
+    );
 
     let expected_removed: Vec<RemovedSymbol> = Vec::new();
     assert_eq!(expected_removed, removed);
@@ -367,7 +389,14 @@ fn should_report_removed_when_a_second_base_symbol_of_same_name_has_no_head_matc
     ];
     let old_changed_ranges = vec![LineRange { start: 11, end: 11 }];
 
-    let removed = classify_symbols(&mut head, &base, &old_changed_ranges, "src/lib.rs");
+    let all_head = head.clone();
+    let removed = classify_symbols(
+        &mut head,
+        &base,
+        &all_head,
+        &old_changed_ranges,
+        "src/lib.rs",
+    );
 
     let mut expected_head = vec![symbol(
         "helper",

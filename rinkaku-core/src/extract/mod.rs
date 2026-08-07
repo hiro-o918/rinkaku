@@ -284,14 +284,28 @@ pub struct RemovedSymbol {
 ///   with `previous_signature` set to the base signature.
 /// - A head symbol with a base-side match whose signature is identical →
 ///   [`Classification::BodyOnly`].
-/// - A base symbol with no head-side match, whose base-side range overlaps
-///   `old_changed_ranges` (the diff's old-side hunk ranges for this file) →
-///   returned as a [`RemovedSymbol`]. A base-only symbol *outside* every
-///   changed range is not reported: nothing in the diff actually touched
-///   it, so it is unrelated to this change (e.g. a symbol that merely moved
-///   later in the file because of an unrelated edit above it) — restricting
-///   to overlapping ranges is what keeps this from flooding output on a
-///   diff that only touches a small part of a large file.
+/// - A base symbol absent from `head_file_identities` (i.e. gone from the
+///   head file entirely, not merely absent from `head_symbols`), whose
+///   base-side range overlaps `old_changed_ranges` (the diff's old-side
+///   hunk ranges for this file) → returned as a [`RemovedSymbol`]. A
+///   base-only symbol *outside* every changed range is not reported:
+///   nothing in the diff actually touched it, so it is unrelated to this
+///   change (e.g. a symbol that merely moved later in the file because of
+///   an unrelated edit above it) — restricting to overlapping ranges is
+///   what keeps this from flooding output on a diff that only touches a
+///   small part of a large file.
+///
+/// `all_head_symbols` is deliberately a separate parameter from
+/// `head_symbols`: `head_symbols` only carries the *narrowest* enclosing
+/// definition touched by the diff (`extract_changed_symbols` suppresses a
+/// container whose own member was the thing actually touched, so the
+/// Change graph doesn't report both), so a still-alive container would
+/// never appear in `head_symbols` when only one of its members changed —
+/// checking removal against `head_symbols` alone would misreport that
+/// container as removed. `all_head_symbols` instead is the head file's
+/// *complete* symbol set (typically `extract_all_symbols`'s output), so a
+/// container's continued existence is judged against the whole file, not
+/// against the subset the diff happens to surface.
 ///
 /// Pure: takes both sides' already-extracted symbol lists and matches them
 /// in memory, no IO. `lang` is not needed here — `head_symbols` and
@@ -306,6 +320,7 @@ pub struct RemovedSymbol {
 pub fn classify_symbols(
     head_symbols: &mut [ExtractedSymbol],
     base_symbols: &[ExtractedSymbol],
+    all_head_symbols: &[ExtractedSymbol],
     old_changed_ranges: &[LineRange],
     path: &str,
 ) -> Vec<RemovedSymbol> {
@@ -314,9 +329,6 @@ pub fn classify_symbols(
         .map(|s| ((s.name.as_str(), s.container.as_deref()), s))
         .collect();
 
-    let mut matched_base_identities: std::collections::HashSet<(&str, Option<&str>)> =
-        std::collections::HashSet::new();
-
     for symbol in head_symbols.iter_mut() {
         let identity = (symbol.name.as_str(), symbol.container.as_deref());
         match base_by_identity.get(&identity) {
@@ -324,7 +336,6 @@ pub fn classify_symbols(
                 symbol.classification = Some(Classification::Added);
             }
             Some(base_symbol) => {
-                matched_base_identities.insert(identity);
                 if normalize_for_comparison(&base_symbol.signature)
                     == normalize_for_comparison(&symbol.signature)
                 {
@@ -337,11 +348,16 @@ pub fn classify_symbols(
         }
     }
 
+    let head_file_identities: std::collections::HashSet<(&str, Option<&str>)> = all_head_symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s.container.as_deref()))
+        .collect();
+
     base_symbols
         .iter()
         .filter(|base_symbol| {
             let identity = (base_symbol.name.as_str(), base_symbol.container.as_deref());
-            !matched_base_identities.contains(&identity)
+            !head_file_identities.contains(&identity)
         })
         .filter(|base_symbol| overlaps_any(base_symbol.range, old_changed_ranges))
         .map(|base_symbol| RemovedSymbol {

@@ -37,6 +37,10 @@
 //! - [`parallel_determinism`] — ADR 0029 regression: `analyze_repo`'s
 //!   rayon-driven per-file loop must produce byte-identical, source-order
 //!   `Report`s across repeated calls.
+//! - [`removed_container_regression`] — a still-alive container
+//!   (Python/TypeScript `class`) misreported as `removed` when only a
+//!   nested member changed, since `extract_changed_symbols` suppresses a
+//!   container in favor of its narrowest touched member.
 
 use std::collections::HashMap;
 
@@ -48,6 +52,7 @@ mod file_size_warnings;
 mod generated_exclusion;
 mod is_generated_content;
 mod parallel_determinism;
+mod removed_container_regression;
 mod test_symbol_exclusion;
 
 /// Builds a `read_file` port backed by an in-memory map, so tests never

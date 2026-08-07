@@ -3,6 +3,11 @@
 //! `read_base_file: None` "not attempted" contract, base-path routing
 //! for renamed files, and the "never call `read_base_file` for an
 //! `Added` file" contract.
+//!
+//! See sibling module [`super::removed_container_regression`] for the
+//! regression where a still-alive container (Python/TypeScript `class`)
+//! was misreported as `removed` when only one of its nested members
+//! changed.
 
 use super::fake_reader;
 use crate::extract::{Classification, RemovedSymbol};

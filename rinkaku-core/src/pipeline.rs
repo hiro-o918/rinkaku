@@ -238,16 +238,23 @@ pub fn analyze_diff(
             // rename, a mode-change-only diff, or — ADR 0014's case — a hunk
             // that only *removes* lines with nothing added back):
             // extract_changed_symbols would return no symbols for an empty
-            // changed_ranges anyway, so the head-side read is skipped entirely
-            // rather than paying IO for a result already known to be empty.
-            // `old_changed_ranges` can still be non-empty in the removal case,
-            // though, so classification against the base side still runs when
-            // a base reader is available — a whole-function deletion is
-            // exactly the case ADR 0014's `removed` classification exists for.
+            // changed_ranges anyway. `old_changed_ranges` can still be
+            // non-empty in the removal case, though, so classification
+            // against the base side still runs when a base reader is
+            // available — a whole-function deletion is exactly the case ADR
+            // 0014's `removed` classification exists for. The head-side file
+            // still needs reading in that case (`classify_against_base`
+            // reads it lazily, only when `old_changed_ranges` is non-empty)
+            // so removal can be judged against what the file *still*
+            // contains, not just the empty `head_symbols` this branch
+            // produces by construction — e.g. a whole-member deletion inside
+            // a class that otherwise survives.
             if changed_file.changed_ranges.is_empty() {
                 let mut no_head_symbols: Vec<ExtractedSymbol> = Vec::new();
                 removed.extend(classify_against_base(
                     &mut no_head_symbols,
+                    None,
+                    &read_file,
                     read_base_file,
                     lang,
                     changed_file.kind,
@@ -291,6 +298,8 @@ pub fn analyze_diff(
             // `read_base_file` is absent or its call fails for this file.
             removed.extend(classify_against_base(
                 &mut symbols,
+                Some(&source),
+                &read_file,
                 read_base_file,
                 lang,
                 changed_file.kind,
@@ -590,6 +599,22 @@ pub fn analyze_repo(
 /// reviewer looking at this diff actually has open — not the path history
 /// happens to read the comparison content from.
 ///
+/// `head_source`, when `Some`, is the caller's already-read head-side
+/// content for `report_path` (the ordinary case, which read it to run
+/// `extract_changed_symbols` anyway); `None` in the removal-only-hunk case,
+/// where the caller skipped that read since `head_symbols` is empty by
+/// construction. `classify_symbols` needs a *complete* head-side symbol set
+/// to judge removal correctly (a container whose only touched line was a
+/// member's — e.g. a class with one edited method — is never itself in
+/// `head_symbols`, since `extract_changed_symbols` suppresses a container in
+/// favor of its narrowest touched member; checking removal against
+/// `head_symbols` alone would misreport that container as gone). When
+/// `head_source` is `None` and `old_changed_ranges` is non-empty (something
+/// could actually be reported removed), this function reads `report_path`
+/// itself via `read_file` to build that complete set — still lazily, so a
+/// mode-change-only diff (`old_changed_ranges` also empty) pays no IO at
+/// all.
+///
 /// For every non-`Added` kind, a `read_base_file` call failing (`None` port,
 /// or an `Err` result — e.g. a transient git failure, or a rename/copy
 /// resolving to a base path this repository never actually had) leaves
@@ -606,6 +631,8 @@ pub fn analyze_repo(
 #[allow(clippy::too_many_arguments)]
 fn classify_against_base(
     head_symbols: &mut [ExtractedSymbol],
+    head_source: Option<&str>,
+    read_file: impl Fn(&str) -> std::io::Result<String>,
     read_base_file: Option<ReadBaseFile>,
     lang: &dyn LanguageSupport,
     kind: ChangeKind,
@@ -630,7 +657,30 @@ fn classify_against_base(
         return Vec::new();
     };
     let base_symbols = extract_all_symbols(&base_source, lang);
-    classify_symbols(head_symbols, &base_symbols, old_changed_ranges, report_path)
+
+    let owned_head_source;
+    let head_source = match head_source {
+        Some(source) => Some(source),
+        None if !old_changed_ranges.is_empty() => match read_file(report_path) {
+            Ok(source) => {
+                owned_head_source = source;
+                Some(owned_head_source.as_str())
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let all_head_symbols = head_source
+        .map(|source| extract_all_symbols(source, lang))
+        .unwrap_or_default();
+
+    classify_symbols(
+        head_symbols,
+        &base_symbols,
+        &all_head_symbols,
+        old_changed_ranges,
+        report_path,
+    )
 }
 
 /// Every base-side symbol of a whole-file deletion, as [`RemovedSymbol`]s

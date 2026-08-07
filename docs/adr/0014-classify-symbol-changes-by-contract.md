@@ -105,3 +105,29 @@ additive fields on the symbol; `removed` is a new top-level array.
 - Stripping comment nodes changes existing signature strings shown in
   output — another pre-1.0 output-format change, consistent with prior
   ADRs (0008, 0009, 0012).
+
+## Amendment (2026-08-07, fix/false-removed-container-on-member-edit)
+
+Found via dogfooding: editing only a nested member of an otherwise
+untouched Python/TypeScript class reported the enclosing class itself as
+`removed`, alongside the member's own (correct) classification —
+contradictory output in the same report. Root cause: `extract_changed_symbols`
+suppresses a container in favor of its narrowest touched member (so the
+Change graph doesn't report both the member and its enclosing class), but
+`classify_symbols`'s removal check compared the base side against that
+same narrowed `head_symbols` list rather than against the head file's
+complete symbol set — a still-alive container whose own line range was
+never directly touched would never appear in `head_symbols`, so it looked
+"gone" by the same test a genuinely deleted symbol would fail.
+
+Rust and Go were structurally immune: an `impl` block is never itself a
+reported symbol, and a Go method never nests inside its receiver's node,
+so neither language's containers are ever suppressed this way.
+
+Fix: `classify_symbols` now takes the head file's complete symbol set
+(`extract_all_symbols`'s output) as a separate parameter from
+`head_symbols`, and judges removal against that complete set instead.
+`pipeline::analyze_diff` threads this through, reading head-side content
+lazily in the empty-`changed_ranges` branch (a whole-symbol-deletion hunk)
+where it previously skipped that read entirely, since removal there can
+no longer be judged from `old_changed_ranges` overlap alone.
