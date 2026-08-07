@@ -123,11 +123,12 @@ pub struct ExtractedSymbol {
     #[serde(skip)]
     pub referenced_names: Vec<String>,
     /// Names this definition references via a receiver or method-spec
-    /// position — `@reference.method` captures: Rust's `x.foo()` calls and
-    /// trait method names, Go's interface method-spec names, TypeScript's
-    /// interface method-signature names (ADR 0068, extending ADR 0064's
-    /// `@reference.method` capture to the container-referring captures ADR
-    /// 0012 introduced). Unlike `referenced_names`, these may legitimately
+    /// position — `@reference.method` (Rust's `x.foo()` receiver calls,
+    /// ADR 0064) plus `@reference.methodspec` (Rust trait method names,
+    /// Go interface method-spec names, TypeScript interface
+    /// method-signature names — the container-referring captures ADR 0012
+    /// introduced, split out so only receiver calls pass the ADR 0064
+    /// stoplist; ADR 0068). Unlike `referenced_names`, these may legitimately
     /// denote a symbol nested inside any container, so
     /// `crate::graph::collect_edges` matches them without the
     /// same-container restriction. Same "intermediate pipeline artifact"

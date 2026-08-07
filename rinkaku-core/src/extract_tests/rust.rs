@@ -554,7 +554,7 @@ trait Greeter {
         // The trait's own name and the referenced `String` return
         // type of its method signature are bare references. Its
         // "greet" method name (ADR 0012 decision 2) is captured
-        // under `@reference.method` (ADR 0068), since a trait method
+        // under `@reference.methodspec` (ADR 0068), since a trait method
         // name may denote a symbol nested inside a container (an
         // impl method).
         referenced_names: vec!["Greeter".to_string(), "String".to_string()],
@@ -601,7 +601,7 @@ trait Repo {
         // grammar, not `type_identifier`, so it is not captured at
         // all — see REFERENCE_QUERY's doc comment). Both the
         // bodiless `save` signature and the default-body `label`
-        // method contribute their names under `@reference.method`
+        // method contribute their names under `@reference.methodspec`
         // (ADR 0012 decision 2, ADR 0068).
         referenced_names: vec!["Repo".to_string(), "String".to_string()],
         referenced_method_names: vec!["label".to_string(), "save".to_string()],
