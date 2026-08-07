@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.20](https://github.com/hiro-o918/rinkaku/compare/v0.6.19...v0.6.20) (2026-08-07)
+
+
+### Features
+
+* add HCL (Terraform) language support ([#216](https://github.com/hiro-o918/rinkaku/issues/216)) ([68ce9b5](https://github.com/hiro-o918/rinkaku/commit/68ce9b54d268f47ef190834e817871cc0825edb8))
+
+
+### Bug Fixes
+
+* match bare references container-aware in the change graph ([#228](https://github.com/hiro-o918/rinkaku/issues/228)) ([2242a0b](https://github.com/hiro-o918/rinkaku/commit/2242a0b0aadf5d3f865ea5db0d648b560f196260))
+* **tui:** allow report.removed/report.skipped overlap in build_tree ([#233](https://github.com/hiro-o918/rinkaku/issues/233)) ([6df08c9](https://github.com/hiro-o918/rinkaku/commit/6df08c9dd155e0861da7c15a59359e42be3a2c8e))
+
+
+### Miscellaneous
+
+* release main ([#209](https://github.com/hiro-o918/rinkaku/issues/209)) ([387446b](https://github.com/hiro-o918/rinkaku/commit/387446b7d4def517cca2e40a86e5d70a048fea86))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.19 to 0.6.20
+
 ## [0.6.19](https://github.com/hiro-o918/rinkaku/compare/v0.6.18...v0.6.19) (2026-08-02)
 
 

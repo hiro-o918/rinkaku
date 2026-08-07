@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.21](https://github.com/hiro-o918/rinkaku/compare/v0.6.20...v0.6.21) (2026-08-07)
+
+
+### Bug Fixes
+
+* match bare references container-aware in the change graph ([#228](https://github.com/hiro-o918/rinkaku/issues/228)) ([2242a0b](https://github.com/hiro-o918/rinkaku/commit/2242a0b0aadf5d3f865ea5db0d648b560f196260))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.19 to 0.6.20
+    * rinkaku-tui bumped from 0.6.19 to 0.6.20
+
 ## [0.6.20](https://github.com/hiro-o918/rinkaku/compare/v0.6.19...v0.6.20) (2026-08-02)
 
 
