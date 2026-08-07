@@ -405,12 +405,9 @@ fn should_keep_top_level_candidate_when_reference_is_bare() {
 
 #[test]
 fn should_not_count_container_restricted_matches_in_omitted_dependency_matches() {
-    // A bare reference's container-restricted candidates are dropped
-    // before ranking/capping, not counted as "omitted" — omission is
-    // reserved for the cap (`MAX_MATCHES_PER_NAME`), a distinct reason
-    // from "this candidate's container makes it syntactically
-    // unreachable from a bare reference". `omitted_dependency_matches`
-    // must stay 0 when the only candidate is dropped this way.
+    // "Omitted" is reserved for the `MAX_MATCHES_PER_NAME` cap;
+    // container-restricted drops are a different reason and must not
+    // inflate it.
     let files = vec![FileReport {
         path: "b.py".to_string(),
         symbols: vec![symbol("use_foo", vec!["Foo"])],
@@ -419,9 +416,13 @@ fn should_not_count_container_restricted_matches_in_omitted_dependency_matches()
         matches: HashMap::from([("Foo", vec![candidate_with_container("a.py", "class Baz")])]),
     };
 
+    let expected = vec![FileReport {
+        path: "b.py".to_string(),
+        symbols: vec![symbol("use_foo", vec!["Foo"])],
+    }];
     let actual = resolve_dependencies(files, &resolver);
 
-    assert_eq!(0, actual[0].symbols[0].omitted_dependency_matches);
+    assert_eq!(expected, actual);
 }
 
 #[test]
