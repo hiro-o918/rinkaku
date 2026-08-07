@@ -15,8 +15,9 @@
 //!   `mod prefilter_tests` nested module
 //! - `resolve_dependencies` — `resolve_dependencies` cross-file behavior:
 //!   self-reference exclusion, diff-collision exclusion, proximity
-//!   ranking, per-name cap boundary (via `rstest`), and cross-name
-//!   omitted-count accumulation
+//!   ranking, per-name cap boundary (via `rstest`), cross-name
+//!   omitted-count accumulation, and container-aware filtering of bare
+//!   vs. method-reference candidates (ADR 0068 amendment, issue #227)
 
 use super::*;
 use crate::language::go::GoSupport;

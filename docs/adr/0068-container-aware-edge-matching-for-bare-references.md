@@ -157,3 +157,35 @@ matching:
 - The `deps.rs` candidate-enumeration gap (Decision point 5) remains
   open; tracked as
   [#227](https://github.com/hiro-o918/rinkaku/issues/227).
+
+## Amendment (2026-08-07, fix/capture-kind-aware-dependency-candidates)
+
+Closes the Decision point 5 gap tracked as
+[#227](https://github.com/hiro-o918/rinkaku/issues/227):
+`deps::resolve_dependencies`'s candidate enumeration had the same
+imprecision this ADR fixed for `graph::collect_edges` — it resolved
+`referenced_names` against a repo-wide index with no container
+awareness, so a bare reference's "Depends on" list could include a
+same-named symbol nested in an unrelated container.
+
+Change: `resolve_dependencies` now applies the same `ContainerRule`
+distinction `collect_edges` uses, to dependency candidates rather than
+graph edges. A `referenced_names` (bare) candidate is only kept if its
+`container` is `None` or matches the referencing symbol's own
+container; a `referenced_method_names` candidate is kept regardless of
+container. Container-restricted-away candidates are dropped before
+ranking and are not counted in `omitted_dependency_matches`, which
+stays reserved for candidates cut by `MAX_MATCHES_PER_NAME`.
+
+Measured on this repo's own reproduction case (issue #227's
+`a.py`/`b.py` sketch, built from a trusted `main` checkout per this
+repo's dogfooding convention): before the fix, a bare `Foo()` call's
+"Depends on" listed both the top-level `def Foo():` and the unrelated
+`class Baz`'s `def Foo(self):`; after, only the top-level definition
+remains. A same-file Rust `impl` method-call scenario (`b.foo()`, a
+`referenced_method_names` entry) confirmed unrestricted resolution is
+unchanged for that set.
+
+`ExtractedSymbol::dependencies`/`omitted_dependency_matches` output
+narrows as a result (candidates that were previously listed and are
+now excluded); no new field or output shape is introduced.

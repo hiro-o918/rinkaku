@@ -48,6 +48,16 @@ fn symbol_with_container(
     }
 }
 
+fn symbol_with_method_reference(name: &str, referenced_method_names: Vec<&str>) -> ExtractedSymbol {
+    ExtractedSymbol {
+        referenced_method_names: referenced_method_names
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ..symbol(name, vec![])
+    }
+}
+
 /// Builds a `ResolvedSymbol` candidate at `path`, with a signature
 /// derived from the path so mismatched ordering is easy to spot in
 /// a failing assertion.
@@ -56,6 +66,14 @@ fn candidate(path: &str) -> ResolvedSymbol {
         signature: format!("fn helper() // {path}"),
         path: path.to_string(),
         container: None,
+    }
+}
+
+/// Builds a `ResolvedSymbol` candidate at `path` nested in `container`.
+fn candidate_with_container(path: &str, container: &str) -> ResolvedSymbol {
+    ResolvedSymbol {
+        container: Some(container.to_string()),
+        ..candidate(path)
     }
 }
 
@@ -281,6 +299,129 @@ fn should_keep_dependency_when_diff_symbol_shares_name_and_path_but_differs_in_c
     let actual = resolve_dependencies(files, &resolver);
 
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_drop_contained_candidate_when_reference_is_bare() {
+    // "use_foo" bare-references "Foo" (`referenced_names`), which
+    // cannot syntactically denote a symbol nested inside an unrelated
+    // container (ADR 0068's rule, mirrored here for dependency
+    // candidates per issue #227). The resolver returns a candidate
+    // nested in "class Baz"; it must not appear as a dependency.
+    let files = vec![FileReport {
+        path: "b.py".to_string(),
+        symbols: vec![symbol("use_foo", vec!["Foo"])],
+    }];
+    let resolver = FakeResolver {
+        matches: HashMap::from([("Foo", vec![candidate_with_container("a.py", "class Baz")])]),
+    };
+
+    let expected = vec![FileReport {
+        path: "b.py".to_string(),
+        symbols: vec![ExtractedSymbol {
+            dependencies: vec![],
+            ..symbol("use_foo", vec!["Foo"])
+        }],
+    }];
+    let actual = resolve_dependencies(files, &resolver);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_keep_contained_candidate_when_reference_is_a_method_reference() {
+    // Same shape as above, but the reference comes from
+    // `referenced_method_names` (a receiver-based call or method-spec
+    // name), which is unambiguous about targeting a contained symbol —
+    // container is not restricted for this set.
+    let files = vec![FileReport {
+        path: "b.rs".to_string(),
+        symbols: vec![symbol_with_method_reference("use_foo", vec!["foo"])],
+    }];
+    let resolver = FakeResolver {
+        matches: HashMap::from([("foo", vec![candidate_with_container("a.rs", "impl Baz")])]),
+    };
+
+    let expected = vec![FileReport {
+        path: "b.rs".to_string(),
+        symbols: vec![ExtractedSymbol {
+            dependencies: vec![candidate_with_container("a.rs", "impl Baz")],
+            ..symbol_with_method_reference("use_foo", vec!["foo"])
+        }],
+    }];
+    let actual = resolve_dependencies(files, &resolver);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_keep_contained_candidate_when_it_shares_the_referencing_symbols_container() {
+    // A bare reference from inside one container to a same-container
+    // sibling member is the one case a bare reference can legitimately
+    // denote a contained symbol (ADR 0068).
+    let files = vec![FileReport {
+        path: "a.py".to_string(),
+        symbols: vec![symbol_with_container("use_foo", "class Baz", vec!["foo"])],
+    }];
+    let resolver = FakeResolver {
+        matches: HashMap::from([("foo", vec![candidate_with_container("a.py", "class Baz")])]),
+    };
+
+    let expected = vec![FileReport {
+        path: "a.py".to_string(),
+        symbols: vec![ExtractedSymbol {
+            dependencies: vec![candidate_with_container("a.py", "class Baz")],
+            ..symbol_with_container("use_foo", "class Baz", vec!["foo"])
+        }],
+    }];
+    let actual = resolve_dependencies(files, &resolver);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_keep_top_level_candidate_when_reference_is_bare() {
+    // Baseline: a bare reference to a top-level (container `None`)
+    // candidate keeps matching, same as before this change.
+    let files = vec![FileReport {
+        path: "b.py".to_string(),
+        symbols: vec![symbol("use_foo", vec!["Foo"])],
+    }];
+    let resolver = FakeResolver {
+        matches: HashMap::from([("Foo", vec![candidate("a.py")])]),
+    };
+
+    let expected = vec![FileReport {
+        path: "b.py".to_string(),
+        symbols: vec![ExtractedSymbol {
+            dependencies: vec![candidate("a.py")],
+            ..symbol("use_foo", vec!["Foo"])
+        }],
+    }];
+    let actual = resolve_dependencies(files, &resolver);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_not_count_container_restricted_matches_in_omitted_dependency_matches() {
+    // A bare reference's container-restricted candidates are dropped
+    // before ranking/capping, not counted as "omitted" — omission is
+    // reserved for the cap (`MAX_MATCHES_PER_NAME`), a distinct reason
+    // from "this candidate's container makes it syntactically
+    // unreachable from a bare reference". `omitted_dependency_matches`
+    // must stay 0 when the only candidate is dropped this way.
+    let files = vec![FileReport {
+        path: "b.py".to_string(),
+        symbols: vec![symbol("use_foo", vec!["Foo"])],
+    }];
+    let resolver = FakeResolver {
+        matches: HashMap::from([("Foo", vec![candidate_with_container("a.py", "class Baz")])]),
+    };
+
+    let actual = resolve_dependencies(files, &resolver);
+
+    assert_eq!(0, actual[0].symbols[0].omitted_dependency_matches);
 }
 
 #[test]

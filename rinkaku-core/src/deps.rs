@@ -340,10 +340,24 @@ impl Resolver for TagsResolver {
 }
 
 /// Populates every symbol's `dependencies` by resolving its
-/// `referenced_names` through `resolver`, across every file in the
-/// report — a symbol in one changed file may reference a symbol changed
-/// in another, so exclusion is computed over the whole diff, not
-/// per-file.
+/// `referenced_names` and `referenced_method_names` through `resolver`,
+/// across every file in the report — a symbol in one changed file may
+/// reference a symbol changed in another, so exclusion is computed over
+/// the whole diff, not per-file.
+///
+/// The two reference sets are container-filtered by different rules
+/// (ADR 0068, extended here to dependency candidates per issue #227,
+/// mirroring `graph::collect_edges`'s `ContainerRule`): a
+/// `referenced_names` entry (a bare call/type reference) only keeps
+/// candidates whose `container` is `None` (top-level) or equal to the
+/// referencing symbol's own container, since a bare reference cannot
+/// syntactically denote an arbitrary container's member in Python, Go,
+/// or TypeScript. A `referenced_method_names` entry (a receiver-based
+/// call or method-spec name) keeps candidates regardless of container,
+/// since it is unambiguous about targeting a contained symbol.
+/// Container-restricted-away candidates are dropped before ranking and
+/// are not counted in `omitted_dependency_matches`, which is reserved
+/// for candidates cut by [`MAX_MATCHES_PER_NAME`].
 ///
 /// Two kinds of matches are deliberately excluded from the resulting
 /// `dependencies`, both to avoid redundant noise rather than because they
@@ -428,33 +442,28 @@ pub fn resolve_dependencies(
                         let mut omitted = 0usize;
 
                         for name in &symbol.referenced_names {
-                            let mut candidates: Vec<ResolvedSymbol> = resolver
-                                .resolve(name)
-                                .into_iter()
-                                .filter(|resolved| {
-                                    let key = (
-                                        name.clone(),
-                                        resolved.container.clone(),
-                                        resolved.path.clone(),
-                                    );
-                                    key != own_key && !diff_symbols.contains(&key)
-                                })
-                                .collect();
-
-                            // Rank before truncating: the cap must keep the
-                            // closest matches, not an arbitrary prefix of
-                            // whatever order the resolver happened to
-                            // return them in (see
-                            // `rank_by_path_proximity`'s doc comment).
-                            candidates.sort_by_key(|resolved| {
-                                path_proximity_rank(&file_path, &resolved.path)
-                            });
-
-                            if candidates.len() > MAX_MATCHES_PER_NAME {
-                                omitted += candidates.len() - MAX_MATCHES_PER_NAME;
-                                candidates.truncate(MAX_MATCHES_PER_NAME);
-                            }
-                            dependencies.extend(candidates);
+                            collect_candidates(
+                                resolver,
+                                name,
+                                &own_key,
+                                &diff_symbols,
+                                &file_path,
+                                ContainerRule::SameOrNone(symbol.container.as_deref()),
+                                &mut dependencies,
+                                &mut omitted,
+                            );
+                        }
+                        for name in &symbol.referenced_method_names {
+                            collect_candidates(
+                                resolver,
+                                name,
+                                &own_key,
+                                &diff_symbols,
+                                &file_path,
+                                ContainerRule::Any,
+                                &mut dependencies,
+                                &mut omitted,
+                            );
                         }
 
                         symbol.dependencies = dependencies;
@@ -465,6 +474,76 @@ pub fn resolve_dependencies(
             }
         })
         .collect()
+}
+
+/// The container-matching rule [`collect_candidates`] applies to one
+/// reference set, mirroring `graph::collect_edges`'s `ContainerRule`
+/// (ADR 0068).
+enum ContainerRule<'a> {
+    /// A candidate only matches if its container is `None`, or equal to
+    /// the referencing symbol's own container — the restriction bare
+    /// references (`referenced_names`) are limited to.
+    SameOrNone(Option<&'a str>),
+    /// A candidate matches regardless of its container — the rule
+    /// `referenced_method_names` entries use.
+    Any,
+}
+
+/// Resolves `name` against `resolver`, applies `rule`'s container
+/// restriction, then applies the shared self-reference/diff-internal
+/// exclusion, proximity ranking, and [`MAX_MATCHES_PER_NAME`] cap —
+/// appending survivors to `dependencies` and adding any capped-away
+/// count to `omitted`.
+///
+/// Candidates dropped by `rule`'s container restriction are excluded
+/// before this counting, not added to `omitted`: that count is reserved
+/// for candidates cut by the cap, a distinct reason from "this
+/// candidate's container makes it syntactically unreachable from a bare
+/// reference".
+#[allow(clippy::too_many_arguments)]
+fn collect_candidates(
+    resolver: &dyn Resolver,
+    name: &str,
+    own_key: &(String, Option<String>, String),
+    diff_symbols: &std::collections::HashSet<(String, Option<String>, String)>,
+    referencing_path: &str,
+    rule: ContainerRule<'_>,
+    dependencies: &mut Vec<ResolvedSymbol>,
+    omitted: &mut usize,
+) {
+    let mut candidates: Vec<ResolvedSymbol> = resolver
+        .resolve(name)
+        .into_iter()
+        .filter(|resolved| {
+            let container_ok = match rule {
+                ContainerRule::Any => true,
+                ContainerRule::SameOrNone(referencing_container) => {
+                    resolved.container.is_none()
+                        || resolved.container.as_deref() == referencing_container
+                }
+            };
+            if !container_ok {
+                return false;
+            }
+            let key = (
+                name.to_string(),
+                resolved.container.clone(),
+                resolved.path.clone(),
+            );
+            &key != own_key && !diff_symbols.contains(&key)
+        })
+        .collect();
+
+    // Rank before truncating: the cap must keep the closest matches, not
+    // an arbitrary prefix of whatever order the resolver happened to
+    // return them in (see `path_proximity_rank`'s doc comment).
+    candidates.sort_by_key(|resolved| path_proximity_rank(referencing_path, &resolved.path));
+
+    if candidates.len() > MAX_MATCHES_PER_NAME {
+        *omitted += candidates.len() - MAX_MATCHES_PER_NAME;
+        candidates.truncate(MAX_MATCHES_PER_NAME);
+    }
+    dependencies.extend(candidates);
 }
 
 /// Maximum number of same-name candidate definitions kept per referenced
