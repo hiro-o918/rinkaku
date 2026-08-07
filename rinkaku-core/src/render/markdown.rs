@@ -137,17 +137,39 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
 
         writeln!(out, "## Definitions")?;
         writeln!(out)?;
+        let mut last_depends_on_by_file: HashMap<
+            &str,
+            (&[crate::deps::ResolvedSymbol], usize, String),
+        > = HashMap::new();
         for id in &visit_order {
             let Some((path, symbol)) = lookup.get(id) else {
                 continue;
             };
+            let same_as_above = last_depends_on_by_file
+                .get(path)
+                .filter(|(dependencies, omitted, _)| {
+                    *dependencies == symbol.dependencies.as_slice()
+                        && *omitted == symbol.omitted_dependency_matches
+                })
+                .map(|(_, _, label)| label.as_str());
             render_definition(
                 &mut out,
                 path,
                 symbol,
                 test_coverage_by_id.get(id.as_str()).copied(),
                 &lookup,
+                same_as_above,
             )?;
+            if !symbol.dependencies.is_empty() || symbol.omitted_dependency_matches > 0 {
+                last_depends_on_by_file.insert(
+                    path,
+                    (
+                        symbol.dependencies.as_slice(),
+                        symbol.omitted_dependency_matches,
+                        labeled_with_marker(path, symbol),
+                    ),
+                );
+            }
         }
     }
 
@@ -449,12 +471,20 @@ fn render_tree_node(
 /// produced an entry for (a test symbol rendered as its own Definitions
 /// entry — coverage is not a meaningful question to ask of a test), in
 /// which case no "Tests:" line is emitted at all.
+///
+/// `same_as_above`, when `Some(label)`, means the caller (`render_markdown`)
+/// already found an earlier same-file symbol whose `dependencies` and
+/// `omitted_dependency_matches` are identical to this symbol's — the
+/// "Depends on:" list is then replaced with a one-line
+/// `Depends on: same as \`label\` above` reference to that symbol instead of
+/// repeating the list (ADR 0069).
 fn render_definition(
     out: &mut String,
     path: &str,
     symbol: &ExtractedSymbol,
     test_coverage: Option<&TestCoverage>,
     lookup: &SymbolLookup,
+    same_as_above: Option<&str>,
 ) -> Result<(), RenderError> {
     writeln!(out, "### {}", labeled_with_marker(path, symbol))?;
     writeln!(out)?;
@@ -497,6 +527,11 @@ fn render_definition(
     }
 
     if !symbol.dependencies.is_empty() || symbol.omitted_dependency_matches > 0 {
+        if let Some(label) = same_as_above {
+            writeln!(out, "Depends on: same as `{label}` above")?;
+            writeln!(out)?;
+            return Ok(());
+        }
         writeln!(out, "Depends on:")?;
         for dependency in &symbol.dependencies {
             // Inline code spans (not a fenced block): a dependency list

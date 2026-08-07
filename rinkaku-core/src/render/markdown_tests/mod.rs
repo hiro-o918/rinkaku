@@ -12,6 +12,9 @@
 //!   `(see above)` for functions, and cycle warnings.
 //! - [`definition_body`] — one symbol's "### ..." entry: container
 //!   comment, `Depends on:` list, and the fence-widening rules.
+//! - [`depends_on_collapse`] — ADR 0069's `Depends on:` collapse into a
+//!   `same as ... above` reference for an exact-match repeat within the
+//!   same file.
 //! - [`sections_skipped_fan_in_filesize`] — the "Skipped files",
 //!   "High fan-in symbols", and "File sizes" sections plus the
 //!   ADR 0028 JSON shape.
@@ -33,6 +36,7 @@ mod change_graph_summary;
 mod change_graph_tree;
 mod classification_and_removed;
 mod definition_body;
+mod depends_on_collapse;
 mod empty_and_ordering;
 mod lookup_miss_defenses;
 mod sections_skipped_fan_in_filesize;
