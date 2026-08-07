@@ -378,3 +378,119 @@ Depends on:
 
     assert_eq!(expected, actual);
 }
+
+#[test]
+fn should_not_collapse_against_an_older_match_when_a_differing_list_interposes() {
+    // Pins the single-slot "nearest earlier match" tracker (ADR 0069):
+    // an interposed differing list overwrites it, so an older identical
+    // list is no longer a collapse target.
+    let point = crate::deps::ResolvedSymbol {
+        signature: "struct Point { x: i32 }".to_string(),
+        path: "src/point.rs".to_string(),
+        container: None,
+    };
+    let line = crate::deps::ResolvedSymbol {
+        signature: "struct Line { a: Point, b: Point }".to_string(),
+        path: "src/line.rs".to_string(),
+        container: None,
+    };
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/lib.rs".to_string(),
+            symbols: vec![
+                ExtractedSymbol {
+                    dependencies: vec![point.clone()],
+                    ..symbol(
+                        "src/lib.rs::foo",
+                        "foo",
+                        SymbolKind::Function,
+                        "fn foo(p: Point) -> i32",
+                    )
+                },
+                ExtractedSymbol {
+                    dependencies: vec![line],
+                    ..symbol(
+                        "src/lib.rs::bar",
+                        "bar",
+                        SymbolKind::Function,
+                        "fn bar(l: Line) -> i32",
+                    )
+                },
+                ExtractedSymbol {
+                    dependencies: vec![point],
+                    ..symbol(
+                        "src/lib.rs::baz",
+                        "baz",
+                        SymbolKind::Function,
+                        "fn baz(p: Point) -> i32",
+                    )
+                },
+            ],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![
+                node("src/lib.rs::foo", "src/lib.rs", "foo"),
+                node("src/lib.rs::bar", "src/lib.rs", "bar"),
+                node("src/lib.rs::baz", "src/lib.rs", "baz"),
+            ],
+            edges: vec![],
+            roots: vec![
+                "src/lib.rs::foo".to_string(),
+                "src/lib.rs::bar".to_string(),
+                "src/lib.rs::baz".to_string(),
+            ],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+    };
+
+    let expected = "\
+## Change graph
+
+3 changed symbols in 1 file
+
+- fn foo (src/lib.rs)
+- fn bar (src/lib.rs)
+- fn baz (src/lib.rs)
+
+## Definitions
+
+### fn foo (src/lib.rs)
+
+```
+fn foo(p: Point) -> i32
+```
+
+Depends on:
+- `src/point.rs`: `struct Point { x: i32 }`
+
+### fn bar (src/lib.rs)
+
+```
+fn bar(l: Line) -> i32
+```
+
+Depends on:
+- `src/line.rs`: `struct Line { a: Point, b: Point }`
+
+### fn baz (src/lib.rs)
+
+```
+fn baz(p: Point) -> i32
+```
+
+Depends on:
+- `src/point.rs`: `struct Point { x: i32 }`
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
