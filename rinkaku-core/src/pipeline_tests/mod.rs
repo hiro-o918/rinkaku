@@ -41,6 +41,22 @@
 //!   (Python/TypeScript `class`) misreported as `removed` when only a
 //!   nested member changed, since `extract_changed_symbols` suppresses a
 //!   container in favor of its narrowest touched member.
+//! - [`import_only_changes`] — import/`use`-only diffs (Python, Rust, Go,
+//!   TypeScript) produce no changed symbols and no false `removed`
+//!   entries, including the base-comparison path where an import-line
+//!   rewrite still yields non-empty `old_changed_ranges`; and the
+//!   compound case where an import rewrite shares a diff with a real
+//!   usage-site change.
+//! - [`hcl_regression`] — HCL/Terraform `resource` block deletion and
+//!   label rename via `analyze_diff`, and `locals` sibling-attribute
+//!   isolation end-to-end.
+//! - [`go_receiver_regression`] — a Go receiver method changing alone,
+//!   with its struct untouched by the diff, is reported under its
+//!   container without a false `removed` entry for the struct.
+//! - [`rust_stoplist_regression`] — ADR 0064/#236 pinned end-to-end: a
+//!   stoplisted receiver call creates no graph edge while the same-named
+//!   trait method spec still links to its implementation via
+//!   `referenced_method_names`.
 
 use std::collections::HashMap;
 
@@ -50,9 +66,13 @@ mod classification_wiring;
 mod collect_referenced_names;
 mod file_size_warnings;
 mod generated_exclusion;
+mod go_receiver_regression;
+mod hcl_regression;
+mod import_only_changes;
 mod is_generated_content;
 mod parallel_determinism;
 mod removed_container_regression;
+mod rust_stoplist_regression;
 mod test_symbol_exclusion;
 
 /// Builds a `read_file` port backed by an in-memory map, so tests never
