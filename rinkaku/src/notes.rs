@@ -118,6 +118,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             }
         }
 
@@ -136,6 +137,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             }
         }
 
@@ -186,6 +188,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
@@ -215,6 +218,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
@@ -256,6 +260,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             };
 
             let actual = garbage_input_note("some diff text", &report);
@@ -318,6 +323,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             }
         }
 
@@ -379,6 +385,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             };
 
             let actual = entry_pivot_empty_note(&report, "src/api");
@@ -411,6 +418,7 @@ mod tests {
                 file_size_warnings: vec![],
                 file_size_bands: vec![],
                 removed: vec![],
+                non_symbol_changes: vec![],
             }
         }
 

@@ -154,6 +154,7 @@ fn should_render_removed_only_file_as_removed_node_when_fallback_fires() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![removed_symbol("old_only", "src/gone.rs")],
+        non_symbol_changes: vec![],
     };
 
     let expected = concat!(

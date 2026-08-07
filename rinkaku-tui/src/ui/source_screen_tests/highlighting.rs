@@ -27,6 +27,7 @@ fn should_apply_keyword_foreground_and_symbol_range_background_in_source_screen(
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let app = App::new(&report)
         .handle_key(crate::app::InputKey::Down)
@@ -102,6 +103,7 @@ fn should_fall_back_to_plain_source_style_when_file_extension_is_unrecognized() 
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let app = App::new(&report)
         .handle_key(crate::app::InputKey::Down)

@@ -279,6 +279,7 @@ fn should_fall_back_to_plain_diff_style_when_file_extension_is_unrecognized() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     // ADR 0020 defaults the right pane to Diff already, so no
     // `ToggleDiff` press is needed to reach it here.

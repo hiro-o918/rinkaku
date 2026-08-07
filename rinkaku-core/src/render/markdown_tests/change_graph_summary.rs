@@ -35,6 +35,7 @@ fn should_render_change_graph_and_definitions_when_report_has_one_symbol() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -91,6 +92,7 @@ fn should_render_summary_with_hotspot_when_report_has_multiple_symbols_and_files
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -143,6 +145,7 @@ fn should_render_repository_graph_heading_and_drop_changed_wording_when_origin_i
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -183,6 +186,7 @@ fn should_omit_hotspot_suffix_when_all_symbols_are_in_one_file() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -231,6 +235,7 @@ fn should_break_hotspot_tie_by_first_seen_path_order_when_counts_are_equal() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -299,6 +304,7 @@ fn should_include_start_line_in_label_when_node_id_is_disambiguated_by_line() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

@@ -31,6 +31,7 @@ fn should_return_empty_report_when_diff_is_empty() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff("", read_file, None, None, true, &HashSet::new(), true, None)
         .expect("analyze should succeed");
@@ -100,6 +101,7 @@ fn foo(a: i32) -> i32 {
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -146,6 +148,7 @@ index 4b825dc..0000000
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -185,6 +188,7 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -232,6 +236,7 @@ index e69de29..4b825dc 100644
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -283,6 +288,7 @@ rename to src/new_name.rs
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -424,6 +430,7 @@ index e69de29..4b825dc 100644
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,

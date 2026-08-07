@@ -42,6 +42,7 @@ fn should_render_skipped_files_section_when_report_has_skips() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -85,6 +86,7 @@ fn should_render_change_graph_then_skipped_section_when_report_has_both() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -137,6 +139,7 @@ fn should_omit_high_fan_in_symbols_section_when_fan_ins_is_empty() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -235,6 +238,7 @@ fn should_render_high_fan_in_symbols_section_between_change_graph_and_definition
         file_size_bands: vec![],
         removed: vec![],
         test_coverage: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -309,6 +313,7 @@ fn should_render_fan_in_line_for_symbol_with_no_matching_definition() {
         file_size_bands: vec![],
         removed: vec![],
         test_coverage: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -376,6 +381,7 @@ fn should_render_file_sizes_section_in_report_order_across_all_bands() {
             },
         ],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -432,6 +438,7 @@ fn should_omit_file_sizes_section_when_report_has_no_bands() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
@@ -509,6 +516,7 @@ fn should_place_file_sizes_between_high_fan_in_symbols_and_definitions() {
         }],
         removed: vec![],
         test_coverage: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -586,6 +594,7 @@ fn should_include_file_size_warnings_in_json_output() {
         ],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -613,7 +622,8 @@ fn should_include_file_size_warnings_in_json_output() {
     }
   ],
   \"file_size_bands\": [],
-  \"removed\": []
+  \"removed\": [],
+  \"non_symbol_changes\": []
 }"
     .to_string();
     let actual = render(&report, OutputFormat::Json).expect("json render succeeds");

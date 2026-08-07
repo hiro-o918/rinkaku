@@ -69,6 +69,7 @@ fn should_collapse_depends_on_when_identical_to_an_earlier_sibling() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -164,6 +165,7 @@ fn should_not_collapse_depends_on_when_lists_differ() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -251,6 +253,7 @@ fn should_not_collapse_across_files() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -340,6 +343,7 @@ fn should_not_collapse_when_omitted_dependency_matches_differ() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -448,6 +452,7 @@ fn should_not_collapse_against_an_older_match_when_a_differing_list_interposes()
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

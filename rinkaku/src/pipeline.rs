@@ -50,6 +50,7 @@ pub(crate) fn run_base_pipeline(
                 file_size_warnings: Vec::new(),
                 file_size_bands: vec![],
                 removed: Vec::new(),
+                non_symbol_changes: vec![],
             },
             diff_text,
         ));
@@ -348,6 +349,7 @@ mod tests {
                 file_size_warnings: Vec::new(),
                 file_size_bands: vec![],
                 removed: Vec::new(),
+                non_symbol_changes: vec![],
             },
             actual_report
         );
@@ -529,6 +531,62 @@ fn should_add_two_numbers() {
         assert_eq!(
             Some("fn foo(a: i32) -> i32".to_string()),
             symbol.previous_signature
+        );
+    }
+
+    // ADR 0070 end-to-end: a real git repository where a commit only
+    // extends Python's `__all__` (a public-API change with no touched
+    // function/class definition) must produce a `non_symbol_changes` entry
+    // through the full `--base`/`--pr` pipeline — not just through
+    // `analyze_diff` called directly with fake readers (already covered by
+    // `pipeline_tests::import_only_changes`).
+    #[test]
+    fn should_report_non_symbol_change_via_real_base_commit_when_diff_only_extends_dunder_all() {
+        let dir = tempfile::TempDir::new().expect("create tempdir");
+        run_git(dir.path(), &["init", "--initial-branch=main"]);
+        run_git(dir.path(), &["config", "user.email", "test@example.com"]);
+        run_git(dir.path(), &["config", "user.name", "Test"]);
+        std::fs::write(
+            dir.path().join("foo.py"),
+            "__all__ = [\"helper\"]\n\n\ndef helper():\n    return 1\n",
+        )
+        .expect("write foo.py");
+        run_git(dir.path(), &["add", "foo.py"]);
+        run_git(dir.path(), &["commit", "-m", "initial commit"]);
+
+        std::fs::write(
+            dir.path().join("foo.py"),
+            "__all__ = [\"helper\", \"other\"]\n\n\ndef helper():\n    return 1\n",
+        )
+        .expect("edit foo.py");
+        run_git(dir.path(), &["add", "foo.py"]);
+        run_git(dir.path(), &["commit", "-m", "export other from foo"]);
+
+        let cli = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: None,
+            format: None,
+            deps: 0,
+            exclude_tests: false,
+            include_generated: false,
+            entry: None,
+            tui: false,
+        };
+        let spinner = Spinner::start("test");
+        let (actual, _diff_text) =
+            run_base_pipeline(&cli, "HEAD~1", "HEAD", Some(dir.path()), &spinner)
+                .expect("run_base_pipeline should succeed");
+
+        let expected_symbols: Vec<rinkaku_core::extract::ExtractedSymbol> = Vec::new();
+        assert_eq!(expected_symbols, actual.files[0].symbols);
+        assert_eq!(
+            vec![rinkaku_core::non_symbol_changes::NonSymbolChange {
+                path: "foo.py".to_string(),
+                changed_line_count: 1,
+            }],
+            actual.non_symbol_changes
         );
     }
 

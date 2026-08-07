@@ -12,6 +12,7 @@ pub mod extract;
 pub mod file_size;
 pub mod graph;
 pub mod language;
+pub mod non_symbol_changes;
 pub mod pipeline;
 pub mod progress;
 pub mod render;

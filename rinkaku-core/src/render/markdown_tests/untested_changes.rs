@@ -36,6 +36,7 @@ fn should_omit_no_referencing_tests_section_when_test_coverage_is_empty() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -91,6 +92,7 @@ fn should_omit_no_referencing_tests_section_when_every_symbol_has_coverage() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -186,6 +188,7 @@ fn should_render_no_referencing_tests_section_between_high_fan_in_symbols_and_fi
             band: crate::file_size::FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -279,6 +282,7 @@ fn should_render_repo_outline_heading_when_origin_is_repo_outline() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

@@ -201,6 +201,7 @@ fn should_append_fan_in_count_suffix_to_label_when_node_is_high_fan_in() {
         file_size_bands: vec![],
         removed: vec![],
         test_coverage: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = concat!(
@@ -250,6 +251,7 @@ fn should_prefer_fan_in_class_over_changed_class_when_node_is_both() {
         file_size_bands: vec![],
         removed: vec![],
         test_coverage: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = concat!(
@@ -303,6 +305,7 @@ fn should_prefer_fan_in_class_over_added_class_when_a_new_symbol_has_high_fan_in
         file_size_bands: vec![],
         removed: vec![],
         test_coverage: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = concat!(

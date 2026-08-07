@@ -81,6 +81,7 @@ fn should_inline_two_leaf_struct_children_as_uses_annotation_on_method_line() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -180,6 +181,7 @@ fn should_disambiguate_folded_names_when_duplicate_symbols_fold_under_same_paren
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -266,6 +268,7 @@ fn should_repeat_folded_struct_annotation_on_every_referencing_parent() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -360,6 +363,7 @@ fn should_fold_hcl_block_dependency_repeated_across_multiple_parents() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -427,6 +431,7 @@ fn should_render_childless_non_function_root_as_top_level_line_when_it_would_oth
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -507,6 +512,7 @@ fn should_render_nested_line_when_non_function_child_has_its_own_children() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -591,6 +597,7 @@ fn should_not_fold_non_function_child_when_its_only_children_are_cycle_edges() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

@@ -38,6 +38,7 @@ fn should_render_container_comment_when_symbol_has_container() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -95,6 +96,7 @@ fn should_render_depends_on_list_when_symbol_has_dependencies() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -158,6 +160,7 @@ fn should_collapse_multiline_dependency_signature_to_one_line() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -224,6 +227,7 @@ fn should_render_multiple_depends_on_entries_when_symbol_has_several_dependencie
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -285,6 +289,7 @@ fn should_render_omitted_matches_note_when_dependency_matches_were_capped() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -347,6 +352,7 @@ fn should_widen_fence_when_signature_contains_a_backtick_run() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -402,6 +408,7 @@ fn should_widen_fence_when_container_contains_a_backtick_run() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -462,6 +469,7 @@ fn should_render_zero_tests_line_when_symbol_has_no_covering_tests() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -537,6 +545,7 @@ fn should_render_covering_test_names_when_symbol_has_tests() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -615,6 +624,7 @@ fn should_cap_covering_test_names_when_symbol_has_more_than_the_listed_maximum()
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

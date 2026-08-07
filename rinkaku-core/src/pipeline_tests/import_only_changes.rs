@@ -13,6 +13,7 @@
 
 use super::fake_reader;
 use crate::extract::RemovedSymbol;
+use crate::non_symbol_changes::NonSymbolChange;
 use crate::pipeline::analyze_diff;
 use pretty_assertions::assert_eq;
 use std::collections::{HashMap, HashSet};
@@ -58,6 +59,52 @@ def helper():
         report.files[0].symbols
     );
     assert_eq!(Vec::<RemovedSymbol>::new(), report.removed);
+}
+
+// ADR 0070: a symbol-less file's `Report.non_symbol_changes` carries the
+// changed-line count `render_markdown`'s "Other changed files" annotation
+// is built from — the same import-only diff as
+// `should_report_no_symbols_when_python_diff_only_adds_an_import`, this
+// time asserting the sibling field that guarantee's regression coverage
+// didn't previously touch.
+#[test]
+fn should_report_non_symbol_change_line_count_when_python_diff_only_adds_an_import() {
+    let diff = "\
+diff --git a/foo.py b/foo.py
+index 57b03c6..1e5c9a1 100644
+--- a/foo.py
++++ b/foo.py
+@@ -1,2 +1,3 @@
++import os
+ def helper():
+     return 1
+";
+    let head_source = "\
+import os
+def helper():
+    return 1
+";
+    let read_file = fake_reader(HashMap::from([("foo.py", head_source)]));
+
+    let report = analyze_diff(
+        diff,
+        read_file,
+        None,
+        None,
+        true,
+        &HashSet::new(),
+        true,
+        None,
+    )
+    .expect("analyze should succeed");
+
+    assert_eq!(
+        vec![NonSymbolChange {
+            path: "foo.py".to_string(),
+            changed_line_count: 1,
+        }],
+        report.non_symbol_changes
+    );
 }
 
 #[test]

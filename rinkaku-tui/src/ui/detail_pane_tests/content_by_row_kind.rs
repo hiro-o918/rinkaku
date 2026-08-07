@@ -17,6 +17,7 @@ fn should_draw_placeholder_message_when_there_are_no_rows_at_all() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     // ADR 0020 defaults the right pane to Diff, whose own placeholder
     // text differs ("select a symbol or file row..."); `ToggleDiff`
@@ -65,6 +66,7 @@ fn should_draw_dir_detail_content_when_cursor_is_on_a_directory_row() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     // ADR 0020 defaults the right pane to Diff; `ToggleDiff` switches to
     // Detail, which is what this test actually exercises. (A directory
@@ -123,6 +125,7 @@ fn should_draw_symbols_label_without_changed_wording_when_origin_is_repo_outline
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     // See the sibling test above for why `ToggleDiff` is needed to
     // reach the Detail pane this test actually exercises.
@@ -257,6 +260,7 @@ fn should_draw_both_test_note_and_real_symbols_in_detail_pane_when_file_is_mixed
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     // Row 0 is the "app.rs" file row itself.
     let app = App::new(&report).handle_key(crate::app::InputKey::ToggleDiff);

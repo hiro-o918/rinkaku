@@ -303,6 +303,7 @@ func Foo() int { return 2 }
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -381,6 +382,7 @@ fn foo(a: i32) -> i32 {
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -469,6 +471,7 @@ index e69de29..4b825dc 100644
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,

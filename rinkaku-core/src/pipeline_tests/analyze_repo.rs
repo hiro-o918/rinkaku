@@ -28,6 +28,7 @@ fn should_return_empty_report_when_paths_is_empty() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_repo(&[], read_file, true, &HashSet::new(), true, None);
 
@@ -123,6 +124,7 @@ struct Point {
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
@@ -166,6 +168,7 @@ fn should_skip_path_without_registered_language_support() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
@@ -191,6 +194,7 @@ fn should_skip_path_when_read_file_fails() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), true, None);
 
@@ -220,6 +224,7 @@ fn should_skip_path_in_generated_paths_set_without_reading_it() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_repo(&paths, read_file, true, &generated_paths, true, None);
 
@@ -243,6 +248,7 @@ fn should_skip_file_with_generated_content_marker_when_include_generated_is_fals
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_repo(&paths, read_file, true, &HashSet::new(), false, None);
 
@@ -283,6 +289,7 @@ func TestFoo(t *testing.T) {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_repo(&paths, read_file, false, &HashSet::new(), true, None);
 

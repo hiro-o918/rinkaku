@@ -76,6 +76,7 @@ fn empty_report(graph: SymbolGraph, files: Vec<FileReport>) -> Report {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     }
 }
 

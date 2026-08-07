@@ -70,6 +70,7 @@ pub(super) fn report_with_one_symbol() -> Report {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     }
 }
 

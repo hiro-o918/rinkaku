@@ -85,6 +85,14 @@ pub struct Report {
     /// [`crate::pipeline::analyze_diff`]'s `read_base_file` parameter),
     /// same as every symbol's `classification` staying `None` in that case.
     pub removed: Vec<RemovedSymbol>,
+    /// Changed-line counts for files whose `FileReport` in `files` has an
+    /// empty `symbols` list (ADR 0070) — the data behind Markdown's
+    /// "Other changed files" annotation. One entry per such file, sorted
+    /// by path ascending (see
+    /// [`crate::non_symbol_changes::compute_non_symbol_changes`]). Always
+    /// empty for [`ReportOrigin::RepoOutline`], which never produces an
+    /// empty-`symbols` `FileReport` in the first place.
+    pub non_symbol_changes: Vec<crate::non_symbol_changes::NonSymbolChange>,
 }
 
 /// Which pipeline entry point produced a [`Report`] (ADR 0017). `Default`
@@ -232,6 +240,7 @@ mod tests {
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
+            non_symbol_changes: vec![],
         };
 
         let expected = "\
@@ -253,7 +262,8 @@ mod tests {
   \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
-  \"removed\": []
+  \"removed\": [],
+  \"non_symbol_changes\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
@@ -285,6 +295,7 @@ mod tests {
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
+            non_symbol_changes: vec![],
         };
 
         let expected = "\
@@ -302,7 +313,8 @@ mod tests {
   \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
-  \"removed\": []
+  \"removed\": [],
+  \"non_symbol_changes\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
@@ -338,6 +350,7 @@ mod tests {
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
+            non_symbol_changes: vec![],
         };
 
         let expected = "\
@@ -386,7 +399,8 @@ mod tests {
   \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
-  \"removed\": []
+  \"removed\": [],
+  \"non_symbol_changes\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
@@ -427,6 +441,7 @@ mod tests {
                 path: "src/lib.rs".to_string(),
                 signature: "fn old_helper()".to_string(),
             }],
+            non_symbol_changes: vec![],
         };
 
         let expected = "\
@@ -479,7 +494,8 @@ mod tests {
       \"path\": \"src/lib.rs\",
       \"signature\": \"fn old_helper()\"
     }
-  ]
+  ],
+  \"non_symbol_changes\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");
@@ -516,6 +532,7 @@ mod tests {
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
+            non_symbol_changes: vec![],
         };
 
         let expected = "\
@@ -559,7 +576,8 @@ mod tests {
   \"test_coverage\": [],
   \"file_size_warnings\": [],
   \"file_size_bands\": [],
-  \"removed\": []
+  \"removed\": [],
+  \"non_symbol_changes\": []
 }"
         .to_string();
         let actual = render(&report, OutputFormat::Json).expect("json render succeeds");

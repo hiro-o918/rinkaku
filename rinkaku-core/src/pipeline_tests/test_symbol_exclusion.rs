@@ -119,6 +119,7 @@ fn should_add_two_numbers() {
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,
@@ -305,6 +306,7 @@ mod tests {
             band: FileSizeBand::Normal,
         }],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let actual = analyze_diff(
         diff,

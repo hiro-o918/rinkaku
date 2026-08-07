@@ -33,6 +33,7 @@ fn draw_detail_for_signature(signature: &str, previous_signature: Option<&str>) 
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let app = App::new(&report)
         .handle_key(crate::app::InputKey::Down)

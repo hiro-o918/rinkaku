@@ -72,6 +72,7 @@ fn should_draw_diff_pane_with_hunk_lines_when_toggled_on_a_skipped_file_row() {
         file_size_bands: vec![],
         removed: vec![],
         files: vec![],
+        non_symbol_changes: vec![],
     };
     // Row 0 is the collapsing "assets" dir; row 1 is the skipped file.
     // ADR 0020 defaults the right pane to Diff already, so no
@@ -141,6 +142,7 @@ fn should_draw_diff_pane_with_hunk_lines_for_an_unsupported_language_skipped_fil
         file_size_bands: vec![],
         removed: vec![],
         files: vec![],
+        non_symbol_changes: vec![],
     };
     // Row 0 is the collapsing "vendor" dir; row 1 is the skipped file.
     // ADR 0020 defaults the right pane to Diff already, so no
@@ -212,6 +214,7 @@ fn should_draw_per_symbol_section_headers_when_diff_pane_shows_a_file_selection(
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let app = App::new(&report);
     let diff_text = "\
@@ -280,6 +283,7 @@ fn should_draw_contract_header_before_hunks_when_symbol_signature_changed() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol.
     let app = App::new(&report).handle_key(crate::app::InputKey::Down);

@@ -79,6 +79,7 @@ pub(super) fn report_with_one_symbol() -> Report {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     }
 }
 
@@ -117,6 +118,7 @@ pub(super) fn report_with_one_skipped_file() -> Report {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     }
 }
 
@@ -141,6 +143,7 @@ pub(super) fn report_with_one_test_file() -> Report {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     }
 }
 
@@ -172,5 +175,6 @@ pub(super) fn report_with_many_symbols(count: usize) -> Report {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     }
 }

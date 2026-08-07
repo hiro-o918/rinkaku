@@ -36,6 +36,7 @@ fn should_skip_definitions_entry_when_visit_order_id_has_no_matching_symbol() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -74,6 +75,7 @@ fn should_render_nothing_for_root_when_root_id_has_no_matching_symbol() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -130,6 +132,7 @@ fn should_omit_cycle_warning_line_when_cycle_target_id_has_no_matching_symbol() 
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

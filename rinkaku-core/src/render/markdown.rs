@@ -21,8 +21,9 @@ use std::fmt::Write as _;
 /// symbol's signature in the same tree order; a "Tests" section
 /// summarizing excluded test symbols per file (ADR 0009); an "Other changed
 /// files" section for files that were analyzed but contributed no symbol
-/// (e.g. a pure rename — see `pipeline::analyze_diff`'s doc comment); and a
-/// list of skipped files.
+/// (e.g. a pure rename — see `pipeline::analyze_diff`'s doc comment),
+/// annotated with a changed-line count when the file's diff touched
+/// content outside any definition (ADR 0070); and a list of skipped files.
 ///
 /// `SkipReason::Generated` entries are omitted from "Skipped files"
 /// entirely, however the file was detected as generated — either an
@@ -214,10 +215,32 @@ pub(super) fn render_markdown(report: &Report) -> Result<String, RenderError> {
     }
 
     if !files_with_no_symbols.is_empty() {
+        // ADR 0070: a path with no matching entry (should not occur — every
+        // `files_with_no_symbols` path is produced by the same pipeline
+        // loop that collects `non_symbol_changes`) falls back to the bare
+        // path rather than panicking.
+        let non_symbol_change_by_path: HashMap<&str, usize> = report
+            .non_symbol_changes
+            .iter()
+            .map(|change| (change.path.as_str(), change.changed_line_count))
+            .collect();
         writeln!(out, "## Other changed files")?;
         writeln!(out)?;
         for path in &files_with_no_symbols {
-            writeln!(out, "- {path}")?;
+            match non_symbol_change_by_path.get(path) {
+                Some(changed_line_count) => {
+                    let noun = if *changed_line_count == 1 {
+                        "line"
+                    } else {
+                        "lines"
+                    };
+                    writeln!(
+                        out,
+                        "- {path} ({changed_line_count} changed {noun} outside any definition)"
+                    )?;
+                }
+                None => writeln!(out, "- {path}")?,
+            }
         }
         writeln!(out)?;
     }

@@ -22,6 +22,7 @@ fn go_report() -> Report {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     }
 }
 
@@ -149,6 +150,7 @@ fn should_expand_tabs_on_the_unhighlighted_path_when_extension_is_unknown() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
     let app = App::new(&report).handle_key(crate::app::InputKey::Down);
     let diff_text = "\

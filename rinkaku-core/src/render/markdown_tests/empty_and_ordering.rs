@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::extract::SymbolKind;
+use crate::non_symbol_changes::NonSymbolChange;
 use crate::render::report::{FileReport, ReportOrigin, SkipReason, SkippedFile};
 use crate::render::{OutputFormat, render};
 use pretty_assertions::assert_eq;
@@ -27,6 +28,7 @@ fn should_render_empty_markdown_when_report_has_no_files_and_no_skips() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "".to_string();
@@ -64,6 +66,125 @@ fn should_list_file_with_no_symbols_under_other_changed_files_when_report_has_no
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
+    };
+
+    let expected = "\
+## Other changed files
+
+- src/new_name.rs
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+// ADR 0070: when `Report.non_symbol_changes` carries an entry for a
+// symbol-less file, "Other changed files" annotates it with the changed
+// line count instead of a bare path.
+#[test]
+fn should_annotate_other_changed_file_with_non_symbol_changed_line_count() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/index.ts".to_string(),
+            symbols: vec![],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![],
+            edges: vec![],
+            roots: vec![],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+        non_symbol_changes: vec![NonSymbolChange {
+            path: "src/index.ts".to_string(),
+            changed_line_count: 12,
+        }],
+    };
+
+    let expected = "\
+## Other changed files
+
+- src/index.ts (12 changed lines outside any definition)
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_use_singular_line_wording_when_non_symbol_change_is_exactly_one_line() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "foo.py".to_string(),
+            symbols: vec![],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![],
+            edges: vec![],
+            roots: vec![],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+        non_symbol_changes: vec![NonSymbolChange {
+            path: "foo.py".to_string(),
+            changed_line_count: 1,
+        }],
+    };
+
+    let expected = "\
+## Other changed files
+
+- foo.py (1 changed line outside any definition)
+
+"
+    .to_string();
+    let actual = render(&report, OutputFormat::Markdown).expect("markdown render succeeds");
+
+    assert_eq!(expected, actual);
+}
+
+// A path with no matching `non_symbol_changes` entry falls back to the
+// bare-path line rather than panicking — should not occur in practice
+// (see `render_markdown`'s doc comment), but the lookup is a `HashMap`
+// miss, not an indexing operation, so this is a real reachable branch.
+#[test]
+fn should_fall_back_to_bare_path_when_non_symbol_changes_has_no_matching_entry() {
+    let report = Report {
+        origin: ReportOrigin::Diff,
+        files: vec![FileReport {
+            path: "src/new_name.rs".to_string(),
+            symbols: vec![],
+        }],
+        skipped: vec![],
+        graph: SymbolGraph {
+            nodes: vec![],
+            edges: vec![],
+            roots: vec![],
+        },
+        tests: vec![],
+        fan_ins: vec![],
+        test_coverage: vec![],
+        file_size_warnings: vec![],
+        file_size_bands: vec![],
+        removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -113,6 +234,7 @@ fn should_list_file_with_no_symbols_after_definitions_when_report_has_graph_node
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -164,6 +286,7 @@ fn should_render_other_changed_files_before_skipped_files_when_report_has_both()
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -201,6 +324,7 @@ fn should_render_tests_section_with_singular_symbol_noun_when_count_is_one() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -235,6 +359,7 @@ fn should_render_tests_section_with_plural_symbols_noun_when_count_is_greater_th
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -278,6 +403,7 @@ fn should_render_tests_section_between_definitions_and_other_changed_files_when_
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -334,6 +460,7 @@ fn should_omit_generated_skip_entry_from_markdown_output() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "".to_string();
@@ -371,6 +498,7 @@ fn should_omit_only_generated_entries_when_skipped_has_other_reasons_too() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

@@ -53,6 +53,7 @@ fn should_nest_callee_under_caller_in_change_graph_when_symbol_references_anothe
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -139,6 +140,7 @@ fn should_order_definitions_in_true_pre_order_when_first_child_has_its_own_child
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -231,6 +233,7 @@ fn should_mark_see_above_when_symbol_reachable_from_multiple_roots() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -303,6 +306,7 @@ fn should_render_cycle_warning_when_edge_is_marked_as_cycle() {
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\
@@ -417,6 +421,7 @@ fn should_render_full_cycle_example_with_two_root_functions_and_a_dependency_cyc
         file_size_warnings: vec![],
         file_size_bands: vec![],
         removed: vec![],
+        non_symbol_changes: vec![],
     };
 
     let expected = "\

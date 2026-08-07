@@ -187,6 +187,7 @@ mod tests {
             file_size_warnings: vec![],
             file_size_bands: vec![],
             removed: vec![],
+            non_symbol_changes: vec![],
         }
     }
 

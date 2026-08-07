@@ -17,6 +17,7 @@ use crate::extract::{
 use crate::file_size::{compute_file_size_bands, compute_file_size_warnings};
 use crate::graph::{build_graph, compute_fan_ins, compute_test_coverage, stamp_ids};
 use crate::language::{LanguageSupport, language_for_path};
+use crate::non_symbol_changes::compute_non_symbol_changes;
 use crate::progress::{OnProgress, should_report_progress};
 use crate::render::{FileReport, Report, ReportOrigin, SkipReason, SkippedFile, TestFileSummary};
 use rayon::prelude::*;
@@ -178,6 +179,13 @@ pub fn analyze_diff(
     // excluded by construction — they have no content to measure, or are
     // explicitly outside rinkaku's concern.
     let mut sized_files: Vec<(String, usize)> = Vec::new();
+    // ADR 0070: `(path, changed_line_count)` for every file whose
+    // `FileReport` ends up with an empty `symbols` list despite having
+    // non-empty `changed_ranges` — i.e. a diff that touched only
+    // non-symbol content (a top-level `const`, an import, Python's
+    // `__all__`). Collected here, where `changed_ranges` is already in
+    // scope, rather than recomputed at render time.
+    let mut non_symbol_changed_files: Vec<(String, usize)> = Vec::new();
 
     for changed_file in changed_files {
         // ADR 0033 (amended): the per-file body is wrapped in a labeled
@@ -308,6 +316,14 @@ pub fn analyze_diff(
                 &changed_file.old_changed_ranges,
             ));
 
+            if symbols.is_empty() {
+                let changed_line_count: usize = changed_file
+                    .changed_ranges
+                    .iter()
+                    .map(|range| range.end - range.start + 1)
+                    .sum();
+                non_symbol_changed_files.push((changed_file.path.clone(), changed_line_count));
+            }
             files.push(FileReport {
                 path: changed_file.path,
                 symbols,
@@ -350,6 +366,9 @@ pub fn analyze_diff(
     let file_size_warnings = compute_file_size_warnings(&sized_files);
     // ADR 0028 amendment: every file's band, from the same pairs.
     let file_size_bands = compute_file_size_bands(&sized_files);
+    // ADR 0070: changed-line counts for symbol-less files, from the pairs
+    // collected inline above during the per-file loop.
+    let non_symbol_changes = compute_non_symbol_changes(&non_symbol_changed_files);
 
     Ok(Report {
         origin: ReportOrigin::Diff,
@@ -362,6 +381,7 @@ pub fn analyze_diff(
         file_size_warnings,
         file_size_bands,
         removed,
+        non_symbol_changes,
     })
 }
 
@@ -571,6 +591,7 @@ pub fn analyze_repo(
         file_size_warnings,
         file_size_bands,
         removed: Vec::new(),
+        non_symbol_changes: vec![],
     }
 }
 
