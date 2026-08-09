@@ -12,7 +12,7 @@ use crate::file_size::{FileSizeBand, FileSizeEntry};
 use crate::graph::{FanIn, Node, NodeId, SymbolGraph, TestCoverage};
 use crate::render::RenderError;
 use crate::render::report::{Report, ReportOrigin, SkipReason, SkippedFile, skip_reason_label};
-use crate::render::shared::SymbolLookup;
+use crate::render::shared::{SymbolLookup, backtick_fence};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -489,6 +489,17 @@ fn render_definition(
     writeln!(out, "### {}", labeled_with_marker(path, symbol))?;
     writeln!(out)?;
 
+    render_signature(out, symbol)?;
+
+    if let Some(coverage) = test_coverage {
+        writeln!(out, "{}", test_coverage_line(coverage, lookup))?;
+        writeln!(out)?;
+    }
+
+    render_dependencies(out, symbol, same_as_above)
+}
+
+fn render_signature(out: &mut String, symbol: &ExtractedSymbol) -> Result<(), RenderError> {
     let container_line = symbol.container.as_deref().map(|c| format!("// {c}"));
     match (symbol.classification, &symbol.previous_signature) {
         (Some(Classification::SignatureChanged), Some(previous_signature)) => {
@@ -520,12 +531,14 @@ fn render_definition(
         }
     }
     writeln!(out)?;
+    Ok(())
+}
 
-    if let Some(coverage) = test_coverage {
-        writeln!(out, "{}", test_coverage_line(coverage, lookup))?;
-        writeln!(out)?;
-    }
-
+fn render_dependencies(
+    out: &mut String,
+    symbol: &ExtractedSymbol,
+    same_as_above: Option<&str>,
+) -> Result<(), RenderError> {
     if !symbol.dependencies.is_empty() || symbol.omitted_dependency_matches > 0 {
         if let Some(label) = same_as_above {
             writeln!(out, "Depends on: same as `{label}` above")?;
@@ -534,16 +547,6 @@ fn render_definition(
         }
         writeln!(out, "Depends on:")?;
         for dependency in &symbol.dependencies {
-            // Inline code spans (not a fenced block): a dependency list
-            // entry is one line per dependency, so a fence per entry would
-            // be noisy. Path and signature are not hardened against
-            // embedded backticks the way the fenced blocks above are — a
-            // signature is unlikely to contain a backtick run long enough
-            // to break out of a single backtick span, and this is a
-            // cosmetic-only failure mode (unlike the fenced blocks, which
-            // without widening could make later content render as code).
-            // A multi-line dependency signature (ADR 0060) is collapsed to
-            // one line here, since this list's shape is one entry per line.
             writeln!(
                 out,
                 "- `{}`: `{}`",
@@ -848,12 +851,7 @@ fn visit_from(
 /// of consecutive backticks in `content`, with a floor of 3 (the minimum
 /// valid Markdown fence).
 fn fence_for(container_line: Option<&str>, signature: &str) -> String {
-    let longest_run = [container_line.unwrap_or(""), signature]
-        .iter()
-        .flat_map(|text| longest_backtick_run(text))
-        .max()
-        .unwrap_or(0);
-    "`".repeat((longest_run + 1).max(3))
+    backtick_fence([container_line.unwrap_or(""), signature], 3)
 }
 
 /// [`fence_for`]'s sibling for a `signature_changed` symbol's ` ```diff `
@@ -865,20 +863,10 @@ fn fence_for_diff(
     previous_signature: &str,
     signature: &str,
 ) -> String {
-    let longest_run = [container_line.unwrap_or(""), previous_signature, signature]
-        .iter()
-        .flat_map(|text| longest_backtick_run(text))
-        .max()
-        .unwrap_or(0);
-    "`".repeat((longest_run + 1).max(3))
-}
-
-/// Length of the longest run of consecutive `` ` `` characters in `text`.
-fn longest_backtick_run(text: &str) -> Option<usize> {
-    text.split(|c| c != '`')
-        .map(str::len)
-        .filter(|&len| len > 0)
-        .max()
+    backtick_fence(
+        [container_line.unwrap_or(""), previous_signature, signature],
+        3,
+    )
 }
 
 /// Collapses a possibly multi-line signature (ADR 0060) into one line for

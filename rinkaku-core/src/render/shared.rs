@@ -20,7 +20,8 @@ pub(super) struct SymbolLookup<'a> {
 
 impl<'a> SymbolLookup<'a> {
     pub(super) fn build(files: &'a [FileReport]) -> Self {
-        let mut by_id = HashMap::new();
+        let symbol_count = files.iter().map(|file| file.symbols.len()).sum();
+        let mut by_id = HashMap::with_capacity(symbol_count);
         for file in files {
             for symbol in &file.symbols {
                 by_id.insert(symbol.id.as_str(), (file.path.as_str(), symbol));
@@ -32,4 +33,23 @@ impl<'a> SymbolLookup<'a> {
     pub(super) fn get(&self, id: &str) -> Option<(&'a str, &'a ExtractedSymbol)> {
         self.by_id.get(id).copied()
     }
+}
+
+pub(super) fn backtick_fence<'a>(
+    contents: impl IntoIterator<Item = &'a str>,
+    minimum_length: usize,
+) -> String {
+    let longest_run = contents
+        .into_iter()
+        .flat_map(longest_backtick_run)
+        .max()
+        .unwrap_or(0);
+    "`".repeat((longest_run + 1).max(minimum_length))
+}
+
+fn longest_backtick_run(text: &str) -> Option<usize> {
+    text.split(|character| character != '`')
+        .map(str::len)
+        .filter(|&length| length > 0)
+        .max()
 }

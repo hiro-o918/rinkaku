@@ -10,6 +10,7 @@
 
 use crate::extract::{Classification, ExtractedSymbol, RemovedSymbol};
 use crate::render::report::Report;
+use crate::render::shared::backtick_fence;
 use std::fmt::Write as _;
 
 /// `name (path)` — matches `render_markdown`'s `tree_label`/
@@ -126,27 +127,14 @@ fn removed_line(removed: &RemovedSymbol) -> String {
 /// `text` can't prematurely close it (mirrors `render_markdown`'s
 /// `fence_for`).
 fn fence_for(text: &str) -> String {
-    "`".repeat((longest_backtick_run(text).unwrap_or(0) + 1).max(1))
+    backtick_fence([text], 1)
 }
 
 /// [`fence_for`]'s sibling for a ` ```diff ` fenced block: widens against
 /// both the previous and current signature text, mirroring
 /// `render_markdown`'s `fence_for_diff`.
 fn fence_for_diff(previous_signature: &str, signature: &str) -> String {
-    let longest_run = [previous_signature, signature]
-        .iter()
-        .flat_map(|text| longest_backtick_run(text))
-        .max()
-        .unwrap_or(0);
-    "`".repeat((longest_run + 1).max(3))
-}
-
-/// Length of the longest run of consecutive `` ` `` characters in `text`.
-fn longest_backtick_run(text: &str) -> Option<usize> {
-    text.split(|c| c != '`')
-        .map(str::len)
-        .filter(|&len| len > 0)
-        .max()
+    backtick_fence([previous_signature, signature], 3)
 }
 
 #[cfg(test)]
