@@ -1,6 +1,8 @@
 # 0053. Split a shared hunk into per-symbol sub-hunks at attribution time
 
-- Status: accepted
+- Status: superseded by [ADR 0072](0072-diff-pane-raw-hunk-order-not-per-symbol-sections.md)
+  (per-symbol sections removed entirely, so there is nothing left to
+  split a shared hunk across)
 - Date: 2026-07-15
 
 ## Context

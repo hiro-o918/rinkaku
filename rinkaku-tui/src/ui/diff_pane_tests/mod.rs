@@ -22,7 +22,7 @@ use crate::ui::draw;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use rinkaku_core::diff::LineRange;
-use rinkaku_core::extract::{Classification, ExtractedSymbol, SymbolKind};
+use rinkaku_core::extract::{ExtractedSymbol, SymbolKind};
 use rinkaku_core::graph::SymbolGraph;
 use rinkaku_core::render::FileReport;
 

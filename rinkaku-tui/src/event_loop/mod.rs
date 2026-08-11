@@ -132,14 +132,12 @@ pub(crate) fn run_app(
         diff_shape::DiffPaneContent::Empty
     };
     // ADR 0027 decision 2: apply the same "auto-scroll to the focused
-    // symbol's section" rule the loop below runs on selection change, so
-    // `--tui` startup on a symbol row (e.g. `App::new`'s default cursor
-    // when the first row happens to be a symbol) already opens with the
-    // correct scroll offset rather than an unrelated 0.
+    // symbol's first intersecting hunk" rule the loop below runs on
+    // selection change, so `--tui` startup on a symbol row (e.g. `App::new`'s
+    // default cursor when the first row happens to be a symbol) already
+    // opens with the correct scroll offset rather than an unrelated 0.
     let mut last_diff_focus: Option<crate::app::DiffFocus> = app.selected_diff_focus(report);
-    if let Some(target_scroll) =
-        auto_scroll_for_diff_focus(&app, report, &diff_pane_content, app.diff_view_mode())
-    {
+    if let Some(target_scroll) = auto_scroll_for_diff_focus(&app, report, &diff_pane_content) {
         app = app.with_right_pane_scroll(target_scroll);
     }
     // The source screen's (`s` key) file read + syntax highlight, computed
@@ -188,16 +186,6 @@ pub(crate) fn run_app(
     // would produce a step that does not match what the reviewer is
     // actually looking at.
     let mut last_help_scroll_viewport_height: Option<usize> = None;
-    // The diff pane's *effective* view mode as of the last drawn frame
-    // (`ui::DrawOutcome::effective_diff_view_mode`) — the ADR 0044
-    // decision 7 fallback (`MIN_SPLIT_VIEW_WIDTH`) means a requested
-    // `Split` can render as `Unified` on a narrow pane, and the ADR
-    // 0044 decision 4 amendment's mode-aware `walk_sections` needs the
-    // effective mode (not the requested one) for its scroll math to
-    // match what is on screen. Initialized to the requested mode so
-    // the very first key press before any frame has drawn (a rare edge
-    // case at startup) still has a sensible value to feed in.
-    let mut last_effective_diff_view_mode: crate::app::DiffViewMode = app.diff_view_mode();
     // ADR 0048's `AnnotationMarkers` cache-on-change, mirroring
     // `blast_radius_selection`/`diff_pane_content`'s own up-front-then-
     // gated-recompute shape: built once from `App::new`'s initial (empty)
@@ -242,9 +230,6 @@ pub(crate) fn run_app(
         app = clamp_help_scroll_after_draw(app, outcome.clamped_help_scroll);
         if outcome.help_scroll_viewport_height.is_some() {
             last_help_scroll_viewport_height = outcome.help_scroll_viewport_height;
-        }
-        if let Some(mode) = outcome.effective_diff_view_mode {
-            last_effective_diff_view_mode = mode;
         }
 
         if app.should_quit() {
@@ -436,13 +421,7 @@ pub(crate) fn run_app(
                 // lives in its own function rather than inline here — see
                 // `dispatch_non_source_key`'s own doc comment for why this
                 // split exists (ADR 0022's `pending_prefix` regression).
-                app = dispatch_non_source_key(
-                    app,
-                    report,
-                    &diff_pane_content,
-                    input_key,
-                    last_effective_diff_view_mode,
-                );
+                app = dispatch_non_source_key(app, report, &diff_pane_content, input_key);
             }
 
             // ADR 0048: performs the export this key requested, if any —
@@ -474,7 +453,6 @@ pub(crate) fn run_app(
                     &diff_hunks,
                     last_diff_focus,
                     scroll_before_dispatch,
-                    last_effective_diff_view_mode,
                 );
                 app = effects.app;
                 diff_pane_content = effects.diff_pane_content;
@@ -548,7 +526,6 @@ fn dispatch_non_source_key(
     report: &Report,
     diff_pane_content: &diff_shape::DiffPaneContent,
     input_key: InputKey,
-    effective_diff_view_mode: crate::app::DiffViewMode,
 ) -> App {
     if let InputKey::NextHunk | InputKey::PrevHunk = input_key
         && should_apply_hunk_jump(&app)
@@ -557,7 +534,7 @@ fn dispatch_non_source_key(
         // caller (to know where each hunk starts — `App::handle_key` itself
         // has no notion of that content), so the jump target is computed
         // here rather than inside `App`.
-        let scroll = diff_shape::hunk_start_lines(diff_pane_content, effective_diff_view_mode);
+        let scroll = diff_shape::hunk_start_lines(diff_pane_content);
         let next = jump_scroll_target(&scroll, app.right_pane_scroll(), input_key);
         if let Some(target) = next {
             return app.handle_key(input_key).with_right_pane_scroll(target);

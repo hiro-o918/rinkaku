@@ -1,14 +1,15 @@
 //! Diff right-pane (TUI iteration 2, [`crate::app::RightPane::Diff`]; ADR
-//! 0020 reshapes its content): the raw unified-diff hunks touching the row
-//! under the cursor, either clipped to a symbol row's own line range or
-//! grouped into per-symbol sections for a file row.
+//! 0072 reshapes its content): the selected file's raw `git diff` hunks, in
+//! original order, unchanged regardless of whether a file row or a symbol
+//! row within it is selected — a symbol selection only changes where the
+//! pane auto-scrolls to.
 
 use super::scroll::{
     Body, render_scrollable_pane, truncate_line_to_width, truncate_to_width_keeping_tail,
 };
 use super::style::{expand_tabs_text, pane_border_style, styled_content_spans};
 use crate::app::{App, DiffTarget, DiffViewMode, Focus};
-use crate::diff_shape::DiffSection;
+use crate::diff_shape::AttributedHunk;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use crate::highlight::{self, HighlightedFile, TokenSpan};
 use crate::row_view::{BadgeContext, push_badge_spans};
@@ -66,13 +67,10 @@ pub(crate) const DIFF_PANE_TITLE: &str = " Diff ";
 ///   zero.
 /// - Line 3 (dim, only when `ranges` is non-empty): `"range: 23-73, ..."`
 ///   — the distinct new-side line spans. `ranges` must arrive already
-///   sorted+deduped ([`crate::diff_shape::changed_line_ranges`]) so a
-///   file selection whose hunks ADR 0029 clones across multiple owning
-///   symbols still produces one entry per distinct span, not one per
-///   section that owns it. On overflow the range list itself is
-///   head-truncated (the *later* line numbers are usually what the
-///   reviewer scrolled to see); the `"range: "` label stays fixed so
-///   the line's meaning survives.
+///   sorted+deduped ([`crate::diff_shape::changed_line_ranges`]). On
+///   overflow the range list itself is head-truncated (the *later* line
+///   numbers are usually what the reviewer scrolled to see); the
+///   `"range: "` label stays fixed so the line's meaning survives.
 pub(crate) fn diff_pane_header_lines(
     selection_name: Option<&str>,
     path: &str,
@@ -130,11 +128,9 @@ pub(crate) fn diff_pane_header_lines(
     lines
 }
 
-/// Draws the diff pane (TUI iteration 2, [`crate::app::RightPane::Diff`]; ADR 0020
-/// reshapes its content): the raw unified-diff hunks touching the row under
-/// the cursor, clipped to a symbol's own line range for a symbol row, or
-/// grouped into per-symbol sections (plus a trailing "(module level)"
-/// section) for a file row — `diff_content` is already shaped by
+/// Draws the diff pane (TUI iteration 2, [`crate::app::RightPane::Diff`];
+/// ADR 0072 reshapes its content): the selected file's raw hunks, in
+/// original order — `diff_content` is already shaped by
 /// `crate::diff_shape::build_diff_pane_content`, computed once per handled
 /// key by `crate::run_app` (this function must not call it itself, mirroring
 /// `App::selected_blast_radius_view`'s own "must not call from `ui::draw`"
@@ -144,10 +140,7 @@ pub(crate) fn diff_pane_header_lines(
 /// message rather than an empty pane; `App::selected_diff_target` is called
 /// here (not cached) purely to pick which of the two placeholder messages
 /// applies — it is an O(rows) lookup, not the O(diff size) hunk-walk
-/// `diff_content` itself avoids recomputing. `diff_highlights` is looked up
-/// by `source_index` rather than pointer identity now that hunks are cloned
-/// into shaped sections (`crate::diff_shape::AttributedHunk`'s own doc
-/// comment).
+/// `diff_content` itself avoids recomputing.
 ///
 /// Returns the clamped scroll offset actually applied, or `None` when the
 /// placeholder path was taken — mirrors `draw_detail_pane`'s own return
@@ -170,7 +163,7 @@ pub(crate) fn draw_diff_pane(
         None => "",
     };
 
-    let sections: Vec<&crate::diff_shape::DiffSection> = match diff_content {
+    let hunks: &[AttributedHunk] = match diff_content {
         DiffPaneContent::Empty => {
             let message = match &target {
                 None => "(select a symbol or file row to see its diff)".to_string(),
@@ -185,7 +178,7 @@ pub(crate) fn draw_diff_pane(
             frame.render_widget(paragraph, area);
             return None;
         }
-        DiffPaneContent::File(sections) => sections.iter().collect(),
+        DiffPaneContent::File(hunks) => hunks,
     };
 
     let highlighted_file = highlight::highlighted_file(diff_highlights, path);
@@ -201,60 +194,36 @@ pub(crate) fn draw_diff_pane(
     let split_fits = area.width >= MIN_SPLIT_VIEW_WIDTH;
     let render_split = split_requested && split_fits;
 
-    // ADR 0027: `DiffPaneContent` no longer has a symbol-clip variant, so
-    // the diff pane always renders with section headers on. `diff_pane_lines`'s/
-    // `diff_pane_split_rows`'s `show_section_headers` parameter is now always
-    // `true` at this call site, kept as a parameter to leave that layout knob
-    // visible in one place rather than hard-coding it inside either function.
     let unified_lines = if render_split {
         Vec::new()
     } else {
-        diff_pane_lines(&sections, true, highlighted_file, annotation_markers, path)
+        diff_pane_lines(hunks, highlighted_file, annotation_markers, path)
     };
     let split_rows = if render_split {
-        diff_pane_split_rows(&sections, true, highlighted_file, annotation_markers, path)
+        diff_pane_split_rows(hunks, highlighted_file, annotation_markers, path)
     } else {
         (Vec::new(), Vec::new())
     };
 
-    // A symbol row's ranges scope to that symbol's own section only; a
-    // file row (no `selected_diff_focus`) scopes to every section — mirrors
-    // `App::selected_diff_target`'s own file-vs-symbol row scoping.
-    let focus = app.selected_diff_focus(report);
-    let range_sections: Vec<&crate::diff_shape::DiffSection> = match &focus {
-        Some(focus) => sections
+    let ranges = crate::diff_shape::changed_line_ranges(
+        &hunks
             .iter()
-            .filter(|section| section.symbol_id.as_deref() == Some(focus.symbol_id.as_str()))
-            .copied()
-            .collect(),
-        None => sections.clone(),
-    };
-    let ranges = crate::diff_shape::changed_line_ranges(&range_sections);
+            .map(|attributed| &attributed.hunk)
+            .collect::<Vec<_>>(),
+    );
     let header_width = area.width.saturating_sub(2) as usize;
 
     // `selected_diff_header_name` is the single source for what line 1
     // names: the symbol's own name on a symbol row (paired with `path`
     // below to form `"<name> · <path>"`), or the file row's path
-    // (rendered bare, `selection_name = None`). Feeding both row kinds
-    // through the accessor — rather than only the symbol arm — keeps its
-    // file-row branch on the rendered path, not dead. Row `badges` come
+    // (rendered bare, `selection_name = None`). Row `badges` come
     // straight off the same `nav.rows(tree)` entry every other lookup
     // already reads, so line 2 renders exactly what the tree row does
     // (no drift).
     let header_name = app.selected_diff_header_name();
-    let (selection_name, header_path) = if focus.is_some() {
-        (header_name, path)
-    } else {
-        (None, header_name.unwrap_or(path))
-    };
     let selected_badges = selected_row_badges(app);
-    let mut header_lines = diff_pane_header_lines(
-        selection_name,
-        header_path,
-        &selected_badges,
-        &ranges,
-        header_width,
-    );
+    let mut header_lines =
+        diff_pane_header_lines(header_name, path, &selected_badges, &ranges, header_width);
     // ADR 0044 decision 7: the toggle stays flipped even when the pane is
     // too narrow to honor it — this note is the only visible sign why `v`
     // didn't change anything, rather than a silent no-op.
@@ -302,108 +271,56 @@ fn selected_row_badges(app: &App) -> Badges {
     }
 }
 
-/// Formats every [`DiffSection`] in `sections` into styled lines (ADR
-/// 0020): a section anchor (via [`section_anchor_lines`]) only when
-/// `show_section_headers` is set — a single-section symbol selection has
-/// nothing to disambiguate a header would add value to, so it is omitted
-/// there and the pane opens straight on the hunks, matching this pane's
-/// pre-ADR-0020 layout for a symbol row. A file selection (multiple
-/// sections, or one section that still benefits from being named) always
-/// shows headers.
-///
-/// Within each section, hunk headers stay dim, `+`/`-` marker glyphs keep
-/// their existing bold green/red foreground, and each line's own code
-/// tokens are colored by [`highlight::lookup_hunk_highlight_by_index`] when
-/// available (ADR 0018/0020) — falling back to [`plain_diff_line`] (green/
-/// red foreground plus the same `ADDED_BG`/`REMOVED_BG` tint, unstyled for
-/// context) when a hunk has no highlight (unknown extension, parse/query
-/// failure, or `highlighted_file` itself being `None`) so highlighting can
-/// never make a diff harder to read than before.
+/// Formats `hunks` into styled lines (ADR 0072: original `git diff` order,
+/// no per-symbol section headers): hunk headers stay dim, `+`/`-` marker
+/// glyphs keep their existing bold green/red foreground, and each line's
+/// own code tokens are colored by [`highlight::lookup_hunk_highlight_by_index`]
+/// when available (ADR 0018) — falling back to [`plain_diff_line`]
+/// (green/red foreground plus the same `ADDED_BG`/`REMOVED_BG` tint,
+/// unstyled for context) when a hunk has no highlight (unknown extension,
+/// parse/query failure, or `highlighted_file` itself being `None`) so
+/// highlighting can never make a diff harder to read than before.
 pub(crate) fn diff_pane_lines(
-    sections: &[&DiffSection],
-    show_section_headers: bool,
+    hunks: &[AttributedHunk],
     highlighted_file: Option<&HighlightedFile>,
     annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     path: &str,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for (section_index, section) in sections.iter().enumerate() {
-        if section_index > 0 {
+    for (hunk_index, attributed) in hunks.iter().enumerate() {
+        if hunk_index > 0 {
             lines.push(Line::raw(""));
         }
-        if show_section_headers {
-            lines.extend(section_anchor_lines(section));
-        }
+        lines.push(Line::styled(
+            attributed.hunk.header.clone(),
+            Style::default().fg(Color::DarkGray),
+        ));
 
-        for (hunk_index, attributed) in section.hunks.iter().enumerate() {
-            if hunk_index > 0 || show_section_headers {
-                lines.push(Line::raw(""));
-            }
-            lines.push(Line::styled(
-                attributed.hunk.header.clone(),
-                Style::default().fg(Color::DarkGray),
+        let hunk_highlight =
+            highlight::lookup_hunk_highlight_by_index(highlighted_file, attributed.source_index);
+        let new_side_lines = new_side_line_numbers(&attributed.hunk);
+
+        for (line_index, line) in attributed.hunk.lines.iter().enumerate() {
+            // `hunk_highlight` is `Option<&[LineHighlight]>`, and
+            // `LineHighlight` is itself `Option<Vec<TokenSpan>>`
+            // (per-line fallback within an otherwise-highlighted hunk) —
+            // `flatten` collapses "no highlight data at all for this
+            // hunk" and "this specific line had no highlight" into the
+            // same `None` `diff_line` already treats as its fallback
+            // signal.
+            let token_spans = hunk_highlight
+                .and_then(|lines| lines.get(line_index).cloned())
+                .flatten();
+            let has_annotation = new_side_lines[line_index].is_some_and(|line_no| {
+                crate::annotation_markers::line_has_annotation(annotation_markers, path, line_no)
+            });
+            lines.push(prefix_annotation_marker(
+                diff_line(line, token_spans),
+                has_annotation,
             ));
-
-            let hunk_highlight = highlight::lookup_hunk_highlight_by_index(
-                highlighted_file,
-                attributed.source_index,
-            );
-            let new_side_lines = new_side_line_numbers(&attributed.hunk);
-
-            for (line_index, line) in attributed.hunk.lines.iter().enumerate() {
-                // `hunk_highlight` is `Option<&[LineHighlight]>`, and
-                // `LineHighlight` is itself `Option<Vec<TokenSpan>>`
-                // (per-line fallback within an otherwise-highlighted hunk)
-                // — `flatten` collapses "no highlight data at all for this
-                // hunk" and "this specific line had no highlight" into the
-                // same `None` `diff_line` already treats as its fallback
-                // signal. `origin_offset` (ADR 0053) rebases `line_index`
-                // back into the *original* hunk's line positions, since
-                // `hunk_highlight` stays keyed by that original length even
-                // when `attributed.hunk` is a smaller split sub-hunk.
-                let token_spans = hunk_highlight
-                    .and_then(|lines| lines.get(attributed.origin_offset + line_index).cloned())
-                    .flatten();
-                let has_annotation = new_side_lines[line_index].is_some_and(|line_no| {
-                    crate::annotation_markers::line_has_annotation(
-                        annotation_markers,
-                        path,
-                        line_no,
-                    )
-                });
-                lines.push(prefix_annotation_marker(
-                    diff_line(line, token_spans),
-                    has_annotation,
-                ));
-            }
         }
     }
     lines
-}
-
-/// A section's anchor line(s) in unified view: the plain bold title when
-/// [`DiffSection::contract_header`] is `None`, or a bold 2-line `- {old}` /
-/// `+ {new}` pair carrying the same `ADDED_BG`/`REMOVED_BG` background tint
-/// as a hunk body line when it is `Some` — the changed-signature case
-/// replaces the title outright rather than showing both, since the title
-/// *is* the old signature's replacement.
-fn section_anchor_lines(section: &DiffSection) -> Vec<Line<'static>> {
-    match &section.contract_header {
-        None => vec![Line::styled(
-            section.title.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )],
-        Some(contract) => vec![
-            Line::styled(
-                format!("- {}", contract.previous_signature),
-                added_removed_style(DiffLineKind::Removed).add_modifier(Modifier::BOLD),
-            ),
-            Line::styled(
-                format!("+ {}", contract.signature),
-                added_removed_style(DiffLineKind::Added).add_modifier(Modifier::BOLD),
-            ),
-        ],
-    }
 }
 
 /// This hunk's own new-side line number for each of `hunk.lines`, `None`
@@ -459,127 +376,70 @@ fn prefix_annotation_marker(line: Line<'static>, has_annotation: bool) -> Line<'
 }
 
 /// Split-view (ADR 0044) counterpart of [`diff_pane_lines`]: the same
-/// section/hunk-header scaffold, but each hunk's body is paired via
+/// hunk-header scaffold, but each hunk's body is paired via
 /// [`crate::diff_shape::pair_hunk_lines`] into old-side/new-side columns
-/// instead of one interleaved column. A plain title renders identically on
-/// both sides (`left`/`right` share it); a changed signature instead pairs
-/// its old/new [`DiffSection::contract_header`] on that same one row
-/// (`left` = previous, `right` = current) — the whole point of a split view
-/// is comparing them without scanning past an interleaved row in between.
-/// Returns `(left, right)`, each the same length — [`crate::diff_shape::SplitRow`]'s
-/// own invariant (one row per source [`DiffLine`]) means every hunk
-/// contributes the same row count here as it does to [`diff_pane_lines`],
-/// and the anchor is always exactly one row regardless of which of the two
-/// arms below fires — so this function's total line count always matches
-/// `diff_pane_lines`'s for the same `sections`/`show_section_headers`,
-/// required for `walk_sections`' shared line-counting (ADR 0044 decision 4)
-/// to stay correct regardless of which of the two this pane actually
-/// renders.
+/// instead of one interleaved column. Returns `(left, right)`, each the
+/// same length — [`crate::diff_shape::SplitRow`]'s own invariant (one row
+/// per source [`DiffLine`]) means every hunk contributes the same row
+/// count here as it does to [`diff_pane_lines`].
 pub(crate) fn diff_pane_split_rows(
-    sections: &[&DiffSection],
-    show_section_headers: bool,
+    hunks: &[AttributedHunk],
     highlighted_file: Option<&HighlightedFile>,
     annotation_markers: &crate::annotation_markers::AnnotationMarkers,
     path: &str,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
     let mut left = Vec::new();
     let mut right = Vec::new();
-    for (section_index, section) in sections.iter().enumerate() {
-        if section_index > 0 {
+    for (hunk_index, attributed) in hunks.iter().enumerate() {
+        if hunk_index > 0 {
             left.push(Line::raw(""));
             right.push(Line::raw(""));
         }
-        if show_section_headers {
-            let (anchor_left, anchor_right) = section_anchor_split_row(section);
-            left.push(anchor_left);
-            right.push(anchor_right);
-        }
+        let header = Line::styled(
+            attributed.hunk.header.clone(),
+            Style::default().fg(Color::DarkGray),
+        );
+        left.push(header.clone());
+        right.push(header);
 
-        for (hunk_index, attributed) in section.hunks.iter().enumerate() {
-            if hunk_index > 0 || show_section_headers {
-                left.push(Line::raw(""));
-                right.push(Line::raw(""));
-            }
-            let header = Line::styled(
-                attributed.hunk.header.clone(),
-                Style::default().fg(Color::DarkGray),
-            );
-            left.push(header.clone());
-            right.push(header);
+        let hunk_highlight =
+            highlight::lookup_hunk_highlight_by_index(highlighted_file, attributed.source_index);
+        let split_rows = crate::diff_shape::pair_hunk_lines(&attributed.hunk.lines);
+        let new_side_lines = new_side_line_numbers(&attributed.hunk);
 
-            let hunk_highlight = highlight::lookup_hunk_highlight_by_index(
-                highlighted_file,
-                attributed.source_index,
-            );
-            let split_rows = crate::diff_shape::pair_hunk_lines(&attributed.hunk.lines);
-            let new_side_lines = new_side_line_numbers(&attributed.hunk);
-
-            for split_row in &split_rows {
-                left.push(split_side_line(
-                    split_row.left.as_ref(),
-                    split_row.left_index,
-                    attributed.origin_offset,
-                    hunk_highlight,
-                    None,
-                ));
-                let right_has_annotation = split_row
-                    .right_index
-                    .and_then(|index| new_side_lines.get(index).copied().flatten())
-                    .is_some_and(|line_no| {
-                        crate::annotation_markers::line_has_annotation(
-                            annotation_markers,
-                            path,
-                            line_no,
-                        )
-                    });
-                right.push(split_side_line(
-                    split_row.right.as_ref(),
-                    split_row.right_index,
-                    attributed.origin_offset,
-                    hunk_highlight,
-                    Some(right_has_annotation),
-                ));
-            }
+        for split_row in &split_rows {
+            left.push(split_side_line(
+                split_row.left.as_ref(),
+                split_row.left_index,
+                hunk_highlight,
+                None,
+            ));
+            let right_has_annotation = split_row
+                .right_index
+                .and_then(|index| new_side_lines.get(index).copied().flatten())
+                .is_some_and(|line_no| {
+                    crate::annotation_markers::line_has_annotation(
+                        annotation_markers,
+                        path,
+                        line_no,
+                    )
+                });
+            right.push(split_side_line(
+                split_row.right.as_ref(),
+                split_row.right_index,
+                hunk_highlight,
+                Some(right_has_annotation),
+            ));
         }
     }
     (left, right)
 }
 
-/// A section's anchor row in split view, paired as `(left, right)`: the
-/// same bold plain title on both sides when [`DiffSection::contract_header`]
-/// is `None`, or the old/new signatures side by side (left = previous,
-/// right = current) with the matching `ADDED_BG`/`REMOVED_BG` tint when it
-/// is `Some` — mirrors [`section_anchor_lines`]'s unified-view choice
-/// between the two, but as one paired row instead of two stacked lines
-/// since split view compares old/new positionally rather than sequentially.
-fn section_anchor_split_row(section: &DiffSection) -> (Line<'static>, Line<'static>) {
-    match &section.contract_header {
-        None => {
-            let title = Line::styled(
-                section.title.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            );
-            (title.clone(), title)
-        }
-        Some(contract) => (
-            Line::styled(
-                format!("- {}", contract.previous_signature),
-                added_removed_style(DiffLineKind::Removed).add_modifier(Modifier::BOLD),
-            ),
-            Line::styled(
-                format!("+ {}", contract.signature),
-                added_removed_style(DiffLineKind::Added).add_modifier(Modifier::BOLD),
-            ),
-        ),
-    }
-}
-
 /// One [`SplitRow`](crate::diff_shape::SplitRow) side's rendered [`Line`] —
 /// a blank filler line for a `None` cell, or `diff_line`'s usual rendering
-/// looked up by `index` (that side's position in the hunk's *original*
+/// looked up by `index` (that side's position in the hunk's original
 /// interleaved `lines`, [`crate::diff_shape::SplitRow::left_index`]/
-/// `right_index`'s own doc comment on why this must be the original index,
-/// not the split row's own position).
+/// `right_index`'s own doc comment).
 ///
 /// `has_annotation` (ADR 0048) is `Some(bool)` on the new-side (right) call, and
 /// `None` on the old-side (left) call — split view only marks the new
@@ -590,17 +450,13 @@ fn section_anchor_split_row(section: &DiffSection) -> (Line<'static>, Line<'stat
 fn split_side_line(
     line: Option<&DiffLine>,
     index: Option<usize>,
-    origin_offset: usize,
     hunk_highlight: Option<&[Option<Vec<TokenSpan>>]>,
     has_annotation: Option<bool>,
 ) -> Line<'static> {
     let rendered = match (line, index) {
         (Some(line), Some(index)) => {
-            // `origin_offset` (ADR 0053) rebases `index` back into the
-            // *original* hunk's line positions — `diff_pane_lines`'s own
-            // sibling offset has the full explanation.
             let token_spans = hunk_highlight
-                .and_then(|lines| lines.get(origin_offset + index).cloned())
+                .and_then(|lines| lines.get(index).cloned())
                 .flatten();
             diff_line(line, token_spans)
         }
@@ -657,10 +513,7 @@ pub(crate) fn plain_diff_line(line: &DiffLine) -> Line<'static> {
 }
 
 /// The fg/bg pair for an `Added`/`Removed` line (ADR 0018: diff signal lives
-/// in the background, not just the foreground), shared by [`plain_diff_line`]
-/// and a section's changed-signature anchor row(s) — the anchor is a
-/// synthetic old/new pair rather than an actual hunk body line, but it
-/// still needs to read as a diff at a glance.
+/// in the background, not just the foreground), used by [`plain_diff_line`].
 ///
 /// Panics on `DiffLineKind::Context`: no caller here ever has a
 /// context-kind line to style.
@@ -669,7 +522,7 @@ fn added_removed_style(kind: DiffLineKind) -> Style {
         DiffLineKind::Added => Style::default().fg(Color::Green).bg(ADDED_BG),
         DiffLineKind::Removed => Style::default().fg(Color::Red).bg(REMOVED_BG),
         DiffLineKind::Context => {
-            unreachable!("contract headers and plain diff lines are never Context-kind")
+            unreachable!("plain diff lines are never Context-kind")
         }
     }
 }

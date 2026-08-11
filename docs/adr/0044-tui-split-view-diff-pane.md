@@ -1,6 +1,10 @@
 # 0044. Split (side-by-side) view for the diff pane
 
-- Status: accepted
+- Status: accepted ("mode-aware row counts for the section anchor"
+  amendment rendered moot by
+  [ADR 0072](0072-diff-pane-raw-hunk-order-not-per-symbol-sections.md),
+  which removed the section anchor it applied to; decisions 1-8 and the
+  other two amendments are unchanged)
 - Date: 2026-07-14
 
 ## Context

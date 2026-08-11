@@ -5,7 +5,7 @@
 //! `*`-marker/space-alignment branch itself is actually exercised.
 
 use super::*;
-use crate::diff_shape::{AttributedHunk, DiffSection};
+use crate::diff_shape::AttributedHunk;
 
 const DIFF_TEXT: &str = "\
 diff --git a/lib.rs b/lib.rs
@@ -18,31 +18,25 @@ index e69de29..4b825dc 100644
  fn b() {}
 ";
 
-fn section_for(diff_text: &str) -> DiffSection {
+fn hunks_for(diff_text: &str) -> Vec<AttributedHunk> {
     let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
     let hunk = diff_files[0].hunks[0].clone();
-    DiffSection {
-        title: "fn foo()".to_string(),
-        symbol_id: Some("lib.rs::foo".to_string()),
-        contract_header: None,
-        hunks: vec![AttributedHunk {
-            source_index: 0,
-            hunk,
-            origin_offset: 0,
-        }],
-    }
+    vec![AttributedHunk {
+        source_index: 0,
+        hunk,
+    }]
 }
 
 #[test]
 fn should_prefix_annotation_marker_only_on_the_line_inside_the_annotation_range_in_unified_view() {
-    let section = section_for(DIFF_TEXT);
+    let hunks = hunks_for(DIFF_TEXT);
     let mut annotation_markers = crate::annotation_markers::AnnotationMarkers::default();
     // New-side line 2 is the added "+fn foo() {}" line in DIFF_TEXT above.
     annotation_markers
         .line_ranges
         .insert("lib.rs".to_string(), vec![(2, 2)]);
 
-    let lines = diff_pane_lines(&[&section], true, None, &annotation_markers, "lib.rs");
+    let lines = diff_pane_lines(&hunks, None, &annotation_markers, "lib.rs");
 
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
     let marked = rendered
@@ -59,14 +53,13 @@ fn should_prefix_annotation_marker_only_on_the_line_inside_the_annotation_range_
 
 #[test]
 fn should_prefix_annotation_marker_only_on_the_new_side_in_split_view() {
-    let section = section_for(DIFF_TEXT);
+    let hunks = hunks_for(DIFF_TEXT);
     let mut annotation_markers = crate::annotation_markers::AnnotationMarkers::default();
     annotation_markers
         .line_ranges
         .insert("lib.rs".to_string(), vec![(2, 2)]);
 
-    let (left, right) =
-        diff_pane_split_rows(&[&section], true, None, &annotation_markers, "lib.rs");
+    let (left, right) = diff_pane_split_rows(&hunks, None, &annotation_markers, "lib.rs");
 
     let left_rendered: Vec<String> = left.iter().map(line_text).collect();
     let right_rendered: Vec<String> = right.iter().map(line_text).collect();

@@ -185,11 +185,11 @@ index e69de29..4b825dc 100644
 }
 
 #[test]
-fn should_draw_per_symbol_section_headers_when_diff_pane_shows_a_file_selection() {
+fn should_draw_every_hunk_in_original_order_when_diff_pane_shows_a_file_selection() {
     // Cursor stays on row 0, the "lib.rs" file row itself — a file
-    // selection (ADR 0020) groups hunks under each symbol's own
-    // signature as a section header, unlike a symbol selection (the
-    // sibling test above), which shows no header at all.
+    // selection (ADR 0072) shows every hunk in the file, in original
+    // `git diff` order, with no per-symbol section header — a symbol
+    // selection (the sibling test above) shows the same content.
     let report = Report {
         origin: rinkaku_core::render::ReportOrigin::Diff,
         files: vec![FileReport {
@@ -252,78 +252,12 @@ index e69de29..4b825dc 100644
         .expect("draw");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("fn foo()"));
-    assert!(text.contains("fn bar()"));
     assert!(text.contains("+fn foo() {}"));
     assert!(text.contains("+fn bar() {}"));
 }
 
-#[test]
-fn should_draw_contract_header_before_hunks_when_symbol_signature_changed() {
-    let report = Report {
-        origin: rinkaku_core::render::ReportOrigin::Diff,
-        files: vec![FileReport {
-            path: "lib.rs".to_string(),
-            symbols: vec![ExtractedSymbol {
-                classification: Some(Classification::SignatureChanged),
-                previous_signature: Some("fn foo(a: i32)".to_string()),
-                signature: "fn foo(a: i32, b: i32)".to_string(),
-                ..symbol("lib.rs::foo", "foo")
-            }],
-        }],
-        skipped: vec![],
-        graph: SymbolGraph {
-            nodes: vec![],
-            edges: vec![],
-            roots: vec![],
-        },
-        tests: vec![],
-        fan_ins: vec![],
-        test_coverage: vec![],
-        file_size_warnings: vec![],
-        file_size_bands: vec![],
-        removed: vec![],
-        non_symbol_changes: vec![],
-    };
-    // Row 0 is the "lib.rs" file row, row 1 is the "foo" symbol.
-    let app = App::new(&report).handle_key(crate::app::InputKey::Down);
-    let diff_text = "\
-diff --git a/lib.rs b/lib.rs
-index e69de29..4b825dc 100644
---- a/lib.rs
-+++ b/lib.rs
-@@ -1,1 +1,1 @@
--fn foo(a: i32) {}
-+fn foo(a: i32, b: i32) {}
-";
-    let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
-    let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
-    let diff_content = diff_content_for(&report, &diff_files, &app);
-    let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
-
-    terminal
-        .draw(|frame| {
-            draw(
-                frame,
-                &app,
-                &report,
-                &diff_content,
-                &diff_highlights,
-                &BlastRadiusSelection::NotApplicable,
-                None,
-                &[],
-                &crate::annotation_markers::AnnotationMarkers::default(),
-                Locale::English,
-            );
-        })
-        .expect("draw");
-
-    let text = buffer_text(&terminal);
-    // The 2-line old/new signature pair stands in for the section title and
-    // precedes the hunk body itself (ADR 0020's outline-before-
-    // implementation disclosure order).
-    assert!(text.contains("- fn foo(a: i32)"));
-    assert!(text.contains("+ fn foo(a: i32, b: i32)"));
-    assert!(text.contains("-fn foo(a: i32) {}"));
-    assert!(text.contains("+fn foo(a: i32, b: i32) {}"));
-}
+// ADR 0072 removed the diff pane's contract-change header (the 2-line
+// old/new signature pair that used to precede a changed symbol's hunks) —
+// the Detail pane's `SignatureView::Changed` already shows the same old/new
+// comparison independently, so `should_draw_contract_header_before_hunks_when_symbol_signature_changed`
+// no longer has an object to test and is removed rather than adapted.

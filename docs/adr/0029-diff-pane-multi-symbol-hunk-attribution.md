@@ -1,6 +1,10 @@
 # 0029. Diff pane attributes a hunk to every symbol it intersects, not just the first
 
-- Status: accepted
+- Status: accepted (per-symbol attribution rendered moot by
+  [ADR 0072](0072-diff-pane-raw-hunk-order-not-per-symbol-sections.md),
+  which removed per-symbol sections entirely; this ADR's finding that a
+  hunk can intersect more than one symbol's range remains true and
+  informs that ADR's own auto-scroll design)
 - Date: 2026-07-13
 
 ## Context

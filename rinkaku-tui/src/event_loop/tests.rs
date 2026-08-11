@@ -373,21 +373,9 @@ fn should_clear_pending_prefix_so_next_d_toggles_diff_after_a_one_candidate_gd_j
     // now set) `GotoDefinition` for the following `d` — both routed
     // through `dispatch_non_source_key`, the same function `run_app`
     // itself calls, rather than `App::handle_key` directly.
-    let app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::PendingGoto,
-        app::DiffViewMode::Split,
-    );
+    let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PendingGoto);
     assert_eq!(Some(app::PendingPrefix::G), app.pending_prefix());
-    let app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::GotoDefinition,
-        app::DiffViewMode::Split,
-    );
+    let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::GotoDefinition);
     assert_eq!(None, app.pending_prefix(), "gd must clear pending_prefix");
 
     // The regression itself: a *plain* `d` right after the jump must
@@ -399,13 +387,7 @@ fn should_clear_pending_prefix_so_next_d_toggles_diff_after_a_one_candidate_gd_j
     // is an indirect but faithful proxy for "the next `d` meant
     // ToggleDiff, not gd".
     let right_pane_before = app.right_pane();
-    let app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::ToggleDiff,
-        app::DiffViewMode::Split,
-    );
+    let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::ToggleDiff);
     assert_ne!(
         right_pane_before,
         app.right_pane(),
@@ -430,20 +412,8 @@ fn should_clear_pending_prefix_so_next_d_toggles_diff_after_a_multi_candidate_gr
         .handle_key(InputKey::Down);
     let diff_content = diff_shape::DiffPaneContent::Empty;
 
-    let app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::PendingGoto,
-        app::DiffViewMode::Split,
-    );
-    let app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::GotoReferences,
-        app::DiffViewMode::Split,
-    );
+    let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PendingGoto);
+    let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::GotoReferences);
     assert!(
         app.jump_popup().is_some(),
         "gr with 2 candidates must open the popup"
@@ -458,13 +428,7 @@ fn should_clear_pending_prefix_so_next_d_toggles_diff_after_a_multi_candidate_gr
     // return is the second path the #61-review finding flagged: it used
     // to return before the (then-later-positioned) `pending_prefix`
     // clear, so a stale prefix could survive an entire popup session.
-    let app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::PopupCancel,
-        app::DiffViewMode::Split,
-    );
+    let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PopupCancel);
     assert_eq!(None, app.jump_popup());
     assert_eq!(None, app.pending_prefix());
 
@@ -472,13 +436,7 @@ fn should_clear_pending_prefix_so_next_d_toggles_diff_after_a_multi_candidate_gr
     // `d` after the cancelled popup must toggle the right pane, not
     // silently re-resolve as another `gr`.
     let right_pane_before = app.right_pane();
-    let app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::ToggleDiff,
-        app::DiffViewMode::Split,
-    );
+    let app = dispatch_non_source_key(app, &report, &diff_content, InputKey::ToggleDiff);
     assert_ne!(
         right_pane_before,
         app.right_pane(),
@@ -517,46 +475,22 @@ fn should_restore_the_scroll_offset_the_reviewer_was_at_when_jumping_back_after_
 
     // Cursor on "foo" (row 1), scrolled 5 lines into its Diff pane.
     let mut app = App::new(&report).handle_key(InputKey::Down);
-    app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::Open,
-        app::DiffViewMode::Split,
-    ); // focus -> Right, RightPane::Diff
+    app = dispatch_non_source_key(app, &report, &diff_content, InputKey::Open); // focus -> Right, RightPane::Diff
     for _ in 0..5 {
-        app = dispatch_non_source_key(
-            app,
-            &report,
-            &diff_content,
-            InputKey::Down,
-            app::DiffViewMode::Split,
-        );
+        app = dispatch_non_source_key(app, &report, &diff_content, InputKey::Down);
     }
     assert_eq!(5, app.right_pane_scroll());
 
     // The real `gd` key sequence: `g` (PendingGoto) then `d`
     // (GotoDefinition) — "bar" is "foo"'s one callee, so this jumps
     // immediately (`GotoOutcome::One`) rather than opening the popup.
-    app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::PendingGoto,
-        app::DiffViewMode::Split,
-    );
+    app = dispatch_non_source_key(app, &report, &diff_content, InputKey::PendingGoto);
     assert_eq!(
         5,
         app.right_pane_scroll(),
         "the leading g of gd must not disturb scroll either"
     );
-    app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::GotoDefinition,
-        app::DiffViewMode::Split,
-    );
+    app = dispatch_non_source_key(app, &report, &diff_content, InputKey::GotoDefinition);
     assert_eq!(Some("lib.rs::bar"), app.selected_symbol_id());
     assert_eq!(
         0,
@@ -565,13 +499,7 @@ fn should_restore_the_scroll_offset_the_reviewer_was_at_when_jumping_back_after_
     );
 
     // Ctrl-o: jump back to "foo" — the regression this test guards.
-    app = dispatch_non_source_key(
-        app,
-        &report,
-        &diff_content,
-        InputKey::JumpBack,
-        app::DiffViewMode::Split,
-    );
+    app = dispatch_non_source_key(app, &report, &diff_content, InputKey::JumpBack);
 
     assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
     assert_eq!(

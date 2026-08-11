@@ -1,6 +1,10 @@
 # 0027. Diff pane follows symbol selection: always render the whole file, auto-scroll to the selected symbol's section
 
-- Status: accepted
+- Status: accepted (amended by
+  [ADR 0072](0072-diff-pane-raw-hunk-order-not-per-symbol-sections.md):
+  "auto-scroll to the selected symbol's section" narrows to "auto-scroll
+  to the selected symbol's first intersecting hunk"; "always render the
+  whole file" is unchanged)
 - Date: 2026-07-13
 
 ## Context

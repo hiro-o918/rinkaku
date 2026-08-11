@@ -187,25 +187,25 @@ index e69de29..4b825dc 100644
 }
 
 #[test]
-fn should_offset_highlight_lookup_by_origin_offset_when_hunk_was_split() {
-    // ADR 0053: a hunk shared by two symbols is split into per-symbol
-    // sub-hunks, each keeping `origin_offset` — its start index within
-    // the *original* hunk's `lines` — needed to look up the right slice
-    // of `crate::highlight::highlight_hunk`'s output, which stays keyed
-    // by position in the original, unsplit hunk (that highlight table is
-    // computed once per original hunk, not re-split alongside it). This
-    // section's sub-hunk starts at `origin_offset` 1 (after the first
-    // section's own 1 line); `hunk_highlight[0]` and `hunk_highlight[1]`
-    // are deliberately set to different, distinguishable spans so an
-    // unoffset lookup (`line_index` 0 instead of `origin_offset +
-    // line_index` = 1) is caught by asserting the exact `TokenSpan`
-    // used, not just "some" highlight was applied.
-    let section = DiffSection {
-        title: "fn bar()".to_string(),
-        symbol_id: Some("lib.rs::bar".to_string()),
-        contract_header: None,
-        hunks: vec![crate::diff_shape::AttributedHunk {
+fn should_look_up_highlight_by_source_index_and_line_position() {
+    // ADR 0072: every `AttributedHunk` maps 1:1 to its original hunk (no
+    // more sub-hunk splitting), so the highlight lookup is a plain
+    // `source_index` + line-position index — this pins that the second
+    // hunk's own `source_index` (1) is used, not the first hunk's.
+    let hunks = vec![
+        crate::diff_shape::AttributedHunk {
             source_index: 0,
+            hunk: crate::diff_view::Hunk {
+                header: "@@ -1,1 +1,1 @@".to_string(),
+                new_range: Some((1, 1)),
+                lines: vec![DiffLine {
+                    kind: DiffLineKind::Added,
+                    content: "foo_body".to_string(),
+                }],
+            },
+        },
+        crate::diff_shape::AttributedHunk {
+            source_index: 1,
             hunk: crate::diff_view::Hunk {
                 header: "@@ -2,1 +2,1 @@".to_string(),
                 new_range: Some((2, 2)),
@@ -214,28 +214,26 @@ fn should_offset_highlight_lookup_by_origin_offset_when_hunk_was_split() {
                     content: "bar_body".to_string(),
                 }],
             },
-            origin_offset: 1,
-        }],
-    };
+        },
+    ];
     let highlighted_file = HighlightedFile {
         path: "lib.rs".to_string(),
-        hunks: vec![vec![
-            Some(vec![TokenSpan {
+        hunks: vec![
+            vec![Some(vec![TokenSpan {
                 start: 0,
                 end: 8,
                 palette_index: 0,
-            }]),
-            Some(vec![TokenSpan {
+            }])],
+            vec![Some(vec![TokenSpan {
                 start: 0,
                 end: 8,
                 palette_index: 1,
-            }]),
-        ]],
+            }])],
+        ],
     };
 
     let actual = diff_pane_lines(
-        &[&section],
-        true,
+        &hunks,
         Some(&highlighted_file),
         &crate::annotation_markers::AnnotationMarkers::default(),
         "lib.rs",
@@ -374,70 +372,10 @@ fn should_keep_context_line_unstyled_in_plain_diff_line_when_no_token_spans() {
     assert_eq!(Line::raw(" fn foo() {}".to_string()), actual);
 }
 
-#[test]
-fn should_replace_the_section_title_with_a_tinted_old_new_pair_in_unified_view_when_signature_changed()
- {
-    let section = crate::diff_shape::DiffSection {
-        title: "fn foo(a: i32, b: i32)".to_string(),
-        symbol_id: Some("lib.rs::foo".to_string()),
-        contract_header: Some(crate::diff_shape::ContractHeader {
-            previous_signature: "fn foo(a: i32)".to_string(),
-            signature: "fn foo(a: i32, b: i32)".to_string(),
-        }),
-        hunks: vec![],
-    };
-
-    let actual = diff_pane_lines(
-        &[&section],
-        true,
-        None,
-        &crate::annotation_markers::AnnotationMarkers::default(),
-        "lib.rs",
-    );
-
-    assert_eq!(
-        vec![
-            Line::styled(
-                "- fn foo(a: i32)".to_string(),
-                Style::default()
-                    .fg(Color::Red)
-                    .bg(REMOVED_BG)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Line::styled(
-                "+ fn foo(a: i32, b: i32)".to_string(),
-                Style::default()
-                    .fg(Color::Green)
-                    .bg(ADDED_BG)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ],
-        actual
-    );
-}
-
-#[test]
-fn should_keep_the_plain_bold_title_in_unified_view_when_signature_is_unchanged() {
-    let section = crate::diff_shape::DiffSection {
-        title: "fn foo()".to_string(),
-        symbol_id: Some("lib.rs::foo".to_string()),
-        contract_header: None,
-        hunks: vec![],
-    };
-
-    let actual = diff_pane_lines(
-        &[&section],
-        true,
-        None,
-        &crate::annotation_markers::AnnotationMarkers::default(),
-        "lib.rs",
-    );
-
-    assert_eq!(
-        vec![Line::styled(
-            "fn foo()".to_string(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )],
-        actual
-    );
-}
+// ADR 0072 removed the diff pane's per-symbol section titles and contract
+// headers entirely (the Detail pane's `SignatureView::Changed` already
+// shows the old/new signature comparison independently) — the two tests
+// that used to pin the contract-header/title rendering here
+// (`should_replace_the_section_title_with_a_tinted_old_new_pair_in_unified_view_when_signature_changed`,
+// `should_keep_the_plain_bold_title_in_unified_view_when_signature_is_unchanged`)
+// no longer have an object to test and are removed rather than adapted.

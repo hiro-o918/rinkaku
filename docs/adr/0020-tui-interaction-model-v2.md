@@ -1,6 +1,9 @@
 # 0020. TUI interaction model v2: focus, default diff, selection-scoped content, and a help overlay
 
-- Status: accepted
+- Status: accepted (decision 4's per-symbol section grouping/module-level
+  bucket/contract-header sub-rules superseded by
+  [ADR 0072](0072-diff-pane-raw-hunk-order-not-per-symbol-sections.md);
+  every other decision in this ADR is unchanged)
 - Date: 2026-07-13
 
 ## Context

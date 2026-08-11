@@ -77,15 +77,24 @@ scrolling to the top of the file — the file is fully shown either way, so
 scroll.
 
 **The reverse direction (`crate::diff_shape::symbol_id_for_scroll_line`,
-ADR 0030) resolves a scroll position to a symbol by new-side line number,
-not by section membership.** Given the scroll line, find which hunk (by
-`hunk_start_lines`' boundary table) the line falls inside, derive that
-line's new-side line number (`new_side_line_numbers`, already used by
-`crate::ui::diff_pane` for annotation-marker lookups), and find the
-symbol whose `LineRange` contains it. A scroll position inside a hunk
-that intersects no symbol resolves to `None`, same as before — ADR 0030's
-own "leave the tree cursor untouched rather than guess" rule for this
-case is unchanged, it is only computed a different way.
+ADR 0030) resolves a scroll position to a symbol by whole-hunk
+intersection, not by section membership.** Given the scroll line, find
+which hunk's rendered span (header row through its last body row,
+inclusive — `hunk_start_lines`' boundary table) it falls inside, then
+return the first symbol (source order) whose `LineRange` intersects that
+hunk via `hunk_intersects`' existing half-open rule — the same
+"first-intersecting" pairing `section_start_line_for_symbol` uses in the
+opposite direction, so a hunk owned by exactly one symbol resolves
+consistently both ways. Whole-hunk intersection rather than a per-line
+new-side-number lookup is deliberate: the scroll target a symbol
+selection lands on is a hunk's *header* row (no line number of its own),
+so a per-line lookup would fail to resolve the exact row auto-scroll just
+placed the reviewer on — the regression this ADR's own dynamic
+verification caught in `scroll_sync_wrap_tests.rs`. A scroll position
+inside a hunk that intersects no symbol resolves to `None`, same as
+before — ADR 0030's own "leave the tree cursor untouched rather than
+guess" rule for this case is unchanged, it is only computed a different
+way.
 
 **`]c`/`[c` walk plain hunk boundaries.** `hunk_start_lines` becomes a
 direct one-entry-per-hunk walk over `DiffPaneContent::File`'s flat list —
@@ -102,6 +111,16 @@ amendment). `crate::event_loop`'s `effective_diff_view_mode` threading
 into `ui::DrawOutcome` stays — it still governs ADR 0044 decision 7's
 narrow-terminal split-to-unified fallback — but no longer needs to reach
 `diff_shape` at all.
+
+**The pane header's `range:` line now always covers the whole file, not
+just the selected symbol.** Before this ADR, a symbol-row selection
+scoped `diff_pane_header_lines`' changed-line-ranges summary to that one
+symbol's own sections (`App::selected_diff_focus`-filtered), while a
+file-row selection covered every section. Since content itself is now
+identical for both row kinds (whole file, always), keeping a
+narrower-than-shown range summary on a symbol row would misdescribe the
+body actually on screen — the header now always summarizes every hunk in
+the file, matching what the pane body always renders.
 
 **Unified/split rendering, highlighting, and the `MIN_SPLIT_VIEW_WIDTH`
 fallback are unaffected.** `diff_pane_lines`/`diff_pane_split_rows` keep
