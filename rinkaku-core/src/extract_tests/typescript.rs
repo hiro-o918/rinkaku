@@ -339,6 +339,9 @@ enum Color {
     assert_eq!(expected, actual);
 }
 
+// NOTE: in both tests below, `area` is untouched by the diff and is
+// dropped from the reported class signature entirely, body and
+// signature line alike (ADR 0071).
 #[test]
 fn should_extract_class_signature_with_untouched_method_dropped_when_field_changed() {
     let source = "\
@@ -359,9 +362,6 @@ class Circle {
         id: String::new(),
         name: "Circle".to_string(),
         kind: SymbolKind::Class,
-        // `area` never touched by this diff, dropped entirely along
-        // with its body (ADR 0071) rather than kept as a bare
-        // signature line.
         signature: "class Circle {\n    radius: number;\n\n}".to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
@@ -400,8 +400,6 @@ class Circle {
         id: String::new(),
         name: "Circle".to_string(),
         kind: SymbolKind::Class,
-        // `area` never touched by this diff, dropped along with the
-        // comments (ADR 0071).
         signature: "class Circle {\n\n    radius: number;\n\n}".to_string(),
         range: LineRange { start: 1, end: 8 },
         container: None,
@@ -645,8 +643,7 @@ abstract class Shape {
         id: String::new(),
         name: "Shape".to_string(),
         kind: SymbolKind::Class,
-        // Neither member overlaps the touched line, so both are
-        // dropped (ADR 0071), leaving only the header.
+        // Neither member overlaps the touched line (ADR 0071).
         signature: "abstract class Shape {\n\n}".to_string(),
         range: LineRange { start: 1, end: 4 },
         container: None,
@@ -738,6 +735,73 @@ const Component = () => {
         previous_signature: None,
     }];
     let actual = extract_changed_symbols(source, lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// NOTE: in both tests below, `string` is TypeScript's built-in
+// `predefined_type`, not captured by the reference query (same as
+// `number` in sibling tests above).
+#[test]
+fn should_drop_two_untouched_same_line_abstract_methods_when_field_changed() {
+    let source = "\
+abstract class Shape {
+    label: string;
+
+    abstract area(): number; abstract perimeter(): number;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Shape".to_string(),
+        kind: SymbolKind::Class,
+        signature: "abstract class Shape {\n    label: string;\n\n}".to_string(),
+        range: LineRange { start: 1, end: 5 },
+        container: None,
+        referenced_names: vec!["Shape".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_drop_three_untouched_same_line_abstract_methods_when_field_changed() {
+    let source = "\
+abstract class Shape {
+    label: string;
+
+    abstract area(): number; abstract perimeter(): number; abstract volume(): number;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Shape".to_string(),
+        kind: SymbolKind::Class,
+        signature: "abstract class Shape {\n    label: string;\n\n}".to_string(),
+        range: LineRange { start: 1, end: 5 },
+        container: None,
+        referenced_names: vec!["Shape".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
     assert_eq!(expected, actual);
 }
