@@ -79,11 +79,11 @@ override it:
 
 `with_definition_nodes` (`extract/mod.rs`) computes each captured
 node's extended span once, right after the query match, and wraps the
-result in a small value type (`extract::definition_span::Definition`)
-carrying the original node plus the span's start byte/row. Every
+result in a small value type (`extract::definition_span::DefinitionNode`)
+carrying the original node plus the span's start byte/row/column. Every
 downstream consumer that today reads a bare node's own
 `start_byte()`/`start_position()` for range or slicing purposes reads
-the `Definition`'s span-start instead:
+the `DefinitionNode`'s span-start instead:
 
 - the touched/overlap check (`node_to_line_range`, feeding
   `extract_changed_symbols`'s filter)
@@ -97,13 +97,21 @@ the `Definition`'s span-start instead:
   decorator.
 
 `collect_referenced_names` (`extract/references.rs`) is **not**
-changed — it still walks the inner (undecorated) node's subtree only.
-A decorator/attribute's own arguments (`@app.route("/x")`,
-`#[serde(rename = "y")]`) are not scanned for references; this is
-deliberately deferred, not silently dropped, since decorator arguments
-are a distinct, lower-confidence reference shape (often configuration
-values, not symbol names) that deserves its own decision if it turns
-out to matter in practice.
+changed — it is still called with the original (unwidened) node, so a
+Python decorator or Rust attribute — sitting outside that node's own
+subtree — contributes nothing to `referenced_names`/
+`referenced_method_names` either before or after this decision. A
+decorator/attribute's own arguments (`@app.route("/x")`,
+`#[serde(rename = "y")]`) are not scanned for references for these two
+languages; this is deliberately deferred, not silently dropped, since
+decorator arguments are a distinct, lower-confidence reference shape
+(often configuration values, not symbol names) that deserves its own
+decision if it turns out to matter in practice. TypeScript already
+diverges from this by construction and is unaffected: its decorator
+sits *inside* `class_declaration`'s own subtree (the same grammar
+accident this ADR's Context section describes), so `Component` in
+`@Component() class Widget {}` was already collected as a reference
+before this decision and continues to be.
 
 ## Alternatives
 
