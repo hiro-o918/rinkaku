@@ -7,14 +7,29 @@
 
 use crate::diff::LineRange;
 use crate::language::LanguageSupport;
+use container_slice::untouched_member_ranges;
 use hcl::{build_hcl_locals_symbols, hcl_block_name, hcl_block_type};
 use references::collect_referenced_names;
 use serde::Serialize;
 use std::collections::HashMap;
 use tree_sitter::StreamingIterator;
 
+mod container_slice;
 mod hcl;
 mod references;
+
+/// Threaded through `build_symbols`/`build_symbol`/`slice_signature` only
+/// by `extract_changed_symbols` (ADR 0071) — `extract_all_symbols` and HCL
+/// `locals` expansion pass `None`, keeping their signatures whole
+/// regardless of any diff, since neither has a "this diff's touched lines"
+/// concept to narrow by (see [`untouched_member_ranges`]'s doc comment for
+/// why: `extract_all_symbols` indexes every definition in a file
+/// independent of any diff).
+#[derive(Clone, Copy)]
+struct TouchedContext<'a> {
+    all_definition_nodes: &'a [tree_sitter::Node<'a>],
+    changed_ranges: &'a [LineRange],
+}
 
 /// The kind of symbol a definition node represents, expressed in
 /// language-neutral terms so callers don't need to match on
@@ -207,6 +222,10 @@ pub fn extract_changed_symbols(
             .copied()
             .filter(|node| overlaps_any(node_to_line_range(*node), changed_ranges))
             .collect();
+        let touched_context = TouchedContext {
+            all_definition_nodes: all_nodes,
+            changed_ranges,
+        };
 
         touched_nodes
             .iter()
@@ -225,7 +244,15 @@ pub fn extract_changed_symbols(
                     .iter()
                     .any(|other| other != *node && is_descendant_of(*other, **node))
             })
-            .flat_map(|node| build_symbols(*node, source_bytes, reference_query, lang))
+            .flat_map(|node| {
+                build_symbols(
+                    *node,
+                    source_bytes,
+                    reference_query,
+                    lang,
+                    Some(touched_context),
+                )
+            })
             .filter(|symbol| overlaps_any(symbol.range, changed_ranges))
             .collect()
     })
@@ -247,7 +274,7 @@ pub fn extract_all_symbols(source: &str, lang: &dyn LanguageSupport) -> Vec<Extr
     with_definition_nodes(source, lang, |all_nodes, source_bytes, reference_query| {
         all_nodes
             .iter()
-            .flat_map(|node| build_symbols(*node, source_bytes, reference_query, lang))
+            .flat_map(|node| build_symbols(*node, source_bytes, reference_query, lang, None))
             .collect()
     })
 }
@@ -317,6 +344,19 @@ pub struct RemovedSymbol {
 /// reflow-only difference (indentation, line wrapping) must be normalized
 /// away here to avoid a false `SignatureChanged`, same as ADR 0014 already
 /// required before display signatures went multi-line.
+///
+/// A head symbol's own `signature` is not necessarily what gets compared:
+/// a reported container's `signature` may be narrowed to only its touched
+/// member lines (ADR 0071), which would never textually match a
+/// same-container base symbol's always-whole-class signature even when
+/// nothing else about the class actually changed. The comparison instead
+/// looks up each head symbol's `(name, container)` identity in
+/// `all_head_symbols` — the file's complete, un-narrowed symbol set
+/// already threaded through for the removal check above — and compares
+/// *that* signature, falling back to `symbol.signature` itself when no
+/// `all_head_symbols` entry exists (defensive; every `head_symbols` entry
+/// is expected to have one, since it is by construction a subset of the
+/// same file's complete symbol set).
 pub fn classify_symbols(
     head_symbols: &mut [ExtractedSymbol],
     base_symbols: &[ExtractedSymbol],
@@ -328,6 +368,10 @@ pub fn classify_symbols(
         .iter()
         .map(|s| ((s.name.as_str(), s.container.as_deref()), s))
         .collect();
+    let all_head_by_identity: HashMap<(&str, Option<&str>), &ExtractedSymbol> = all_head_symbols
+        .iter()
+        .map(|s| ((s.name.as_str(), s.container.as_deref()), s))
+        .collect();
 
     for symbol in head_symbols.iter_mut() {
         let identity = (symbol.name.as_str(), symbol.container.as_deref());
@@ -336,8 +380,11 @@ pub fn classify_symbols(
                 symbol.classification = Some(Classification::Added);
             }
             Some(base_symbol) => {
+                let comparison_signature = all_head_by_identity
+                    .get(&identity)
+                    .map_or(symbol.signature.as_str(), |s| s.signature.as_str());
                 if normalize_for_comparison(&base_symbol.signature)
-                    == normalize_for_comparison(&symbol.signature)
+                    == normalize_for_comparison(comparison_signature)
                 {
                     symbol.classification = Some(Classification::BodyOnly);
                 } else {
@@ -424,7 +471,7 @@ fn with_definition_nodes<T>(
 }
 
 /// Whether `node` is strictly nested inside `ancestor` in the syntax tree.
-fn is_descendant_of(node: tree_sitter::Node, ancestor: tree_sitter::Node) -> bool {
+pub(super) fn is_descendant_of(node: tree_sitter::Node, ancestor: tree_sitter::Node) -> bool {
     let mut current = node.parent();
     while let Some(parent) = current {
         if parent == ancestor {
@@ -438,7 +485,7 @@ fn is_descendant_of(node: tree_sitter::Node, ancestor: tree_sitter::Node) -> boo
 /// Converts a tree-sitter node's byte-oriented row span into a 1-based
 /// inclusive [`LineRange`], matching the convention `diff::parse_unified_diff`
 /// uses for new-side line numbers.
-fn node_to_line_range(node: tree_sitter::Node) -> LineRange {
+pub(super) fn node_to_line_range(node: tree_sitter::Node) -> LineRange {
     LineRange {
         start: node.start_position().row + 1,
         end: node.end_position().row + 1,
@@ -446,7 +493,7 @@ fn node_to_line_range(node: tree_sitter::Node) -> LineRange {
 }
 
 /// Whether `range` shares at least one line with any range in `others`.
-fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
+pub(super) fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
     others
         .iter()
         .any(|other| range.start <= other.end && other.start <= range.end)
@@ -465,12 +512,13 @@ fn build_symbols(
     source: &[u8],
     reference_query: &tree_sitter::Query,
     lang: &dyn LanguageSupport,
+    touched: Option<TouchedContext>,
 ) -> Vec<ExtractedSymbol> {
     if node.kind() == "block" && hcl_block_type(node, source).as_deref() == Some("locals") {
         return build_hcl_locals_symbols(node, source, reference_query, lang);
     }
 
-    build_symbol(node, source, reference_query, lang)
+    build_symbol(node, source, reference_query, lang, touched)
         .into_iter()
         .collect()
 }
@@ -484,10 +532,11 @@ fn build_symbol(
     source: &[u8],
     reference_query: &tree_sitter::Query,
     lang: &dyn LanguageSupport,
+    touched: Option<TouchedContext>,
 ) -> Option<ExtractedSymbol> {
     let kind = symbol_kind(node, source)?;
     let name = definition_name(node, source)?;
-    let signature = slice_signature(node, source);
+    let signature = slice_signature(node, source, touched);
     let container = find_container(node, source);
     let references = collect_referenced_names(node, source, reference_query);
     let is_test = lang.is_test_definition(node, source);
@@ -606,16 +655,19 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 ///   implementation sense — their fields/variants/method signatures *are*
 ///   the API surface — so the whole node text is kept.
 /// - `class_definition` (Python), `class_declaration` /
-///   `abstract_class_declaration` (TS): the whole class text is kept
-///   (field/method signatures are the API surface, same as
-///   struct/interface), but nested method *bodies* — including a class
-///   field whose value is an arrow function, e.g. `area = (): number => {
-///   ... }` — are stripped so a class reads as a list of member signatures
-///   rather than full implementations. A per-method signature listing
-///   (rather than "whole class minus method bodies") would be more precise
-///   but adds real complexity — e.g. reconciling which subset of members to
-///   show when only one changed — that v1 defers; see the module-level
-///   rationale in `language/python.rs` and `language/typescript.rs`.
+///   `abstract_class_declaration` (TS): the class header plus member
+///   signatures are kept (field/method signatures are the API surface,
+///   same as struct/interface), but nested method *bodies* — including a
+///   class field whose value is an arrow function, e.g. `area = (): number
+///   => { ... }` — are stripped so a class reads as a list of member
+///   signatures rather than full implementations. When `touched` is
+///   `Some` (only `extract_changed_symbols` passes this — see
+///   [`TouchedContext`]), a member with no line overlapping
+///   `TouchedContext::changed_ranges` is dropped from the signature
+///   entirely, header and all (ADR 0071): a container is only ever
+///   reported as a symbol because some body-level line of its own was
+///   touched, so an unrelated, untouched method or nested class adds
+///   nothing but noise to that report.
 ///
 /// Comment nodes (`line_comment`/`block_comment` in Rust, `comment` in
 /// Go/Python/TypeScript — see [`is_comment_node`]) inside the kept range are
@@ -625,7 +677,11 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 /// signature-string equality fire incorrectly. This is a pre-1.0 output
 /// change sanctioned by the ADR — some previously-reported signature strings
 /// that contained inline comments now omit them.
-fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
+fn slice_signature(
+    node: tree_sitter::Node,
+    source: &[u8],
+    touched: Option<TouchedContext>,
+) -> String {
     let first_line_column = node.start_position().column;
 
     if matches!(
@@ -634,6 +690,14 @@ fn slice_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     ) {
         let mut removed_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         collect_method_body_ranges(node, &mut removed_ranges);
+        if let Some(touched) = touched {
+            removed_ranges.extend(untouched_member_ranges(
+                node,
+                touched.all_definition_nodes,
+                touched.changed_ranges,
+                source,
+            ));
+        }
         collect_comment_ranges(node, source, &removed_ranges.clone(), &mut removed_ranges);
         return tidy_signature_lines(
             &text_with_ranges_removed(node, source, removed_ranges),

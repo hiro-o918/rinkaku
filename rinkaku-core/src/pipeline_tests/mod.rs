@@ -57,6 +57,11 @@
 //!   stoplisted receiver call creates no graph edge while the same-named
 //!   trait method spec still links to its implementation via
 //!   `referenced_method_names`.
+//! - [`container_slice_regression`] — ADR 0071 end-to-end: a reported
+//!   container's signature narrows to touched member lines, and ADR 0014
+//!   classification (`BodyOnly`/`SignatureChanged`) stays correct despite
+//!   the head-side signature no longer matching the base side's shape
+//!   byte-for-byte.
 
 use std::collections::HashMap;
 
@@ -64,6 +69,7 @@ mod analyze_diff;
 mod analyze_repo;
 mod classification_wiring;
 mod collect_referenced_names;
+mod container_slice_regression;
 mod file_size_warnings;
 mod generated_exclusion;
 mod go_receiver_regression;

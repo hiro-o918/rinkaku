@@ -5,7 +5,10 @@
 //! [`super::Classification::SignatureChanged`] /
 //! [`super::Classification::BodyOnly`]) and returns any base-only
 //! symbols whose base-side range overlaps `old_changed_ranges` as
-//! [`super::RemovedSymbol`]s.
+//! [`super::RemovedSymbol`]s. Also pins ADR 0071's `all_head_symbols`
+//! comparison lookup, which keeps classification correct when a
+//! container's own `signature` has been narrowed to its touched member
+//! lines.
 
 use super::*;
 use pretty_assertions::assert_eq;
@@ -58,6 +61,86 @@ fn should_classify_as_added_when_no_base_side_match_exists() {
         LineRange { start: 1, end: 3 },
     )];
     expected[0].classification = Some(Classification::Added);
+    let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+    assert_eq!(expected, head);
+    assert_eq!(expected_removed, removed);
+}
+
+// ADR 0071: a reported container's own `signature` may be narrowed to
+// only its touched member lines, but `all_head_symbols` still carries
+// that same symbol's whole, un-narrowed signature (as `extract_all_symbols`
+// always produces). Classification must compare the whole-class text
+// from `all_head_symbols`, not `head`'s own narrowed `signature` field —
+// otherwise a container whose base-side counterpart's whole-class text is
+// identical would spuriously classify `SignatureChanged` purely because
+// the head-side display text is shorter.
+#[test]
+fn should_classify_as_body_only_using_all_head_symbols_whole_signature_when_head_signature_is_narrowed()
+ {
+    let mut head = vec![symbol(
+        "Widget",
+        None,
+        // The narrowed, touched-lines-only display signature ADR 0071
+        // produces for a container — deliberately missing `move`'s
+        // signature line that both `all_head`/`base` still carry.
+        "class Widget:\n    label = \"a\"",
+        LineRange { start: 1, end: 6 },
+    )];
+    let all_head = vec![symbol(
+        "Widget",
+        None,
+        "class Widget:\n    label = \"a\"\n\n    def move(self, dx, dy):",
+        LineRange { start: 1, end: 6 },
+    )];
+    let base = vec![symbol(
+        "Widget",
+        None,
+        "class Widget:\n    label = \"a\"\n\n    def move(self, dx, dy):",
+        LineRange { start: 1, end: 6 },
+    )];
+
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "widget.py");
+
+    let mut expected = head.clone();
+    expected[0].classification = Some(Classification::BodyOnly);
+    let expected_removed: Vec<RemovedSymbol> = Vec::new();
+
+    assert_eq!(expected, head);
+    assert_eq!(expected_removed, removed);
+}
+
+// Companion: when the whole-class text in `all_head_symbols` actually
+// differs from the base side (not just narrower for display), the real
+// difference must still surface as `SignatureChanged`.
+#[test]
+fn should_classify_as_signature_changed_using_all_head_symbols_whole_signature_when_it_actually_differs()
+ {
+    let mut head = vec![symbol(
+        "Widget",
+        None,
+        "class Widget:\n    label = \"b\"",
+        LineRange { start: 1, end: 6 },
+    )];
+    let all_head = vec![symbol(
+        "Widget",
+        None,
+        "class Widget:\n    label = \"b\"\n\n    def move(self, dx, dy):",
+        LineRange { start: 1, end: 6 },
+    )];
+    let base = vec![symbol(
+        "Widget",
+        None,
+        "class Widget:\n    label = \"a\"\n\n    def move(self, dx, dy):",
+        LineRange { start: 1, end: 6 },
+    )];
+
+    let removed = classify_symbols(&mut head, &base, &all_head, &[], "widget.py");
+
+    let mut expected = head.clone();
+    expected[0].classification = Some(Classification::SignatureChanged);
+    expected[0].previous_signature =
+        Some("class Widget:\n    label = \"a\"\n\n    def move(self, dx, dy):".to_string());
     let expected_removed: Vec<RemovedSymbol> = Vec::new();
 
     assert_eq!(expected, head);

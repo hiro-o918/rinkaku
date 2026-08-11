@@ -190,7 +190,7 @@ def decorated(a):
 }
 
 #[test]
-fn should_extract_class_signature_with_method_bodies_stripped_when_field_changed() {
+fn should_extract_class_signature_with_untouched_method_dropped_when_field_changed() {
     let source = "\
 class Point:
     x: int
@@ -209,8 +209,11 @@ class Point:
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Point:\n    x: int\n    y: int\n\n    def __init__(self, x, y):"
-            .to_string(),
+        // `__init__` never touched by this diff, so its signature
+        // line is dropped entirely along with its body (ADR 0071)
+        // rather than kept the way `slice_signature` used to keep
+        // every member unconditionally.
+        signature: "class Point:\n    x: int\n    y: int".to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
         // "int" is the shared field-annotation type of both `x`
@@ -250,8 +253,9 @@ class Point:
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Point:\n\n    x: int\n    y: int\n\n    def __init__(self, x, y):"
-            .to_string(),
+        // `__init__` untouched by this diff, dropped along with the
+        // comment (ADR 0071).
+        signature: "class Point:\n\n    x: int\n    y: int".to_string(),
         range: LineRange { start: 1, end: 8 },
         container: None,
         referenced_names: vec!["int".to_string()],

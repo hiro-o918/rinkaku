@@ -340,7 +340,7 @@ enum Color {
 }
 
 #[test]
-fn should_extract_class_signature_with_method_bodies_stripped_when_field_changed() {
+fn should_extract_class_signature_with_untouched_method_dropped_when_field_changed() {
     let source = "\
 class Circle {
     radius: number;
@@ -359,7 +359,10 @@ class Circle {
         id: String::new(),
         name: "Circle".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Circle {\n    radius: number;\n\n    area(): number\n}".to_string(),
+        // `area` never touched by this diff, dropped entirely along
+        // with its body (ADR 0071) rather than kept as a bare
+        // signature line.
+        signature: "class Circle {\n    radius: number;\n\n}".to_string(),
         range: LineRange { start: 1, end: 7 },
         container: None,
         referenced_names: vec!["Circle".to_string()],
@@ -397,7 +400,9 @@ class Circle {
         id: String::new(),
         name: "Circle".to_string(),
         kind: SymbolKind::Class,
-        signature: "class Circle {\n\n    radius: number;\n\n    area(): number\n}".to_string(),
+        // `area` never touched by this diff, dropped along with the
+        // comments (ADR 0071).
+        signature: "class Circle {\n\n    radius: number;\n\n}".to_string(),
         range: LineRange { start: 1, end: 8 },
         container: None,
         referenced_names: vec!["Circle".to_string()],
@@ -624,7 +629,7 @@ abstract class Shape {
 }
 
 #[test]
-fn should_extract_abstract_class_signature_when_no_member_line_specifically_changed() {
+fn should_extract_abstract_class_header_only_when_no_member_line_specifically_changed() {
     let source = "\
 abstract class Shape {
     abstract area(): number;
@@ -640,9 +645,9 @@ abstract class Shape {
         id: String::new(),
         name: "Shape".to_string(),
         kind: SymbolKind::Class,
-        signature:
-            "abstract class Shape {\n    abstract area(): number;\n    abstract perimeter(): number;\n}"
-                .to_string(),
+        // Neither member overlaps the touched line, so both are
+        // dropped (ADR 0071), leaving only the header.
+        signature: "abstract class Shape {\n\n}".to_string(),
         range: LineRange { start: 1, end: 4 },
         container: None,
         referenced_names: vec!["Shape".to_string()],
