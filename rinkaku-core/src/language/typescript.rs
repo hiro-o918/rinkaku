@@ -118,6 +118,10 @@ impl LanguageSupport for TypeScriptSupport {
     fn is_test_path(&self, path: &str) -> bool {
         is_test_path(path)
     }
+
+    fn definition_span_start<'a>(&self, node: tree_sitter::Node<'a>) -> tree_sitter::Node<'a> {
+        exported_decorator_span_start(node)
+    }
 }
 
 /// Common test-file convention checked by both grammars: `.test.ts(x)` /
@@ -158,6 +162,32 @@ impl LanguageSupport for TsxSupport {
 
     fn is_test_path(&self, path: &str) -> bool {
         is_test_path(path)
+    }
+
+    fn definition_span_start<'a>(&self, node: tree_sitter::Node<'a>) -> tree_sitter::Node<'a> {
+        exported_decorator_span_start(node)
+    }
+}
+
+/// Widens `node`'s span to its enclosing `export_statement`'s earliest
+/// `decorator` field when present (ADR 0073 amendment): unlike a
+/// non-exported `class_declaration`, whose decorator is grammar-nested as
+/// its own child and thus already inside its span, `export class Foo {}`
+/// attaches the decorator to the *`export_statement`* wrapper instead, so
+/// it falls outside `class_declaration`'s span the same way Python's
+/// `decorated_definition` wrapper does. Returns `node` unchanged when the
+/// parent is an `export_statement` with no decorator — an export with no
+/// decorator must not pull the `export` keyword into the signature.
+fn exported_decorator_span_start(node: tree_sitter::Node) -> tree_sitter::Node {
+    let Some(parent) = node.parent() else {
+        return node;
+    };
+    if parent.kind() != "export_statement" {
+        return node;
+    }
+    match parent.child_by_field_name("decorator") {
+        Some(decorator) => decorator,
+        None => node,
     }
 }
 

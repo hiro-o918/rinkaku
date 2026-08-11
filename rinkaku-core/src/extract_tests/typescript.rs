@@ -422,6 +422,115 @@ class Widget {
     assert_eq!(expected, actual);
 }
 
+// `export class` puts the decorator on the enclosing `export_statement`,
+// not on `class_declaration` itself (unlike the non-exported case pinned
+// above), so this needs `TypeScriptSupport`'s `definition_span_start`
+// override (ADR 0073) to be detected and included in the signature.
+#[test]
+fn should_detect_change_when_only_exported_class_decorator_line_changed() {
+    let source = "\
+@Component()
+export class Widget {
+    label: string;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Widget".to_string(),
+        kind: SymbolKind::Class,
+        signature: "@Component()\nexport class Widget {\n    label: string;\n}".to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        referenced_names: vec!["Widget".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// `export @Component() class` (decorator written after the `export`
+// keyword) parses the decorator as a child of `class_declaration` itself,
+// the same grammar shape as the non-exported case — already covered by
+// `definition_span_start`'s default (no widening needed), so this is
+// detected without going through `exported_decorator_span_start` at all.
+// `class_declaration`'s own span starts at the decorator, not at
+// `export`, so the leading `export` keyword is outside it and stays out
+// of the signature (unlike the `@dec\nexport class` ordering above, whose
+// decorator is truly outside the node and needs the override to be
+// included).
+#[test]
+fn should_detect_change_when_decorator_follows_export_keyword() {
+    let source = "\
+export @Component()
+class Widget {
+    label: string;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Widget".to_string(),
+        kind: SymbolKind::Class,
+        signature: "@Component()\nclass Widget {\n    label: string;\n}".to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        referenced_names: vec!["Component".to_string(), "Widget".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// Pins that a plain `export class` (no decorator) keeps today's
+// signature text unchanged — `export` must not leak into the span start
+// just because the definition sits inside an `export_statement`.
+#[test]
+fn should_not_include_export_keyword_when_exported_class_has_no_decorator() {
+    let source = "\
+export class Widget {
+    label: string;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Widget".to_string(),
+        kind: SymbolKind::Class,
+        signature: "class Widget {\n    label: string;\n}".to_string(),
+        range: LineRange { start: 1, end: 3 },
+        container: None,
+        referenced_names: vec!["Widget".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
 // ADR 0014: both `//` and `/* */` comments in this grammar parse
 // under the same `comment` node kind (unlike Rust's split), and
 // both must be stripped from a class signature.

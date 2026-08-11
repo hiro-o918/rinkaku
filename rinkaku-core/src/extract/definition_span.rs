@@ -71,6 +71,7 @@ mod tests {
     use super::*;
     use crate::language::python::PythonSupport;
     use crate::language::rust::RustSupport;
+    use crate::language::typescript::TypeScriptSupport;
     use pretty_assertions::assert_eq;
 
     fn parse<'a>(
@@ -146,8 +147,40 @@ mod tests {
 
         let actual = DefinitionNode::new(struct_node, &lang);
 
-        // Line 2 is the `#[derive(Debug)]` line — the comment on line 1
-        // must stay outside the span.
         assert_eq!(LineRange { start: 2, end: 5 }, actual.line_range());
+    }
+
+    #[test]
+    fn should_widen_span_to_decorator_when_typescript_exported_class_is_decorated() {
+        let source = "@Component()\nexport class Widget {\n    label: string;\n}\n";
+        let mut parser = tree_sitter::Parser::new();
+        let lang = TypeScriptSupport;
+        let tree = parse(&mut parser, lang.grammar(), source);
+        let export_statement = tree.root_node().named_child(0).unwrap();
+        assert_eq!("export_statement", export_statement.kind());
+        let class_node = export_statement.child_by_field_name("declaration").unwrap();
+        assert_eq!("class_declaration", class_node.kind());
+
+        let actual = DefinitionNode::new(class_node, &lang);
+
+        assert_eq!(0, actual.span_start_byte());
+        assert_eq!(LineRange { start: 1, end: 4 }, actual.line_range());
+    }
+
+    #[test]
+    fn should_not_widen_span_when_typescript_exported_class_is_undecorated() {
+        let source = "export class Widget {\n    label: string;\n}\n";
+        let mut parser = tree_sitter::Parser::new();
+        let lang = TypeScriptSupport;
+        let tree = parse(&mut parser, lang.grammar(), source);
+        let export_statement = tree.root_node().named_child(0).unwrap();
+        assert_eq!("export_statement", export_statement.kind());
+        let class_node = export_statement.child_by_field_name("declaration").unwrap();
+        assert_eq!("class_declaration", class_node.kind());
+
+        let actual = DefinitionNode::new(class_node, &lang);
+
+        assert_eq!(class_node.start_byte(), actual.span_start_byte());
+        assert_eq!(LineRange { start: 1, end: 3 }, actual.line_range());
     }
 }

@@ -30,15 +30,26 @@ falls outside every reported definition's row range, so
 signature (when it *is* reported for some other reason) never includes
 the decorator/attribute text.
 
-TypeScript does not have this problem, but not by design: its grammar
-attaches a decorator as a child of `class_declaration` itself
-(`(decorator) (class) name: (type_identifier) ...`), so it is already
-inside the captured node's row range and already inside the text
-`slice_signature` keeps. This is a grammar-shape accident, not a
-deliberate choice recorded anywhere — Python and Rust's current
-"decorator-blind" behavior is the actual v1 simplification (Python's
-`DEFINITION_QUERY` doc comment says so explicitly), and this ADR closes
-that gap so all three languages behave the same way.
+A non-exported TypeScript class does not have this problem, but not by
+design: its grammar attaches a decorator as a child of
+`class_declaration` itself (`(decorator) (class) name:
+(type_identifier) ...`), so it is already inside the captured node's
+row range and already inside the text `slice_signature` keeps. This is
+a grammar-shape accident, not a deliberate choice recorded anywhere —
+Python and Rust's current "decorator-blind" behavior is the actual v1
+simplification (Python's `DEFINITION_QUERY` doc comment says so
+explicitly), and this ADR closes that gap so all three languages behave
+the same way.
+
+An `export`ed TypeScript class does *not* share this accident: the
+grammar instead attaches the decorator to the enclosing
+`export_statement` (`(export_statement decorator: (decorator ...)
+declaration: (class_declaration ...))`), one level higher than the
+`class_declaration` node `DEFINITION_QUERY` captures. `export class Foo
+{}` is the common case in Angular/NestJS-style decorated classes, so
+this is not a corner case — a decorator-only change on an exported
+class was invisible in the same way Python/Rust's was, and needs the
+same widening `PythonSupport`/`RustSupport` already have.
 
 ## Decision
 
@@ -50,9 +61,9 @@ fn definition_span_start<'a>(&self, node: Node<'a>) -> Node<'a> {
 }
 ```
 
-Default implementation returns `node` unchanged — Go, TypeScript, and
-HCL keep exactly today's behavior with zero code. Python and Rust
-override it:
+Default implementation returns `node` unchanged — Go and HCL keep
+exactly today's behavior with zero code (neither has decorator/attribute
+syntax at all). Python, Rust, and TypeScript override it:
 
 - **Python**: if `node`'s parent is `decorated_definition`, return that
   parent. This also covers a class method's own decorator, since
@@ -76,6 +87,19 @@ override it:
   walk instead answers "which lines belong to this definition", where
   a comment in between is content that must stay outside the span for
   the pin above to hold.
+- **TypeScript**: if `node`'s parent is `export_statement` and it has a
+  `decorator` field, return the earliest decorator (`export_statement`'s
+  `decorator` field is `multiple: true` for stacked decorators, and
+  `child_by_field_name` already returns the first one in source order).
+  Returns `node` unchanged when the parent is an `export_statement` with
+  no `decorator` field — an undecorated `export class Foo {}` must not
+  pull the `export` keyword into the span, since it belongs to
+  `export_statement`, not to `class_declaration` itself. A non-exported
+  decorated class, or the `export @Dec() class Foo {}` ordering (the
+  grammar accepts the decorator either before or after `export`), needs
+  no override at all: both put the decorator inside
+  `class_declaration`'s own span already, per the grammar-accident
+  behavior described above.
 
 `with_definition_nodes` (`extract/mod.rs`) computes each captured
 node's extended span once, right after the query match, and wraps the
@@ -106,12 +130,16 @@ decorator/attribute's own arguments (`@app.route("/x")`,
 languages; this is deliberately deferred, not silently dropped, since
 decorator arguments are a distinct, lower-confidence reference shape
 (often configuration values, not symbol names) that deserves its own
-decision if it turns out to matter in practice. TypeScript already
-diverges from this by construction and is unaffected: its decorator
-sits *inside* `class_declaration`'s own subtree (the same grammar
-accident this ADR's Context section describes), so `Component` in
-`@Component() class Widget {}` was already collected as a reference
-before this decision and continues to be.
+decision if it turns out to matter in practice. A non-exported
+TypeScript class's decorator already diverges from this by construction
+and is unaffected: it sits *inside* `class_declaration`'s own subtree
+(the same grammar accident this ADR's Context section describes), so
+`Component` in `@Component() class Widget {}` was already collected as
+a reference before this decision and continues to be. An exported
+class's decorator (`@Component()\nexport class Widget {}`) sits outside
+`class_declaration`'s subtree the same way Python/Rust's do, so it is
+subject to the same deferral: `Component` is not collected as a
+reference for the exported form, unlike the non-exported form.
 
 ## Alternatives
 
@@ -147,9 +175,10 @@ before this decision and continues to be.
   attribute(s) even when the diff that triggered the report touched
   only the `def`/`class`/`fn`/`struct` line itself, not the
   decorator — this widens what today's tests pin as the expected
-  signature text for every decorated/attributed Python and Rust
-  fixture, a deliberate, one-time output-shape change accepted as part
-  of this ADR (not something call sites need to opt into).
+  signature text for every decorated/attributed Python, Rust, and
+  exported-TypeScript-class fixture, a deliberate, one-time
+  output-shape change accepted as part of this ADR (not something call
+  sites need to opt into).
 - A Python class method's decorator-only change now surfaces the
   method itself as the narrowest touched definition (per the existing
   narrowest-enclosing-definition rule), not the whole enclosing class —
