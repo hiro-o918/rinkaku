@@ -85,8 +85,10 @@ fn should_add_two_numbers() {
                 id: "src/lib.rs::should_add_two_numbers".to_string(),
                 name: "should_add_two_numbers".to_string(),
                 kind: SymbolKind::Function,
-                signature: "fn should_add_two_numbers()".to_string(),
-                range: LineRange { start: 2, end: 4 },
+                // The `#[test]` attribute is included in the signature
+                // and the reported range starts at its line (ADR 0073).
+                signature: "#[test]\nfn should_add_two_numbers()".to_string(),
+                range: LineRange { start: 1, end: 4 },
                 container: None,
                 referenced_names: vec![],
                 referenced_method_names: vec![],

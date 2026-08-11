@@ -62,6 +62,9 @@
 //!   classification (`BodyOnly`/`SignatureChanged`) stays correct despite
 //!   the head-side signature no longer matching the base side's shape
 //!   byte-for-byte.
+//! - [`decorator_attribute_span_regression`] — ADR 0073 end-to-end: a
+//!   diff touching only a Python decorator or Rust attribute line is
+//!   detected and classified `SignatureChanged` via `analyze_diff`.
 
 use std::collections::HashMap;
 
@@ -70,6 +73,7 @@ mod analyze_repo;
 mod classification_wiring;
 mod collect_referenced_names;
 mod container_slice_regression;
+mod decorator_attribute_span_regression;
 mod file_size_warnings;
 mod generated_exclusion;
 mod go_receiver_regression;

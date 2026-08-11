@@ -117,12 +117,11 @@ fn should_add_two_numbers() {
         id: String::new(),
         name: "should_add_two_numbers".to_string(),
         kind: SymbolKind::Function,
-        signature: "fn should_add_two_numbers()".to_string(),
-        // Note: the `function_item` node's own range starts at the
-        // `fn` line, not the `#[test]` attribute line above it — same
-        // convention as Python's decorator handling (see
-        // `should_not_detect_change_when_only_decorator_line_changed`).
-        range: LineRange { start: 2, end: 4 },
+        // The `#[test]` attribute is included in the signature and the
+        // reported range starts at its line, not the `fn` line below it
+        // (ADR 0073) — same convention as Python's decorator handling.
+        signature: "#[test]\nfn should_add_two_numbers()".to_string(),
+        range: LineRange { start: 1, end: 4 },
         container: None,
         referenced_names: vec![],
         referenced_method_names: vec![],
@@ -174,6 +173,128 @@ fn should_return_empty_vec_when_source_has_no_definitions() {
 
     let expected: Vec<ExtractedSymbol> = Vec::new();
     let actual = extract_all_symbols(source, &lang);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_detect_change_when_only_derive_attribute_line_changed() {
+    let source = "\
+#[derive(Debug, Clone)]
+struct Point {
+    x: i32,
+}
+";
+    let lang = RustSupport;
+    // Line 1 is the attribute — `RustSupport::definition_span_start`
+    // widens `struct_item`'s span to include its preceding
+    // `attribute_item` sibling (ADR 0073), so an attribute-only change
+    // is detected and included in the reported signature.
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Point".to_string(),
+        kind: SymbolKind::Struct,
+        signature: "#[derive(Debug, Clone)]\nstruct Point {\n    x: i32,\n}".to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        referenced_names: vec!["Point".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_detect_change_when_only_a_functions_attribute_line_changed() {
+    let source = "\
+#[inline]
+fn helper(x: i32) -> i32 {
+    x
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "helper".to_string(),
+        kind: SymbolKind::Function,
+        signature: "#[inline]\nfn helper(x: i32) -> i32".to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        referenced_names: vec![],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// ADR 0073: a comment between an attribute and the item it annotates
+// stops the span-widening walk, so a comment-only line change does not
+// make the definition register as touched.
+#[test]
+fn should_not_detect_change_when_only_a_comment_between_attribute_and_item_changed() {
+    let source = "\
+#[derive(Debug)]
+// a comment
+struct Point {
+    x: i32,
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let expected: Vec<ExtractedSymbol> = Vec::new();
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// The attribute above the comment is still outside the span too, since
+// the walk stops at the first non-attribute sibling it meets going
+// backward from the item.
+#[test]
+fn should_not_include_attribute_separated_by_comment_in_signature() {
+    let source = "\
+#[derive(Debug)]
+// a comment
+struct Point {
+    x: i32,
+}
+";
+    let lang = RustSupport;
+    let changed_ranges = vec![LineRange { start: 3, end: 3 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Point".to_string(),
+        kind: SymbolKind::Struct,
+        signature: "struct Point {\n    x: i32,\n}".to_string(),
+        range: LineRange { start: 3, end: 5 },
+        container: None,
+        referenced_names: vec!["Point".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
     assert_eq!(expected, actual);
 }

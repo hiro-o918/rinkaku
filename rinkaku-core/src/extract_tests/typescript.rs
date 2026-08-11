@@ -378,6 +378,50 @@ class Circle {
     assert_eq!(expected, actual);
 }
 
+// TypeScript's grammar nests a decorator as a direct child of
+// `class_declaration` itself, so it is already inside the captured
+// node's own row range and signature text without any widening (ADR
+// 0073's `LanguageSupport::definition_span_start` default applies
+// here) — pinning this keeps Python/Rust's explicit widening and
+// TypeScript's pre-existing grammar-shape behavior symmetric.
+#[test]
+fn should_detect_change_when_only_class_decorator_line_changed() {
+    let source = "\
+@Component()
+class Widget {
+    label: string;
+}
+";
+    let lang = TypeScriptSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Widget".to_string(),
+        kind: SymbolKind::Class,
+        signature: "@Component()\nclass Widget {\n    label: string;\n}".to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        // `Component` (the decorator's own call) and `Widget` (the
+        // class's own self-reference — see the sibling
+        // `should_extract_class_signature_with_untouched_method_dropped_when_field_changed`
+        // test for why a class captures its own name) are both
+        // collected, since this module deliberately does not scope
+        // reference collection away from a decorator's own subtree
+        // (see `references.rs`).
+        referenced_names: vec!["Component".to_string(), "Widget".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
 // ADR 0014: both `//` and `/* */` comments in this grammar parse
 // under the same `comment` node kind (unlike Rust's split), and
 // both must be stripped from a class signature.

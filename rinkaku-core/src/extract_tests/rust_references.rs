@@ -356,8 +356,12 @@ struct Point {
         id: String::new(),
         name: "Point".to_string(),
         kind: SymbolKind::Struct,
-        signature: "struct Point {\n    x: i32,\n}".to_string(),
-        range: LineRange { start: 2, end: 4 },
+        // The `#[derive(...)]` attribute is included in the signature
+        // and the reported range starts at its line (ADR 0073); its own
+        // arguments (`Debug`, `Clone`) are still not collected as
+        // references, which is what this test pins.
+        signature: "#[derive(Debug, Clone)]\nstruct Point {\n    x: i32,\n}".to_string(),
+        range: LineRange { start: 1, end: 4 },
         container: None,
         referenced_names: vec!["Point".to_string()],
         referenced_method_names: vec![],

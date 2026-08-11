@@ -1,8 +1,8 @@
 //! Tests pinning [`super::extract_changed_symbols`] and
 //! [`super::extract_all_symbols`] behavior on Python sources: function
 //! and class signatures with nested method bodies stripped, decorator
-//! and nested-function edge cases (decorators do not extend a
-//! definition's range up to the decorator line), comment stripping
+//! and nested-function edge cases (a decorator extends a definition's
+//! span up to the decorator line itself — ADR 0073), comment stripping
 //! inside class signatures, and the Python end-to-end path via
 //! `parse_unified_diff` + `language_for_path`.
 
@@ -141,19 +141,35 @@ def top_level(a, b):
 }
 
 #[test]
-fn should_not_detect_change_when_only_decorator_line_changed() {
+fn should_detect_change_when_only_decorator_line_changed() {
     let source = "\
 @decorator_v2
 def decorated(a):
     return a
 ";
     let lang = PythonSupport;
-    // Line 1 is the decorator, outside `function_definition`'s own
-    // row range (see the doc comment on `DEFINITION_QUERY` in
-    // language/python.rs) — a deliberate v1 simplification.
+    // Line 1 is the decorator — `PythonSupport::definition_span_start`
+    // widens `function_definition`'s span to include its
+    // `decorated_definition` wrapper (ADR 0073), so a decorator-only
+    // change is detected and the decorator is included in the reported
+    // signature.
     let changed_ranges = vec![LineRange { start: 1, end: 1 }];
 
-    let expected: Vec<ExtractedSymbol> = Vec::new();
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "decorated".to_string(),
+        kind: SymbolKind::Function,
+        signature: "@decorator_v2\ndef decorated(a):".to_string(),
+        range: LineRange { start: 1, end: 3 },
+        container: None,
+        referenced_names: vec![],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
     let actual = extract_changed_symbols(source, &lang, &changed_ranges);
 
     assert_eq!(expected, actual);
@@ -173,8 +189,111 @@ def decorated(a):
         id: String::new(),
         name: "decorated".to_string(),
         kind: SymbolKind::Function,
-        signature: "def decorated(a):".to_string(),
-        range: LineRange { start: 2, end: 3 },
+        // The decorator is included in the signature (ADR 0073) even
+        // though only the body line changed: the reported span always
+        // starts at the decorator once one is present.
+        signature: "@decorator\ndef decorated(a):".to_string(),
+        range: LineRange { start: 1, end: 3 },
+        container: None,
+        referenced_names: vec![],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_detect_change_when_only_class_decorator_line_changed() {
+    let source = "\
+@dataclass
+class Point:
+    x: int
+    y: int
+";
+    let lang = PythonSupport;
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Point".to_string(),
+        kind: SymbolKind::Class,
+        signature: "@dataclass\nclass Point:\n    x: int\n    y: int".to_string(),
+        range: LineRange { start: 1, end: 4 },
+        container: None,
+        referenced_names: vec!["int".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// A decorator on a class *method* is covered by the same
+// `decorated_definition`-parent check as a top-level function (ADR
+// 0073) — the method itself, not the enclosing class, is reported as
+// the narrowest touched definition.
+#[test]
+fn should_report_only_the_method_when_only_a_class_methods_decorator_line_changed() {
+    let source = "\
+class Widget:
+    @property
+    def label(self):
+        return self._label
+";
+    let lang = PythonSupport;
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "label".to_string(),
+        kind: SymbolKind::Function,
+        signature: "@property\ndef label(self):".to_string(),
+        range: LineRange { start: 2, end: 4 },
+        container: Some("class Widget".to_string()),
+        referenced_names: vec![],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+#[test]
+fn should_detect_change_when_a_decorator_is_newly_added() {
+    let source = "\
+@decorator
+def foo(a):
+    return a
+";
+    let lang = PythonSupport;
+    // Diff-line-count semantics: an added decorator shifts the
+    // definition's own diff-reported start down by one line versus the
+    // undecorated base, but the changed range here is simply the new
+    // decorator line itself.
+    let changed_ranges = vec![LineRange { start: 1, end: 1 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "foo".to_string(),
+        kind: SymbolKind::Function,
+        signature: "@decorator\ndef foo(a):".to_string(),
+        range: LineRange { start: 1, end: 3 },
         container: None,
         referenced_names: vec![],
         referenced_method_names: vec![],
@@ -398,6 +517,80 @@ class Point:
         // — see REFERENCE_QUERY's doc comment in
         // language/python.rs).
         referenced_names: vec!["str".to_string()],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// ADR 0071 + ADR 0073: when the container itself is reported (a
+// body-level line touched, not any member), an untouched decorated
+// method is dropped from the signature decorator and all — not left
+// behind as an orphaned `@property` line.
+#[test]
+fn should_drop_untouched_decorated_members_decorator_from_container_signature() {
+    let source = "\
+class Widget:
+    label = \"a\"
+
+    @property
+    def untouched(self):
+        return self._untouched
+";
+    let lang = PythonSupport;
+    // Line 2 (`label = \"a\"`) is a body-level line, not inside any
+    // method, so the class itself is the narrowest touched definition.
+    let changed_ranges = vec![LineRange { start: 2, end: 2 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "Widget".to_string(),
+        kind: SymbolKind::Class,
+        signature: "class Widget:\n    label = \"a\"".to_string(),
+        range: LineRange { start: 1, end: 6 },
+        container: None,
+        referenced_names: vec![],
+        referenced_method_names: vec![],
+        dependencies: vec![],
+        omitted_dependency_matches: 0,
+        is_test: false,
+        classification: None,
+        previous_signature: None,
+    }];
+    let actual = extract_changed_symbols(source, &lang, &changed_ranges);
+
+    assert_eq!(expected, actual);
+}
+
+// A decorated method whose own body line is touched is reported on its
+// own (narrowest-enclosing-definition rule), and its decorator is kept
+// as part of that reported signature (ADR 0073) — the container is
+// never reported in this case, so container-slicing does not apply.
+#[test]
+fn should_keep_touched_members_decorator_when_member_itself_is_reported() {
+    let source = "\
+class Widget:
+    @property
+    def touched(self):
+        return self._touched
+";
+    let lang = PythonSupport;
+    let changed_ranges = vec![LineRange { start: 4, end: 4 }];
+
+    let expected = vec![ExtractedSymbol {
+        id: String::new(),
+        name: "touched".to_string(),
+        kind: SymbolKind::Function,
+        signature: "@property\ndef touched(self):".to_string(),
+        range: LineRange { start: 2, end: 4 },
+        container: Some("class Widget".to_string()),
+        referenced_names: vec![],
         referenced_method_names: vec![],
         dependencies: vec![],
         omitted_dependency_matches: 0,
