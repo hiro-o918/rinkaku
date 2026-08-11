@@ -8,6 +8,7 @@
 use crate::diff::LineRange;
 use crate::language::LanguageSupport;
 use container_slice::untouched_member_ranges;
+use definition_span::DefinitionNode;
 use hcl::{build_hcl_locals_symbols, hcl_block_name, hcl_block_type};
 use references::collect_referenced_names;
 use serde::Serialize;
@@ -15,6 +16,7 @@ use std::collections::HashMap;
 use tree_sitter::StreamingIterator;
 
 mod container_slice;
+mod definition_span;
 mod hcl;
 mod references;
 
@@ -27,7 +29,7 @@ mod references;
 /// independent of any diff).
 #[derive(Clone, Copy)]
 struct TouchedContext<'a> {
-    all_definition_nodes: &'a [tree_sitter::Node<'a>],
+    all_definition_nodes: &'a [DefinitionNode<'a>],
     changed_ranges: &'a [LineRange],
 }
 
@@ -217,10 +219,10 @@ pub fn extract_changed_symbols(
     }
 
     with_definition_nodes(source, lang, |all_nodes, source_bytes, reference_query| {
-        let touched_nodes: Vec<tree_sitter::Node> = all_nodes
+        let touched_nodes: Vec<DefinitionNode> = all_nodes
             .iter()
             .copied()
-            .filter(|node| overlaps_any(node_to_line_range(*node), changed_ranges))
+            .filter(|node| overlaps_any(node.line_range(), changed_ranges))
             .collect();
         let touched_context = TouchedContext {
             all_definition_nodes: all_nodes,
@@ -242,7 +244,7 @@ pub fn extract_changed_symbols(
                 // situation cannot arise for Go structs.
                 !touched_nodes
                     .iter()
-                    .any(|other| other != *node && is_descendant_of(*other, **node))
+                    .any(|other| other.node != node.node && is_descendant_of(other.node, node.node))
             })
             .flat_map(|node| {
                 build_symbols(
@@ -417,14 +419,15 @@ pub fn classify_symbols(
 }
 
 /// Parses `source`, runs `lang`'s `definition_query` to find every
-/// `@definition` node, and hands the resulting nodes (plus the source
-/// bytes they borrow from, and a compiled `reference_query`) to `f`. Node
-/// values borrow from the parsed tree, so this scoped-callback shape —
-/// rather than returning `Vec<Node>` directly — keeps the tree alive
-/// exactly as long as needed without leaking it or threading a `Tree`
-/// value out through every caller. Shared by `extract_changed_symbols`
-/// and `extract_all_symbols`, which differ only in how they filter/use
-/// the node list.
+/// `@definition` node, widens each one's span to include any
+/// decorator/attribute ([`DefinitionNode`], ADR 0073), and hands the
+/// resulting list (plus the source bytes they borrow from, and a compiled
+/// `reference_query`) to `f`. Node values borrow from the parsed tree, so
+/// this scoped-callback shape — rather than returning `Vec<DefinitionNode>`
+/// directly — keeps the tree alive exactly as long as needed without
+/// leaking it or threading a `Tree` value out through every caller. Shared
+/// by `extract_changed_symbols` and `extract_all_symbols`, which differ
+/// only in how they filter/use the node list.
 ///
 /// `reference_query` is compiled once here (file granularity) rather than
 /// once per definition node: `Query::new` takes ~1ms, and a repo-wide
@@ -437,7 +440,7 @@ pub fn classify_symbols(
 fn with_definition_nodes<T>(
     source: &str,
     lang: &dyn LanguageSupport,
-    f: impl FnOnce(&[tree_sitter::Node], &[u8], &tree_sitter::Query) -> T,
+    f: impl FnOnce(&[DefinitionNode], &[u8], &tree_sitter::Query) -> T,
 ) -> T {
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -463,7 +466,7 @@ fn with_definition_nodes<T>(
     while let Some(m) = matches.next() {
         for capture in m.captures {
             if capture.index == definition_capture_index {
-                nodes.push(capture.node);
+                nodes.push(DefinitionNode::new(capture.node, lang));
             }
         }
     }
@@ -482,16 +485,6 @@ pub(super) fn is_descendant_of(node: tree_sitter::Node, ancestor: tree_sitter::N
     false
 }
 
-/// Converts a tree-sitter node's byte-oriented row span into a 1-based
-/// inclusive [`LineRange`], matching the convention `diff::parse_unified_diff`
-/// uses for new-side line numbers.
-pub(super) fn node_to_line_range(node: tree_sitter::Node) -> LineRange {
-    LineRange {
-        start: node.start_position().row + 1,
-        end: node.end_position().row + 1,
-    }
-}
-
 /// Whether `range` shares at least one line with any range in `others`.
 pub(super) fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
     others
@@ -508,17 +501,18 @@ pub(super) fn overlaps_any(range: LineRange, others: &[LineRange]) -> bool {
 /// overlap — a no-op for single-node symbols, whose range is the
 /// already-touched captured node's own.
 fn build_symbols(
-    node: tree_sitter::Node,
+    definition: DefinitionNode,
     source: &[u8],
     reference_query: &tree_sitter::Query,
     lang: &dyn LanguageSupport,
     touched: Option<TouchedContext>,
 ) -> Vec<ExtractedSymbol> {
+    let node = definition.node;
     if node.kind() == "block" && hcl_block_type(node, source).as_deref() == Some("locals") {
         return build_hcl_locals_symbols(node, source, reference_query, lang);
     }
 
-    build_symbol(node, source, reference_query, lang, touched)
+    build_symbol(definition, source, reference_query, lang, touched)
         .into_iter()
         .collect()
 }
@@ -528,15 +522,16 @@ fn build_symbols(
 /// (defensive default for query/grammar drift, not expected in practice
 /// given `definition_query` only captures known kinds).
 fn build_symbol(
-    node: tree_sitter::Node,
+    definition: DefinitionNode,
     source: &[u8],
     reference_query: &tree_sitter::Query,
     lang: &dyn LanguageSupport,
     touched: Option<TouchedContext>,
 ) -> Option<ExtractedSymbol> {
+    let node = definition.node;
     let kind = symbol_kind(node, source)?;
     let name = definition_name(node, source)?;
-    let signature = slice_signature(node, source, touched);
+    let signature = slice_signature(definition, source, touched);
     let container = find_container(node, source);
     let references = collect_referenced_names(node, source, reference_query);
     let is_test = lang.is_test_definition(node, source);
@@ -548,7 +543,7 @@ fn build_symbol(
         name,
         kind,
         signature,
-        range: node_to_line_range(node),
+        range: definition.line_range(),
         container,
         referenced_names: references.bare,
         referenced_method_names: references.method,
@@ -678,11 +673,12 @@ fn definition_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 /// change sanctioned by the ADR — some previously-reported signature strings
 /// that contained inline comments now omit them.
 fn slice_signature(
-    node: tree_sitter::Node,
+    definition: DefinitionNode,
     source: &[u8],
     touched: Option<TouchedContext>,
 ) -> String {
-    let first_line_column = node.start_position().column;
+    let node = definition.node;
+    let first_line_column = definition.span_start_column();
 
     if matches!(
         node.kind(),
@@ -700,7 +696,7 @@ fn slice_signature(
         }
         collect_comment_ranges(node, source, &removed_ranges.clone(), &mut removed_ranges);
         return tidy_signature_lines(
-            &text_with_ranges_removed(node, source, removed_ranges),
+            &text_with_ranges_removed(node, definition.span_start_byte(), source, removed_ranges),
             first_line_column,
         );
     }
@@ -750,30 +746,31 @@ fn slice_signature(
         removed_ranges.push(body.start_byte()..node.end_byte());
     }
 
-    let raw = text_with_ranges_removed(node, source, removed_ranges);
+    let raw = text_with_ranges_removed(node, definition.span_start_byte(), source, removed_ranges);
     tidy_signature_lines(&raw, first_line_column)
 }
 
-/// Removes every byte range in `ranges` from `node`'s own text (`node`'s
-/// full span, not just the declaration prefix — callers that only want a
-/// prefix pre-truncate `ranges` to stop at that boundary), returning the
-/// remainder as a `String`. Ranges are sorted and removed front-to-back,
-/// advancing a `cursor` past each removed range in turn, so earlier
-/// removals naturally narrow what later ones can still remove; if a range
-/// starts before the current `cursor` (overlapping ranges, defensively not
-/// expected in practice) *that one range's removal* is skipped — its own
-/// iteration does nothing and `cursor` is left wherever the previous
-/// iteration advanced it to — rather than the whole function panicking on
-/// an invalid slice.
+/// Removes every byte range in `ranges` from the `span_start_byte..
+/// node.end_byte()` text (the definition's full widened span, not just the
+/// declaration prefix — callers that only want a prefix pre-truncate
+/// `ranges` to stop at that boundary), returning the remainder as a
+/// `String`. Ranges are sorted and removed front-to-back, advancing a
+/// `cursor` past each removed range in turn, so earlier removals naturally
+/// narrow what later ones can still remove; if a range starts before the
+/// current `cursor` (overlapping ranges, defensively not expected in
+/// practice) *that one range's removal* is skipped — its own iteration does
+/// nothing and `cursor` is left wherever the previous iteration advanced it
+/// to — rather than the whole function panicking on an invalid slice.
 fn text_with_ranges_removed(
     node: tree_sitter::Node,
+    span_start_byte: usize,
     source: &[u8],
     mut ranges: Vec<std::ops::Range<usize>>,
 ) -> String {
     ranges.sort_by_key(|r| r.start);
 
     let mut result = Vec::with_capacity(source.len());
-    let mut cursor = node.start_byte();
+    let mut cursor = span_start_byte;
     for range in &ranges {
         if range.start < cursor {
             continue; // Defensive: overlapping ranges should not occur.

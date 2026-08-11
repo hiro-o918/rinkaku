@@ -57,6 +57,18 @@ pub trait LanguageSupport {
     fn is_test_definition(&self, _node: tree_sitter::Node, _source: &[u8]) -> bool {
         false
     }
+
+    /// Widens a captured `@definition` node's span to include any
+    /// decorator/attribute annotating it (ADR 0073), so the touched-range
+    /// check, `ExtractedSymbol::range`, and the extracted signature text
+    /// all cover the decorator/attribute the same way they cover the
+    /// definition itself. Defaults to `node` unchanged: Go, TypeScript, and
+    /// HCL need no widening — TypeScript's grammar already nests a
+    /// decorator inside `class_declaration`, and Go/HCL have no decorator
+    /// syntax at all.
+    fn definition_span_start<'a>(&self, node: tree_sitter::Node<'a>) -> tree_sitter::Node<'a> {
+        node
+    }
 }
 
 /// Looks up the `LanguageSupport` registered for a file path, based on

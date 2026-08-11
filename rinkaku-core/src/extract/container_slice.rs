@@ -10,7 +10,8 @@
 //! rendered signature entirely, while `slice_signature`'s existing
 //! method-body/comment stripping still applies to whatever remains.
 
-use super::{LineRange, is_descendant_of, node_to_line_range, overlaps_any};
+use super::{LineRange, is_descendant_of, overlaps_any};
+use crate::extract::definition_span::DefinitionNode;
 
 /// The byte ranges of every member definition inside `container` that
 /// does *not* overlap `changed_ranges` — i.e. every member whose entire
@@ -23,12 +24,16 @@ use super::{LineRange, is_descendant_of, node_to_line_range, overlaps_any};
 /// Python class method, a TypeScript class method, or a class nested
 /// inside another class, with no per-language node-kind matching.
 ///
-/// Each member's own node span is widened to its whole source line
+/// Each member's own widened span (ADR 0073: decorator/attribute
+/// inclusive) is further widened to its whole source line
 /// ([`widen_to_whole_line`]) before being returned: a captured definition
 /// node's span does not include a trailing terminator some grammars place
 /// outside it (e.g. TypeScript's `abstract_method_signature` excludes its
 /// own trailing `;`), so removing only the bare node span would leave a
-/// stray `;` and blank indentation behind.
+/// stray `;` and blank indentation behind. Starting from the member's
+/// decorator/attribute rather than its bare node also means an untouched
+/// member's decorator is dropped along with the rest of it, not left
+/// behind as an orphaned line.
 ///
 /// The widened ranges are then merged ([`merge_adjacent_ranges`]) before
 /// being returned: when two or more untouched members share the same
@@ -41,15 +46,20 @@ use super::{LineRange, is_descendant_of, node_to_line_range, overlaps_any};
 /// closes that gap instead of leaving each member to widen in isolation.
 pub(super) fn untouched_member_ranges<'a>(
     container: tree_sitter::Node<'a>,
-    all_definition_nodes: &[tree_sitter::Node<'a>],
+    all_definition_nodes: &[DefinitionNode<'a>],
     changed_ranges: &[LineRange],
     source: &[u8],
 ) -> Vec<std::ops::Range<usize>> {
     let widened: Vec<std::ops::Range<usize>> = all_definition_nodes
         .iter()
-        .filter(|node| is_descendant_of(**node, container))
-        .filter(|node| !overlaps_any(node_to_line_range(**node), changed_ranges))
-        .map(|node| widen_to_whole_line(node.start_byte()..node.end_byte(), source))
+        .filter(|definition| is_descendant_of(definition.node, container))
+        .filter(|definition| !overlaps_any(definition.line_range(), changed_ranges))
+        .map(|definition| {
+            widen_to_whole_line(
+                definition.span_start_byte()..definition.node.end_byte(),
+                source,
+            )
+        })
         .collect();
     merge_adjacent_ranges(widened, source)
 }

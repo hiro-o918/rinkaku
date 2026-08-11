@@ -10,13 +10,11 @@ use super::LanguageSupport;
 /// another `function_definition`, not a class) and classes.
 ///
 /// `function_definition`/`class_definition` are captured directly rather
-/// than their enclosing `decorated_definition` wrapper. This means a
-/// decorator-only line change (with the `def`/`class` line itself
-/// untouched) is not detected as touching the definition — a deliberate
-/// v1 simplification consistent with "only symbol-level changes are
-/// surfaced" (see `extract_changed_symbols`'s module doc); decorators are
-/// also never included in the extracted signature text for the same
-/// reason a Rust definition's attributes aren't.
+/// than their enclosing `decorated_definition` wrapper — `PythonSupport`'s
+/// `definition_span_start` widens the captured node back out to that
+/// wrapper when present (ADR 0073), so a decorator-only change is still
+/// detected and included in the extracted signature, without needing the
+/// query itself to capture the wrapper node.
 const DEFINITION_QUERY: &str = "\
 [
   (function_definition) @definition.function
@@ -73,6 +71,19 @@ impl LanguageSupport for PythonSupport {
     /// match the filename pattern (e.g. `tests/factories.py`).
     fn is_test_path(&self, path: &str) -> bool {
         is_in_tests_dir(path) || is_python_test_filename(path)
+    }
+
+    /// A decorated function/class's `decorated_definition` wrapper is its
+    /// direct parent — true whether the definition is top-level or nested
+    /// inside a class body (a decorated method's parent chain is `block ->
+    /// decorated_definition -> function_definition`, the same shape as the
+    /// top-level case), so a class method's own decorator is covered
+    /// without any container-specific handling.
+    fn definition_span_start<'a>(&self, node: tree_sitter::Node<'a>) -> tree_sitter::Node<'a> {
+        match node.parent() {
+            Some(parent) if parent.kind() == "decorated_definition" => parent,
+            _ => node,
+        }
     }
 }
 

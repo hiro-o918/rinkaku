@@ -130,6 +130,26 @@ impl LanguageSupport for RustSupport {
         }
         false
     }
+
+    /// Walks backward through `node`'s preceding siblings across
+    /// consecutive `attribute_item`s (ADR 0073), returning the earliest one
+    /// found. Stops at (does not extend across) a comment sibling — unlike
+    /// `has_test_attribute`'s walk, which skips comments because it only
+    /// needs a yes/no answer, this walk determines which lines belong to
+    /// the definition, so a comment between an attribute and its item must
+    /// stay outside the span.
+    fn definition_span_start<'a>(&self, node: tree_sitter::Node<'a>) -> tree_sitter::Node<'a> {
+        let mut span_start = node;
+        let mut sibling = node.prev_sibling();
+        while let Some(candidate) = sibling {
+            if candidate.kind() != "attribute_item" {
+                break;
+            }
+            span_start = candidate;
+            sibling = candidate.prev_sibling();
+        }
+        span_start
+    }
 }
 
 /// Whether `node` is preceded by a `#[test]`, `#[rstest]`, or

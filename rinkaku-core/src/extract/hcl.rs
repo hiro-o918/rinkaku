@@ -4,6 +4,7 @@
 //! (ADR 0028) when the HCL arms pushed it over the warn threshold —
 //! the same split `references.rs` got for the language-specific walks.
 
+use crate::extract::definition_span::DefinitionNode;
 use crate::language::LanguageSupport;
 
 /// The block-type keyword of an HCL `block` node — the text of its
@@ -83,12 +84,13 @@ pub(super) fn build_hcl_locals_symbols(
             let name = name_node.utf8_text(source).ok()?;
             let references =
                 super::references::collect_referenced_names(attribute, source, reference_query);
+            let definition = DefinitionNode::new(attribute, lang);
             Some(super::ExtractedSymbol {
                 id: String::new(),
                 name: format!("local.{name}"),
                 kind: super::SymbolKind::Block,
-                signature: super::slice_signature(attribute, source, None),
-                range: super::node_to_line_range(attribute),
+                signature: super::slice_signature(definition, source, None),
+                range: definition.line_range(),
                 container: None,
                 referenced_names: references.bare,
                 referenced_method_names: references.method,
