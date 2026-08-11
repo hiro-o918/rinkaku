@@ -2,18 +2,17 @@
 //! grouped by which pub function each block pins:
 //!
 //! - `build_diff_pane_content` — every scenario `build_diff_pane_content`
-//!   supports (per-symbol grouping, deletion / overlap / new-file
-//!   attribution, contract-header inclusion, and the empty-input degrade
-//!   paths)
+//!   supports (ADR 0072's raw hunk-order shaping, deletion / overlap /
+//!   new-file attribution, and the empty-input degrade paths)
 //! - `hunk_start_lines` — the `]c`/`[c` jump-stop layout math
-//! - `section_start_line` — `section_start_line_for_symbol`'s title-line
-//!   pointer including its contract-header offset behavior
+//! - `section_start_line` — `section_start_line_for_symbol`'s auto-scroll
+//!   target: the first hunk intersecting the selected symbol's range
 //! - `symbol_id_for_scroll_line` — the reverse lookup added by ADR 0030
 //!   (scroll offset → symbol id under it), powering the diff → tree
 //!   auto-sync
 //! - `changed_line_ranges` — the Diff pane header's `range:` line data
-//!   (distinct new-side line spans, sorted and deduped across sections
-//!   so ADR 0029's cloned hunks produce one entry per span)
+//!   (distinct new-side line spans across hunks, sorted and deduped, with
+//!   pure-deletion hunks excluded)
 //!
 //! `pair_hunk_lines`'s own tests moved to `crate::split_pairing_tests`
 //! alongside the rest of that module's split-out implementation.

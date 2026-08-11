@@ -90,6 +90,29 @@ fn should_return_none_when_scroll_line_falls_inside_a_hunk_intersecting_no_symbo
 }
 
 #[test]
+fn should_return_the_first_hunks_symbol_when_scroll_line_is_the_separator_before_the_next_hunk() {
+    // Hunk 0: header(0), 1 body line(1) — 2 lines. Blank(2) is the last
+    // line still owned by hunk 0 before hunk 1 starts at line 3 (sibling
+    // of `should_return_the_second_symbol_when_scroll_line_falls_inside_the_second_hunk`,
+    // which pins the boundary's other side).
+    let content = DiffPaneContent::File(vec![
+        attributed(
+            0,
+            hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+        ),
+        attributed(
+            1,
+            hunk("@@ -10,1 +10,2 @@", Some((10, 11)), vec!["fn bar() {}"]),
+        ),
+    ]);
+    let symbols = foo_bar_symbols();
+
+    let actual = symbol_id_for_scroll_line(&content, 2, &symbols);
+
+    assert_eq!(Some("lib.rs::foo"), actual);
+}
+
+#[test]
 fn should_return_the_last_hunks_symbol_when_scroll_line_is_past_every_hunk() {
     // ADR 0030 decision 3 (carried over by ADR 0072): the last hunk's span
     // is open-ended — an overscroll about to be clamped by

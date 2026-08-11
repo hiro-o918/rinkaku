@@ -261,3 +261,85 @@ index e69de29..4b825dc 100644
 // the Detail pane's `SignatureView::Changed` already shows the same old/new
 // comparison independently, so `should_draw_contract_header_before_hunks_when_symbol_signature_changed`
 // no longer has an object to test and is removed rather than adapted.
+
+#[test]
+fn should_show_bare_path_once_on_diff_pane_header_when_cursor_is_on_a_file_row() {
+    // Regression: `App::selected_diff_header_name` returns the path
+    // itself (not `None`) for a file row, so a caller that pairs it with
+    // `path` unconditionally would print the path twice.
+    let report = report_with_one_symbol();
+    let app = App::new(&report);
+    let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,2 @@
+ fn a() {}
++fn foo() {}
+";
+    let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+    let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+    let diff_content = diff_content_for(&report, &diff_files, &app);
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                &report,
+                &diff_content,
+                &diff_highlights,
+                &BlastRadiusSelection::NotApplicable,
+                None,
+                &[],
+                &crate::annotation_markers::AnnotationMarkers::default(),
+                Locale::English,
+            );
+        })
+        .expect("draw");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("lib.rs"));
+    assert!(!text.contains("lib.rs · lib.rs"));
+}
+
+#[test]
+fn should_join_symbol_name_and_path_on_diff_pane_header_when_cursor_is_on_a_symbol_row() {
+    let report = report_with_one_symbol();
+    let app = App::new(&report).handle_key(crate::app::InputKey::Down);
+    let diff_text = "\
+diff --git a/lib.rs b/lib.rs
+index e69de29..4b825dc 100644
+--- a/lib.rs
++++ b/lib.rs
+@@ -1,1 +1,2 @@
+ fn a() {}
++fn foo() {}
+";
+    let diff_files = crate::diff_view::parse_diff_hunks(diff_text);
+    let diff_highlights = crate::highlight::highlight_diff_files(&diff_files);
+    let diff_content = diff_content_for(&report, &diff_files, &app);
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                &report,
+                &diff_content,
+                &diff_highlights,
+                &BlastRadiusSelection::NotApplicable,
+                None,
+                &[],
+                &crate::annotation_markers::AnnotationMarkers::default(),
+                Locale::English,
+            );
+        })
+        .expect("draw");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("foo · lib.rs"));
+}

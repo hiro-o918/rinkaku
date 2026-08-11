@@ -61,9 +61,11 @@ pub struct Hunk {
     /// is `0` (git's own "before the first line of the file" marker for a
     /// deletion at the very top) — `0` has no `start - 1` to subtract
     /// without underflow, and no symbol's 1-based range can start before
-    /// line 1 anyway, so a deletion reported there can never belong to any
-    /// symbol; it always falls through to the file view's module-level
-    /// bucket, same as a genuinely unreadable header.
+    /// line 1 anyway, so a deletion reported there can never intersect any
+    /// symbol via [`hunk_intersects`]. The hunk itself still renders (ADR
+    /// 0072: the diff pane shows every hunk in a selected file regardless
+    /// of `new_range`); `None` only means it never drives a symbol's
+    /// auto-scroll target or the reverse scroll-to-symbol lookup.
     pub new_range: Option<(usize, usize)>,
     pub lines: Vec<DiffLine>,
 }

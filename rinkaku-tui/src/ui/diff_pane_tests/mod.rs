@@ -4,8 +4,9 @@
 //! - `header_lines` — `diff_pane_header_lines`'s pure identification/stats
 //!   formatting and truncation
 //! - `row_kinds` — the "which content shows for which row" coverage:
-//!   symbol row, skipped file (binary and textual), file selection with
-//!   per-symbol section headers, and the contract-header disclosure order
+//!   symbol row, skipped file (binary and textual), file selection showing
+//!   every hunk in original order (ADR 0072), and the header's
+//!   symbol-vs-file identification
 //! - `split_view` — ADR 0044's side-by-side rendering: paired old/new
 //!   lines, the narrow-pane fallback to unified, and unified staying the
 //!   default when the toggle was never pressed

@@ -213,17 +213,24 @@ pub(crate) fn draw_diff_pane(
     );
     let header_width = area.width.saturating_sub(2) as usize;
 
-    // `selected_diff_header_name` is the single source for what line 1
-    // names: the symbol's own name on a symbol row (paired with `path`
-    // below to form `"<name> · <path>"`), or the file row's path
-    // (rendered bare, `selection_name = None`). Row `badges` come
-    // straight off the same `nav.rows(tree)` entry every other lookup
-    // already reads, so line 2 renders exactly what the tree row does
-    // (no drift).
+    // `selected_diff_header_name` returns the path itself on a file row
+    // (its own doc comment), so it cannot be passed to
+    // `diff_pane_header_lines` unconditionally — pairing it with `path`
+    // there would print the path twice.
     let header_name = app.selected_diff_header_name();
+    let selection_name = if selected_row_is_symbol(app) {
+        header_name
+    } else {
+        None
+    };
     let selected_badges = selected_row_badges(app);
-    let mut header_lines =
-        diff_pane_header_lines(header_name, path, &selected_badges, &ranges, header_width);
+    let mut header_lines = diff_pane_header_lines(
+        selection_name,
+        path,
+        &selected_badges,
+        &ranges,
+        header_width,
+    );
     // ADR 0044 decision 7: the toggle stays flipped even when the pane is
     // too narrow to honor it — this note is the only visible sign why `v`
     // didn't change anything, rather than a silent no-op.
@@ -249,6 +256,18 @@ pub(crate) fn draw_diff_pane(
         area,
         focused,
     ))
+}
+
+/// Whether the row currently under the cursor is a present (non-removed)
+/// symbol row — the same row-kind branch [`App::selected_diff_header_name`]
+/// uses to decide whether its returned name is a symbol name (pair with
+/// `path`) or a file path (already the whole identification, render bare).
+fn selected_row_is_symbol(app: &App) -> bool {
+    let rows = app.nav().rows(app.tree());
+    let Some(row) = rows.get(app.nav().cursor()) else {
+        return false;
+    };
+    matches!(&row.node.kind, NodeKind::Symbol(symbol_ref) if !symbol_ref.removed)
 }
 
 /// The `Badges` on the row currently under the cursor — read from the
