@@ -654,7 +654,7 @@ fn should_scroll_into_the_second_symbols_hunk_when_cursor_moves_past_a_wide_firs
     );
 
     assert_eq!(Some("lib.rs::bar"), app.selected_symbol_id());
-    let expected_scroll = diff_shape::section_start_line_for_symbol(
+    let expected_scroll = diff_shape::scroll_target_line_for_symbol(
         &diff_shape::build_diff_pane_content(
             &report,
             &diff_hunks,
@@ -664,4 +664,71 @@ fn should_scroll_into_the_second_symbols_hunk_when_cursor_moves_past_a_wide_firs
     )
     .expect("bar's hunk start must resolve");
     assert_eq!(expected_scroll, app.right_pane_scroll());
+}
+
+/// `report_with_two_symbols`'s two symbols packed into a *single* hunk —
+/// the shape a whole new file (`@@ -0,0 +1,n @@`) always takes, and the one
+/// a hunk with generous context routinely takes for adjacent definitions.
+fn diff_hunks_with_one_shared_hunk() -> Vec<diff_view::FileHunks> {
+    use diff_view::{DiffLine, DiffLineKind, Hunk};
+
+    vec![diff_view::FileHunks {
+        path: "lib.rs".to_string(),
+        hunks: vec![Hunk {
+            header: "@@ -0,0 +1,11 @@".to_string(),
+            new_range: Some((1, 11)),
+            lines: (1..=11)
+                .map(|line_number| DiffLine {
+                    kind: DiffLineKind::Added,
+                    content: format!("line {line_number}"),
+                })
+                .collect(),
+        }],
+    }]
+}
+
+#[test]
+fn should_scroll_to_the_second_symbols_own_row_when_both_symbols_share_one_hunk() {
+    // ADR 0074's end-to-end regression pin. Under ADR 0072's whole-hunk
+    // rule both symbols resolved to the shared hunk's header row, so
+    // moving the tree cursor from `foo` to `bar` left the pane exactly
+    // where it was — the diff pane stopped following the signature list
+    // for every file whose changes arrive as one hunk.
+    let report = report_with_two_symbols();
+    let diff_hunks = diff_hunks_with_one_shared_hunk();
+    let app = App::new(&report).handle_key(InputKey::Down);
+    assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
+    let last_diff_focus = app.selected_diff_focus(&report);
+
+    let app = dispatch_draw_and_fold(
+        app,
+        &report,
+        &diff_hunks,
+        last_diff_focus,
+        InputKey::Down,
+        160,
+        10,
+    );
+
+    // `bar` covers new-side lines 10-11; row 0 is the `@@` header and rows
+    // 1..=11 are new-side lines 1..=11, so bar's first row is row 10.
+    assert_eq!(Some("lib.rs::bar"), app.selected_symbol_id());
+    assert_eq!(10, app.right_pane_scroll());
+}
+
+#[test]
+fn should_sync_tree_cursor_to_the_second_symbol_when_scroll_moves_within_one_shared_hunk() {
+    // The mirror image of the test above: with only whole-hunk resolution,
+    // every row of a shared hunk resolved to its first symbol, so scrolling
+    // through `bar`'s half of the hunk left the tree cursor stuck on `foo`.
+    let report = report_with_two_symbols();
+    let diff_hunks = diff_hunks_with_one_shared_hunk();
+    let app = app_focused_on_diff_pane_with_scroll(&report, 0);
+    let last_diff_focus = app.selected_diff_focus(&report);
+    assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
+
+    let app = app.with_right_pane_scroll(10);
+    let effects = apply_diff_pane_selection_effects(app, &report, &diff_hunks, last_diff_focus, 0);
+
+    assert_eq!(Some("lib.rs::bar"), effects.app.selected_symbol_id());
 }

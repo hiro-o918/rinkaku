@@ -16,7 +16,9 @@ use rinkaku_core::render::Report;
 /// `path`, in `report.files[..].symbols` order — the input
 /// [`diff_shape::symbol_id_for_scroll_line`] needs to resolve a scroll
 /// position back to a symbol now that there are no pre-grouped sections to
-/// look membership up in (ADR 0072).
+/// look membership up in (ADR 0072). Source order is what makes the
+/// lookup's "first symbol containing this row's line" tie-break
+/// deterministic when two ranges nest (ADR 0074).
 fn symbol_ranges_for_path(report: &Report, path: &str) -> Vec<(String, LineRange)> {
     report
         .files
@@ -81,8 +83,8 @@ pub(crate) fn apply_diff_pane_selection_effects(
         diff_hunks,
         app.selected_diff_target(report).as_ref(),
     );
-    // ADR 0027 decision 2: auto-scroll to the focused symbol's first
-    // intersecting hunk only when the focus *actually changed* since the
+    // ADR 0027 decision 2: auto-scroll to the focused symbol's own first
+    // rendered row only when the focus *actually changed* since the
     // previous key. The caller's `should_recompute_diff_pane_content` gate
     // is `true` on every key while Diff is showing (it just gates the
     // cache rebuild, not a selection-change signal), so firing auto-scroll
@@ -90,8 +92,8 @@ pub(crate) fn apply_diff_pane_selection_effects(
     // `j`/`k`/`Ctrl-d` scrolling immediately after they pressed it
     // (dogfooding finding: Enter into Focus::Right + subsequent `j`/`k`
     // had no visible effect because this override snapped back to the
-    // section start every keystroke). Only when the tree cursor lands on
-    // a different symbol do we retarget the pane.
+    // symbol's own target every keystroke). Only when the tree cursor
+    // lands on a different symbol do we retarget the pane.
     let next_focus = app.selected_diff_focus(report);
     let last_diff_focus = if next_focus != last_diff_focus {
         if let Some(target_scroll) = auto_scroll_for_diff_focus(&app, report, &diff_pane_content) {
@@ -103,16 +105,16 @@ pub(crate) fn apply_diff_pane_selection_effects(
     {
         // ADR 0030: the mirror-image sync — this key's dispatch did not
         // itself move the cursor (`next_focus == last_diff_focus`, the `if`
-        // branch above), but it did move `right_pane_scroll` onto a
-        // *different* symbol's section than the cursor is currently on, so
-        // move the cursor to match. The returned `last_diff_focus` is the
+        // branch above), but it did move `right_pane_scroll` onto a row
+        // belonging to a *different* symbol than the cursor is currently
+        // on, so move the cursor to match. The returned `last_diff_focus` is the
         // post-sync focus, not the pre-sync `next_focus` — critical to
         // avoid the auto-scroll-vs-scroll-sync feedback loop decision 6
         // documents: without this, the next handled key would see
         // `selected_diff_focus` (now the synced symbol) differ from a
         // stale `last_diff_focus` (still the pre-scroll symbol), treat that
         // as a fresh cursor-driven selection change, and auto-scroll
-        // `right_pane_scroll` right back to that symbol's section start —
+        // `right_pane_scroll` right back to that symbol's own target —
         // undoing the very scroll that triggered this sync.
         app = app.sync_tree_cursor_to_symbol(&target_symbol_id);
         app.selected_diff_focus(report)
@@ -135,15 +137,15 @@ pub(crate) fn apply_diff_pane_selection_effects(
 ///
 /// `None` when: the right pane isn't showing the diff pane with focus on it
 /// (`should_apply_hunk_jump`'s own focus/pane gate — scrolling a pane that
-/// isn't the diff pane, e.g. Detail/BlastRadius, has no per-symbol section
-/// to sync against); this key's dispatch did not actually change
+/// isn't the diff pane, e.g. Detail/BlastRadius, has no per-symbol row
+/// coordinates to sync against); this key's dispatch did not actually change
 /// `right_pane_scroll` from `scroll_before_dispatch` (a key that reached
 /// this point already passed the "focus didn't change" check above, but
 /// plenty of keys — `Enter`, `d`, `?`, arbitrary no-ops — reach here without
 /// touching scroll at all, and re-deriving the same symbol id every one of
 /// those keys would be wasted work, not just a correctness no-op);
 /// [`diff_shape::symbol_id_for_scroll_line`] resolves to `None` (ADR 0030
-/// decision 3: a hunk intersecting no symbol, or past-content overscroll,
+/// decision 3: a row belonging to no symbol, or past-content overscroll,
 /// where there is no principled symbol to sync to); or the resolved symbol
 /// id is already the one currently focused (nothing to do — most scroll
 /// keys that stay within the same hunk land here).
@@ -231,12 +233,12 @@ pub(crate) fn clamp_help_scroll_after_draw(app: App, clamped: Option<usize>) -> 
 }
 
 /// The auto-scroll target for the diff pane (ADR 0027 decision 2 + 4, ADR
-/// 0072): [`crate::diff_shape::section_start_line_for_symbol`] on the
-/// currently focused symbol's own line range, or `None` when there is
+/// 0072, ADR 0074): [`crate::diff_shape::scroll_target_line_for_symbol`] on
+/// the currently focused symbol's own line range, or `None` when there is
 /// nothing to auto-scroll to — a file/directory row has no `DiffFocus`, and
-/// a symbol whose range intersects no hunk (e.g. a `BodyOnly` change with
-/// no diff lines of its own, or the file has no diff hunks at all) has no
-/// hunk to jump to.
+/// a symbol no rendered diff row falls inside (e.g. a `BodyOnly` change
+/// with no diff lines of its own, or the file has no diff hunks at all) has
+/// nothing to jump to.
 ///
 /// Extracted as its own pure function (mirroring
 /// [`jump_scroll_target`]/[`should_apply_hunk_jump`]'s own precedent) so this
@@ -255,7 +257,7 @@ pub(crate) fn auto_scroll_for_diff_focus(
         .find(|file| file.path == focus.path)
         .and_then(|file| file.symbols.iter().find(|s| s.id == focus.symbol_id))
         .map(|symbol| symbol.range)?;
-    diff_shape::section_start_line_for_symbol(diff_pane_content, range)
+    diff_shape::scroll_target_line_for_symbol(diff_pane_content, range)
 }
 
 /// Whether `crate::event_loop::run_app`'s event loop should act on an

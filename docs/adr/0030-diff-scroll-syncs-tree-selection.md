@@ -1,6 +1,9 @@
 # 0030. Manual diff-pane scrolling syncs the tree cursor back to the visible symbol
 
-- Status: accepted
+- Status: accepted (amended by
+  [ADR 0074](0074-row-precise-diff-pane-scroll-sync.md): the reverse
+  lookup resolves the row at the scroll offset rather than the whole hunk
+  containing it; decisions 3 and 6 are unaffected)
 - Date: 2026-07-13
 
 ## Context

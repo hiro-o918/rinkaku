@@ -41,12 +41,12 @@ pub enum DiffTarget {
 
 /// Which symbol (if any) the tree cursor is currently on for the diff
 /// pane's benefit (ADR 0027 decision 2 + Consequences): `crate::run_app`
-/// looks up this symbol's shaped section
-/// (`crate::diff_shape::section_start_line_for_symbol`) and auto-scrolls
-/// [`App::right_pane_scroll`] to that section's start whenever a new
-/// selection triggers a diff-pane recompute. `None` on file/directory
-/// rows and on removed symbol rows — those either have no symbol to
-/// focus, or no line-range/graph identity to derive a section from.
+/// resolves this symbol's own scroll target
+/// (`crate::diff_shape::scroll_target_line_for_symbol`) and auto-scrolls
+/// [`App::right_pane_scroll`] to it whenever a new selection triggers a
+/// diff-pane recompute. `None` on file/directory rows and on removed
+/// symbol rows — those either have no symbol to focus, or no line range
+/// to resolve a target from.
 ///
 /// `path` is redundant with [`DiffTarget::File`]'s own `path` (both come
 /// from the same tree row), but is kept here so a caller with only a
@@ -192,8 +192,8 @@ impl App {
     /// in `report.files[..].symbols`; when it does not (a mismatch between
     /// tree and report, "should not happen" but not enforceable at compile
     /// time), returning `None` here matches
-    /// [`crate::diff_shape::section_start_line_for_symbol`]'s own "no
-    /// section found" behavior so the diff pane simply does not auto-scroll
+    /// [`crate::diff_shape::scroll_target_line_for_symbol`]'s own "no
+    /// target found" behavior so the diff pane simply does not auto-scroll
     /// rather than jumping to a stale offset.
     pub fn selected_diff_focus(&self, report: &Report) -> Option<DiffFocus> {
         let rows = self.nav.rows(&self.tree);

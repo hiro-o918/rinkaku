@@ -4,7 +4,9 @@
   [ADR 0072](0072-diff-pane-raw-hunk-order-not-per-symbol-sections.md):
   "auto-scroll to the selected symbol's section" narrows to "auto-scroll
   to the selected symbol's first intersecting hunk"; "always render the
-  whole file" is unchanged)
+  whole file" is unchanged. Amended again by
+  [ADR 0074](0074-row-precise-diff-pane-scroll-sync.md): the target
+  narrows further to the selected symbol's own first rendered row)
 - Date: 2026-07-13
 
 ## Context

@@ -278,6 +278,57 @@ pub fn hunk_intersects(hunk: &Hunk, range_start: usize, range_end: usize) -> boo
     }
 }
 
+/// The new-side line number each of `hunk.lines` sits at, in the hunk's own
+/// interleaved order — the per-row coordinate `crate::diff_shape` resolves a
+/// symbol's `LineRange` against, one entry per rendered diff row.
+///
+/// An `Added`/`Context` line sits *on* its own new-side line, so it gets
+/// that number. A `Removed` line has no new-side line of its own, so it gets
+/// the line it immediately *precedes* — the same "a deletion is a position,
+/// not a range" reading [`hunk_intersects`] already applies to a whole
+/// pure-deletion hunk, expressed from the following side rather than the
+/// preceding one so that a `-`/`+` replacement pair shares one coordinate:
+/// the `-` line of a changed signature resolves to the same new-side line as
+/// the `+` line that replaces it, which is what keeps a symbol's auto-scroll
+/// target landing on the `-` line rather than one row past it.
+///
+/// The returned vector's first element is also the hunk's *header* row
+/// coordinate ([`hunk_header_position`]) — the header is rendered directly
+/// above the first body line and shares its position.
+///
+/// Every entry is `None` when `hunk.new_range` is `None` (an unreadable
+/// header, or a new-side start of `0` — [`Hunk::new_range`]'s own doc
+/// comment): there is no starting point to count from, so no row of this
+/// hunk can be resolved to a line.
+pub fn new_side_positions(hunk: &Hunk) -> Vec<Option<usize>> {
+    let mut next = hunk_header_position(hunk);
+    hunk.lines
+        .iter()
+        .map(|line| {
+            let current = next;
+            if line.kind != DiffLineKind::Removed {
+                next = next.map(|line_number| line_number + 1);
+            }
+            current
+        })
+        .collect()
+}
+
+/// The new-side line coordinate of `hunk`'s own `@@` header row: the first
+/// line its body occupies, or — for a pure-deletion hunk, whose `new_range`
+/// is the zero-width `(position, position - 1)` pair [`Hunk::new_range`]
+/// documents — the line its deleted content immediately precedes
+/// (`position + 1`, since git reports the deletion as sitting *after*
+/// new-side line `position`). `None` for a hunk with no readable new-side
+/// start at all.
+pub fn hunk_header_position(hunk: &Hunk) -> Option<usize> {
+    match hunk.new_range {
+        Some((start, end)) if start > end => Some(start + 1),
+        Some((start, _)) => Some(start),
+        None => None,
+    }
+}
+
 /// Every hunk in `file_hunks` intersecting `[range_start, range_end]`
 /// (1-based inclusive, matching [`rinkaku_core::diff::LineRange`]'s own
 /// convention) — the symbol-row view: "just the hunks touching this

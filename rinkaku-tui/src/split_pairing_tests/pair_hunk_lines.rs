@@ -202,7 +202,7 @@ fn should_treat_two_separate_replace_runs_independently() {
 #[test]
 fn should_return_hunk_lines_len_rows_regardless_of_run_shape() {
     // ADR 0044 decision 4's own invariant: row count always equals
-    // `lines.len()`, so `walk_sections`'s line-counting (and therefore
+    // `lines.len()`, so `crate::diff_shape`'s line-counting (and therefore
     // every scroll-sync offset it feeds) never has to branch on
     // `diff_view_mode`.
     let lines = vec![removed("a"), removed("b"), removed("c"), added("a'")];

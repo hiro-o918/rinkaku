@@ -22,8 +22,8 @@ use crate::diff_view::{DiffLine, DiffLineKind};
 /// [`pair_hunk_lines`] always returns one `SplitRow` per input
 /// [`DiffLine`], never fewer, so a hunk's split-mode row count matches its
 /// unified-mode row count exactly (ADR 0044 decision 4) — this is what lets
-/// `crate::diff_shape`'s `walk_sections`/`hunk_start_lines`/
-/// `section_start_line_for_symbol`/`symbol_id_for_scroll_line` stay
+/// `crate::diff_shape`'s row walk / `hunk_start_lines` /
+/// `scroll_target_line_for_symbol`/`symbol_id_for_scroll_line` stay
 /// unchanged regardless of [`crate::app::DiffViewMode`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplitRow {

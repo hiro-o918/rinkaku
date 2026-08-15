@@ -343,31 +343,22 @@ pub(crate) fn diff_pane_lines(
 }
 
 /// This hunk's own new-side line number for each of `hunk.lines`, `None`
-/// for a pure-`Removed` line (which has no new-side position of its own —
-/// [`crate::diff_view::hunk_intersects`]'s own doc comment on the same
-/// "a removed line is a position, not a range" distinction). Starts
-/// counting from `hunk.new_range`'s own start (already the hunk body's
-/// *actual* new-side extent, not the header's possibly-inaccurate claim —
-/// `Hunk::new_range`'s own doc comment), incrementing once per `Added`/
-/// `Context` line, mirroring how a unified diff's new-side numbering works.
+/// for a `Removed` line — the anchor [`crate::annotation_markers`] needs to
+/// decide whether a rendered row carries an annotation marker, which only a
+/// line that actually exists in the new file can.
 ///
-/// `None` for every line when `hunk.new_range` itself is `None` (an
-/// unreadable header, or new-side start `0` — [`crate::diff_view::Hunk::new_range`]'s
-/// doc comment) — there is no starting point to count from.
+/// Narrows [`crate::diff_view::new_side_positions`], which gives *every*
+/// row a coordinate (a `Removed` row gets the line it precedes, so
+/// `crate::diff_shape`'s scroll sync can resolve it) — an annotation must
+/// not be attributed to a line that was deleted, so the removed rows are
+/// dropped back to `None` here rather than the walk being duplicated.
 fn new_side_line_numbers(hunk: &crate::diff_view::Hunk) -> Vec<Option<usize>> {
-    let Some((start, _)) = hunk.new_range else {
-        return vec![None; hunk.lines.len()];
-    };
-    let mut next_line = start;
-    hunk.lines
-        .iter()
-        .map(|line| match line.kind {
+    crate::diff_view::new_side_positions(hunk)
+        .into_iter()
+        .zip(&hunk.lines)
+        .map(|(position, line)| match line.kind {
             DiffLineKind::Removed => None,
-            DiffLineKind::Added | DiffLineKind::Context => {
-                let current = next_line;
-                next_line += 1;
-                Some(current)
-            }
+            DiffLineKind::Added | DiffLineKind::Context => position,
         })
         .collect()
 }

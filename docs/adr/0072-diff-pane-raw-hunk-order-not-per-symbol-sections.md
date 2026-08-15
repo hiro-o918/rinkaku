@@ -1,6 +1,6 @@
 # 0072. Diff pane shows raw hunks in original order, not per-symbol sections
 
-- Status: accepted
+- Status: accepted (scroll-sync granularity amended by ADR 0074)
 - Date: 2026-08-11
 
 ## Context

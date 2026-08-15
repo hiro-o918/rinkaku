@@ -24,7 +24,7 @@ use unicode_width::UnicodeWidthChar;
 
 /// Renders `lines` into a bordered pane titled `title`, scrolled to
 /// `requested_scroll` *logical* lines down (an index into the unwrapped
-/// `body`, the same unit `crate::diff_shape::walk_sections` and its
+/// `body`, the same unit `crate::diff_shape`'s own row walk and its
 /// derivatives compute against) and clamped to what actually fits
 /// (`clamp_scroll`'s own doc comment on why clamping only happens here,
 /// not in `crate::app`). When the content overflows the pane's inner
@@ -78,7 +78,7 @@ use unicode_width::UnicodeWidthChar;
 /// it lives entirely outside the coordinate system `requested_scroll`/
 /// `clamp_scroll`/`scroll_indicator` operate in (the same way the `Block`'s
 /// border and title already sit outside that coordinate system). This
-/// matters beyond layout: `crate::diff_shape::walk_sections` hand-mirrors
+/// matters beyond layout: `crate::diff_shape`'s own row walk hand-mirrors
 /// this function's line-counting to place both ADR 0027's forward
 /// (selection → scroll target) and ADR 0030's reverse (scroll position →
 /// selected symbol) sync, so a header that shifted the body's own scroll
@@ -285,7 +285,7 @@ pub(crate) fn wrap_lines_with_origins(
 }
 
 /// Converts a logical-line offset (`App::right_pane_scroll`'s unit, and
-/// [`crate::diff_shape::walk_sections`]'s) to the display-row index of that
+/// `crate::diff_shape`'s own row walk) to the display-row index of that
 /// logical line's *first* wrapped row, given `origins` (either
 /// [`wrap_lines_with_origins`]'s or [`pair_wrap_with_origins`]'s per-row
 /// logical-line index). A `logical_line` past every origin (an overscroll

@@ -5,8 +5,9 @@
 //!   supports (ADR 0072's raw hunk-order shaping, deletion / overlap /
 //!   new-file attribution, and the empty-input degrade paths)
 //! - `hunk_start_lines` — the `]c`/`[c` jump-stop layout math
-//! - `section_start_line` — `section_start_line_for_symbol`'s auto-scroll
-//!   target: the first hunk intersecting the selected symbol's range
+//! - `scroll_target_line` — `scroll_target_line_for_symbol`'s auto-scroll
+//!   target: the first rendered row whose new-side coordinate falls inside
+//!   the selected symbol's range (ADR 0074)
 //! - `symbol_id_for_scroll_line` — the reverse lookup added by ADR 0030
 //!   (scroll offset → symbol id under it), powering the diff → tree
 //!   auto-sync
@@ -26,7 +27,7 @@ use rinkaku_core::render::{FileReport, ReportOrigin};
 mod build_diff_pane_content;
 mod changed_line_ranges;
 mod hunk_start_lines;
-mod section_start_line;
+mod scroll_target_line;
 mod symbol_id_for_scroll_line;
 
 pub(super) fn symbol(id: &str, name: &str, range: LineRange) -> ExtractedSymbol {

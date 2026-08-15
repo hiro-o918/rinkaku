@@ -113,7 +113,7 @@ pub struct DrawOutcome {
     /// did not render at all this frame (source screen, or a different
     /// right pane). `crate::run_app` remembers this between frames and
     /// passes it into `diff_shape::hunk_start_lines`/
-    /// `section_start_line_for_symbol`/`symbol_id_for_scroll_line`, so
+    /// `scroll_target_line_for_symbol`/`symbol_id_for_scroll_line`, so
     /// their scroll math matches the mode actually on screen rather than
     /// the requested one — decision 4 amendment's "narrow-terminal
     /// fallback wrong-symbol sync" hazard, closed.

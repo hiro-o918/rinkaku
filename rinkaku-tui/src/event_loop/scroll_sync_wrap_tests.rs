@@ -408,7 +408,7 @@ fn should_resolve_the_correct_symbol_when_scroll_position_lands_inside_a_precedi
     // Symptom 2's regression pin: before the fix, `render_scrollable_pane`
     // clamped/consumed `requested_scroll` directly as a *display-row* index
     // into the wrapped content, with no conversion from the *logical-line*
-    // unit `crate::diff_shape::section_start_line_for_symbol` produces it
+    // unit `crate::diff_shape::scroll_target_line_for_symbol` produces it
     // in. Requesting `small`'s logical hunk-start (a small number) left
     // the rendered viewport still showing `giant`'s own wrapped
     // continuation — `small`'s hunk was nowhere on screen — while the
@@ -428,7 +428,7 @@ fn should_resolve_the_correct_symbol_when_scroll_position_lands_inside_a_precedi
         }),
     );
     let small_start =
-        diff_shape::section_start_line_for_symbol(&content, LineRange { start: 10, end: 11 })
+        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 10, end: 11 })
             .expect("small's hunk start must resolve");
 
     // Request `small`'s logical hunk-start directly (bypassing
@@ -623,7 +623,7 @@ fn should_advance_scroll_monotonically_past_a_huge_wrapped_leading_line_in_unifi
         }),
     );
     let last_line =
-        diff_shape::section_start_line_for_symbol(&content, LineRange { start: 30, end: 31 })
+        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 30, end: 31 })
             .expect("third's hunk start must resolve");
     let symbols = symbols_for(&report, "lib.rs");
 
@@ -663,7 +663,7 @@ fn should_advance_scroll_monotonically_past_a_huge_wrapped_leading_line_in_split
         }),
     );
     let last_line =
-        diff_shape::section_start_line_for_symbol(&content, LineRange { start: 30, end: 31 })
+        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 30, end: 31 })
             .expect("third's hunk start must resolve");
     let symbols = symbols_for(&report, "lib.rs");
 
@@ -703,7 +703,7 @@ fn should_not_oscillate_when_alternating_down_and_up_past_a_huge_wrapped_leading
         }),
     );
     let last_line =
-        diff_shape::section_start_line_for_symbol(&content, LineRange { start: 30, end: 31 })
+        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 30, end: 31 })
             .expect("third's hunk start must resolve");
     let diff_highlights = crate::highlight::highlight_diff_files(&diff_hunks);
     let width = 40;
