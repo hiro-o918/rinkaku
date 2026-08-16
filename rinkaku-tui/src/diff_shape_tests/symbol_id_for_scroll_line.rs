@@ -4,6 +4,7 @@
 //! auto-sync (`lib::sync_target_for_scroll` from the caller side).
 
 use super::*;
+use crate::app::DiffViewMode;
 
 fn foo_bar_symbols() -> Vec<(String, LineRange)> {
     vec![
@@ -16,7 +17,8 @@ fn foo_bar_symbols() -> Vec<(String, LineRange)> {
 fn should_return_none_for_scroll_line_when_content_is_empty() {
     let symbols = foo_bar_symbols();
 
-    let actual = symbol_id_for_scroll_line(&DiffPaneContent::Empty, 0, &symbols);
+    let actual =
+        symbol_id_for_scroll_line(&DiffPaneContent::Empty, 0, &symbols, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -33,7 +35,7 @@ fn should_return_the_symbol_covering_the_hunk_header_row() {
     )]);
     let symbols = foo_bar_symbols();
 
-    let actual = symbol_id_for_scroll_line(&content, 0, &symbols);
+    let actual = symbol_id_for_scroll_line(&content, 0, &symbols, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::foo"), actual);
 }
@@ -50,7 +52,7 @@ fn should_return_the_symbol_covering_the_body_row_at_the_scroll_line() {
     )]);
     let symbols = foo_bar_symbols();
 
-    let actual = symbol_id_for_scroll_line(&content, 1, &symbols);
+    let actual = symbol_id_for_scroll_line(&content, 1, &symbols, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::foo"), actual);
 }
@@ -71,7 +73,7 @@ fn should_return_the_second_symbol_when_scroll_line_falls_inside_the_second_hunk
     ]);
     let symbols = foo_bar_symbols();
 
-    let actual = symbol_id_for_scroll_line(&content, 4, &symbols);
+    let actual = symbol_id_for_scroll_line(&content, 4, &symbols, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::bar"), actual);
 }
@@ -84,7 +86,7 @@ fn should_return_none_when_the_row_at_the_scroll_line_belongs_to_no_symbol() {
     )]);
     let symbols = foo_bar_symbols();
 
-    let actual = symbol_id_for_scroll_line(&content, 1, &symbols);
+    let actual = symbol_id_for_scroll_line(&content, 1, &symbols, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -107,7 +109,7 @@ fn should_return_the_first_hunks_symbol_when_scroll_line_is_the_separator_before
     ]);
     let symbols = foo_bar_symbols();
 
-    let actual = symbol_id_for_scroll_line(&content, 2, &symbols);
+    let actual = symbol_id_for_scroll_line(&content, 2, &symbols, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::foo"), actual);
 }
@@ -124,7 +126,7 @@ fn should_return_the_last_hunks_symbol_when_scroll_line_is_past_every_hunk() {
     )]);
     let symbols = foo_bar_symbols();
 
-    let actual = symbol_id_for_scroll_line(&content, 100, &symbols);
+    let actual = symbol_id_for_scroll_line(&content, 100, &symbols, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::foo"), actual);
 }
@@ -151,7 +153,7 @@ fn should_return_each_symbol_in_turn_for_rows_of_one_hunk_covering_several_symbo
     ];
 
     let actual: Vec<Option<&str>> = (0..=4)
-        .map(|line| symbol_id_for_scroll_line(&content, line, &symbols))
+        .map(|line| symbol_id_for_scroll_line(&content, line, &symbols, DiffViewMode::Unified))
         .collect();
 
     assert_eq!(
@@ -189,9 +191,9 @@ fn should_round_trip_the_scroll_target_of_every_symbol_under_one_hunk() {
     let actual: Vec<Option<&str>> = symbols
         .iter()
         .map(|(_, range)| {
-            let target = scroll_target_line_for_symbol(&content, *range)
+            let target = scroll_target_line_for_symbol(&content, *range, DiffViewMode::Unified)
                 .expect("every symbol here has a covering row");
-            symbol_id_for_scroll_line(&content, target, &symbols)
+            symbol_id_for_scroll_line(&content, target, &symbols, DiffViewMode::Unified)
         })
         .collect();
 
@@ -203,4 +205,80 @@ fn should_round_trip_the_scroll_target_of_every_symbol_under_one_hunk() {
         ],
         actual
     );
+}
+
+#[test]
+fn should_resolve_split_view_rows_by_where_each_symbol_actually_renders() {
+    // The mirror image of
+    // `scroll_target_line::should_target_the_row_a_symbol_actually_renders_on_in_split_view`:
+    // in split view body row 3 shows `gamma`'s own `-`/`+` pair, so parking
+    // the scroll there must resolve to `gamma` — under the unified-order
+    // walk it resolves to `alpha`, whose `-` line is the third source line.
+    use crate::diff_view::{DiffLine, DiffLineKind};
+
+    let replaced = |content: &str, kind| DiffLine {
+        kind,
+        content: content.to_string(),
+    };
+    let content = DiffPaneContent::File(vec![attributed(
+        0,
+        Hunk {
+            header: "@@ -10,3 +10,3 @@".to_string(),
+            new_range: Some((10, 12)),
+            lines: vec![
+                replaced("fn alpha(x: u32) {}", DiffLineKind::Removed),
+                replaced("fn beta(x: u32) {}", DiffLineKind::Removed),
+                replaced("fn gamma(x: u32) {}", DiffLineKind::Removed),
+                replaced("fn alpha(x: u64) {}", DiffLineKind::Added),
+                replaced("fn beta(x: u64) {}", DiffLineKind::Added),
+                replaced("fn gamma(x: u64) {}", DiffLineKind::Added),
+            ],
+        },
+    )]);
+    let symbols = vec![
+        (
+            "lib.rs::alpha".to_string(),
+            LineRange { start: 10, end: 10 },
+        ),
+        ("lib.rs::beta".to_string(), LineRange { start: 11, end: 11 }),
+        (
+            "lib.rs::gamma".to_string(),
+            LineRange { start: 12, end: 12 },
+        ),
+    ];
+
+    let actual: Vec<Option<&str>> = (1..=3)
+        .map(|line| symbol_id_for_scroll_line(&content, line, &symbols, DiffViewMode::Split))
+        .collect();
+
+    assert_eq!(
+        vec![
+            Some("lib.rs::alpha"),
+            Some("lib.rs::beta"),
+            Some("lib.rs::gamma"),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_walk_back_to_the_previous_hunk_when_the_hunk_at_the_scroll_line_has_no_readable_header() {
+    // A hunk whose header this parser could not read carries no coordinate
+    // on any of its rows, so a scroll position inside it resolves to the
+    // nearest preceding row that has one — the previous hunk's symbol —
+    // rather than to `None`. Documented on `symbol_id_for_scroll_line`
+    // alongside the separator case, but only the separator case was pinned.
+    let content = DiffPaneContent::File(vec![
+        attributed(
+            0,
+            hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
+        ),
+        attributed(1, hunk("@@ garbled @@", None, vec!["fn bar() {}"])),
+    ]);
+    let symbols = foo_bar_symbols();
+
+    // Rows: header(0), body(1), separator(2), header(3), body(4).
+    let actual = symbol_id_for_scroll_line(&content, 4, &symbols, DiffViewMode::Unified);
+
+    assert_eq!(Some("lib.rs::foo"), actual);
 }

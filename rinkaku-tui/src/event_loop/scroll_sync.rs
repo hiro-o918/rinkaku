@@ -52,7 +52,10 @@ pub(crate) struct DiffPaneSelectionEffects {
 /// given `last_diff_focus` (the tree-cursor-driven focus as of the
 /// *previous* handled key) and `scroll_before_dispatch` (`right_pane_scroll`
 /// as of *before* this key's dispatch, ADR 0030's own doc comment on why
-/// scroll-vs-focus need two different "before" snapshots).
+/// scroll-vs-focus need two different "before" snapshots) and `view_mode`
+/// (the mode the *last drawn frame* actually rendered the diff pane in —
+/// `crate::diff_shape::diff_rows`' own doc comment on why the row-precise
+/// scroll math has to be told the two modes apart).
 ///
 /// Extracted out of `run_app`'s loop body for the same reason
 /// `dispatch_non_source_key` was (that function's own doc comment): a bug
@@ -77,6 +80,7 @@ pub(crate) fn apply_diff_pane_selection_effects(
     diff_hunks: &[diff_view::FileHunks],
     last_diff_focus: Option<app::DiffFocus>,
     scroll_before_dispatch: usize,
+    view_mode: app::DiffViewMode,
 ) -> DiffPaneSelectionEffects {
     let diff_pane_content = diff_shape::build_diff_pane_content(
         report,
@@ -96,13 +100,19 @@ pub(crate) fn apply_diff_pane_selection_effects(
     // lands on a different symbol do we retarget the pane.
     let next_focus = app.selected_diff_focus(report);
     let last_diff_focus = if next_focus != last_diff_focus {
-        if let Some(target_scroll) = auto_scroll_for_diff_focus(&app, report, &diff_pane_content) {
+        if let Some(target_scroll) =
+            auto_scroll_for_diff_focus(&app, report, &diff_pane_content, view_mode)
+        {
             app = app.with_right_pane_scroll(target_scroll);
         }
         next_focus
-    } else if let Some(target_symbol_id) =
-        sync_target_for_scroll(&app, report, &diff_pane_content, scroll_before_dispatch)
-    {
+    } else if let Some(target_symbol_id) = sync_target_for_scroll(
+        &app,
+        report,
+        &diff_pane_content,
+        scroll_before_dispatch,
+        view_mode,
+    ) {
         // ADR 0030: the mirror-image sync — this key's dispatch did not
         // itself move the cursor (`next_focus == last_diff_focus`, the `if`
         // branch above), but it did move `right_pane_scroll` onto a row
@@ -154,6 +164,7 @@ pub(crate) fn sync_target_for_scroll(
     report: &Report,
     diff_pane_content: &diff_shape::DiffPaneContent,
     scroll_before_dispatch: usize,
+    view_mode: app::DiffViewMode,
 ) -> Option<String> {
     if !should_apply_hunk_jump(app) {
         return None;
@@ -170,6 +181,7 @@ pub(crate) fn sync_target_for_scroll(
         diff_pane_content,
         app.right_pane_scroll(),
         &symbols,
+        view_mode,
     )?;
     if Some(target_symbol_id) == app.selected_symbol_id() {
         return None;
@@ -249,6 +261,7 @@ pub(crate) fn auto_scroll_for_diff_focus(
     app: &App,
     report: &Report,
     diff_pane_content: &diff_shape::DiffPaneContent,
+    view_mode: app::DiffViewMode,
 ) -> Option<usize> {
     let focus = app.selected_diff_focus(report)?;
     let range = report
@@ -257,7 +270,7 @@ pub(crate) fn auto_scroll_for_diff_focus(
         .find(|file| file.path == focus.path)
         .and_then(|file| file.symbols.iter().find(|s| s.id == focus.symbol_id))
         .map(|symbol| symbol.range)?;
-    diff_shape::scroll_target_line_for_symbol(diff_pane_content, range)
+    diff_shape::scroll_target_line_for_symbol(diff_pane_content, range, view_mode)
 }
 
 /// Whether `crate::event_loop::run_app`'s event loop should act on an

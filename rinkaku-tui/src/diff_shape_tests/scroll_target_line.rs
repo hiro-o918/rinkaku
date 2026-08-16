@@ -4,6 +4,7 @@
 //! symbol's range.
 
 use super::*;
+use crate::app::DiffViewMode;
 use crate::diff_view::{DiffLine, DiffLineKind};
 use pretty_assertions::assert_eq;
 
@@ -30,8 +31,11 @@ fn mixed_hunk(
 
 #[test]
 fn should_return_none_for_symbol_start_when_content_is_empty() {
-    let actual =
-        scroll_target_line_for_symbol(&DiffPaneContent::Empty, LineRange { start: 1, end: 2 });
+    let actual = scroll_target_line_for_symbol(
+        &DiffPaneContent::Empty,
+        LineRange { start: 1, end: 2 },
+        DiffViewMode::Unified,
+    );
 
     assert_eq!(None, actual);
 }
@@ -46,7 +50,11 @@ fn should_return_zero_when_the_symbol_starts_where_the_only_hunk_starts() {
         hunk("@@ -1,1 +1,2 @@", Some((1, 2)), vec!["fn foo() {}"]),
     )]);
 
-    let actual = scroll_target_line_for_symbol(&content, LineRange { start: 1, end: 2 });
+    let actual = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 1, end: 2 },
+        DiffViewMode::Unified,
+    );
 
     assert_eq!(Some(0), actual);
 }
@@ -66,7 +74,11 @@ fn should_return_second_hunk_start_when_only_the_second_hunk_covers_the_symbol_r
         ),
     ]);
 
-    let actual = scroll_target_line_for_symbol(&content, LineRange { start: 10, end: 11 });
+    let actual = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 10, end: 11 },
+        DiffViewMode::Unified,
+    );
 
     assert_eq!(Some(3), actual);
 }
@@ -87,8 +99,16 @@ fn should_return_the_symbols_own_row_when_it_starts_inside_a_hunk() {
         ),
     )]);
 
-    let foo = scroll_target_line_for_symbol(&content, LineRange { start: 1, end: 2 });
-    let bar = scroll_target_line_for_symbol(&content, LineRange { start: 3, end: 4 });
+    let foo = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 1, end: 2 },
+        DiffViewMode::Unified,
+    );
+    let bar = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 3, end: 4 },
+        DiffViewMode::Unified,
+    );
 
     assert_eq!((Some(0), Some(3)), (foo, bar));
 }
@@ -106,7 +126,11 @@ fn should_return_the_first_covering_row_when_the_symbol_range_spans_two_hunks() 
         attributed(1, hunk("@@ -10,1 +4,2 @@", Some((4, 5)), vec!["d", "e"])),
     ]);
 
-    let actual = scroll_target_line_for_symbol(&content, LineRange { start: 3, end: 5 });
+    let actual = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 3, end: 5 },
+        DiffViewMode::Unified,
+    );
 
     assert_eq!(Some(3), actual);
 }
@@ -132,7 +156,11 @@ fn should_return_the_removed_row_of_a_replaced_signature_rather_than_its_added_r
         ),
     )]);
 
-    let actual = scroll_target_line_for_symbol(&content, LineRange { start: 2, end: 2 });
+    let actual = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 2, end: 2 },
+        DiffViewMode::Unified,
+    );
 
     assert_eq!(Some(2), actual);
 }
@@ -150,6 +178,7 @@ fn should_return_none_when_no_row_covers_the_symbol_range() {
             start: 100,
             end: 200,
         },
+        DiffViewMode::Unified,
     );
 
     assert_eq!(None, actual);
@@ -165,7 +194,88 @@ fn should_return_none_when_the_hunk_header_has_no_readable_new_side_start() {
         hunk("@@ garbled @@", None, vec!["fn foo() {}"]),
     )]);
 
-    let actual = scroll_target_line_for_symbol(&content, LineRange { start: 1, end: 2 });
+    let actual = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 1, end: 2 },
+        DiffViewMode::Unified,
+    );
 
     assert_eq!(None, actual);
+}
+
+#[test]
+fn should_target_the_row_a_symbol_actually_renders_on_in_split_view() {
+    // ADR 0044's `pair_hunk_lines` merges a removed/added run onto shared
+    // rows and appends one filler row per merge *at the end of the run*, so
+    // split rows match unified rows in count but not in content order. A
+    // three-line replacement renders as three paired rows followed by three
+    // fillers, while the unified order is `-a -b -c +a +b +c`.
+    let content = DiffPaneContent::File(vec![attributed(
+        0,
+        mixed_hunk(
+            "@@ -10,3 +10,3 @@",
+            Some((10, 12)),
+            vec![
+                (DiffLineKind::Removed, "fn alpha(x: u32) {}"),
+                (DiffLineKind::Removed, "fn beta(x: u32) {}"),
+                (DiffLineKind::Removed, "fn gamma(x: u32) {}"),
+                (DiffLineKind::Added, "fn alpha(x: u64) {}"),
+                (DiffLineKind::Added, "fn beta(x: u64) {}"),
+                (DiffLineKind::Added, "fn gamma(x: u64) {}"),
+            ],
+        ),
+    )]);
+
+    // Rows are header(0) then body rows 1..=6. In split view `gamma`
+    // renders on the third *paired* row (body row 3); the unified-order
+    // coordinate walk would point at body row 6, a blank filler three rows
+    // below where `gamma` actually is.
+    let unified = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 12, end: 12 },
+        DiffViewMode::Unified,
+    );
+    let split = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 12, end: 12 },
+        DiffViewMode::Split,
+    );
+
+    assert_eq!((Some(6), Some(3)), (unified, split));
+}
+
+#[test]
+fn should_resolve_a_pure_deletion_hunk_to_the_line_its_removed_content_precedes() {
+    // A pure-deletion hunk's `new_range` is the zero-width `(position,
+    // position - 1)` pair, where `position` is the line the removal sits
+    // *after* — so every row of `@@ -10,2 +9,0 @@` carries coordinate 10,
+    // not 9. Pinned because the arithmetic is invisible from the outside:
+    // with `hunk_header_position` returning `start` instead of `start + 1`,
+    // a symbol starting at line 10 (whose leading lines these are) would
+    // stop resolving to this hunk at all.
+    let content = DiffPaneContent::File(vec![attributed(
+        0,
+        mixed_hunk(
+            "@@ -10,2 +9,0 @@",
+            Some((9, 8)),
+            vec![
+                (DiffLineKind::Removed, "#[derive(Debug)]"),
+                (DiffLineKind::Removed, "struct Gone;"),
+            ],
+        ),
+    )]);
+
+    let at_the_removal = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 10, end: 12 },
+        DiffViewMode::Unified,
+    );
+    // The symbol *ending* at 9 owns the line before the gap, not the gap.
+    let before_the_removal = scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 7, end: 9 },
+        DiffViewMode::Unified,
+    );
+
+    assert_eq!((Some(0), None), (at_the_removal, before_the_removal));
 }

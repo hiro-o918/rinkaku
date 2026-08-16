@@ -28,7 +28,7 @@
 //!   fixed point before reaching the last symbol.
 
 use super::{apply_diff_pane_selection_effects, clamp_right_pane_scroll_after_draw};
-use crate::app::{self, App, InputKey};
+use crate::app::{self, App, DiffViewMode, InputKey};
 use crate::event_loop::tests::empty_report;
 use crate::locale::Locale;
 use crate::{diff_shape, diff_view};
@@ -130,6 +130,7 @@ fn dispatch_draw_and_fold(
         diff_hunks,
         last_diff_focus,
         scroll_before_dispatch,
+        DiffViewMode::Unified,
     );
     let app = effects.app;
     let diff_pane_content = effects.diff_pane_content;
@@ -427,9 +428,12 @@ fn should_resolve_the_correct_symbol_when_scroll_position_lands_inside_a_precedi
             path: "lib.rs".to_string(),
         }),
     );
-    let small_start =
-        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 10, end: 11 })
-            .expect("small's hunk start must resolve");
+    let small_start = diff_shape::scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 10, end: 11 },
+        DiffViewMode::Unified,
+    )
+    .expect("small's hunk start must resolve");
 
     // Request `small`'s logical hunk-start directly (bypassing
     // `apply_diff_pane_selection_effects`'s own gating, since this test
@@ -470,7 +474,12 @@ fn should_resolve_the_correct_symbol_when_scroll_position_lands_inside_a_precedi
         "small's hunk header must be visible once requested at its own logical start; rows: {rows:?}"
     );
     let symbols = symbols_for(&report, "lib.rs");
-    let resolved = diff_shape::symbol_id_for_scroll_line(&content, folded_back_scroll, &symbols);
+    let resolved = diff_shape::symbol_id_for_scroll_line(
+        &content,
+        folded_back_scroll,
+        &symbols,
+        DiffViewMode::Unified,
+    );
     assert_eq!(
         Some("lib.rs::small"),
         resolved,
@@ -622,9 +631,12 @@ fn should_advance_scroll_monotonically_past_a_huge_wrapped_leading_line_in_unifi
             path: "lib.rs".to_string(),
         }),
     );
-    let last_line =
-        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 30, end: 31 })
-            .expect("third's hunk start must resolve");
+    let last_line = diff_shape::scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 30, end: 31 },
+        DiffViewMode::Unified,
+    )
+    .expect("third's hunk start must resolve");
     let symbols = symbols_for(&report, "lib.rs");
 
     for viewport_height in [2u16, 3, 4] {
@@ -642,6 +654,7 @@ fn should_advance_scroll_monotonically_past_a_huge_wrapped_leading_line_in_unifi
             &content,
             *positions.last().expect("at least one press recorded"),
             &symbols,
+            DiffViewMode::Unified,
         );
         assert_eq!(
             Some("lib.rs::third"),
@@ -662,9 +675,12 @@ fn should_advance_scroll_monotonically_past_a_huge_wrapped_leading_line_in_split
             path: "lib.rs".to_string(),
         }),
     );
-    let last_line =
-        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 30, end: 31 })
-            .expect("third's hunk start must resolve");
+    let last_line = diff_shape::scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 30, end: 31 },
+        DiffViewMode::Unified,
+    )
+    .expect("third's hunk start must resolve");
     let symbols = symbols_for(&report, "lib.rs");
 
     for viewport_height in [2u16, 3, 4] {
@@ -682,6 +698,7 @@ fn should_advance_scroll_monotonically_past_a_huge_wrapped_leading_line_in_split
             &content,
             *positions.last().expect("at least one press recorded"),
             &symbols,
+            DiffViewMode::Unified,
         );
         assert_eq!(
             Some("lib.rs::third"),
@@ -702,9 +719,12 @@ fn should_not_oscillate_when_alternating_down_and_up_past_a_huge_wrapped_leading
             path: "lib.rs".to_string(),
         }),
     );
-    let last_line =
-        diff_shape::scroll_target_line_for_symbol(&content, LineRange { start: 30, end: 31 })
-            .expect("third's hunk start must resolve");
+    let last_line = diff_shape::scroll_target_line_for_symbol(
+        &content,
+        LineRange { start: 30, end: 31 },
+        DiffViewMode::Unified,
+    )
+    .expect("third's hunk start must resolve");
     let diff_highlights = crate::highlight::highlight_diff_files(&diff_hunks);
     let width = 40;
     let height = 10;

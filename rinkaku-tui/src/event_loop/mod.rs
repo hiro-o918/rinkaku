@@ -136,8 +136,26 @@ pub(crate) fn run_app(
     // selection change, so `--tui` startup on a symbol row (e.g. `App::new`'s
     // default cursor when the first row happens to be a symbol) already
     // opens with the correct scroll offset rather than an unrelated 0.
+    // The diff pane's view mode as *actually rendered* by the last frame
+    // (`ui::DrawOutcome::effective_diff_view_mode`, which folds in ADR 0044
+    // decision 7's narrow-terminal split-to-unified fallback), remembered
+    // across frames the same way `last_scroll_viewport_height` is and for
+    // the same reason: ADR 0074's row-precise scroll math only matches what
+    // is on screen when it is told which mode produced those rows, and only
+    // the renderer knows whether a `Split` request actually fit.
+    //
+    // Seeded with the *requested* mode, since no frame has drawn yet — a
+    // terminal too narrow to honor `Split` gets one frame of unified-order
+    // coordinates before the first draw corrects this, which the very next
+    // selection change re-targets.
+    let mut last_effective_diff_view_mode = app.diff_view_mode();
     let mut last_diff_focus: Option<crate::app::DiffFocus> = app.selected_diff_focus(report);
-    if let Some(target_scroll) = auto_scroll_for_diff_focus(&app, report, &diff_pane_content) {
+    if let Some(target_scroll) = auto_scroll_for_diff_focus(
+        &app,
+        report,
+        &diff_pane_content,
+        last_effective_diff_view_mode,
+    ) {
         app = app.with_right_pane_scroll(target_scroll);
     }
     // The source screen's (`s` key) file read + syntax highlight, computed
@@ -230,6 +248,9 @@ pub(crate) fn run_app(
         app = clamp_help_scroll_after_draw(app, outcome.clamped_help_scroll);
         if outcome.help_scroll_viewport_height.is_some() {
             last_help_scroll_viewport_height = outcome.help_scroll_viewport_height;
+        }
+        if let Some(view_mode) = outcome.effective_diff_view_mode {
+            last_effective_diff_view_mode = view_mode;
         }
 
         if app.should_quit() {
@@ -453,6 +474,7 @@ pub(crate) fn run_app(
                     &diff_hunks,
                     last_diff_focus,
                     scroll_before_dispatch,
+                    last_effective_diff_view_mode,
                 );
                 app = effects.app;
                 diff_pane_content = effects.diff_pane_content;

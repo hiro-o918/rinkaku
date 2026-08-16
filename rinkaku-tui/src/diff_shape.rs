@@ -26,7 +26,7 @@
 //! `crate::ui::draw` must not call it, for the identical reason
 //! `ui::draw` must not call `App::selected_blast_radius_view` either.
 
-use crate::app::DiffTarget;
+use crate::app::{DiffTarget, DiffViewMode};
 use crate::diff_view::{FileHunks, Hunk, file_hunks, hunk_header_position, new_side_positions};
 pub use crate::split_pairing::{SplitRow, pair_hunk_lines};
 use rinkaku_core::diff::LineRange;
@@ -69,11 +69,11 @@ pub enum DiffPaneContent {
 /// (ADR 0052: logical lines, before `crate::ui::wrap_lines`' width-based
 /// wrapping).
 ///
-/// Each variant carries the *new-side line coordinate* the row sits at
-/// ([`crate::diff_view::new_side_positions`]), which is what makes both
-/// scroll-sync directions row-precise rather than hunk-precise (ADR 0074).
-/// `None` where there is no coordinate to carry: a separator row belongs to
-/// no hunk, and a hunk whose header this parser could not read has no
+/// Each variant carries the *new-side line coordinate* the row sits at,
+/// which is what makes both scroll-sync directions row-precise rather than
+/// hunk-precise (ADR 0074). `None` where there is no coordinate to carry: a
+/// separator row belongs to no hunk, a split-view filler row shows no line
+/// at all, and a hunk whose header this parser could not read has no
 /// new-side start to count from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiffRow {
@@ -100,12 +100,24 @@ impl DiffRow {
 /// [`symbol_id_for_scroll_line`] all resolve against, kept in one place so a
 /// change to the rendered layout only has to be mirrored here once.
 ///
-/// Mirrors `diff_pane_lines`/`diff_pane_split_rows`'s own line-counting by
+/// `view_mode` must be the mode the pane *actually rendered* in
+/// (`crate::ui::DrawOutcome::effective_diff_view_mode`, which already folds
+/// in ADR 0044 decision 7's narrow-terminal fallback), not the requested
+/// one. The two modes render the same number of rows per hunk — that is
+/// `crate::split_pairing::pair_hunk_lines`' one-row-per-input-line invariant
+/// (ADR 0044 decision 4) — but *not* the same content per row: a matched
+/// removed/added pair merges two source lines onto one row and pushes its
+/// filler row to the end of the run, so a hunk's nth split row and its nth
+/// unified row show different lines as soon as the hunk contains a replace
+/// run. Equal row counts were all ADR 0072's whole-hunk rule ever needed;
+/// row-precise coordinates need the modes told apart.
+///
+/// Mirrors `diff_pane_lines`/`diff_pane_split_rows`'s own row emission by
 /// hand rather than reusing either function, since this module must stay
 /// free of `ratatui` types (module doc comment) — the same trade
 /// `crate::order`'s own doc comment already accepts for its deliberately
 /// duplicated Tarjan SCC implementation.
-fn diff_rows(content: &DiffPaneContent) -> Vec<DiffRow> {
+fn diff_rows(content: &DiffPaneContent, view_mode: DiffViewMode) -> Vec<DiffRow> {
     let hunks: &[AttributedHunk] = match content {
         DiffPaneContent::Empty => &[],
         DiffPaneContent::File(hunks) => hunks,
@@ -117,11 +129,24 @@ fn diff_rows(content: &DiffPaneContent) -> Vec<DiffRow> {
             rows.push(DiffRow::Separator);
         }
         rows.push(DiffRow::Header(hunk_header_position(&attributed.hunk)));
-        rows.extend(
-            new_side_positions(&attributed.hunk)
-                .into_iter()
-                .map(DiffRow::Body),
-        );
+
+        let positions = new_side_positions(&attributed.hunk);
+        match view_mode {
+            DiffViewMode::Unified => rows.extend(positions.into_iter().map(DiffRow::Body)),
+            DiffViewMode::Split => rows.extend(
+                pair_hunk_lines(&attributed.hunk.lines)
+                    .into_iter()
+                    .map(|split_row| {
+                        // The new side is what a symbol's `LineRange` is
+                        // expressed in, so it wins when the row shows both;
+                        // an old-side-only row falls back to the line its
+                        // removal precedes (`new_side_positions`), the same
+                        // coordinate that row carries in unified view.
+                        let index = split_row.right_index.or(split_row.left_index);
+                        DiffRow::Body(index.and_then(|index| positions[index]))
+                    }),
+            ),
+        }
     }
     rows
 }
@@ -133,7 +158,12 @@ fn diff_rows(content: &DiffPaneContent) -> Vec<DiffRow> {
 /// by `crate::run_app`'s `]c`/`[c` (`InputKey::NextHunk`/`PrevHunk`)
 /// handling to jump the scroll offset to a hunk boundary.
 pub fn hunk_start_lines(content: &DiffPaneContent) -> Vec<usize> {
-    diff_rows(content)
+    // Mode-independent, unlike the two row-precise lookups: a hunk's header
+    // row index depends only on how many rows precede it, and both modes
+    // render the same count per hunk ([`diff_rows`]' own doc comment). The
+    // cheaper unified walk therefore gives the same answer as the split one
+    // without running `pair_hunk_lines`' alignment DP.
+    diff_rows(content, DiffViewMode::Unified)
         .iter()
         .enumerate()
         .filter(|(_, row)| matches!(row, DiffRow::Header(_)))
@@ -171,8 +201,9 @@ pub fn hunk_start_lines(content: &DiffPaneContent) -> Vec<usize> {
 pub fn scroll_target_line_for_symbol(
     content: &DiffPaneContent,
     symbol_range: LineRange,
+    view_mode: DiffViewMode,
 ) -> Option<usize> {
-    diff_rows(content)
+    diff_rows(content, view_mode)
         .iter()
         .position(|row| row_is_within(*row, symbol_range))
 }
@@ -202,8 +233,9 @@ pub fn symbol_id_for_scroll_line<'a>(
     content: &DiffPaneContent,
     scroll_line: usize,
     symbols: &'a [(String, LineRange)],
+    view_mode: DiffViewMode,
 ) -> Option<&'a str> {
-    let rows = diff_rows(content);
+    let rows = diff_rows(content, view_mode);
     let last_row = rows.len().checked_sub(1)?;
     let position = rows[..=scroll_line.min(last_row)]
         .iter()

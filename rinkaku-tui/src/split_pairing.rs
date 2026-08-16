@@ -22,9 +22,18 @@ use crate::diff_view::{DiffLine, DiffLineKind};
 /// [`pair_hunk_lines`] always returns one `SplitRow` per input
 /// [`DiffLine`], never fewer, so a hunk's split-mode row count matches its
 /// unified-mode row count exactly (ADR 0044 decision 4) — this is what lets
-/// `crate::diff_shape`'s row walk / `hunk_start_lines` /
-/// `scroll_target_line_for_symbol`/`symbol_id_for_scroll_line` stay
-/// unchanged regardless of [`crate::app::DiffViewMode`].
+/// `crate::diff_shape::hunk_start_lines` (and so `]c`/`[c`) stay unchanged
+/// regardless of [`crate::app::DiffViewMode`]: a hunk header's row index
+/// depends only on how many rows precede it.
+///
+/// Equal counts are **not** equal content per row, and ADR 0074's
+/// row-precise scroll sync needs the latter: a matched removed/added pair
+/// merges two source lines onto one row and pushes its filler row to the
+/// end of the run, so this function's nth row and `hunk.lines[n]` are
+/// different lines as soon as the hunk contains a replace run.
+/// `crate::diff_shape::diff_rows` therefore takes the rendered
+/// [`crate::app::DiffViewMode`] and walks *these* rows in split mode rather
+/// than the interleaved source order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplitRow {
     pub left: Option<DiffLine>,

@@ -49,7 +49,10 @@ pub struct Hunk {
     /// in the new file — line `start` is still `start`, it is just now
     /// zero-width, so this stores it as `(start, start - 1)` (`start > end`,
     /// a deliberately empty range at that position) rather than discarding
-    /// it. This lets [`hunk_intersects`] test a deletion's *position*
+    /// it — the line the deletion sits *after*, so the removed content
+    /// occupied the gap between new-side lines `start` and `start + 1`
+    /// ([`hunk_header_position`] states the same fact from the following
+    /// side). This lets [`hunk_intersects`] test a deletion's *position*
     /// against a symbol's range using the exact same `start <= end`
     /// comparison it already uses for ordinary hunks — mirroring
     /// `rinkaku_core::diff::parse_hunk`'s own zero-width `LineRange { start,
@@ -250,8 +253,9 @@ fn parse_new_side_header(header: &str) -> Option<(usize, usize)> {
 /// `start <= end` span, and it needs its own boundary rule, not the general
 /// `hunk_start <= range_end && range_start <= hunk_end` overlap test below —
 /// that test treats both ends of an inclusive range as "belongs", but a
-/// deletion *position* is where content used to sit, i.e. strictly *before*
-/// new-file line `position`. Concretely (verified against `git diff -U0`
+/// deletion *position* is where content used to sit, i.e. in the gap
+/// *after* new-file line `position` — equivalently, strictly before line
+/// `position + 1`. Concretely (verified against `git diff -U0`
 /// output, not just algebra): deleting a function's first body statement
 /// reports `position == range_start`, and should belong to that function
 /// (`range_start <= position`); deleting the blank separator line right
@@ -260,8 +264,9 @@ fn parse_new_side_header(header: &str) -> Option<(usize, usize)> {
 /// `position <= range_end` — the deletion sits in the gap between this
 /// symbol and the next one, not inside this symbol's own body). So the rule
 /// for a zero-width position is `range_start <= position < range_end`, the
-/// half-open interpretation of "before this new-file line" — deliberately
-/// asymmetric versus the closed-interval test used for ordinary hunks.
+/// half-open interpretation of "in the gap after this new-file line" —
+/// deliberately asymmetric versus the closed-interval test used for
+/// ordinary hunks.
 pub fn hunk_intersects(hunk: &Hunk, range_start: usize, range_end: usize) -> bool {
     match hunk.new_range {
         Some((hunk_start, hunk_end)) if hunk_start > hunk_end => {
@@ -317,13 +322,26 @@ pub fn new_side_positions(hunk: &Hunk) -> Vec<Option<usize>> {
 /// The new-side line coordinate of `hunk`'s own `@@` header row: the first
 /// line its body occupies, or — for a pure-deletion hunk, whose `new_range`
 /// is the zero-width `(position, position - 1)` pair [`Hunk::new_range`]
-/// documents — the line its deleted content immediately precedes
-/// (`position + 1`, since git reports the deletion as sitting *after*
-/// new-side line `position`). `None` for a hunk with no readable new-side
-/// start at all.
+/// documents — the line its deleted content immediately precedes.
+///
+/// That second case is `position + 1`, not `position`: git reports a
+/// deletion as sitting *after* new-side line `position` (verified against
+/// real output — deleting old lines 4-5 of an 8-line file emits
+/// `@@ -4,2 +3,0 @@`, and the removed content sat between new-side lines 3
+/// and 4). [`hunk_intersects`] encodes the same fact from the other side,
+/// testing `position` against a half-open `[range_start, range_end)`
+/// instead of shifting it — the two agree on every case except a deletion
+/// sitting immediately before a symbol's first line, which this function's
+/// callers deliberately attribute to that symbol (ADR 0074).
+///
+/// `None` for a hunk with no readable new-side start at all, and for the
+/// `usize::MAX` start a malformed header could declare — this parser
+/// degrades rather than panicking on input it cannot read (module doc
+/// comment), the same way [`parse_one_hunk`] already special-cases `start
+/// == 0` before subtracting.
 pub fn hunk_header_position(hunk: &Hunk) -> Option<usize> {
     match hunk.new_range {
-        Some((start, end)) if start > end => Some(start + 1),
+        Some((start, end)) if start > end => start.checked_add(1),
         Some((start, _)) => Some(start),
         None => None,
     }

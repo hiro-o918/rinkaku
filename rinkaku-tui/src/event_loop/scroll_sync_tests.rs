@@ -11,7 +11,7 @@ use super::{
     clamp_right_pane_scroll_after_draw, jump_scroll_target, should_apply_hunk_jump,
     sync_target_for_scroll,
 };
-use crate::app::{self, App, InputKey};
+use crate::app::{self, App, DiffViewMode, InputKey};
 use crate::event_loop::tests::{empty_report, report_with_one_symbol};
 use crate::locale::Locale;
 use crate::{diff_shape, diff_view};
@@ -301,7 +301,7 @@ fn should_return_none_when_scroll_did_not_change_this_key() {
     // which symbol the unchanged offset happens to point at.
     let app = app_focused_on_diff_pane_with_scroll(&report, 1);
 
-    let actual = sync_target_for_scroll(&app, &report, &content, 1);
+    let actual = sync_target_for_scroll(&app, &report, &content, 1, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -313,7 +313,7 @@ fn should_return_none_when_tree_is_focused_even_if_scroll_changed() {
     let app = App::new(&report).with_right_pane_scroll(3);
     assert_eq!(app::Focus::Tree, app.focus());
 
-    let actual = sync_target_for_scroll(&app, &report, &content, 0);
+    let actual = sync_target_for_scroll(&app, &report, &content, 0, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -328,7 +328,7 @@ fn should_return_none_when_right_pane_is_not_diff_even_if_focus_is_right() {
         .with_right_pane_scroll(3);
     assert_eq!(app::RightPane::Detail, app.right_pane());
 
-    let actual = sync_target_for_scroll(&app, &report, &content, 0);
+    let actual = sync_target_for_scroll(&app, &report, &content, 0, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -341,7 +341,7 @@ fn should_return_bar_when_scroll_moved_into_bars_hunk() {
     // (line 1) into bar's hunk body (line 4).
     let app = app_focused_on_diff_pane_with_scroll(&report, 4);
 
-    let actual = sync_target_for_scroll(&app, &report, &content, 1);
+    let actual = sync_target_for_scroll(&app, &report, &content, 1, DiffViewMode::Unified);
 
     assert_eq!(Some("lib.rs::bar".to_string()), actual);
 }
@@ -354,7 +354,7 @@ fn should_return_none_when_scroll_moved_but_stayed_within_the_current_symbols_hu
     // still inside foo's own hunk — nothing to sync.
     let app = app_focused_on_diff_pane_with_scroll(&report, 1);
 
-    let actual = sync_target_for_scroll(&app, &report, &content, 0);
+    let actual = sync_target_for_scroll(&app, &report, &content, 0, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -392,7 +392,7 @@ fn should_return_none_when_scroll_moved_into_a_hunk_intersecting_no_symbol() {
     // header(3), body(4)).
     let app = app_focused_on_diff_pane_with_scroll(&report, 4);
 
-    let actual = sync_target_for_scroll(&app, &report, &content, 1);
+    let actual = sync_target_for_scroll(&app, &report, &content, 1, DiffViewMode::Unified);
 
     assert_eq!(None, actual);
 }
@@ -489,6 +489,7 @@ fn should_sync_tree_cursor_when_scroll_moves_into_a_different_symbols_hunk() {
         &diff_hunks,
         last_diff_focus,
         scroll_before_dispatch,
+        DiffViewMode::Unified,
     );
 
     assert_eq!(Some("lib.rs::bar"), effects.app.selected_symbol_id());
@@ -522,6 +523,7 @@ fn should_not_bounce_scroll_back_on_the_next_key_after_a_sync() {
         &diff_hunks,
         last_diff_focus,
         scroll_before_first_key,
+        DiffViewMode::Unified,
     );
     assert_eq!(Some("lib.rs::bar"), first.app.selected_symbol_id());
     assert_eq!(4, first.app.right_pane_scroll());
@@ -543,6 +545,7 @@ fn should_not_bounce_scroll_back_on_the_next_key_after_a_sync() {
         &diff_hunks,
         first.last_diff_focus,
         scroll_before_second_key,
+        DiffViewMode::Unified,
     );
 
     assert_eq!(4, second.app.right_pane_scroll());
@@ -571,7 +574,14 @@ fn should_resync_scroll_to_current_symbols_hunk_when_diff_pane_is_reentered_with
     // `run_app`'s loop passes in after a Diff -> Detail -> Diff toggle
     // with the cursor untouched, per the fix.
     let app = app.with_right_pane_scroll(0);
-    let effects = apply_diff_pane_selection_effects(app, &report, &diff_hunks, None, 0);
+    let effects = apply_diff_pane_selection_effects(
+        app,
+        &report,
+        &diff_hunks,
+        None,
+        0,
+        DiffViewMode::Unified,
+    );
 
     // bar's hunk starts at line 3 (same layout as every other test in
     // this file); landing at 0 would show foo's hunk under a pinned
@@ -609,6 +619,7 @@ fn dispatch_draw_and_fold(
         diff_hunks,
         last_diff_focus,
         scroll_before_dispatch,
+        DiffViewMode::Unified,
     );
     let app = effects.app;
     let diff_pane_content = effects.diff_pane_content;
@@ -661,6 +672,7 @@ fn should_scroll_into_the_second_symbols_hunk_when_cursor_moves_past_a_wide_firs
             app.selected_diff_target(&report).as_ref(),
         ),
         rinkaku_core::diff::LineRange { start: 10, end: 11 },
+        DiffViewMode::Unified,
     )
     .expect("bar's hunk start must resolve");
     assert_eq!(expected_scroll, app.right_pane_scroll());
@@ -728,7 +740,14 @@ fn should_sync_tree_cursor_to_the_second_symbol_when_scroll_moves_within_one_sha
     assert_eq!(Some("lib.rs::foo"), app.selected_symbol_id());
 
     let app = app.with_right_pane_scroll(10);
-    let effects = apply_diff_pane_selection_effects(app, &report, &diff_hunks, last_diff_focus, 0);
+    let effects = apply_diff_pane_selection_effects(
+        app,
+        &report,
+        &diff_hunks,
+        last_diff_focus,
+        0,
+        DiffViewMode::Unified,
+    );
 
     assert_eq!(Some("lib.rs::bar"), effects.app.selected_symbol_id());
 }
