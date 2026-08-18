@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.21](https://github.com/hiro-o918/rinkaku/compare/v0.6.20...v0.6.21) (2026-08-18)
+
+
+### Features
+
+* annotate Other changed files with non-symbol changed-line counts ([#241](https://github.com/hiro-o918/rinkaku/issues/241)) ([74cc4ca](https://github.com/hiro-o918/rinkaku/commit/74cc4ca73a0c8ec481510420a87113e9284791f4))
+* **tui:** render a symbol range bar in the diff pane ([#247](https://github.com/hiro-o918/rinkaku/issues/247)) ([b929217](https://github.com/hiro-o918/rinkaku/commit/b929217cca034799db1a37bd883baf769ba6eea5))
+
+
+### Bug Fixes
+
+* match bare references container-aware in the change graph ([#228](https://github.com/hiro-o918/rinkaku/issues/228)) ([2242a0b](https://github.com/hiro-o918/rinkaku/commit/2242a0b0aadf5d3f865ea5db0d648b560f196260))
+* **tui:** allow report.removed/report.skipped overlap in build_tree ([#233](https://github.com/hiro-o918/rinkaku/issues/233)) ([6df08c9](https://github.com/hiro-o918/rinkaku/commit/6df08c9dd155e0861da7c15a59359e42be3a2c8e))
+* **tui:** resolve diff-pane scroll sync per row, not per hunk ([#246](https://github.com/hiro-o918/rinkaku/issues/246)) ([c15d264](https://github.com/hiro-o918/rinkaku/commit/c15d2640eaafd54693bd9466c235704a5f603eff))
+
+
+### Miscellaneous
+
+* release main ([#222](https://github.com/hiro-o918/rinkaku/issues/222)) ([c154936](https://github.com/hiro-o918/rinkaku/commit/c15493670e0b23f9d33f909f58123cfe75c90d9f))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.20 to 0.6.21
+
 ## [0.6.20](https://github.com/hiro-o918/rinkaku/compare/v0.6.19...v0.6.20) (2026-08-07)
 
 

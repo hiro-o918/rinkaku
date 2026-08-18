@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.22](https://github.com/hiro-o918/rinkaku/compare/v0.6.21...v0.6.22) (2026-08-18)
+
+
+### Features
+
+* annotate Other changed files with non-symbol changed-line counts ([#241](https://github.com/hiro-o918/rinkaku/issues/241)) ([74cc4ca](https://github.com/hiro-o918/rinkaku/commit/74cc4ca73a0c8ec481510420a87113e9284791f4))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.20 to 0.6.21
+    * rinkaku-tui bumped from 0.6.20 to 0.6.21
+
 ## [0.6.21](https://github.com/hiro-o918/rinkaku/compare/v0.6.20...v0.6.21) (2026-08-07)
 
 
