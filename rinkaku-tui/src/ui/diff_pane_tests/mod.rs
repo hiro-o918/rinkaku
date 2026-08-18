@@ -15,6 +15,9 @@
 //! - `annotation_markers` — the ADR 0048 `*`-marker column's positive case
 //!   (unified and split), since every other block in this module exercises
 //!   only an empty `AnnotationMarkers`
+//! - `sync_cursor` — the sync-target cursor marker (`▶`): row-kind
+//!   detection, gutter overwrite vs. prepend, the annotation-collision
+//!   winner, and end-to-end unified/split rendering
 
 use super::*;
 use crate::app::{App, BlastRadiusSelection};
@@ -32,6 +35,7 @@ mod header_lines;
 mod row_kinds;
 mod split_view;
 mod styling;
+mod sync_cursor;
 mod tab_expansion;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {
