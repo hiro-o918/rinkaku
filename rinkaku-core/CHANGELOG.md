@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.6.22](https://github.com/hiro-o918/rinkaku/compare/v0.6.21...v0.6.22) (2026-08-18)
+
+
+### Features
+
+* annotate Other changed files with non-symbol changed-line counts ([#241](https://github.com/hiro-o918/rinkaku/issues/241)) ([74cc4ca](https://github.com/hiro-o918/rinkaku/commit/74cc4ca73a0c8ec481510420a87113e9284791f4))
+* collapse repeated Depends on lists in Markdown Definitions ([#239](https://github.com/hiro-o918/rinkaku/issues/239)) ([60c5bf9](https://github.com/hiro-o918/rinkaku/commit/60c5bf9250927f9b3d78c74beba3a75979bc8a5a))
+
+
+### Bug Fixes
+
+* include leading decorators and attributes in definition spans ([#245](https://github.com/hiro-o918/rinkaku/issues/245)) ([870f1a4](https://github.com/hiro-o918/rinkaku/commit/870f1a423966b74bdeb864e5212e4395d27b2262))
+* restrict dependency candidates by reference capture kind ([#235](https://github.com/hiro-o918/rinkaku/issues/235)) ([2a12141](https://github.com/hiro-o918/rinkaku/commit/2a12141a6035c07e1fe6fc26570f5d7de6278430))
+* scope ubiquitous-method-name stoplist to receiver-call captures ([#236](https://github.com/hiro-o918/rinkaku/issues/236)) ([3c5ecf7](https://github.com/hiro-o918/rinkaku/commit/3c5ecf7834254f32677ae09881072a2bc15aa174))
+* slice a reported container's signature to touched lines only ([#243](https://github.com/hiro-o918/rinkaku/issues/243)) ([52a2879](https://github.com/hiro-o918/rinkaku/commit/52a28797c38fa4c8d27e8c3899a67a4bd877429a))
+* stop reporting a live container as removed when only a member changed ([#237](https://github.com/hiro-o918/rinkaku/issues/237)) ([d8b810f](https://github.com/hiro-o918/rinkaku/commit/d8b810f88285fac736dfb537d0cb17f248dfadc6))
+* strip whole comment lines including indentation from signatures ([#240](https://github.com/hiro-o918/rinkaku/issues/240)) ([b1569ac](https://github.com/hiro-o918/rinkaku/commit/b1569ac768f0a234093f2c16e69aa320ad20e48e))
+
+
+### Miscellaneous
+
+* release main ([#234](https://github.com/hiro-o918/rinkaku/issues/234)) ([7da6421](https://github.com/hiro-o918/rinkaku/commit/7da642121b8162c5ba75071adee21d5cba464fe9))
+
 ## [0.6.21](https://github.com/hiro-o918/rinkaku/compare/v0.6.20...v0.6.21) (2026-08-18)
 
 
