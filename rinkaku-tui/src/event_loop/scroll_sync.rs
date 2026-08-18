@@ -258,9 +258,13 @@ pub(crate) fn clamp_help_scroll_after_draw(app: App, clamped: Option<usize>) -> 
 /// so the "when do we auto-scroll?" gate is in one obvious place rather than
 /// scattered through `run_app`'s loop body.
 ///
-/// `crate::ui::diff_pane`'s `sync_target_line` mirrors this focus → range →
+/// `crate::ui::diff_pane`'s `range_bar_lines` mirrors this focus → range →
 /// target composition (its own doc comment on why it cannot call this
-/// private-module function) — keep the two in step when changing it.
+/// private-module function) — keep the two in step when changing it. The two
+/// diverge past that point: this function still resolves to the symbol's
+/// single *first* covering row (the auto-scroll target), while
+/// `range_bar_lines` resolves to every covering row (the range bar it
+/// paints).
 pub(crate) fn auto_scroll_for_diff_focus(
     app: &App,
     report: &Report,

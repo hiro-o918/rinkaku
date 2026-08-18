@@ -255,6 +255,35 @@ fn row_is_within(row: DiffRow, range: LineRange) -> bool {
         .is_some_and(|position| range.start <= position && position <= range.end)
 }
 
+/// Every logical-line offset (same "requested-scroll unit"
+/// [`scroll_target_line_for_symbol`] resolves in) of a *body* row whose own
+/// new-side coordinate falls inside `symbol_range` — the rows
+/// `crate::ui::diff_pane`'s range-bar marker paints, so the whole extent of
+/// the selected symbol reads as one continuous bar rather than a single
+/// target line.
+///
+/// Restricted to [`DiffRow::Body`] on purpose: a hunk's `@@` header row can
+/// share its first body line's coordinate ([`crate::diff_view::hunk_header_position`]),
+/// which would otherwise pull the header into the marked set even though it
+/// carries no gutter column of its own (ADR 0048's 1-column gutter is a
+/// hunk-body-only layout) and the separator between hunks belongs to no
+/// symbol at all.
+///
+/// Ascending order and free of duplicates by construction: [`diff_rows`]
+/// visits each rendered row exactly once, in render order.
+pub fn marked_body_rows(
+    content: &DiffPaneContent,
+    symbol_range: LineRange,
+    view_mode: DiffViewMode,
+) -> Vec<usize> {
+    diff_rows(content, view_mode)
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| matches!(row, DiffRow::Body(Some(position)) if symbol_range.start <= *position && *position <= symbol_range.end))
+        .map(|(line, _)| line)
+        .collect()
+}
+
 /// Builds the diff pane's shaped content for `target` (`None` mirrors
 /// `App::selected_diff_target` returning `None` — nothing selected, or a
 /// directory row). `diff_files` is the whole diff already parsed once by

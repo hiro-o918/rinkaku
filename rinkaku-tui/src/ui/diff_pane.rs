@@ -210,13 +210,11 @@ pub(crate) fn draw_diff_pane(
     } else {
         DiffViewMode::Unified
     };
-    if let Some(target_line) = sync_target_line(app, report, diff_content, view_mode) {
-        let has_gutter = is_body_row(hunks, target_line);
-        if render_split {
-            mark_sync_target_line(&mut split_rows.1, target_line, has_gutter);
-        } else {
-            mark_sync_target_line(&mut unified_lines, target_line, has_gutter);
-        }
+    let marked_rows = range_bar_lines(app, report, diff_content, view_mode);
+    if render_split {
+        mark_range_bar_lines(&mut split_rows.1, &marked_rows);
+    } else {
+        mark_range_bar_lines(&mut unified_lines, &marked_rows);
     }
 
     let ranges = crate::diff_shape::changed_line_ranges(
@@ -272,37 +270,42 @@ pub(crate) fn draw_diff_pane(
     ))
 }
 
-/// The logical-line offset (the same unit [`crate::diff_shape::scroll_target_line_for_symbol`]
+/// The logical-line offsets (the same unit [`crate::diff_shape::marked_body_rows`]
 /// returns and `Body::Single`/`Body::Split`'s slices are indexed by) the
-/// sync-target cursor marker should render on, or `None` when the cursor
-/// has nothing to mark — a file/directory row carries no [`crate::app::DiffFocus`]
+/// range bar should paint, or an empty `Vec` when the selection has nothing
+/// to mark — a file/directory row carries no [`crate::app::DiffFocus`]
 /// (`App::selected_diff_focus` itself returns `None` there), which mirrors
 /// [`crate::event_loop::scroll_sync::auto_scroll_for_diff_focus`]'s own
 /// "nothing to auto-scroll to" case: that function leaves the pane's scroll
 /// position untouched rather than jumping to line 0, so a file-row selection
-/// draws no marker here either, keeping the two in the same "no principled
-/// target" state instead of inventing one only the marker would show.
+/// draws no bar here either, keeping the two in the same "no principled
+/// target" state instead of inventing one only the bar would show.
 ///
-/// Cheap by construction: [`crate::diff_shape::scroll_target_line_for_symbol`]
-/// walks `diff_content`, which is already scoped to the one selected file
+/// Cheap by construction: [`crate::diff_shape::marked_body_rows`] walks
+/// `diff_content`, which is already scoped to the one selected file
 /// (`DiffPaneContent`'s own doc comment) and already walked once per frame
 /// by [`diff_pane_lines`]/[`diff_pane_split_rows`] — this adds no new
 /// O(diff-size) work beyond what `draw_diff_pane` already does
 /// unconditionally.
-fn sync_target_line(
+fn range_bar_lines(
     app: &App,
     report: &Report,
     diff_content: &DiffPaneContent,
     view_mode: DiffViewMode,
-) -> Option<usize> {
-    let focus = app.selected_diff_focus(report)?;
-    let range = report
+) -> Vec<usize> {
+    let Some(focus) = app.selected_diff_focus(report) else {
+        return Vec::new();
+    };
+    let Some(range) = report
         .files
         .iter()
         .find(|file| file.path == focus.path)
         .and_then(|file| file.symbols.iter().find(|s| s.id == focus.symbol_id))
-        .map(|symbol| symbol.range)?;
-    diff_shape::scroll_target_line_for_symbol(diff_content, range, view_mode)
+        .map(|symbol| symbol.range)
+    else {
+        return Vec::new();
+    };
+    diff_shape::marked_body_rows(diff_content, range, view_mode)
 }
 
 /// Whether the row currently under the cursor is a present (non-removed)
@@ -432,75 +435,48 @@ fn prefix_annotation_marker(line: Line<'static>, has_annotation: bool) -> Line<'
     Line::from(spans).style(line.style)
 }
 
-/// The sync-target cursor marker's own span: a bold yellow `▶`, the same
-/// glyph regardless of whether it overwrites an existing gutter column or is
-/// prepended to a row that has none (`mark_sync_target_line`'s own two
-/// branches).
-fn sync_cursor_span() -> Span<'static> {
+/// The range bar's own span: a bold yellow `┃`, painted into the gutter
+/// column [`prefix_annotation_marker`] already reserves on every hunk body
+/// row (ADR 0048) — the range bar never touches a hunk header or separator
+/// row, both of which carry no such column ([`crate::diff_shape::marked_body_rows`]'s
+/// own doc comment on why it excludes them).
+fn range_bar_span() -> Span<'static> {
     Span::styled(
-        "▶",
+        "┃",
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
     )
 }
 
-/// Whether `target_line` (a logical-line index into `diff_pane_lines`'/
-/// `diff_pane_split_rows`' output) lands on a hunk *body* row rather than a
-/// `@@` header row or the blank separator between two hunks — mirrors those
-/// two functions' own row emission (1 header row, then one body row per
-/// `attributed.hunk.lines` entry, with a blank separator before every hunk
-/// but the first) without depending on either's `Vec<Line>` output, since
-/// [`mark_sync_target_line`] needs to know this *before* deciding whether to
-/// overwrite an existing gutter span or prepend a new one.
-fn is_body_row(hunks: &[AttributedHunk], target_line: usize) -> bool {
-    let mut rows_before = 0;
-    for (hunk_index, attributed) in hunks.iter().enumerate() {
-        let separator_rows = if hunk_index > 0 { 1 } else { 0 };
-        let header_row = rows_before + separator_rows;
-        let body_start = header_row + 1;
-        let body_end = body_start + attributed.hunk.lines.len();
-        if (body_start..body_end).contains(&target_line) {
-            return true;
-        }
-        rows_before = body_end;
-    }
-    false
-}
-
-/// Marks `lines[target_line]` with the sync-target cursor glyph (bold
-/// yellow `▶`), so the row the tree cursor's current selection maps to is
-/// visible even when the whole diff fits on screen and no scroll ever
-/// happens (this feature's whole point — auto-scroll alone gives no
-/// feedback once there is nothing left to scroll).
+/// Paints the range bar (bold yellow `┃`) into `lines[row]`'s gutter column
+/// for every `row` in `marked_rows`, so the selected symbol's whole line
+/// range reads as one continuous bar rather than a single target line —
+/// this feature's whole point: auto-scroll alone gives no feedback once the
+/// whole diff already fits on screen and no scroll ever happens.
 ///
-/// `has_gutter` (from [`is_body_row`]) tells this function which of the two
-/// column layouts `target_line` actually has: every hunk *body* row already
-/// carries [`prefix_annotation_marker`]'s 1-column gutter (ADR 0048), so the
-/// cursor glyph overwrites that column's span there — winning over an
-/// annotation marker on the same row, since the two glyphs would otherwise
-/// collide on the shared column and the reviewer's current position is the
-/// more time-sensitive of the two signals. A hunk's own `@@` header row
-/// carries no such gutter (annotations never anchor to it), which
-/// [`crate::diff_shape::scroll_target_line_for_symbol`]'s own doc comment
-/// notes a symbol can still resolve to when it starts exactly where its
-/// hunk does — there the glyph is prepended as a new span instead, so the
-/// header text itself is never overwritten.
+/// The annotation marker (ADR 0048's cyan `*`) wins on a row that carries
+/// both: an annotation is a reviewer's own persistent note, so it stays
+/// visible even where the range bar would otherwise paint over it — the
+/// reverse priority of the two glyphs' shared gutter column.
 ///
-/// No-op when `target_line` is past `lines`' end — `sync_target_line`'s own
-/// callers only ever pass an index [`crate::diff_shape::scroll_target_line_for_symbol`]
-/// resolved against this exact same content, so this only guards against a
-/// defensive mismatch, not an expected case.
-fn mark_sync_target_line(lines: &mut [Line<'static>], target_line: usize, has_gutter: bool) {
-    let Some(line) = lines.get_mut(target_line) else {
-        return;
-    };
-    if has_gutter {
-        if let Some(gutter) = line.spans.first_mut() {
-            *gutter = sync_cursor_span();
+/// Indices past `lines`' end are skipped rather than treated as an error —
+/// `marked_rows`' own callers only ever pass offsets
+/// [`crate::diff_shape::marked_body_rows`] resolved against this exact same
+/// content, so this only guards against a defensive mismatch, not an
+/// expected case.
+fn mark_range_bar_lines(lines: &mut [Line<'static>], marked_rows: &[usize]) {
+    for &row in marked_rows {
+        let Some(line) = lines.get_mut(row) else {
+            continue;
+        };
+        let Some(gutter) = line.spans.first_mut() else {
+            continue;
+        };
+        if gutter.content.as_ref() == "*" {
+            continue;
         }
-    } else {
-        line.spans.insert(0, sync_cursor_span());
+        *gutter = range_bar_span();
     }
 }
 
