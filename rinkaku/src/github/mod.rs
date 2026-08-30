@@ -7,4 +7,5 @@ pub(crate) mod pr_arg;
 pub(crate) mod pr_info;
 pub(crate) mod remote;
 pub(crate) mod review;
+pub(crate) mod stack;
 pub(crate) mod workdir;

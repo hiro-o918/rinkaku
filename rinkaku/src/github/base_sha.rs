@@ -8,6 +8,16 @@ pub(crate) fn fetch_pr_head(number: u64, cwd: Option<&std::path::Path>) -> anyho
     run_git_fetch(&format!("refs/pull/{number}/head"), cwd)
 }
 
+/// Fetches every PR head in `numbers` with one multi-refspec `git fetch`
+/// (ADR 0075) and returns their SHAs in the same order, read from
+/// `FETCH_HEAD`'s one-line-per-refspec content.
+pub(crate) fn fetch_pr_heads(
+    numbers: &[u64],
+    cwd: Option<&std::path::Path>,
+) -> anyhow::Result<Vec<String>> {
+    todo!("fetch refs/pull/<n>/head for {numbers:?} in {cwd:?} and parse FETCH_HEAD")
+}
+
 /// Fetches branch `name` into the repository at `cwd` and returns the
 /// fetched commit's SHA. Used to resolve `--pr` mode's base commit from
 /// the base branch name `gh pr view` reports.

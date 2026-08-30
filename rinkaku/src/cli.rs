@@ -41,6 +41,12 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) pr: Option<String>,
 
+    /// Review only the PR named by `--pr`, even when GitHub reports it as
+    /// part of a stack. Without this flag a stacked PR opens every open
+    /// layer of its stack in the TUI (ADR 0075).
+    #[arg(long, default_value_t = false, requires = "pr")]
+    pub(crate) no_stack: bool,
+
     /// Output format. Defaults to Markdown, or the interactive TUI when
     /// stdout is a terminal and neither `--format` nor `--tui` was given.
     //
@@ -159,6 +165,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -178,6 +185,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -215,6 +223,7 @@ mod tests {
             base: Some("main".to_string()),
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -234,6 +243,7 @@ mod tests {
             base: Some("main".to_string()),
             head: "feature-branch".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -253,6 +263,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: Some(Format::Json),
             deps: 1,
             exclude_tests: false,
@@ -279,6 +290,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 0,
             exclude_tests: false,
@@ -305,6 +317,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: true,
@@ -350,6 +363,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -369,6 +383,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -388,6 +403,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -407,6 +423,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -426,6 +443,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: None,
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
@@ -460,6 +478,7 @@ mod tests {
             base: None,
             head: "HEAD".to_string(),
             pr: Some("76".to_string()),
+            no_stack: false,
             format: None,
             deps: 1,
             exclude_tests: false,
