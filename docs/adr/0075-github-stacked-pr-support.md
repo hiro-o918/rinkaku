@@ -106,18 +106,25 @@ thread runs a git command that writes to the repository.
 
 Only the initial PR (the cursor) is analysed synchronously, behind the
 existing splash screen (ADR 0033). The remaining layers are analysed by
-**one** background thread in stack order starting from the layer just
-above the cursor and wrapping around to the layers below it — the order
-a bottom-up reviewer will most likely visit them.
+**one** background thread that, before each layer, picks the pending
+layer nearest to the *current* cursor — the one just above first, then
+the one just below, then outward. The driver publishes every cursor move
+to the cache, so after `gt`/`gT` the next likely target is always the
+one being analysed; a fixed bottom-up order would leave a reviewer who
+walks down the stack waiting on every step. Waiting on the layer one is
+reading is unavoidable; waiting on the next one is the cost this design
+removes.
 
 Results land in a `PrAnalysisCache` owned by `rinkaku-tui`: a
-`Mutex<Vec<Slot>>` plus a `Condvar`, with `Slot = Pending |
-Ready(Arc<PrAnalysis>) | Failed(String)` and `PrAnalysis { report,
-diff_text, pr: PrContext }`. The cache is data plus synchronisation and
+`Mutex<Vec<Slot>>` plus a `Condvar` and the published cursor, with
+`Slot = Pending | InProgress | Ready(Arc<PrAnalysis>) | Failed(String)`
+and `PrAnalysis { report, diff_text, pr: PrContext }`. The worker claims
+a layer (`Pending` → `InProgress`) under the lock, so the choice and the
+reservation are one step. The cache is data plus synchronisation and
 nothing else — it has no knowledge of git or `gh`; the `rinkaku` binary
 fills it, the TUI reads it.
 
-Switching to a `Pending` layer redraws the splash screen with
+Switching to a `Pending` or `InProgress` layer redraws the splash screen with
 "Analyzing PR #N (k/n)…" and blocks on the condvar until the slot
 resolves. A `Failed` layer reports its error in the status line and the
 cursor stays where it was.
@@ -153,11 +160,15 @@ unit-testable without a terminal.
 
 ### D5. Keys and status line
 
-`p` moves to the next layer (up the stack, away from trunk) and `P` to
-the previous one (down, toward trunk), mirroring the existing `n`/`N`
-next/previous pair for search matches. Outside stack mode both keys are
-no-ops. Both are listed in the `?` help overlay's Entry-screen group in
-both locales.
+`gt` moves to the next layer (up the stack, away from trunk) and `gT`
+to the previous one (down, toward trunk) — vim's next/previous *tab*
+pair, reusing the `g` prefix that already carries `gg`/`gd`/`gr`. A
+stack of PRs reads naturally as a row of tabs, and the TUI's vocabulary
+is vim's throughout. A `p`/`P` pair was considered (it would mirror
+`n`/`N`) but `p` reads as *paste* to a vim user and adds another
+case-paired binding for no mnemonic gain. Outside stack mode both keys
+are no-ops. Both are listed in the `?` help overlay's Entry-screen group
+in both locales.
 
 The status line gains a leading `PR #43 2/3  |  ` segment in stack mode
 only. The existing Tree-focus hint line is 74 columns; the 15-column
@@ -189,8 +200,10 @@ differs per layer and GitHub validates comment anchors against it.
 
 **Sink B (agent packet / clipboard).** Sections are grouped under `##
 PR #43 — <title>` headings in stack order, so an agent reading the
-packet knows which branch each note applies to. A packet with no
-PR-numbered annotation renders exactly as today.
+packet knows which branch each note applies to. Annotations only carry
+the number, so the renderer receives the stack's entries (number →
+title) alongside them; a number without an entry renders as `## PR
+#43`. A packet with no PR-numbered annotation renders exactly as today.
 
 ## Alternatives
 
@@ -222,10 +235,15 @@ PR-numbered annotation renders exactly as today.
   none of the new invariants.
 - **Verdict applies to every PR with annotations.** Fewer round trips,
   but it turns a per-PR decision into a batch one. Rejected (D6).
-- **`ctrl-n`/`ctrl-p` instead of `p`/`P`.** Free too, and parallel to
-  `ctrl-o`/`ctrl-i`. `p`/`P` is preferred for its mnemonic and for
-  matching the `n`/`N` pair's shape; the control variants remain
-  available if `p` is ever needed for something else.
+- **`p`/`P`, `}`/`{`, or `ctrl-n`/`ctrl-p` instead of `gt`/`gT`.** All
+  free. `p`/`P` mirrors `n`/`N` but reads as *paste*; `}`/`{` would sit
+  one unit above the `]`/`[` hunk pair but says nothing about PRs;
+  `ctrl-n`/`ctrl-p` parallels `ctrl-o`/`ctrl-i` yet is emacs' idiom, not
+  vim's. `gt`/`gT` is the only pair a vim user already knows as
+  next/previous *tab*.
+- **A fixed prefetch order chosen at start-up.** Simpler (a `Vec<usize>`
+  computed once) but wrong the moment the reviewer moves against it:
+  walking down the stack would wait on every layer. Rejected (D3).
 
 ## Consequences
 

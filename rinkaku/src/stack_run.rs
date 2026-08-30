@@ -88,7 +88,7 @@ pub(crate) fn run_stack_session(
     locale: Locale,
 ) -> anyhow::Result<bool> {
     let layers = resolve_layer_shas(&plan, &progress)?;
-    let cache = Arc::new(PrAnalysisCache::new(layers.len()));
+    let cache = Arc::new(PrAnalysisCache::new(layers.len(), plan.cursor));
     let initial = analyze_layer(cli, &plan, &layers[plan.cursor], &progress)?;
     cache.set(plan.cursor, Slot::Ready(Arc::new(initial)));
     let (session, buffered_notes) = progress.into_session_and_notes();
@@ -173,7 +173,7 @@ fn analyze_remaining_layers(
     cache: &PrAnalysisCache,
     cancel: &AtomicBool,
 ) {
-    for index in prefetch_order(plan.cursor, layers.len()) {
+    while let Some(index) = cache.claim_next() {
         if cancel.load(Ordering::Relaxed) {
             return;
         }
@@ -194,10 +194,6 @@ impl AnalysisProgress for SilentProgress {
     fn note(&self, _message: String) {}
 }
 
-fn prefetch_order(cursor: usize, len: usize) -> Vec<usize> {
-    todo!("order the {len} layers around cursor {cursor}")
-}
-
 fn stack_entries(layers: &[ResolvedLayer]) -> Vec<StackEntry> {
     layers
         .iter()
@@ -215,27 +211,5 @@ fn pr_context(plan: &StackPlan, layer: &ResolvedLayer) -> PrContext {
         repo: plan.repo.clone(),
         number: layer.pr.number,
         head_sha: layer.head_sha.clone(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::should_walk_up_then_wrap_to_bottom_when_cursor_is_mid_stack(1, 4, vec![2, 3, 0])]
-    #[case::should_walk_up_only_when_cursor_is_at_the_bottom(0, 3, vec![1, 2])]
-    #[case::should_walk_bottom_up_when_cursor_is_at_the_top(2, 3, vec![0, 1])]
-    #[case::should_return_empty_when_stack_has_one_layer(0, 1, vec![])]
-    #[ignore = "not implemented"]
-    fn prefetch_order_cases(
-        #[case] cursor: usize,
-        #[case] len: usize,
-        #[case] expected: Vec<usize>,
-    ) {
-        let actual = prefetch_order(cursor, len);
-        assert_eq!(expected, actual);
     }
 }
