@@ -98,10 +98,14 @@ const REVIEW_SUMMARY: &str = "Review annotations posted via rinkaku.";
 /// crate's existing practice of not trusting an invariant across a module
 /// boundary (e.g. `App::jump_to_symbol`'s own doc comment on the same
 /// judgment call).
+///
+/// `stack_entries` (ADR 0075) is sink B's title lookup for
+/// [`review::render_agent_packet`] — empty outside stack mode.
 pub(crate) fn perform_export(
     review: review::ReviewState,
     ports: &ReviewPorts<'_>,
     export: review::ExportRequest,
+    stack_entries: &[crate::stack::StackEntry],
 ) -> review::ReviewState {
     match export {
         review::ExportRequest::GithubReview(verdict)
@@ -135,7 +139,7 @@ pub(crate) fn perform_export(
             }
         }
         review::ExportRequest::Clipboard => {
-            let packet = review::render_agent_packet(review.annotations());
+            let packet = review::render_agent_packet(review.annotations(), stack_entries);
             match ports.clipboard.copy(&packet) {
                 Ok(status) => review.set_status(status),
                 Err(message) => review.set_status(format!("error copying to clipboard: {message}")),
@@ -146,15 +150,55 @@ pub(crate) fn perform_export(
 
 /// Sink A in stack mode (ADR 0075 D6). Only the PR under the cursor gets
 /// `verdict`: a verdict is a statement about one PR, and the reviewer chose
-/// it while looking at that one; the other PRs get `Verdict::Comment`.
+/// it while looking at that one; the other PRs get `Verdict::Comment`. An
+/// unnumbered group (should not happen in a stack session, but handled
+/// defensively) goes with the cursor PR's own verdict/context, since it can
+/// only have been composed while the cursor sat on that layer.
 fn submit_grouped_reviews(
     review: review::ReviewState,
     ports: &ReviewPorts<'_>,
     verdict: review::Verdict,
 ) -> review::ReviewState {
-    let _ = (ports, verdict);
+    let Some(submitter) = ports.submitter else {
+        return review.set_status("error: no PR context available to post a review");
+    };
     let groups = review::group_by_pr(review.annotations());
-    todo!("submit {} per-PR reviews", groups.len())
+    let mut posted = 0usize;
+    let mut pr_count = 0usize;
+    for (pr_number, annotations) in groups {
+        let number = pr_number.or(review.current_pr());
+        let Some(context) = number.and_then(|number| {
+            ports
+                .stack_pr_contexts
+                .iter()
+                .find(|context| context.number == number)
+        }) else {
+            let label = number.map_or("unknown".to_string(), |number| number.to_string());
+            return review.set_status(format!("error: no PR context available for PR #{label}"));
+        };
+        let group_verdict = if Some(context.number) == review.current_pr() {
+            verdict
+        } else {
+            review::Verdict::Comment
+        };
+        let (anchored, unanchored): (Vec<&review::Annotation>, Vec<&review::Annotation>) =
+            annotations
+                .into_iter()
+                .partition(|annotation| review::has_export_anchor(&annotation.location));
+        let comments = review::render_review_comments(&anchored);
+        let summary = format!(
+            "{REVIEW_SUMMARY}{}",
+            review::render_additional_notes(&unanchored)
+        );
+        if let Err(message) = submitter.submit_review(context, group_verdict, &summary, &comments) {
+            return review.set_status(format!("error posting review: {message}"));
+        }
+        posted += comments.len();
+        pr_count += 1;
+    }
+    review.set_status(format!(
+        "posted {posted} review comment(s) across {pr_count} PRs"
+    ))
 }
 
 /// Derives a [`review::SelectionSnapshot`] from whatever the tree cursor

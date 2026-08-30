@@ -173,7 +173,6 @@ fn should_draw_annotations_list_overlay_with_annotation_summary() {
 }
 
 #[test]
-#[ignore = "not implemented"]
 fn should_draw_annotations_list_row_with_pr_number_when_annotation_carries_one() {
     let report = report_with_one_symbol();
     let review = ReviewState::default()

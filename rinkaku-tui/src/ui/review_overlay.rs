@@ -168,7 +168,7 @@ fn annotations_list_entry_text(annotation: &crate::review::Annotation) -> String
     };
     let body_first_line = annotation.body.lines().next().unwrap_or("");
     match annotation.pr_number {
-        Some(number) => todo!("prefix the row with #{number} (ADR 0075)"),
+        Some(number) => format!("#{number} {location_text}: {body_first_line}"),
         None => format!("{location_text}: {body_first_line}"),
     }
 }

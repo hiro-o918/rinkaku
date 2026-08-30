@@ -42,6 +42,7 @@ fn should_surface_the_ports_status_line_when_copy_succeeds() {
         ReviewState::default(),
         &ports_with(&clipboard, &browser),
         ExportRequest::Clipboard,
+        &[],
     );
 
     assert_eq!(
@@ -61,6 +62,7 @@ fn should_wrap_the_ports_error_in_the_error_prefix_when_copy_fails() {
         ReviewState::default(),
         &ports_with(&clipboard, &browser),
         ExportRequest::Clipboard,
+        &[],
     );
 
     assert_eq!(

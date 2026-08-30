@@ -258,7 +258,6 @@ mod group_by_pr_tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_group_annotations_by_pr_in_first_seen_order_when_pr_numbers_are_set() {
         let on_43 = Annotation {
             pr_number: Some(43),
@@ -286,7 +285,6 @@ mod group_by_pr_tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_return_one_unnumbered_group_when_no_annotation_has_a_pr_number() {
         let first = annotation(file_location("a.rs"), "a", None);
         let second = annotation(file_location("b.rs"), "b", None);
@@ -303,8 +301,7 @@ mod render_agent_packet_tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    #[ignore = "not implemented"]
-    fn should_render_one_pr_section_per_group_when_annotations_carry_pr_numbers() {
+    fn should_render_bare_pr_number_heading_when_stack_entries_has_no_matching_title() {
         let annotations = vec![
             Annotation {
                 pr_number: Some(43),
@@ -316,7 +313,7 @@ mod render_agent_packet_tests {
             },
         ];
 
-        let actual = render_agent_packet(&annotations);
+        let actual = render_agent_packet(&annotations, &[]);
 
         assert_eq!(
             "# Review annotations\n\n\
@@ -332,8 +329,48 @@ mod render_agent_packet_tests {
     }
 
     #[test]
+    fn should_render_one_titled_pr_section_per_group_when_stack_entries_has_a_matching_title() {
+        let annotations = vec![
+            Annotation {
+                pr_number: Some(43),
+                ..annotation(file_location("a.rs"), "on 43", None)
+            },
+            Annotation {
+                pr_number: Some(44),
+                ..annotation(file_location("b.rs"), "on 44", None)
+            },
+        ];
+        let stack_entries = vec![
+            crate::stack::StackEntry {
+                number: 43,
+                title: "api".to_string(),
+                head_ref_name: "api".to_string(),
+            },
+            crate::stack::StackEntry {
+                number: 44,
+                title: "frontend".to_string(),
+                head_ref_name: "frontend".to_string(),
+            },
+        ];
+
+        let actual = render_agent_packet(&annotations, &stack_entries);
+
+        assert_eq!(
+            "# Review annotations\n\n\
+             Address each of the following review annotations.\n\n\
+             ## PR #43 — api\n\n\
+             ### a.rs\n\
+             on 43\n\n\
+             ## PR #44 — frontend\n\n\
+             ### b.rs\n\
+             on 44\n",
+            actual
+        );
+    }
+
+    #[test]
     fn should_render_empty_packet_header_when_there_are_no_annotations() {
-        let actual = render_agent_packet(&[]);
+        let actual = render_agent_packet(&[], &[]);
 
         assert_eq!(
             "# Review annotations\n\nAddress each of the following review annotations.\n",
@@ -349,7 +386,7 @@ mod render_agent_packet_tests {
             Some("fn foo(x: i32) -> i32"),
         )];
 
-        let actual = render_agent_packet(&annotations);
+        let actual = render_agent_packet(&annotations, &[]);
 
         assert_eq!(
             "# Review annotations\n\n\
@@ -371,7 +408,7 @@ mod render_agent_packet_tests {
             None,
         )];
 
-        let actual = render_agent_packet(&annotations);
+        let actual = render_agent_packet(&annotations, &[]);
 
         assert_eq!(
             "# Review annotations\n\n\
@@ -390,7 +427,7 @@ mod render_agent_packet_tests {
             None,
         )];
 
-        let actual = render_agent_packet(&annotations);
+        let actual = render_agent_packet(&annotations, &[]);
 
         assert_eq!(
             "# Review annotations\n\n\
@@ -409,7 +446,7 @@ mod render_agent_packet_tests {
             None,
         )];
 
-        let actual = render_agent_packet(&annotations);
+        let actual = render_agent_packet(&annotations, &[]);
 
         assert_eq!(
             "# Review annotations\n\n\
@@ -428,7 +465,7 @@ mod render_agent_packet_tests {
             None,
         )];
 
-        let actual = render_agent_packet(&annotations);
+        let actual = render_agent_packet(&annotations, &[]);
 
         assert_eq!(
             "# Review annotations\n\n\
@@ -454,7 +491,7 @@ mod render_agent_packet_tests {
             ),
         ];
 
-        let actual = render_agent_packet(&annotations);
+        let actual = render_agent_packet(&annotations, &[]);
 
         assert_eq!(
             "# Review annotations\n\n\

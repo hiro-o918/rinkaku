@@ -99,7 +99,6 @@ impl ReviewSubmitter for PerPrRecordingSubmitter {
 }
 
 #[test]
-#[ignore = "not implemented"]
 fn should_post_verdict_to_cursor_pr_and_comment_reviews_to_other_prs_when_annotations_span_layers()
 {
     let submitter = PerPrRecordingSubmitter {
@@ -138,6 +137,7 @@ fn should_post_verdict_to_cursor_pr_and_comment_reviews_to_other_prs_when_annota
         review,
         &ports,
         ExportRequest::GithubReview(Verdict::RequestChanges),
+        &[],
     );
 
     assert_eq!(
@@ -225,6 +225,7 @@ fn should_post_only_the_fixed_summary_when_every_annotation_is_anchored() {
         review,
         &ports_with(&submitter, &browser, &clipboard),
         ExportRequest::GithubReview(Verdict::Approve),
+        &[],
     );
 
     assert_eq!(
@@ -261,6 +262,7 @@ fn should_append_additional_notes_section_when_an_unanchored_annotation_is_prese
         review,
         &ports_with(&submitter, &browser, &clipboard),
         ExportRequest::GithubReview(Verdict::Comment),
+        &[],
     );
 
     assert_eq!(

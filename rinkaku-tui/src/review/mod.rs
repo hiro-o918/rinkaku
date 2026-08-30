@@ -16,8 +16,8 @@ pub mod ports;
 mod render;
 
 pub use render::{
-    group_by_pr, partition_for_export, render_additional_notes, render_agent_packet,
-    render_review_comments,
+    group_by_pr, has_export_anchor, partition_for_export, render_additional_notes,
+    render_agent_packet, render_review_comments,
 };
 
 /// A destination-neutral annotation attached to a location in the diff (ADR

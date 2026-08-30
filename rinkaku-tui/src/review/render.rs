@@ -14,6 +14,7 @@
 //! of the unsound `(1, 1)` fallback this module used to fall back to.
 
 use super::{Annotation, AnnotationTarget, RenderedComment};
+use crate::stack::StackEntry;
 
 /// Splits `annotations` into the anchored subset (has a real `anchor` or
 /// `range` to post an inline comment against) and the unanchored subset
@@ -23,10 +24,14 @@ use super::{Annotation, AnnotationTarget, RenderedComment};
 pub fn partition_for_export(annotations: &[Annotation]) -> (Vec<&Annotation>, Vec<&Annotation>) {
     annotations
         .iter()
-        .partition(|annotation| has_anchor(&annotation.location))
+        .partition(|annotation| has_export_anchor(&annotation.location))
 }
 
-fn has_anchor(location: &super::AnnotationLocation) -> bool {
+/// Whether `location` has a real `anchor` or `range` to post an inline
+/// comment against — [`partition_for_export`]'s own predicate, reused by
+/// `crate::review_flow::submit_grouped_reviews` (ADR 0075) to partition an
+/// already-grouped `Vec<&Annotation>` the same way.
+pub fn has_export_anchor(location: &super::AnnotationLocation) -> bool {
     location.anchor.or(location.range).is_some()
 }
 
@@ -88,31 +93,76 @@ pub fn render_additional_notes(annotations: &[&Annotation]) -> String {
 /// (ADR 0075) — the stack driver's annotation order is stack order, since
 /// a note can only be taken on the layer currently on screen.
 pub fn group_by_pr(annotations: &[Annotation]) -> Vec<(Option<u64>, Vec<&Annotation>)> {
-    todo!("group {} annotations by pr_number", annotations.len())
+    let mut groups: Vec<(Option<u64>, Vec<&Annotation>)> = Vec::new();
+    for annotation in annotations {
+        match groups
+            .iter_mut()
+            .find(|(pr_number, _)| *pr_number == annotation.pr_number)
+        {
+            Some((_, group)) => group.push(annotation),
+            None => groups.push((annotation.pr_number, vec![annotation])),
+        }
+    }
+    groups
 }
 
-pub fn render_agent_packet(annotations: &[Annotation]) -> String {
-    if annotations
-        .iter()
-        .any(|annotation| annotation.pr_number.is_some())
-    {
-        todo!("render one `## PR #N — title` section per group_by_pr group")
-    }
+pub fn render_agent_packet(annotations: &[Annotation], stack_entries: &[StackEntry]) -> String {
     let mut packet =
         String::from("# Review annotations\n\nAddress each of the following review annotations.\n");
-    for annotation in annotations {
-        packet.push('\n');
-        packet.push_str(&format!("## {}\n", annotation_heading(annotation)));
-        if let Some(signature) = &annotation.signature {
-            packet.push_str("```\n");
-            packet.push_str(signature);
+    let has_pr_numbers = annotations
+        .iter()
+        .any(|annotation| annotation.pr_number.is_some());
+    if !has_pr_numbers {
+        for annotation in annotations {
             packet.push('\n');
-            packet.push_str("```\n");
+            render_annotation_section(&mut packet, annotation, "##");
         }
-        packet.push_str(&annotation.body);
+        return packet;
+    }
+    for (pr_number, group) in group_by_pr(annotations) {
         packet.push('\n');
+        packet.push_str(&format!(
+            "## {}\n",
+            pr_section_heading(pr_number, stack_entries)
+        ));
+        for annotation in group {
+            packet.push('\n');
+            render_annotation_section(&mut packet, annotation, "###");
+        }
     }
     packet
+}
+
+/// The `## PR #N — <title>` heading for one [`group_by_pr`] group, falling
+/// back to `## PR #N` when `stack_entries` has no matching title and to
+/// `## (unnumbered)` for the `None` group (defensive: a stack session
+/// should stamp every annotation with a PR number).
+fn pr_section_heading(pr_number: Option<u64>, stack_entries: &[StackEntry]) -> String {
+    match pr_number {
+        Some(number) => match stack_entries.iter().find(|entry| entry.number == number) {
+            Some(entry) => format!("PR #{number} — {}", entry.title),
+            None => format!("PR #{number}"),
+        },
+        None => "(unnumbered)".to_string(),
+    }
+}
+
+/// Renders one annotation's own section — heading, optional signature
+/// fence, then body — under `heading_marker` (`"##"` outside stack mode,
+/// `"###"` nested under a `## PR #N` section).
+fn render_annotation_section(packet: &mut String, annotation: &Annotation, heading_marker: &str) {
+    packet.push_str(&format!(
+        "{heading_marker} {}\n",
+        annotation_heading(annotation)
+    ));
+    if let Some(signature) = &annotation.signature {
+        packet.push_str("```\n");
+        packet.push_str(signature);
+        packet.push('\n');
+        packet.push_str("```\n");
+    }
+    packet.push_str(&annotation.body);
+    packet.push('\n');
 }
 
 /// The `## {path}:{start}-{end} {symbol_name}` heading for one annotation
