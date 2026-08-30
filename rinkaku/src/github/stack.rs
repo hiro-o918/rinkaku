@@ -25,18 +25,119 @@ impl PrStack {
     /// Index of `number` within `prs`, or `None` when the requested PR is
     /// not an open layer (a merged layer is dropped by `parse_stack_json`).
     pub(crate) fn position_of(&self, number: u64) -> Option<usize> {
-        todo!("find the index of PR #{number} in the parsed stack")
+        self.prs.iter().position(|pr| pr.number == number)
     }
 }
 
 pub(crate) fn stack_query() -> &'static str {
-    todo!("return the PullRequest.stack GraphQL query text")
+    "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ \
+     pullRequest(number:$number){ stack { number baseRefName size entries(first:50){ nodes { \
+     position pullRequest { number title headRefName baseRefName baseRefOid headRefOid state \
+     merged isDraft } } } } } } }"
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlResponse {
+    data: Option<GraphqlData>,
+    errors: Option<Vec<GraphqlError>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlError {
+    message: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlData {
+    repository: Option<GraphqlRepository>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GraphqlPullRequest>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlPullRequest {
+    stack: Option<GraphqlStack>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlStack {
+    number: u64,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    entries: GraphqlEntries,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlEntries {
+    nodes: Vec<GraphqlEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlEntry {
+    position: u64,
+    #[serde(rename = "pullRequest")]
+    pull_request: GraphqlEntryPr,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GraphqlEntryPr {
+    number: u64,
+    title: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    #[serde(rename = "baseRefOid")]
+    base_ref_oid: String,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+    state: String,
+    merged: bool,
 }
 
 /// Parses `gh api graphql`'s response for [`stack_query`]: `Ok(None)` when
 /// the PR is not stacked, otherwise the open layers sorted by `position`.
 pub(crate) fn parse_stack_json(json: &str) -> anyhow::Result<Option<PrStack>> {
-    todo!("parse {json} into a PrStack, dropping merged/non-open entries")
+    let response: GraphqlResponse = serde_json::from_str(json)?;
+    if let Some(first) = response.errors.and_then(|errors| errors.into_iter().next()) {
+        anyhow::bail!("gh api graphql (stack query) failed: {}", first.message);
+    }
+    let Some(stack) = response
+        .data
+        .and_then(|data| data.repository)
+        .and_then(|repository| repository.pull_request)
+        .and_then(|pull_request| pull_request.stack)
+    else {
+        return Ok(None);
+    };
+
+    let mut entries: Vec<GraphqlEntry> = stack
+        .entries
+        .nodes
+        .into_iter()
+        .filter(|entry| !entry.pull_request.merged && entry.pull_request.state == "OPEN")
+        .collect();
+    entries.sort_by_key(|entry| entry.position);
+
+    Ok(Some(PrStack {
+        number: stack.number,
+        base_ref_name: stack.base_ref_name,
+        prs: entries
+            .into_iter()
+            .map(|entry| StackPr {
+                number: entry.pull_request.number,
+                title: entry.pull_request.title,
+                head_ref_name: entry.pull_request.head_ref_name,
+                base_ref_name: entry.pull_request.base_ref_name,
+                base_ref_oid: entry.pull_request.base_ref_oid,
+                head_ref_oid: entry.pull_request.head_ref_oid,
+            })
+            .collect(),
+    }))
 }
 
 pub(crate) fn fetch_pr_stack(
@@ -70,7 +171,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_return_none_when_stack_is_null() {
         let json = r#"{"data":{"repository":{"pullRequest":{"number":249,"stack":null}}}}"#;
 
@@ -80,7 +180,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_drop_merged_entries_and_sort_by_position_when_stack_has_mixed_states() {
         let json = r#"{"data":{"repository":{"pullRequest":{"number":43,"stack":{
             "number":7,"baseRefName":"main","size":3,"entries":{"nodes":[
@@ -119,7 +218,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_error_when_json_is_malformed() {
         let actual = parse_stack_json("{not json");
 
@@ -127,7 +225,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_error_when_response_carries_graphql_errors() {
         let json = r#"{"data":null,"errors":[{"message":"Could not resolve to a PullRequest"}]}"#;
 
@@ -137,7 +234,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_find_cursor_position_when_requested_pr_is_an_open_layer() {
         let stack = PrStack {
             number: 7,
