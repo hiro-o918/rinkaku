@@ -9,7 +9,9 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use rinkaku_core::graph::SymbolGraph;
 use rinkaku_core::render::{Report, ReportOrigin};
+use rstest::rstest;
 use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 
 fn empty_report() -> Report {
     Report {
@@ -316,6 +318,128 @@ fn should_scroll_the_strip_to_keep_the_current_tab_in_view_when_the_stack_overfl
     let rendered: String = actual.iter().map(|seg| seg.text.as_str()).collect();
     assert!(rendered.contains('5'));
     assert!(!rendered.contains('1'));
+}
+
+// --- header_segments (display width, CJK) ---
+
+#[test]
+fn should_fit_a_cjk_single_pr_title_exactly_when_width_equals_its_display_width() {
+    let content = HeaderContent::Single {
+        number: 249,
+        title: "字".to_string(),
+    };
+
+    let actual = header_segments(11, &content);
+
+    assert_eq!(vec![segment("PR #249  字", SegmentKind::Title)], actual);
+}
+
+#[test]
+fn should_truncate_a_cjk_single_pr_title_on_a_column_boundary_when_one_column_short() {
+    let content = HeaderContent::Single {
+        number: 249,
+        title: "字".to_string(),
+    };
+
+    let actual = header_segments(10, &content);
+
+    assert_eq!(
+        vec![segment("PR #249  \u{2026}", SegmentKind::Title)],
+        actual
+    );
+}
+
+#[rstest]
+#[case::single(HeaderContent::Single { number: 249, title: "タイトル".to_string() })]
+#[case::stack(HeaderContent::Stack {
+    tabs: vec![tab(42, "認証機能", TabStatus::Current)],
+    current: 0,
+})]
+fn should_keep_total_segment_width_within_budget_for_cjk_content(#[case] content: HeaderContent) {
+    // NOTE: starts at width 3 (the numbers-only `#42` floor), not 0 — a
+    // stack's current tab is always shown even narrower than that
+    // (`tabs_fitting`'s documented "nothing narrower to fall back to"
+    // exception), which `should_return_no_segments_for_stack_content_when_width_is_zero`
+    // and `should_drop_a_cjk_stack_tab_title_when_one_column_short` already
+    // cover on their own.
+    for width in 3..=40 {
+        let actual = header_segments(width, &content);
+
+        let total_width: usize = actual.iter().map(|seg| seg.text.width()).sum();
+        assert!(
+            total_width <= width,
+            "width {width}: segments {actual:?} summed to {total_width}"
+        );
+    }
+}
+
+#[test]
+fn should_fit_a_cjk_stack_tab_title_exactly_when_width_equals_its_display_width() {
+    let content = HeaderContent::Stack {
+        tabs: vec![tab(42, "認証", TabStatus::Current)],
+        current: 0,
+    };
+
+    let actual = header_segments(8, &content);
+
+    assert_eq!(vec![segment("#42 認証", SegmentKind::CurrentTab)], actual);
+}
+
+#[test]
+fn should_drop_a_cjk_stack_tab_title_when_one_column_short() {
+    let content = HeaderContent::Stack {
+        tabs: vec![tab(42, "認証", TabStatus::Current)],
+        current: 0,
+    };
+
+    let actual = header_segments(7, &content);
+
+    assert_eq!(vec![segment("#42", SegmentKind::CurrentTab)], actual);
+}
+
+#[test]
+fn should_drop_a_wide_char_whole_when_it_would_straddle_the_truncation_cut() {
+    // NOTE: width 10 leaves exactly 1 column after the ascii prefix, one
+    // short of the 2-column 字 that would come next — chosen to land the
+    // straddle exactly on that boundary.
+    let content = HeaderContent::Single {
+        number: 249,
+        title: "字a".to_string(),
+    };
+
+    let actual = header_segments(10, &content);
+
+    assert_eq!(
+        vec![segment("PR #249  \u{2026}", SegmentKind::Title)],
+        actual
+    );
+}
+
+#[test]
+fn should_return_no_segments_for_single_pr_content_when_width_is_zero() {
+    let content = HeaderContent::Single {
+        number: 249,
+        title: "add PR header tabs".to_string(),
+    };
+
+    let actual = header_segments(0, &content);
+
+    assert_eq!(Vec::<Segment>::new(), actual);
+}
+
+#[test]
+fn should_return_no_segments_for_stack_content_when_width_is_zero() {
+    let content = HeaderContent::Stack {
+        tabs: vec![
+            tab(42, "auth", TabStatus::Ready),
+            tab(43, "api", TabStatus::Current),
+        ],
+        current: 1,
+    };
+
+    let actual = header_segments(0, &content);
+
+    assert_eq!(Vec::<Segment>::new(), actual);
 }
 
 // --- draw_pr_header / draw (rendering) ---

@@ -12,6 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const HINT_TEXT: &str = "w: open PR";
 const SEPARATOR: &str = " \u{2502} ";
@@ -192,20 +193,33 @@ fn render_tab_window(
 }
 
 fn strip_width(segments: &[Segment]) -> usize {
-    segments.iter().map(|s| s.text.chars().count()).sum()
+    segments.iter().map(|s| s.text.width()).sum()
 }
 
-/// Truncates `text` to at most `max` columns, replacing the last visible
-/// character with [`TRUNCATION_MARK`] when it doesn't fit whole — `max == 0`
+/// Truncates `text` to at most `max` display columns, replacing the tail
+/// with [`TRUNCATION_MARK`] (1 column) when it doesn't fit whole — measured
+/// with [`UnicodeWidthChar::width`] (`unwrap_or(1)` fallback, matching
+/// `super::scroll`'s convention) rather than `char` count, so a wide (e.g.
+/// CJK) character is dropped whole rather than sliced in half. `max == 0`
 /// returns an empty string rather than panicking on the zero-width slice.
 fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
+    if text.width() <= max {
         return text.to_string();
     }
     if max == 0 {
         return String::new();
     }
-    let mut truncated: String = text.chars().take(max - 1).collect();
+    let budget = max - 1;
+    let mut truncated = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(1);
+        if used + char_width > budget {
+            break;
+        }
+        truncated.push(ch);
+        used += char_width;
+    }
     truncated.push(TRUNCATION_MARK);
     truncated
 }
@@ -216,7 +230,7 @@ fn truncate(text: &str, max: usize) -> String {
 /// then without the hint, then (single-PR mode: truncating the title;
 /// stack mode: narrowing/dropping tab titles) until the strip fits.
 pub(crate) fn header_segments(width: usize, content: &HeaderContent) -> Vec<Segment> {
-    let hint_reserve = HINT_TEXT.chars().count() + 2;
+    let hint_reserve = HINT_TEXT.width() + 2;
     let body_with_hint_room = body_segments(width.saturating_sub(hint_reserve).max(1), content);
     if let Some(segments) = with_hint(width, body_with_hint_room) {
         return segments;
@@ -225,11 +239,14 @@ pub(crate) fn header_segments(width: usize, content: &HeaderContent) -> Vec<Segm
 }
 
 fn body_segments(width: usize, content: &HeaderContent) -> Vec<Segment> {
+    if width == 0 {
+        return Vec::new();
+    }
     match content {
         HeaderContent::Stack { tabs, current } => stack_segments(width, tabs, *current),
         HeaderContent::Single { number, title } => {
             let full = format!("PR #{number}  {title}");
-            vec![segment(truncate(&full, width.max(1)), SegmentKind::Title)]
+            vec![segment(truncate(&full, width), SegmentKind::Title)]
         }
     }
 }
@@ -240,7 +257,7 @@ fn body_segments(width: usize, content: &HeaderContent) -> Vec<Segment> {
 /// [`body_segments`] computed against the *full* `width`, so a body that
 /// didn't need to shrink for the hint isn't shrunk needlessly.
 fn with_hint(width: usize, body: Vec<Segment>) -> Option<Vec<Segment>> {
-    let hint_len = HINT_TEXT.chars().count();
+    let hint_len = HINT_TEXT.width();
     let body_len = strip_width(&body);
     if body_len + 2 + hint_len > width {
         return None;
