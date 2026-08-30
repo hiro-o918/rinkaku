@@ -85,12 +85,12 @@ with its own consumers (the GitHub Action, LLM prompts) to consult.
 
 ### D2. Every layer's SHAs are resolved before the TUI opens
 
-Before any analysis runs, `main.rs` fetches every stack PR's head in
-one `git fetch origin refs/pull/A/head refs/pull/B/head ...`
-(`fetch_pr_heads`, a multi-refspec sibling of `fetch_pr_head`; the
-resulting `FETCH_HEAD` holds one line per refspec and is parsed per
-entry rather than via `git rev-parse FETCH_HEAD`, which only reads the
-first). Each fetched head is checked against the `headRefOid` the
+Before any analysis runs, the driver fetches every stack PR's head
+(`fetch_pr_heads`: one `refs/pull/N/head` fetch per layer through the
+existing `fetch_pr_head`; a single multi-refspec fetch would save a few
+round trips but needs `FETCH_HEAD` parsed line by line, and the layers
+share almost all objects so the extra fetches are cheap). Each fetched
+head is checked against the `headRefOid` the
 GraphQL query reported (`ensure_fetched_head_matches`, unchanged), and
 each PR's base is resolved with the existing `resolve_pr_base_sha`
 cascade (ADR 0007) from that PR's own `baseRefOid`. For a stack PR,
