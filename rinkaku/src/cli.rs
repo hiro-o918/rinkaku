@@ -377,6 +377,33 @@ mod tests {
     }
 
     #[test]
+    fn should_set_no_stack_when_no_stack_flag_given_with_pr() {
+        let expected = Cli {
+            command: None,
+            base: None,
+            head: "HEAD".to_string(),
+            pr: Some("42".to_string()),
+            no_stack: true,
+            format: None,
+            deps: 1,
+            exclude_tests: false,
+            include_generated: false,
+            entry: None,
+            tui: false,
+        };
+        let actual = Cli::parse_from(["rinkaku", "--pr", "42", "--no-stack"]);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn should_reject_no_stack_when_pr_is_not_given() {
+        let actual = Cli::try_parse_from(["rinkaku", "--no-stack"]);
+
+        assert!(actual.is_err());
+    }
+
+    #[test]
     fn should_set_entry_when_entry_flag_given() {
         let expected = Cli {
             command: None,

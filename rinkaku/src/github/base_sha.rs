@@ -8,22 +8,60 @@ pub(crate) fn fetch_pr_head(number: u64, cwd: Option<&std::path::Path>) -> anyho
     run_git_fetch(&format!("refs/pull/{number}/head"), cwd)
 }
 
-/// Fetches every PR head in `numbers`, one `git fetch` per PR via
-/// [`fetch_pr_head`], and returns their SHAs in the same order.
-///
-/// ADR 0075 describes a single multi-refspec `git fetch` parsing
-/// `FETCH_HEAD`'s one-line-per-refspec content; a loop over the existing
-/// per-PR fetch was chosen instead because parsing multi-refspec
-/// `FETCH_HEAD` order reliably is not worth the added complexity for a
-/// one-off stack (typically a handful of layers).
+/// Fetches every PR head in `numbers` with one multi-refspec `git fetch`
+/// into `refs/rinkaku/pull/<number>/head` and returns their SHAs in the
+/// same order. Named refs rather than `FETCH_HEAD`: another rinkaku
+/// process fetching in the same clone overwrites `FETCH_HEAD` between a
+/// fetch and its `rev-parse`, and a stack session fetches several heads
+/// in a row, so that window is wide enough to hit.
 pub(crate) fn fetch_pr_heads(
     numbers: &[u64],
     cwd: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<String>> {
+    if numbers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let refspecs: Vec<String> = numbers
+        .iter()
+        .map(|number| format!("+refs/pull/{number}/head:{}", local_pr_head_ref(*number)))
+        .collect();
+    let mut fetch_command = std::process::Command::new("git");
+    fetch_command.args(["fetch", "origin"]).args(&refspecs);
+    if let Some(cwd) = cwd {
+        fetch_command.current_dir(cwd);
+    }
+    let fetch_output = fetch_command.output()?;
+    if !fetch_output.status.success() {
+        anyhow::bail!(
+            "git fetch origin {} failed: {}",
+            refspecs.join(" "),
+            String::from_utf8_lossy(&fetch_output.stderr)
+        );
+    }
     numbers
         .iter()
-        .map(|&number| fetch_pr_head(number, cwd))
+        .map(|number| rev_parse(&local_pr_head_ref(*number), cwd))
         .collect()
+}
+
+fn local_pr_head_ref(number: u64) -> String {
+    format!("refs/rinkaku/pull/{number}/head")
+}
+
+fn rev_parse(reference: &str, cwd: Option<&std::path::Path>) -> anyhow::Result<String> {
+    let mut command = std::process::Command::new("git");
+    command.args(["rev-parse", reference]);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command.output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git rev-parse {reference} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Fetches branch `name` into the repository at `cwd` and returns the
@@ -184,6 +222,57 @@ fn run_git_fetch(refspec: &str, cwd: Option<&std::path::Path>) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
+    mod fetch_pr_heads_tests {
+        use crate::github::base_sha::fetch_pr_heads;
+        use crate::test_util::{init_repo_with_committed_file, run_git};
+        use pretty_assertions::assert_eq;
+
+        fn head_sha(dir: &std::path::Path) -> String {
+            let output = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .expect("git rev-parse");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+
+        #[test]
+        fn should_return_each_pr_head_in_input_order_when_fetched_in_one_call() {
+            let remote = tempfile::TempDir::new().expect("remote dir");
+            init_repo_with_committed_file(remote.path(), "fn one() {}\n");
+            let first = head_sha(remote.path());
+            run_git(remote.path(), &["update-ref", "refs/pull/7/head", &first]);
+            std::fs::write(remote.path().join("src/lib.rs"), "fn two() {}\n").expect("write");
+            run_git(remote.path(), &["commit", "-am", "second"]);
+            let second = head_sha(remote.path());
+            run_git(remote.path(), &["update-ref", "refs/pull/9/head", &second]);
+            let clone = tempfile::TempDir::new().expect("clone dir");
+            let clone_dir = clone.path().join("repo");
+            run_git(
+                clone.path(),
+                &[
+                    "clone",
+                    "--quiet",
+                    remote.path().to_str().expect("utf8 path"),
+                    clone_dir.to_str().expect("utf8 path"),
+                ],
+            );
+
+            let actual = fetch_pr_heads(&[9, 7], Some(&clone_dir)).expect("fetch");
+
+            assert_eq!(vec![second, first], actual);
+        }
+
+        #[test]
+        fn should_return_empty_without_fetching_when_no_numbers_are_given() {
+            let dir = tempfile::TempDir::new().expect("dir");
+
+            let actual = fetch_pr_heads(&[], Some(dir.path())).expect("fetch");
+
+            assert_eq!(Vec::<String>::new(), actual);
+        }
+    }
+
     use super::*;
 
     mod resolve_pr_base_sha_tests {

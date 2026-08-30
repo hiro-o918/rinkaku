@@ -85,11 +85,15 @@ with its own consumers (the GitHub Action, LLM prompts) to consult.
 
 ### D2. Every layer's SHAs are resolved before the TUI opens
 
-Before any analysis runs, the driver fetches every stack PR's head
-(`fetch_pr_heads`: one `refs/pull/N/head` fetch per layer through the
-existing `fetch_pr_head`; a single multi-refspec fetch would save a few
-round trips but needs `FETCH_HEAD` parsed line by line, and the layers
-share almost all objects so the extra fetches are cheap). Each fetched
+Before any analysis runs, the driver fetches every stack PR's head in
+one multi-refspec `git fetch` into named refs
+(`refs/rinkaku/pull/<N>/head`) and reads each SHA back with
+`git rev-parse` on that ref (`fetch_pr_heads`). The single-PR path's
+`FETCH_HEAD` round trip is not reused: `FETCH_HEAD` is per-clone state,
+so a second rinkaku process fetching in the same clone (a reviewer and
+an agent, or two stack sessions) overwrites it between one process's
+fetch and its `rev-parse` — the dogfooding run for this ADR hit exactly
+that and analysed one layer against another's head. Each fetched
 head is checked against the `headRefOid` the
 GraphQL query reported (`ensure_fetched_head_matches`, unchanged), and
 each PR's base is resolved with the existing `resolve_pr_base_sha`
