@@ -153,6 +153,11 @@ fn tab_text(tab: &TabLabel, title_width: Option<usize>) -> (String, SegmentKind)
         }
         None => format!("#{}{suffix}", tab.number),
     };
+    let text = if tab.status == TabStatus::Current {
+        format!(" {text} ")
+    } else {
+        text
+    };
     let kind = match tab.status {
         TabStatus::Current => SegmentKind::CurrentTab,
         TabStatus::Ready => SegmentKind::OtherTab,
@@ -352,7 +357,8 @@ pub(crate) fn header_segments(width: usize, content: &HeaderContent) -> Vec<Segm
 fn style_for(kind: SegmentKind) -> Style {
     match kind {
         SegmentKind::CurrentTab => Style::default()
-            .fg(Color::Cyan)
+            .fg(Color::Black)
+            .bg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
         SegmentKind::OtherTab | SegmentKind::Title | SegmentKind::Trunk => Style::default(),
         SegmentKind::PendingTab => Style::default().fg(Color::DarkGray),

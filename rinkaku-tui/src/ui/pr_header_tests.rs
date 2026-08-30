@@ -262,7 +262,7 @@ fn should_render_label_trunk_and_capped_titles_when_width_is_generous() {
             ),
             segment(SEPARATOR, SegmentKind::Separator),
             segment(
-                "#252 feat(tui): render PR he\u{2026}",
+                " #252 feat(tui): render PR he\u{2026} ",
                 SegmentKind::CurrentTab
             ),
         ],
@@ -303,15 +303,15 @@ fn should_show_five_layers_with_shrunk_titles_at_120_columns() {
             segment("  ", SegmentKind::Separator),
             segment("main", SegmentKind::Trunk),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#101 auth module\u{2026}", SegmentKind::OtherTab),
+            segment("#101 auth modul\u{2026}", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#102 api client \u{2026}", SegmentKind::OtherTab),
+            segment("#102 api client\u{2026}", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#103 frontend in\u{2026}", SegmentKind::OtherTab),
+            segment("#103 frontend i\u{2026}", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#104 background \u{2026}", SegmentKind::OtherTab),
+            segment("#104 background\u{2026}", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#105 final polis\u{2026}", SegmentKind::CurrentTab),
+            segment(" #105 final poli\u{2026} ", SegmentKind::CurrentTab),
         ],
         actual
     );
@@ -358,7 +358,7 @@ fn should_show_five_layers_with_numbers_only_titles_at_80_columns() {
             segment(SEPARATOR, SegmentKind::Separator),
             segment("#104", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#105", SegmentKind::CurrentTab),
+            segment(" #105 ", SegmentKind::CurrentTab),
         ],
         actual
     );
@@ -393,7 +393,7 @@ fn should_drop_the_trunk_name_before_scrolling_when_five_layers_barely_fit_numbe
             segment(SEPARATOR, SegmentKind::Separator),
             segment("#104", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#105", SegmentKind::CurrentTab),
+            segment(" #105 ", SegmentKind::CurrentTab),
         ],
         actual
     );
@@ -417,12 +417,12 @@ fn should_drop_the_trunk_name_when_shrinking_titles_still_does_not_leave_room_fo
             segment("stack 2/2", SegmentKind::Label),
             segment("  ", SegmentKind::Separator),
             segment(
-                format!("#1 {}\u{2026}", "x".repeat(17)),
+                format!("#1 {}\u{2026}", "x".repeat(16)),
                 SegmentKind::OtherTab
             ),
             segment(SEPARATOR, SegmentKind::Separator),
             segment(
-                format!("#2 {}\u{2026}", "y".repeat(17)),
+                format!(" #2 {}\u{2026} ", "y".repeat(16)),
                 SegmentKind::CurrentTab
             ),
         ],
@@ -481,7 +481,7 @@ fn should_show_numbers_only_before_scrolling_when_shrinking_titles_falls_below_t
             segment("  ", SegmentKind::Separator),
             segment("#100", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#200", SegmentKind::CurrentTab),
+            segment(" #200 ", SegmentKind::CurrentTab),
         ],
         actual
     );
@@ -507,7 +507,7 @@ fn should_scroll_off_other_tabs_only_once_even_a_numbers_only_strip_of_every_tab
         vec![
             segment("stack 5/5", SegmentKind::Label),
             segment("  ", SegmentKind::Separator),
-            segment("#5", SegmentKind::CurrentTab),
+            segment(" #5 ", SegmentKind::CurrentTab),
         ],
         actual
     );
@@ -587,14 +587,14 @@ fn should_truncate_a_cjk_single_pr_title_on_a_column_boundary_when_one_column_sh
 #[case::single(HeaderContent::Single { number: 249, title: "タイトル".to_string() })]
 #[case::stack(stack_content("認証", vec![tab(42, "認証機能", TabStatus::Current)], 0))]
 fn should_keep_total_segment_width_within_budget_for_cjk_content(#[case] content: HeaderContent) {
-    // NOTE: starts at width 14 (label "stack 1/1" + 2-space gap + the
-    // numbers-only `#42` floor), not 0 — a stack's current tab is always
-    // shown even narrower than that (`tabs_fitting`'s documented "nothing
-    // narrower to fall back to" exception), which
+    // NOTE: starts at width 16 (label "stack 1/1" + 2-space gap + the
+    // padded numbers-only ` #42 ` floor), not 0 — a stack's current tab is
+    // always shown even narrower than that (`tabs_fitting`'s documented
+    // "nothing narrower to fall back to" exception), which
     // `should_always_show_the_label_even_when_nothing_else_fits` and
     // `should_drop_a_cjk_stack_tab_title_to_numbers_only_when_the_shrink_floor_is_not_met`
     // already cover on their own.
-    for width in 14..=40 {
+    for width in 16..=40 {
         let actual = header_segments(width, &content);
 
         let total_width: usize = actual.iter().map(|seg| seg.text.width()).sum();
@@ -609,7 +609,7 @@ fn should_keep_total_segment_width_within_budget_for_cjk_content(#[case] content
 fn should_fit_a_cjk_stack_tab_title_with_trunk_exactly_when_width_equals_its_display_width() {
     let content = stack_content("main", vec![tab(42, "認証", TabStatus::Current)], 0);
 
-    let actual = header_segments(26, &content);
+    let actual = header_segments(28, &content);
 
     assert_eq!(
         vec![
@@ -617,7 +617,7 @@ fn should_fit_a_cjk_stack_tab_title_with_trunk_exactly_when_width_equals_its_dis
             segment("  ", SegmentKind::Separator),
             segment("main", SegmentKind::Trunk),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment("#42 認証", SegmentKind::CurrentTab),
+            segment(" #42 認証 ", SegmentKind::CurrentTab),
         ],
         actual
     );
@@ -633,7 +633,7 @@ fn should_drop_the_trunk_name_when_one_column_short_of_fitting_it_with_the_tab()
         vec![
             segment("stack 1/1", SegmentKind::Label),
             segment("  ", SegmentKind::Separator),
-            segment("#42 認証", SegmentKind::CurrentTab),
+            segment(" #42 認証 ", SegmentKind::CurrentTab),
         ],
         actual
     );
@@ -649,7 +649,7 @@ fn should_drop_a_cjk_stack_tab_title_to_numbers_only_when_the_shrink_floor_is_no
         vec![
             segment("stack 1/1", SegmentKind::Label),
             segment("  ", SegmentKind::Separator),
-            segment("#42", SegmentKind::CurrentTab),
+            segment(" #42 ", SegmentKind::CurrentTab),
         ],
         actual
     );
