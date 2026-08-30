@@ -257,6 +257,136 @@ fn should_render_every_tab_with_titles_when_width_is_generous() {
 }
 
 #[test]
+fn should_shrink_both_titles_to_keep_every_tab_visible_when_full_titles_overflow_width() {
+    let content = HeaderContent::Stack {
+        tabs: vec![
+            tab(1, &"x".repeat(30), TabStatus::Ready),
+            tab(2, &"y".repeat(30), TabStatus::Current),
+        ],
+        current: 1,
+    };
+
+    let actual = header_segments(50, &content);
+
+    assert_eq!(
+        vec![
+            segment(
+                format!("#1 {}\u{2026}", "x".repeat(12)),
+                SegmentKind::OtherTab
+            ),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment(
+                format!("#2 {}\u{2026}", "y".repeat(12)),
+                SegmentKind::CurrentTab
+            ),
+            segment(" ".repeat(5), SegmentKind::Separator),
+            segment(HINT_TEXT, SegmentKind::Hint),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_reproduce_a_real_two_layer_stack_at_120_columns() {
+    let content = HeaderContent::Stack {
+        tabs: vec![
+            tab(251, &"a".repeat(70), TabStatus::Ready),
+            tab(252, &"b".repeat(55), TabStatus::Current),
+        ],
+        current: 1,
+    };
+
+    let actual = header_segments(120, &content);
+
+    assert_eq!(
+        vec![
+            segment(
+                format!("#251 {}\u{2026}", "a".repeat(45)),
+                SegmentKind::OtherTab
+            ),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment(
+                format!("#252 {}\u{2026}", "b".repeat(45)),
+                SegmentKind::CurrentTab
+            ),
+            segment(" ".repeat(5), SegmentKind::Separator),
+            segment(HINT_TEXT, SegmentKind::Hint),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_keep_both_layers_visible_at_80_columns_when_cursor_is_on_the_second_layer() {
+    let content = HeaderContent::Stack {
+        tabs: vec![
+            tab(251, &"a".repeat(70), TabStatus::Ready),
+            tab(252, &"b".repeat(55), TabStatus::Current),
+        ],
+        current: 1,
+    };
+
+    let actual = header_segments(80, &content);
+
+    assert_eq!(
+        vec![
+            segment(
+                format!("#251 {}\u{2026}", "a".repeat(25)),
+                SegmentKind::OtherTab
+            ),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment(
+                format!("#252 {}\u{2026}", "b".repeat(25)),
+                SegmentKind::CurrentTab
+            ),
+            segment(" ".repeat(5), SegmentKind::Separator),
+            segment(HINT_TEXT, SegmentKind::Hint),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_show_numbers_only_before_scrolling_when_shrinking_titles_falls_below_the_floor() {
+    let content = HeaderContent::Stack {
+        tabs: vec![
+            tab(100, "a-fairly-long-title-for-tab-one", TabStatus::Ready),
+            tab(200, "a-fairly-long-title-for-tab-two", TabStatus::Current),
+        ],
+        current: 1,
+    };
+
+    let actual = header_segments(20, &content);
+
+    assert_eq!(
+        vec![
+            segment("#100", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#200", SegmentKind::CurrentTab),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_scroll_off_other_tabs_only_once_even_a_numbers_only_strip_of_every_tab_does_not_fit() {
+    let content = HeaderContent::Stack {
+        tabs: vec![
+            tab(1, "one", TabStatus::Ready),
+            tab(2, "two", TabStatus::Ready),
+            tab(3, "three", TabStatus::Ready),
+            tab(4, "four", TabStatus::Ready),
+            tab(5, "five", TabStatus::Current),
+        ],
+        current: 4,
+    };
+
+    let actual = header_segments(6, &content);
+
+    assert_eq!(vec![segment("#5", SegmentKind::CurrentTab)], actual);
+}
+
+#[test]
 fn should_mark_a_failed_tab_with_a_trailing_bang() {
     let content = HeaderContent::Stack {
         tabs: vec![

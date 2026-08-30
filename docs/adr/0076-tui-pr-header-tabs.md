@@ -28,11 +28,17 @@ changes.
 
 Stack mode: `#2063 auth │ #2055 api │ #2056 provider │ …`, bottom-to-top,
 current layer bold+reversed, a `Pending`/`InProgress` layer dimmed with a
-trailing `…`, a `Failed` layer dimmed with a trailing `!`. Titles
-truncate with `…` to fit; if numbers alone still don't fit, titles are
-dropped first. The current tab is always kept in view by scrolling the
-strip when the stack is wider than the frame. A right-aligned `w: open
-PR` hint is dropped first under width pressure.
+trailing `…`, a `Failed` layer dimmed with a trailing `!`. Every layer's
+tab stays visible for as long as it can: full titles, then titles shrunk
+to an equal per-tab column budget (a fixed floor of 8 columns, split
+evenly across tabs rather than proportionally to title length — simpler
+to reason about, and every tab ends up equally readable rather than the
+longest title being squeezed hardest), then numbers only. Only once even
+a numbers-only strip of every layer doesn't fit does the strip scroll,
+dropping tabs off one end to keep the current layer in view. The
+right-aligned `w: open PR` hint is dropped before any of that: it is
+tried after each of the three "every tab visible" layouts, but is gone by
+the time the strip has to scroll.
 
 Single-PR mode: `PR #249  <title>` on the left, `w: open PR` on the
 right — the same building blocks (title, hint), one row of content.

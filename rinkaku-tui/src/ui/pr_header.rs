@@ -17,6 +17,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const HINT_TEXT: &str = "w: open PR";
 const SEPARATOR: &str = " \u{2502} ";
 const TRUNCATION_MARK: char = '\u{2026}';
+/// Minimum display columns a tab's title keeps before
+/// [`tabs_with_shrunk_titles`] gives up on titles altogether and falls back
+/// to a numbers-only strip (ADR 0076 D2 amendment).
+const MIN_TITLE_WIDTH: usize = 8;
 
 /// One tab's live status, resolved from [`crate::stack::PrAnalysisCache`] at
 /// draw time (ADR 0076 D3) — the cursor's own layer is always [`Self::Ready`]
@@ -114,19 +118,18 @@ fn segment(text: impl Into<String>, kind: SegmentKind) -> Segment {
 }
 
 /// One tab's own rendered text and [`SegmentKind`], before the "does the
-/// whole strip fit" truncation pass below — `with_title` controls whether
-/// the title is included at all (dropped first when width is short, ADR
-/// 0076 D2).
-fn tab_text(tab: &TabLabel, with_title: bool) -> (String, SegmentKind) {
+/// whole strip fit" truncation pass below. `title_width` is `None` for a
+/// numbers-only tab (dropped last, ADR 0076 D2 amendment); `Some(budget)`
+/// truncates the title to at most `budget` display columns.
+fn tab_text(tab: &TabLabel, title_width: Option<usize>) -> (String, SegmentKind) {
     let suffix = match tab.status {
         TabStatus::Pending => "\u{2026}",
         TabStatus::Failed => "!",
         TabStatus::Current | TabStatus::Ready => "",
     };
-    let text = if with_title {
-        format!("#{} {}{suffix}", tab.number, tab.title)
-    } else {
-        format!("#{}{suffix}", tab.number)
+    let text = match title_width {
+        Some(budget) => format!("#{} {}{suffix}", tab.number, truncate(&tab.title, budget)),
+        None => format!("#{}{suffix}", tab.number),
     };
     let kind = match tab.status {
         TabStatus::Current => SegmentKind::CurrentTab,
@@ -137,27 +140,65 @@ fn tab_text(tab: &TabLabel, with_title: bool) -> (String, SegmentKind) {
     (text, kind)
 }
 
-/// Renders `tabs` into tab segments joined by [`SEPARATOR`], scrolling the
-/// strip (dropping tabs off one end) so `current`'s own tab is always
-/// included, then dropping titles (numbers only) if the full-title strip
-/// still doesn't fit `width`. Mirrors [`super::scroll`]'s "requested value,
-/// caller clamps to what's visible" split: this function decides *what*
-/// fits, not how a real terminal wraps it.
+/// Renders `tabs` into tab segments joined by [`SEPARATOR`], trying every
+/// layer visible before dropping any (ADR 0076 D2 amendment), in order:
+/// (1) all tabs, full titles; (2) all tabs, titles shrunk to share the
+/// available width; (3) all tabs, numbers only; (4) numbers-only, scrolling
+/// the strip so `current` stays in view. Mirrors [`super::scroll`]'s
+/// "requested value, caller clamps to what's visible" split: this function
+/// decides *what* fits, not how a real terminal wraps it.
 fn stack_segments(width: usize, tabs: &[TabLabel], current: usize) -> Vec<Segment> {
-    let with_titles = tabs_fitting(width, tabs, current, true);
-    if strip_width(&with_titles) <= width {
-        return with_titles;
-    }
-    tabs_fitting(width, tabs, current, false)
+    all_tabs_visible(width, tabs).unwrap_or_else(|| tabs_fitting(width, tabs, current))
 }
 
-/// The widest contiguous window of `tabs` that includes `current`, rendered
-/// with or without titles, grown one tab at a time (alternating toward the
-/// top of the stack first, then the bottom) while the strip still fits
-/// `width` — the scrolling behaviour ADR 0076 D2 asks for. Always includes
-/// `current` even when its own tab alone overflows `width` (the caller has
-/// nothing narrower to fall back to at that point).
-fn tabs_fitting(width: usize, tabs: &[TabLabel], current: usize, with_title: bool) -> Vec<Segment> {
+/// Steps (1)-(3) of [`stack_segments`]: every layer's tab, at full,
+/// shrunk, or numbers-only titles. `None` once even numbers-only doesn't
+/// fit `width` — the boundary [`header_segments`] uses to keep dropping
+/// the hint a lower-priority resort than dropping/scrolling tabs.
+fn all_tabs_visible(width: usize, tabs: &[TabLabel]) -> Option<Vec<Segment>> {
+    if tabs.is_empty() {
+        return Some(Vec::new());
+    }
+    let last = tabs.len() - 1;
+    let full_titles = render_tab_window(tabs, 0..=last, Some(usize::MAX));
+    if strip_width(&full_titles) <= width {
+        return Some(full_titles);
+    }
+    if let Some(shrunk) = tabs_with_shrunk_titles(width, tabs) {
+        return Some(shrunk);
+    }
+    let numbers_only = render_tab_window(tabs, 0..=last, None);
+    (strip_width(&numbers_only) <= width).then_some(numbers_only)
+}
+
+/// All tabs with titles truncated to an equal per-tab column budget
+/// (rather than proportionally to title length, so every tab ends up
+/// equally readable), `None` if `width` can't fit every tab even at
+/// [`MIN_TITLE_WIDTH`].
+fn tabs_with_shrunk_titles(width: usize, tabs: &[TabLabel]) -> Option<Vec<Segment>> {
+    let last = tabs.len() - 1;
+    let fixed_width = strip_width(&render_tab_window(tabs, 0..=last, None));
+    let separators_width = SEPARATOR.width() * tabs.len().saturating_sub(1);
+    let space_before_each_title = tabs.len();
+    let available_for_titles = width
+        .saturating_sub(fixed_width)
+        .saturating_sub(separators_width)
+        .saturating_sub(space_before_each_title);
+    let per_tab_budget = available_for_titles / tabs.len();
+    if per_tab_budget < MIN_TITLE_WIDTH {
+        return None;
+    }
+    Some(render_tab_window(tabs, 0..=last, Some(per_tab_budget)))
+}
+
+/// The widest contiguous window of numbers-only `tabs` that includes
+/// `current`, grown one tab at a time (alternating toward the top of the
+/// stack first, then the bottom) while the strip still fits `width` — the
+/// scrolling behaviour ADR 0076 D2 asks for once even a numbers-only strip
+/// of every tab doesn't fit. Always includes `current` even when its own
+/// tab alone overflows `width` (the caller has nothing narrower to fall
+/// back to at that point).
+fn tabs_fitting(width: usize, tabs: &[TabLabel], current: usize) -> Vec<Segment> {
     let mut start = current;
     let mut end = current;
     loop {
@@ -166,27 +207,27 @@ fn tabs_fitting(width: usize, tabs: &[TabLabel], current: usize, with_title: boo
         let grown = [up, down]
             .into_iter()
             .flatten()
-            .find(|&(s, e)| strip_width(&render_tab_window(tabs, s..=e, with_title)) <= width);
+            .find(|&(s, e)| strip_width(&render_tab_window(tabs, s..=e, None)) <= width);
         let Some((next_start, next_end)) = grown else {
             break;
         };
         start = next_start;
         end = next_end;
     }
-    render_tab_window(tabs, start..=end, with_title)
+    render_tab_window(tabs, start..=end, None)
 }
 
 fn render_tab_window(
     tabs: &[TabLabel],
     range: std::ops::RangeInclusive<usize>,
-    with_title: bool,
+    title_width: Option<usize>,
 ) -> Vec<Segment> {
     let mut segments = Vec::new();
     for (offset, index) in range.clone().enumerate() {
         if offset > 0 {
             segments.push(segment(SEPARATOR, SegmentKind::Separator));
         }
-        let (text, kind) = tab_text(&tabs[index], with_title);
+        let (text, kind) = tab_text(&tabs[index], title_width);
         segments.push(segment(text, kind));
     }
     segments
@@ -226,16 +267,38 @@ fn truncate(text: &str, max: usize) -> String {
 
 /// Builds the header row's segments for a frame `width` columns wide —
 /// takes no `ratatui`/`App` types so it is unit-testable in isolation
-/// (ADR 0076 D3). Tries, in order: full content with the `w: open PR` hint,
-/// then without the hint, then (single-PR mode: truncating the title;
-/// stack mode: narrowing/dropping tab titles) until the strip fits.
+/// (ADR 0076 D3). Tries, in order: every tab visible (full, then shrunk,
+/// then numbers-only titles) with the `w: open PR` hint; the same without
+/// the hint; only then (stack mode) scrolling the numbers-only strip, or
+/// (single-PR mode) truncating the title further. The hint is dropped
+/// before tabs are ever dropped/scrolled — [`body_with_every_tab_visible`]
+/// is what keeps that order, since it is `None` exactly when scrolling
+/// would otherwise be needed.
 pub(crate) fn header_segments(width: usize, content: &HeaderContent) -> Vec<Segment> {
     let hint_reserve = HINT_TEXT.width() + 2;
-    let body_with_hint_room = body_segments(width.saturating_sub(hint_reserve).max(1), content);
-    if let Some(segments) = with_hint(width, body_with_hint_room) {
+    let hint_room_width = width.saturating_sub(hint_reserve).max(1);
+    if let Some(segments) = body_with_every_tab_visible(hint_room_width, content)
+        .and_then(|body| with_hint(width, body))
+    {
         return segments;
     }
+    if let Some(body) = body_with_every_tab_visible(width, content) {
+        return body;
+    }
     body_segments(width, content)
+}
+
+/// `body_segments`, but `None` for stack mode once the strip would need to
+/// scroll (single-PR mode never scrolls, so it always returns `Some`) —
+/// see [`header_segments`] for why that distinction matters.
+fn body_with_every_tab_visible(width: usize, content: &HeaderContent) -> Option<Vec<Segment>> {
+    if width == 0 {
+        return Some(Vec::new());
+    }
+    match content {
+        HeaderContent::Stack { tabs, .. } => all_tabs_visible(width, tabs),
+        HeaderContent::Single { .. } => Some(body_segments(width, content)),
+    }
 }
 
 fn body_segments(width: usize, content: &HeaderContent) -> Vec<Segment> {
