@@ -84,7 +84,20 @@ pub fn render_additional_notes(annotations: &[&Annotation]) -> String {
 /// location heading, the originating symbol's signature (when the
 /// annotation carries one) as a fenced code block, then the annotation's
 /// own body verbatim.
+/// Groups `annotations` by [`Annotation::pr_number`] in first-seen order
+/// (ADR 0075) — the stack driver's annotation order is stack order, since
+/// a note can only be taken on the layer currently on screen.
+pub fn group_by_pr(annotations: &[Annotation]) -> Vec<(Option<u64>, Vec<&Annotation>)> {
+    todo!("group {} annotations by pr_number", annotations.len())
+}
+
 pub fn render_agent_packet(annotations: &[Annotation]) -> String {
+    if annotations
+        .iter()
+        .any(|annotation| annotation.pr_number.is_some())
+    {
+        todo!("render one `## PR #N — title` section per group_by_pr group")
+    }
     let mut packet =
         String::from("# Review annotations\n\nAddress each of the following review annotations.\n");
     for annotation in annotations {

@@ -63,6 +63,25 @@ mod compose_tests {
     }
 
     #[test]
+    fn should_stamp_current_pr_on_the_confirmed_annotation_when_set() {
+        let state = ReviewState::default()
+            .set_current_pr(Some(43))
+            .begin_compose(snapshot("lib.rs"))
+            .push_char('h')
+            .confirm_compose();
+
+        assert_eq!(
+            &[Annotation {
+                location: AnnotationLocation::from(snapshot("lib.rs")),
+                body: "h".to_string(),
+                signature: Some("fn foo()".to_string()),
+                pr_number: Some(43),
+            }],
+            state.annotations()
+        );
+    }
+
+    #[test]
     fn should_be_a_no_op_when_backspacing_an_empty_buffer() {
         let state = ReviewState::default()
             .begin_compose(snapshot("lib.rs"))
@@ -91,6 +110,7 @@ mod compose_tests {
                 location: AnnotationLocation::from(snapshot("lib.rs")),
                 body: "hi".to_string(),
                 signature: Some("fn foo()".to_string()),
+                pr_number: None,
             }],
             state.annotations()
         );
@@ -206,6 +226,7 @@ mod list_tests {
                 location: AnnotationLocation::from(snapshot("a.rs")),
                 body: "a".to_string(),
                 signature: Some("fn foo()".to_string()),
+                pr_number: None,
             }],
             state.annotations()
         );

@@ -45,6 +45,7 @@ help:
     jump_to_caller: "カーソル位置のシンボルの caller へジャンプ"
     jump_back: "jumplist の一つ前の位置へ戻る"
     jump_forward: "jumplist の次の位置へ進む"
+    next_prev_pr: "stack 内の次 / 前の PR へ切り替え（stacked --pr のみ）"
     open_pr_in_browser: "現在の PR のページをブラウザで開く（--pr モードのみ）"
     prompt_self_update: "self-update を促す（新しいリリースがある場合のみ表示）"
     toggle_help_overlay: "このヘルプ画面を切り替え"

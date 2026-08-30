@@ -104,6 +104,14 @@ pub(crate) fn perform_export(
     export: review::ExportRequest,
 ) -> review::ReviewState {
     match export {
+        review::ExportRequest::GithubReview(verdict)
+            if review
+                .annotations()
+                .iter()
+                .any(|annotation| annotation.pr_number.is_some()) =>
+        {
+            submit_grouped_reviews(review, ports, verdict)
+        }
         review::ExportRequest::GithubReview(verdict) => {
             let Some(submitter) = ports.submitter else {
                 return review.set_status("error: no PR context available to post a review");
@@ -134,6 +142,19 @@ pub(crate) fn perform_export(
             }
         }
     }
+}
+
+/// Sink A in stack mode (ADR 0075 D6). Only the PR under the cursor gets
+/// `verdict`: a verdict is a statement about one PR, and the reviewer chose
+/// it while looking at that one; the other PRs get `Verdict::Comment`.
+fn submit_grouped_reviews(
+    review: review::ReviewState,
+    ports: &ReviewPorts<'_>,
+    verdict: review::Verdict,
+) -> review::ReviewState {
+    let _ = (ports, verdict);
+    let groups = review::group_by_pr(review.annotations());
+    todo!("submit {} per-PR reviews", groups.len())
 }
 
 /// Derives a [`review::SelectionSnapshot`] from whatever the tree cursor

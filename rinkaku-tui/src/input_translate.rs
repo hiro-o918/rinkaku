@@ -280,6 +280,8 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // special-cases the actual dispatch (it needs the session's
         // `PrContext`, which `App` doesn't hold).
         KeyCode::Char('w') => Some(InputKey::OpenPrInBrowser),
+        KeyCode::Char('p') => Some(InputKey::NextPr),
+        KeyCode::Char('P') => Some(InputKey::PrevPr),
         // `u` (ADR 0054): opens the update confirmation popup. Global,
         // like `w`/`d`/`r`/`s`; `App::handle_key`'s own arm no-ops unless
         // `App::update_available` is `Some`.

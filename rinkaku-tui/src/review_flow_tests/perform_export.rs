@@ -24,6 +24,7 @@ fn ports_with<'a>(
 ) -> ReviewPorts<'a> {
     ReviewPorts {
         pr_context: None,
+        stack_pr_contexts: Vec::new(),
         submitter: None,
         clipboard,
         browser,

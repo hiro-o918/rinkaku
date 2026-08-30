@@ -228,6 +228,10 @@ pub enum InputKey {
     /// special-cases this variant before dispatch rather than routing it
     /// through `App::handle_key`.
     OpenPrInBrowser,
+    /// `p` (ADR 0075): the stack layer above the current one.
+    NextPr,
+    /// `P` (ADR 0075): the stack layer below the current one.
+    PrevPr,
     /// `U` (ADR 0054): opens the update confirmation popup once a newer
     /// released version has been found. Deliberately key-gated rather than
     /// auto-opening when the background version-check thread reports: an

@@ -9,13 +9,17 @@
 //! only the terminal-lifecycle wrapper around that loop moves here.
 
 use crate::ReviewPorts;
+use crate::event_loop::AppExit;
 use crate::locale::Locale;
+use crate::review::{PrContext, ReviewState};
 use crate::run_app;
 use crate::source::{SourceReader, WorkingTreeSourceReader};
 use crate::splash;
+use crate::stack::{PrAnalysisCache, StackPosition};
 use ratatui::crossterm::event;
 use ratatui::crossterm::execute;
 use rinkaku_core::render::Report;
+use std::sync::Arc;
 
 /// Runs the interactive TUI over `report` until the user quits, taking
 /// over the terminal for the duration of the call (raw mode + alternate
@@ -248,6 +252,7 @@ impl TuiSession {
         update_check: Option<std::sync::mpsc::Receiver<String>>,
         locale: Locale,
     ) -> std::io::Result<bool> {
+        let mut review = ReviewState::default();
         let result = run_app(
             &mut self.terminal,
             report,
@@ -258,10 +263,41 @@ impl TuiSession {
             review_ports,
             update_check,
             locale,
+            None,
+            &mut review,
         );
         let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
         ratatui::restore();
-        result
+        result.map(|exit| exit == AppExit::UpdateRequested)
+    }
+
+    /// Drives a stacked-PR session (ADR 0075) by re-entering [`run_app`]
+    /// once per visited layer; `review_ports.pr_context` is replaced by each
+    /// layer's own, and the [`ReviewState`] survives every switch. Restores
+    /// the terminal unconditionally, like [`TuiSession::run`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_stack(
+        self,
+        position: StackPosition,
+        cache: Arc<PrAnalysisCache>,
+        source_reader_for: &dyn Fn(&PrContext) -> Box<dyn SourceReader>,
+        entry_path: Option<&str>,
+        repo_root: &std::path::Path,
+        review_ports: ReviewPorts<'_>,
+        update_check: Option<std::sync::mpsc::Receiver<String>>,
+        locale: Locale,
+    ) -> std::io::Result<bool> {
+        let _ = (
+            position,
+            cache,
+            source_reader_for,
+            entry_path,
+            repo_root,
+            review_ports,
+            update_check,
+            locale,
+        );
+        todo!("loop over run_app per layer until AppExit::Quit/UpdateRequested")
     }
 }
 

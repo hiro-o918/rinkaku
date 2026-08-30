@@ -746,6 +746,9 @@ impl App {
             // precedent just above), so this arm is a no-op stub kept only
             // for match exhaustiveness.
             (Screen::Entry, _, InputKey::OpenPrInBrowser) => {}
+            (Screen::Entry, _, InputKey::NextPr | InputKey::PrevPr) => {
+                todo!("move the stack cursor and record a pr_switch_request (ADR 0075)")
+            }
             // `U` (ADR 0054) reaches this arm only when no update is
             // available (`self.update_available.is_none()`) — the branch
             // above this match already intercepts it and opens the popup

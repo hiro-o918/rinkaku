@@ -4,6 +4,7 @@
 
 use crate::app::{App, Screen};
 use crate::search::SearchMode;
+use crate::stack::StackPosition;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -122,9 +123,17 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
         None => help,
     };
 
-    match app.status() {
+    let line = match app.status() {
         Some(status) => format!("{status}  |  {help}"),
         None => help,
+    };
+    format!("{}{line}", stack_prefix(app.stack()))
+}
+
+fn stack_prefix(stack: Option<&StackPosition>) -> String {
+    match stack {
+        None => String::new(),
+        Some(position) => todo!("render {} as the status-line prefix", position.label()),
     }
 }
 
@@ -491,6 +500,74 @@ mod tests {
         assert!(
             actual.ends_with("  |  update v1.2.3: U"),
             "expected trailing update hint, got: {actual}",
+        );
+    }
+
+    fn stack_position() -> crate::stack::StackPosition {
+        crate::stack::StackPosition::new(
+            vec![
+                crate::stack::StackEntry {
+                    number: 42,
+                    title: "auth".to_string(),
+                    head_ref_name: "auth".to_string(),
+                },
+                crate::stack::StackEntry {
+                    number: 43,
+                    title: "api".to_string(),
+                    head_ref_name: "api".to_string(),
+                },
+                crate::stack::StackEntry {
+                    number: 44,
+                    title: "frontend".to_string(),
+                    head_ref_name: "frontend".to_string(),
+                },
+            ],
+            1,
+        )
+    }
+
+    // ADR 0075: `enter: open` is dropped from the Tree-focus hints in stack
+    // mode so the prefixed line stays inside the 80-column budget (#196).
+    #[test]
+    #[ignore = "not implemented"]
+    fn should_prefix_status_line_with_pr_label_when_in_stack_mode() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report).with_stack(Some(stack_position()));
+
+        let actual = status_line_text(&app, &report);
+
+        assert_eq!(
+            "PR #43 2/3  |  order: topological  |  j/k: move  /: search  ?: help  q: quit"
+                .to_string(),
+            actual
+        );
+    }
+
+    #[test]
+    #[ignore = "not implemented"]
+    fn should_fit_the_stack_mode_tree_hint_line_within_80_columns() {
+        let report = report_with_one_symbol();
+        let app = App::new(&report).with_stack(Some(stack_position()));
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            actual.chars().count() <= 80,
+            "stack-mode hint line is {} columns, over the 80-column budget: {actual}",
+            actual.chars().count(),
+        );
+    }
+
+    #[test]
+    fn should_not_prefix_status_line_when_not_in_stack_mode() {
+        let report = empty_report_for_status_line();
+        let app = App::new(&report);
+
+        let actual = status_line_text(&app, &report);
+
+        assert!(
+            !actual.starts_with("PR #"),
+            "unexpected stack prefix: {actual}"
         );
     }
 

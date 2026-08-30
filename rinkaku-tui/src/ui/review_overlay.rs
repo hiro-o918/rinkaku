@@ -167,7 +167,10 @@ fn annotations_list_entry_text(annotation: &crate::review::Annotation) -> String
         }
     };
     let body_first_line = annotation.body.lines().next().unwrap_or("");
-    format!("{location_text}: {body_first_line}")
+    match annotation.pr_number {
+        Some(number) => todo!("prefix the row with #{number} (ADR 0075)"),
+        None => format!("{location_text}: {body_first_line}"),
+    }
 }
 
 /// The export menu: `GitHub PR review` only when `sink_a_available` (ADR

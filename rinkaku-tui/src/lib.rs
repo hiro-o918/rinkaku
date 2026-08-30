@@ -61,6 +61,7 @@ pub mod source_diff;
 pub mod source_split;
 pub mod splash;
 mod split_pairing;
+pub mod stack;
 pub mod tree;
 pub mod ui;
 

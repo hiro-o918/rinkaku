@@ -67,10 +67,110 @@ fn ports_with<'a>(
 ) -> ReviewPorts<'a> {
     ReviewPorts {
         pr_context: Some(pr_context()),
+        stack_pr_contexts: Vec::new(),
         submitter: Some(submitter),
         clipboard,
         browser,
     }
+}
+
+type PerPrCall = (u64, String, Verdict, Vec<RenderedComment>);
+
+struct PerPrRecordingSubmitter {
+    calls: std::cell::RefCell<Vec<PerPrCall>>,
+}
+
+impl ReviewSubmitter for PerPrRecordingSubmitter {
+    fn submit_review(
+        &self,
+        ctx: &PrContext,
+        verdict: Verdict,
+        _summary: &str,
+        comments: &[RenderedComment],
+    ) -> Result<(), String> {
+        self.calls.borrow_mut().push((
+            ctx.number,
+            ctx.head_sha.clone(),
+            verdict,
+            comments.to_vec(),
+        ));
+        Ok(())
+    }
+}
+
+#[test]
+#[ignore = "not implemented"]
+fn should_post_verdict_to_cursor_pr_and_comment_reviews_to_other_prs_when_annotations_span_layers()
+{
+    let submitter = PerPrRecordingSubmitter {
+        calls: std::cell::RefCell::new(Vec::new()),
+    };
+    let browser = super::FakeBrowserOpener::new(Ok(()));
+    let clipboard = UnusedClipboard;
+    let below = PrContext {
+        number: 42,
+        head_sha: "sha42".to_string(),
+        ..pr_context()
+    };
+    let cursor = PrContext {
+        number: 43,
+        head_sha: "sha43".to_string(),
+        ..pr_context()
+    };
+    let ports = ReviewPorts {
+        pr_context: Some(cursor.clone()),
+        stack_pr_contexts: vec![below.clone(), cursor.clone()],
+        submitter: Some(&submitter),
+        clipboard: &clipboard,
+        browser: &browser,
+    };
+    let mut review = ReviewState::default()
+        .set_current_pr(Some(42))
+        .begin_compose(symbol_snapshot((10, 10)))
+        .push_char('a')
+        .confirm_compose()
+        .set_current_pr(Some(43))
+        .begin_compose(symbol_snapshot((20, 20)))
+        .push_char('b')
+        .confirm_compose();
+
+    review = perform_export(
+        review,
+        &ports,
+        ExportRequest::GithubReview(Verdict::RequestChanges),
+    );
+
+    assert_eq!(
+        vec![
+            (
+                42,
+                "sha42".to_string(),
+                Verdict::Comment,
+                vec![RenderedComment {
+                    path: "src/lib.rs".to_string(),
+                    line: 10,
+                    start_line: None,
+                    body: "a".to_string(),
+                }],
+            ),
+            (
+                43,
+                "sha43".to_string(),
+                Verdict::RequestChanges,
+                vec![RenderedComment {
+                    path: "src/lib.rs".to_string(),
+                    line: 20,
+                    start_line: None,
+                    body: "b".to_string(),
+                }],
+            ),
+        ],
+        submitter.calls.into_inner()
+    );
+    assert_eq!(
+        Some("posted 2 review comment(s) across 2 PRs"),
+        review.last_status()
+    );
 }
 
 fn symbol_snapshot(anchor: (usize, usize)) -> SelectionSnapshot {

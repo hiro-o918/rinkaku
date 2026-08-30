@@ -14,12 +14,13 @@ mod scroll_sync;
 use crate::app::{App, BlastRadiusSelection, Focus, InputKey, Screen};
 use crate::locale::Locale;
 use crate::nav::row_search_texts;
-use crate::review::PrContext;
 use crate::review::ports::{BrowserOpener, ClipboardSink, ReviewSubmitter};
+use crate::review::{PrContext, ReviewState};
 use crate::review_flow::{
     derive_selection_snapshot, dispatch_annotation_compose_key, open_pr_in_browser, perform_export,
     should_recompute_annotation_markers,
 };
+use crate::stack::StackPosition;
 use crate::{annotation_markers, diff_shape, diff_view, highlight, input_translate, source, ui};
 use goto::{GotoOutcome, resolve_goto};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -39,8 +40,12 @@ use std::time::Duration;
 /// depends on a PR. `browser` (ADR 0050) is likewise always present — `w` is
 /// a global key regardless of `pr_context`, so the port itself always
 /// exists; only the `PrContext` it needs to build a URL may be absent.
+#[derive(Clone)]
 pub struct ReviewPorts<'a> {
     pub pr_context: Option<PrContext>,
+    /// Every open layer's context in stack order (ADR 0075), empty outside
+    /// stack mode — sink A posts one review per PR that has annotations.
+    pub stack_pr_contexts: Vec<PrContext>,
     pub submitter: Option<&'a dyn ReviewSubmitter>,
     pub clipboard: &'a dyn ClipboardSink,
     pub browser: &'a dyn BrowserOpener,
@@ -64,6 +69,16 @@ pub struct ReviewPorts<'a> {
 // this function's own doc comment and `TuiSession::run`'s, which has the
 // same allow for the same reason), so bundling them into a struct now
 // would only rename the same values one level deeper.
+/// Why [`run_app`] returned (ADR 0075): the reviewer quit, quit after
+/// confirming the update popup (ADR 0054), or asked for another layer of
+/// the stack — the driver in `crate::session` re-enters with that layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppExit {
+    Quit,
+    UpdateRequested,
+    SwitchPr(usize),
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_app(
     terminal: &mut ratatui::DefaultTerminal,
@@ -75,8 +90,13 @@ pub(crate) fn run_app(
     review_ports: ReviewPorts<'_>,
     update_check: Option<std::sync::mpsc::Receiver<String>>,
     locale: Locale,
-) -> std::io::Result<bool> {
-    let mut app = App::new(report).with_review_sink_a_available(review_ports.pr_context.is_some());
+    stack: Option<StackPosition>,
+    review: &mut ReviewState,
+) -> std::io::Result<AppExit> {
+    let mut app = App::new(report)
+        .with_review_sink_a_available(review_ports.pr_context.is_some())
+        .with_stack(stack)
+        .with_review(std::mem::take(review));
     if let Some(path) = entry_path {
         app = app.with_entry_pivot(path);
     }
@@ -254,7 +274,16 @@ pub(crate) fn run_app(
         }
 
         if app.should_quit() {
-            return Ok(app.update_requested());
+            *review = app.review().clone();
+            return Ok(if app.update_requested() {
+                AppExit::UpdateRequested
+            } else {
+                AppExit::Quit
+            });
+        }
+        if let Some(target) = app.take_pr_switch_request() {
+            *review = app.review().clone();
+            return Ok(AppExit::SwitchPr(target));
         }
 
         // ADR 0054: `try_recv` never blocks, so polling the version-check

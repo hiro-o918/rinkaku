@@ -6,6 +6,7 @@ fn annotation(location: AnnotationLocation, body: &str, signature: Option<&str>)
         location,
         body: body.to_string(),
         signature: signature.map(str::to_string),
+        pr_number: None,
     }
 }
 
@@ -252,9 +253,83 @@ mod render_additional_notes_tests {
     }
 }
 
+mod group_by_pr_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    #[ignore = "not implemented"]
+    fn should_group_annotations_by_pr_in_first_seen_order_when_pr_numbers_are_set() {
+        let on_43 = Annotation {
+            pr_number: Some(43),
+            ..annotation(file_location("a.rs"), "first on 43", None)
+        };
+        let on_44 = Annotation {
+            pr_number: Some(44),
+            ..annotation(file_location("b.rs"), "on 44", None)
+        };
+        let again_43 = Annotation {
+            pr_number: Some(43),
+            ..annotation(file_location("c.rs"), "second on 43", None)
+        };
+        let annotations = vec![on_43.clone(), on_44.clone(), again_43.clone()];
+
+        let actual = group_by_pr(&annotations);
+
+        assert_eq!(
+            vec![
+                (Some(43), vec![&on_43, &again_43]),
+                (Some(44), vec![&on_44]),
+            ],
+            actual
+        );
+    }
+
+    #[test]
+    #[ignore = "not implemented"]
+    fn should_return_one_unnumbered_group_when_no_annotation_has_a_pr_number() {
+        let first = annotation(file_location("a.rs"), "a", None);
+        let second = annotation(file_location("b.rs"), "b", None);
+        let annotations = vec![first.clone(), second.clone()];
+
+        let actual = group_by_pr(&annotations);
+
+        assert_eq!(vec![(None, vec![&first, &second])], actual);
+    }
+}
+
 mod render_agent_packet_tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    #[ignore = "not implemented"]
+    fn should_render_one_pr_section_per_group_when_annotations_carry_pr_numbers() {
+        let annotations = vec![
+            Annotation {
+                pr_number: Some(43),
+                ..annotation(file_location("a.rs"), "on 43", None)
+            },
+            Annotation {
+                pr_number: Some(44),
+                ..annotation(file_location("b.rs"), "on 44", None)
+            },
+        ];
+
+        let actual = render_agent_packet(&annotations);
+
+        assert_eq!(
+            "# Review annotations\n\n\
+             Address each of the following review annotations.\n\n\
+             ## PR #43\n\n\
+             ### a.rs\n\
+             on 43\n\n\
+             ## PR #44\n\n\
+             ### b.rs\n\
+             on 44\n",
+            actual
+        );
+    }
 
     #[test]
     fn should_render_empty_packet_header_when_there_are_no_annotations() {

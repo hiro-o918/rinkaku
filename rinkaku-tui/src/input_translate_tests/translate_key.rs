@@ -621,6 +621,26 @@ fn should_translate_lowercase_w_to_open_pr_in_browser() {
 }
 
 #[test]
+fn should_translate_lowercase_p_to_next_pr() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('p'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::NextPr), actual);
+}
+
+#[test]
+fn should_translate_uppercase_p_to_prev_pr() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('P'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::PrevPr), actual);
+}
+
+#[test]
 fn should_translate_uppercase_w_to_none() {
     let report = empty_report();
     let app = App::new(&report);
