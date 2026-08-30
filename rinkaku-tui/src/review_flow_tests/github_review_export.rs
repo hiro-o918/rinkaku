@@ -285,3 +285,81 @@ fn should_append_additional_notes_section_when_an_unanchored_annotation_is_prese
         actual.last_status()
     );
 }
+
+struct FailingAtSubmitter {
+    fails_on: u64,
+    calls: std::cell::RefCell<Vec<u64>>,
+}
+
+impl ReviewSubmitter for FailingAtSubmitter {
+    fn submit_review(
+        &self,
+        ctx: &PrContext,
+        _verdict: Verdict,
+        _summary: &str,
+        _comments: &[RenderedComment],
+    ) -> Result<(), String> {
+        self.calls.borrow_mut().push(ctx.number);
+        if ctx.number == self.fails_on {
+            Err("boom".to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn should_name_the_already_posted_prs_when_a_later_pr_review_fails() {
+    let submitter = FailingAtSubmitter {
+        fails_on: 43,
+        calls: std::cell::RefCell::new(Vec::new()),
+    };
+    let browser = super::FakeBrowserOpener::new(Ok(()));
+    let clipboard = UnusedClipboard;
+    let below = PrContext {
+        number: 42,
+        head_sha: "sha42".to_string(),
+        ..pr_context()
+    };
+    let cursor = PrContext {
+        number: 43,
+        head_sha: "sha43".to_string(),
+        ..pr_context()
+    };
+    let ports = ReviewPorts {
+        pr_context: Some(cursor.clone()),
+        stack_pr_contexts: vec![below, cursor],
+        submitter: Some(&submitter),
+        clipboard: &clipboard,
+        browser: &browser,
+    };
+    let review = ReviewState::default()
+        .set_current_pr(Some(42))
+        .begin_compose(symbol_snapshot((10, 10)))
+        .push_char('a')
+        .confirm_compose()
+        .set_current_pr(Some(43))
+        .begin_compose(symbol_snapshot((20, 20)))
+        .push_char('b')
+        .confirm_compose();
+
+    let review = perform_export(
+        review,
+        &ports,
+        ExportRequest::GithubReview(Verdict::Approve),
+        &[],
+    );
+
+    assert_eq!(
+        (
+            vec![42, 43],
+            Some("error posting review for PR #43: boom (already posted: #42)".to_string()),
+            2,
+        ),
+        (
+            submitter.calls.into_inner(),
+            review.last_status().map(str::to_string),
+            review.annotations().len(),
+        )
+    );
+}

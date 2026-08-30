@@ -285,6 +285,33 @@ impl TuiSession {
         entry_path: Option<&str>,
         repo_root: &std::path::Path,
         review_ports: ReviewPorts<'_>,
+        update_check: Option<std::sync::mpsc::Receiver<String>>,
+        locale: Locale,
+    ) -> std::io::Result<bool> {
+        let result = self.run_stack_layers(
+            position,
+            cache,
+            source_reader_for,
+            entry_path,
+            repo_root,
+            review_ports,
+            update_check,
+            locale,
+        );
+        let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
+        ratatui::restore();
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_stack_layers(
+        &mut self,
+        position: StackPosition,
+        cache: Arc<PrAnalysisCache>,
+        source_reader_for: &dyn Fn(&PrContext) -> Box<dyn SourceReader>,
+        entry_path: Option<&str>,
+        repo_root: &std::path::Path,
+        review_ports: ReviewPorts<'_>,
         mut update_check: Option<std::sync::mpsc::Receiver<String>>,
         locale: Locale,
     ) -> std::io::Result<bool> {
@@ -350,8 +377,6 @@ impl TuiSession {
                 stack_driver::StackStep::UpdateRequested => break true,
             }
         };
-        let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
-        ratatui::restore();
         Ok(update_requested)
     }
 }

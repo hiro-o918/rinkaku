@@ -164,7 +164,7 @@ fn submit_grouped_reviews(
     };
     let groups = review::group_by_pr(review.annotations());
     let mut posted = 0usize;
-    let mut pr_count = 0usize;
+    let mut posted_prs: Vec<u64> = Vec::new();
     for (pr_number, annotations) in groups {
         let number = pr_number.or(review.current_pr());
         let Some(context) = number.and_then(|number| {
@@ -191,14 +191,33 @@ fn submit_grouped_reviews(
             review::render_additional_notes(&unanchored)
         );
         if let Err(message) = submitter.submit_review(context, group_verdict, &summary, &comments) {
-            return review.set_status(format!("error posting review: {message}"));
+            return review.set_status(grouped_posting_failure_status(
+                context.number,
+                &message,
+                &posted_prs,
+            ));
         }
         posted += comments.len();
-        pr_count += 1;
+        posted_prs.push(context.number);
     }
     review.set_status(format!(
-        "posted {posted} review comment(s) across {pr_count} PRs"
+        "posted {posted} review comment(s) across {} PRs",
+        posted_prs.len()
     ))
+}
+
+/// Reviews already posted to other PRs cannot be withdrawn, so a mid-batch
+/// failure must say which ones landed — re-exporting would post them twice.
+fn grouped_posting_failure_status(failed_pr: u64, message: &str, posted_prs: &[u64]) -> String {
+    if posted_prs.is_empty() {
+        return format!("error posting review: {message}");
+    }
+    let already = posted_prs
+        .iter()
+        .map(|number| format!("#{number}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("error posting review for PR #{failed_pr}: {message} (already posted: {already})")
 }
 
 /// Derives a [`review::SelectionSnapshot`] from whatever the tree cursor
