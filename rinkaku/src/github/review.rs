@@ -119,6 +119,7 @@ mod tests {
             owner: "octocat".to_string(),
             repo: "hello-world".to_string(),
             number: 42,
+            title: "add auth".to_string(),
             head_sha: "abc123".to_string(),
         }
     }

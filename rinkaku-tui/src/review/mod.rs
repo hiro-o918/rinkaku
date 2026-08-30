@@ -96,15 +96,16 @@ impl From<SelectionSnapshot> for AnnotationLocation {
     }
 }
 
-/// A PR's identity, enough to post a review against it (ADR 0048 sink A):
-/// assembled once in `main.rs` after `run_analysis` succeeds from
-/// `PrInfo`/`PrArg`/`git_remote_origin_url`, `None` for every non-`--pr`
-/// input mode.
+/// A PR's identity, enough to post a review against it (ADR 0048 sink A)
+/// and to label it in the header (ADR 0076): assembled once in `main.rs`
+/// after `run_analysis` succeeds from `PrInfo`/`PrArg`/
+/// `git_remote_origin_url`, `None` for every non-`--pr` input mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrContext {
     pub owner: String,
     pub repo: String,
     pub number: u64,
+    pub title: String,
     pub head_sha: String,
 }
 

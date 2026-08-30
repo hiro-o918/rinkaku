@@ -276,6 +276,7 @@ fn pr_context(plan: &StackPlan, layer: &ResolvedLayer) -> PrContext {
         owner: plan.owner.clone(),
         repo: plan.repo.clone(),
         number: layer.pr.number,
+        title: layer.pr.title.clone(),
         head_sha: layer.head_sha.clone(),
     }
 }

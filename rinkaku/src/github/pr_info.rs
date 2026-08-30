@@ -1,15 +1,16 @@
 //! `gh pr view` info fetch: the `PrInfo` shape and its JSON parser.
 
-/// The subset of `gh pr view --json number,baseRefName,baseRefOid,
+/// The subset of `gh pr view --json number,title,baseRefName,baseRefOid,
 /// headRefOid` this binary needs to drive `--pr` mode (ADR 0004, ADR
-/// 0007): which PR, what its base branch is called (fallback path),
-/// the commit its base was pinned to at PR time (`base_ref_oid`,
-/// preferred — see ADR 0007), and the exact commit its head is expected
-/// to be at (checked against what `git fetch` actually retrieves, see
-/// `main`'s mismatch check).
+/// 0007): which PR, its title (ADR 0076's TUI header), what its base
+/// branch is called (fallback path), the commit its base was pinned to
+/// at PR time (`base_ref_oid`, preferred — see ADR 0007), and the exact
+/// commit its head is expected to be at (checked against what `git
+/// fetch` actually retrieves, see `main`'s mismatch check).
 #[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 pub(crate) struct PrInfo {
     pub(crate) number: u64,
+    pub(crate) title: String,
     #[serde(rename = "baseRefName")]
     pub(crate) base_ref_name: String,
     #[serde(rename = "baseRefOid")]
@@ -17,9 +18,9 @@ pub(crate) struct PrInfo {
     #[serde(rename = "headRefOid")]
     pub(crate) head_ref_oid: String,
 }
-/// Parses `gh pr view --json number,baseRefName,baseRefOid,headRefOid`'s
-/// stdout. Split out from `fetch_pr_info` so the JSON shape can be
-/// unit-tested without shelling out to `gh`.
+/// Parses `gh pr view --json number,title,baseRefName,baseRefOid,
+/// headRefOid`'s stdout. Split out from `fetch_pr_info` so the JSON
+/// shape can be unit-tested without shelling out to `gh`.
 pub(crate) fn parse_pr_view_json(json: &str) -> anyhow::Result<PrInfo> {
     Ok(serde_json::from_str(json)?)
 }
@@ -48,8 +49,8 @@ pub(crate) fn ensure_fetched_head_matches(
     );
 }
 
-/// Runs `gh pr view <arg> --json number,baseRefName,baseRefOid,headRefOid`
-/// and parses the result.
+/// Runs `gh pr view <arg> --json number,title,baseRefName,baseRefOid,
+/// headRefOid` and parses the result.
 ///
 /// Takes the user's original `--pr` argument (URL or bare number) rather
 /// than the number `parse_pr_arg` extracts from it, and this is load-bearing
@@ -71,7 +72,7 @@ pub(crate) fn fetch_pr_info(arg: &str) -> anyhow::Result<PrInfo> {
             "view",
             arg,
             "--json",
-            "number,baseRefName,baseRefOid,headRefOid",
+            "number,title,baseRefName,baseRefOid,headRefOid",
         ])
         .output()?;
     if !output.status.success() {
@@ -90,13 +91,14 @@ mod tests {
 
     #[test]
     fn should_parse_pr_view_json_into_pr_info() {
-        let json = r#"{"number":123,"baseRefName":"main","baseRefOid":"base789","headRefOid":"abc123def456"}"#;
+        let json = r#"{"number":123,"title":"add auth","baseRefName":"main","baseRefOid":"base789","headRefOid":"abc123def456"}"#;
 
         let actual = parse_pr_view_json(json).expect("expected valid JSON to parse");
 
         assert_eq!(
             PrInfo {
                 number: 123,
+                title: "add auth".to_string(),
                 base_ref_name: "main".to_string(),
                 base_ref_oid: "base789".to_string(),
                 head_ref_oid: "abc123def456".to_string(),

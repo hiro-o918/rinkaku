@@ -38,6 +38,7 @@ fn pr_context() -> PrContext {
         owner: "hiro-o918".to_string(),
         repo: "rinkaku".to_string(),
         number: 42,
+        title: "add auth".to_string(),
         head_sha: "deadbeef".to_string(),
     }
 }
