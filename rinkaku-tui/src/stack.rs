@@ -25,19 +25,30 @@ pub struct StackPosition {
 
 impl StackPosition {
     pub fn new(entries: Vec<StackEntry>, cursor: usize) -> Self {
-        todo!(
-            "build a StackPosition over {} entries at {cursor}",
-            entries.len()
-        )
+        let clamped = cursor.min(entries.len().saturating_sub(1));
+        Self {
+            entries,
+            cursor: clamped,
+        }
     }
 
     /// Up is away from trunk, matching `gh stack up`.
     pub fn move_up(&mut self) -> bool {
-        todo!("advance the cursor toward the top of the stack")
+        if self.cursor + 1 < self.entries.len() {
+            self.cursor += 1;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn move_down(&mut self) -> bool {
-        todo!("retreat the cursor toward the bottom of the stack")
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn cursor(&self) -> usize {
@@ -57,11 +68,16 @@ impl StackPosition {
     }
 
     pub fn current(&self) -> &StackEntry {
-        todo!("return the entry under the cursor")
+        &self.entries[self.cursor]
     }
 
     pub fn label(&self) -> String {
-        todo!("format the cursor's PR number and 1-based position")
+        format!(
+            "PR #{} {}/{}",
+            self.current().number,
+            self.cursor + 1,
+            self.entries.len()
+        )
     }
 }
 
@@ -200,7 +216,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_advance_cursor_when_moving_up_below_the_top() {
         let mut position = StackPosition::new(entries(), 0);
 
@@ -210,7 +225,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_clamp_cursor_when_moving_up_at_the_top() {
         let mut position = StackPosition::new(entries(), 2);
 
@@ -220,7 +234,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_clamp_cursor_when_moving_down_at_the_bottom() {
         let mut position = StackPosition::new(entries(), 0);
 
@@ -230,7 +243,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_render_pr_number_and_one_based_position_when_labelled() {
         let position = StackPosition::new(entries(), 1);
 
