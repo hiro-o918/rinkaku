@@ -192,6 +192,7 @@ fn should_document_jumplist_bindings_in_the_entry_only_group() {
 
     assert!(keys.contains(&"ctrl-o"));
     assert!(keys.contains(&"ctrl-i"));
+    assert!(keys.contains(&"gt / gT"));
     assert!(keys.contains(&"d"));
     assert!(keys.contains(&"r"));
     assert!(keys.contains(&"o"));

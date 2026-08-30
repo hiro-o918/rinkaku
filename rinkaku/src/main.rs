@@ -53,6 +53,7 @@ mod progress;
 mod self_update;
 mod spinner;
 mod splash_progress;
+mod stack_run;
 mod update_prompt;
 
 #[cfg(test)]
@@ -195,11 +196,28 @@ fn main() -> anyhow::Result<()> {
             // splash screen drawn on the alternate screen is this run's
             // only progress feedback, replacing it rather than layering on
             // top of it.
+            let locale = detect_locale(
+                std::env::var("LC_ALL").ok().as_deref(),
+                std::env::var("LC_MESSAGES").ok().as_deref(),
+                std::env::var("LANG").ok().as_deref(),
+            );
             let mut session = TuiSession::init()?;
             session.draw_splash(&rinkaku_tui::splash::SplashState::label_only(
                 spinner::phase_message(AnalysisPhase::Starting),
             ))?;
             let progress = SplashProgress::new(session);
+            // ADR 0075: a stacked PR takes its own driver from here on;
+            // every other input mode continues into the single-report path.
+            if let Some(plan) = stack_run::discover_stack(&cli, &progress)? {
+                let update_requested =
+                    stack_run::run_stack_session(&cli, plan, progress, update_check, locale)?;
+                release_log_sink(&log_sink);
+                return if update_requested {
+                    self_update::run_self_update(true, self_update::Announcement::Print).map(|_| ())
+                } else {
+                    Ok(())
+                };
+            }
             let outcome = run_analysis(&cli, &progress).map(|analyzed| {
                 // `finish_report` is called *before* `into_session_and_notes`
                 // below, while `progress` is still the active
@@ -270,6 +288,7 @@ fn main() -> anyhow::Result<()> {
             let system_browser = SystemBrowserOpener;
             let review_ports = rinkaku_tui::ReviewPorts {
                 pr_context,
+                stack_pr_contexts: Vec::new(),
                 submitter,
                 clipboard: &system_clipboard,
                 browser: &system_browser,
@@ -279,11 +298,6 @@ fn main() -> anyhow::Result<()> {
             // > LANG` precedence env reads every other IO in this module
             // is isolated to — `rinkaku_tui::locale::detect_locale` itself
             // is a pure function taking the already-read values.
-            let locale = detect_locale(
-                std::env::var("LC_ALL").ok().as_deref(),
-                std::env::var("LC_MESSAGES").ok().as_deref(),
-                std::env::var("LANG").ok().as_deref(),
-            );
             let run_result = session.run(
                 &report,
                 &diff_text,

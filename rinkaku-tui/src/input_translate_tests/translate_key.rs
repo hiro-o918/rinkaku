@@ -621,6 +621,36 @@ fn should_translate_lowercase_w_to_open_pr_in_browser() {
 }
 
 #[test]
+fn should_translate_t_to_next_pr_when_g_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+    let actual = translate_key(KeyCode::Char('t'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::NextPr), actual);
+}
+
+#[test]
+fn should_translate_uppercase_t_to_prev_pr_when_g_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+    let actual = translate_key(KeyCode::Char('T'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::PrevPr), actual);
+}
+
+#[test]
+fn should_translate_lowercase_t_to_none_when_no_prefix_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('t'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
 fn should_translate_uppercase_w_to_none() {
     let report = empty_report();
     let app = App::new(&report);

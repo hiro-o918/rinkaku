@@ -67,10 +67,110 @@ fn ports_with<'a>(
 ) -> ReviewPorts<'a> {
     ReviewPorts {
         pr_context: Some(pr_context()),
+        stack_pr_contexts: Vec::new(),
         submitter: Some(submitter),
         clipboard,
         browser,
     }
+}
+
+type PerPrCall = (u64, String, Verdict, Vec<RenderedComment>);
+
+struct PerPrRecordingSubmitter {
+    calls: std::cell::RefCell<Vec<PerPrCall>>,
+}
+
+impl ReviewSubmitter for PerPrRecordingSubmitter {
+    fn submit_review(
+        &self,
+        ctx: &PrContext,
+        verdict: Verdict,
+        _summary: &str,
+        comments: &[RenderedComment],
+    ) -> Result<(), String> {
+        self.calls.borrow_mut().push((
+            ctx.number,
+            ctx.head_sha.clone(),
+            verdict,
+            comments.to_vec(),
+        ));
+        Ok(())
+    }
+}
+
+#[test]
+fn should_post_verdict_to_cursor_pr_and_comment_reviews_to_other_prs_when_annotations_span_layers()
+{
+    let submitter = PerPrRecordingSubmitter {
+        calls: std::cell::RefCell::new(Vec::new()),
+    };
+    let browser = super::FakeBrowserOpener::new(Ok(()));
+    let clipboard = UnusedClipboard;
+    let below = PrContext {
+        number: 42,
+        head_sha: "sha42".to_string(),
+        ..pr_context()
+    };
+    let cursor = PrContext {
+        number: 43,
+        head_sha: "sha43".to_string(),
+        ..pr_context()
+    };
+    let ports = ReviewPorts {
+        pr_context: Some(cursor.clone()),
+        stack_pr_contexts: vec![below.clone(), cursor.clone()],
+        submitter: Some(&submitter),
+        clipboard: &clipboard,
+        browser: &browser,
+    };
+    let mut review = ReviewState::default()
+        .set_current_pr(Some(42))
+        .begin_compose(symbol_snapshot((10, 10)))
+        .push_char('a')
+        .confirm_compose()
+        .set_current_pr(Some(43))
+        .begin_compose(symbol_snapshot((20, 20)))
+        .push_char('b')
+        .confirm_compose();
+
+    review = perform_export(
+        review,
+        &ports,
+        ExportRequest::GithubReview(Verdict::RequestChanges),
+        &[],
+    );
+
+    assert_eq!(
+        vec![
+            (
+                42,
+                "sha42".to_string(),
+                Verdict::Comment,
+                vec![RenderedComment {
+                    path: "src/lib.rs".to_string(),
+                    line: 10,
+                    start_line: None,
+                    body: "a".to_string(),
+                }],
+            ),
+            (
+                43,
+                "sha43".to_string(),
+                Verdict::RequestChanges,
+                vec![RenderedComment {
+                    path: "src/lib.rs".to_string(),
+                    line: 20,
+                    start_line: None,
+                    body: "b".to_string(),
+                }],
+            ),
+        ],
+        submitter.calls.into_inner()
+    );
+    assert_eq!(
+        Some("posted 2 review comment(s) across 2 PRs"),
+        review.last_status()
+    );
 }
 
 fn symbol_snapshot(anchor: (usize, usize)) -> SelectionSnapshot {
@@ -125,6 +225,7 @@ fn should_post_only_the_fixed_summary_when_every_annotation_is_anchored() {
         review,
         &ports_with(&submitter, &browser, &clipboard),
         ExportRequest::GithubReview(Verdict::Approve),
+        &[],
     );
 
     assert_eq!(
@@ -161,6 +262,7 @@ fn should_append_additional_notes_section_when_an_unanchored_annotation_is_prese
         review,
         &ports_with(&submitter, &browser, &clipboard),
         ExportRequest::GithubReview(Verdict::Comment),
+        &[],
     );
 
     assert_eq!(
@@ -181,5 +283,83 @@ fn should_append_additional_notes_section_when_an_unanchored_annotation_is_prese
     assert_eq!(
         Some("posted 1 review comment(s) to PR #42"),
         actual.last_status()
+    );
+}
+
+struct FailingAtSubmitter {
+    fails_on: u64,
+    calls: std::cell::RefCell<Vec<u64>>,
+}
+
+impl ReviewSubmitter for FailingAtSubmitter {
+    fn submit_review(
+        &self,
+        ctx: &PrContext,
+        _verdict: Verdict,
+        _summary: &str,
+        _comments: &[RenderedComment],
+    ) -> Result<(), String> {
+        self.calls.borrow_mut().push(ctx.number);
+        if ctx.number == self.fails_on {
+            Err("boom".to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn should_name_the_already_posted_prs_when_a_later_pr_review_fails() {
+    let submitter = FailingAtSubmitter {
+        fails_on: 43,
+        calls: std::cell::RefCell::new(Vec::new()),
+    };
+    let browser = super::FakeBrowserOpener::new(Ok(()));
+    let clipboard = UnusedClipboard;
+    let below = PrContext {
+        number: 42,
+        head_sha: "sha42".to_string(),
+        ..pr_context()
+    };
+    let cursor = PrContext {
+        number: 43,
+        head_sha: "sha43".to_string(),
+        ..pr_context()
+    };
+    let ports = ReviewPorts {
+        pr_context: Some(cursor.clone()),
+        stack_pr_contexts: vec![below, cursor],
+        submitter: Some(&submitter),
+        clipboard: &clipboard,
+        browser: &browser,
+    };
+    let review = ReviewState::default()
+        .set_current_pr(Some(42))
+        .begin_compose(symbol_snapshot((10, 10)))
+        .push_char('a')
+        .confirm_compose()
+        .set_current_pr(Some(43))
+        .begin_compose(symbol_snapshot((20, 20)))
+        .push_char('b')
+        .confirm_compose();
+
+    let review = perform_export(
+        review,
+        &ports,
+        ExportRequest::GithubReview(Verdict::Approve),
+        &[],
+    );
+
+    assert_eq!(
+        (
+            vec![42, 43],
+            Some("error posting review for PR #43: boom (already posted: #42)".to_string()),
+            2,
+        ),
+        (
+            submitter.calls.into_inner(),
+            review.last_status().map(str::to_string),
+            review.annotations().len(),
+        )
     );
 }

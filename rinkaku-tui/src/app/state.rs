@@ -8,6 +8,7 @@ use crate::nav::{self, Nav};
 use crate::order::{DirRank, OrderMode, rank_directories};
 use crate::review::ReviewState;
 use crate::search::SearchState;
+use crate::stack::StackPosition;
 use crate::tree::{Tree, build_tree};
 use rinkaku_core::render::Report;
 use std::collections::HashMap;
@@ -142,6 +143,11 @@ pub struct App {
     /// `TuiSession::run` read this once [`Self::should_quit`] is set to
     /// decide whether to run `self-update` after the terminal is restored.
     pub(super) update_requested: bool,
+    /// The stack this session reviews (ADR 0075), `None` outside stack mode.
+    pub(super) stack: Option<StackPosition>,
+    /// Set by `gt`/`gT`; drained by `crate::run_app`, which exits with
+    /// `AppExit::SwitchPr` so the driver can re-enter over the new layer.
+    pub(super) pr_switch_request: Option<usize>,
 }
 
 impl App {
@@ -183,7 +189,22 @@ impl App {
             update_available: None,
             update_prompt_open: false,
             update_requested: false,
+            stack: None,
+            pr_switch_request: None,
         }
+    }
+
+    pub fn with_stack(mut self, stack: Option<StackPosition>) -> Self {
+        self.stack = stack;
+        self
+    }
+
+    pub fn stack(&self) -> Option<&StackPosition> {
+        self.stack.as_ref()
+    }
+
+    pub fn take_pr_switch_request(&mut self) -> Option<usize> {
+        self.pr_switch_request.take()
     }
 
     /// Sets whether sink A (a GitHub PR review) is on the export menu for

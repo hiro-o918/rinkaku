@@ -45,6 +45,7 @@ help:
     jump_to_caller: "Jump to a caller of the symbol under the cursor"
     jump_back: "Jump back to the previous location in the jumplist"
     jump_forward: "Jump forward to the next location in the jumplist"
+    next_prev_pr: "Switch to the next / previous PR of the stack (stacked --pr only)"
     open_pr_in_browser: "Open the current PR's page in a web browser (--pr mode only)"
     prompt_self_update: "Prompt to self-update (only shown when a newer release is available)"
     toggle_help_overlay: "Toggle this help overlay"

@@ -746,6 +746,18 @@ impl App {
             // precedent just above), so this arm is a no-op stub kept only
             // for match exhaustiveness.
             (Screen::Entry, _, InputKey::OpenPrInBrowser) => {}
+            (Screen::Entry, _, InputKey::NextPr | InputKey::PrevPr) => {
+                if let Some(stack) = &mut self.stack {
+                    let moved = if key == InputKey::NextPr {
+                        stack.move_up()
+                    } else {
+                        stack.move_down()
+                    };
+                    if moved {
+                        self.pr_switch_request = Some(stack.cursor());
+                    }
+                }
+            }
             // `U` (ADR 0054) reaches this arm only when no update is
             // available (`self.update_available.is_none()`) — the branch
             // above this match already intercepts it and opens the popup

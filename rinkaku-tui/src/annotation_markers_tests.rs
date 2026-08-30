@@ -18,6 +18,7 @@ fn annotation(path: &str, symbol_id: Option<&str>, range: Option<(usize, usize)>
         },
         body: "annotation body".to_string(),
         signature: None,
+        pr_number: None,
     }
 }
 

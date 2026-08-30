@@ -16,7 +16,8 @@ pub mod ports;
 mod render;
 
 pub use render::{
-    partition_for_export, render_additional_notes, render_agent_packet, render_review_comments,
+    group_by_pr, has_export_anchor, partition_for_export, render_additional_notes,
+    render_agent_packet, render_review_comments,
 };
 
 /// A destination-neutral annotation attached to a location in the diff (ADR
@@ -27,6 +28,9 @@ pub struct Annotation {
     pub location: AnnotationLocation,
     pub body: String,
     pub signature: Option<String>,
+    /// The PR the annotation was taken on (ADR 0075), `None` outside stack
+    /// mode — sink A posts it to that PR, sink B groups under it.
+    pub pr_number: Option<u64>,
 }
 
 /// What kind of tree row an [`AnnotationLocation`]/[`SelectionSnapshot`] was
@@ -215,6 +219,9 @@ pub struct ReviewState {
     revision: u64,
     pending_export: Option<ExportRequest>,
     last_status: Option<String>,
+    /// Stamped onto every annotation confirmed while set (ADR 0075); the
+    /// stack driver updates it on each layer switch.
+    current_pr: Option<u64>,
 }
 
 impl ReviewState {
@@ -232,6 +239,15 @@ impl ReviewState {
 
     pub fn last_status(&self) -> Option<&str> {
         self.last_status.as_deref()
+    }
+
+    pub fn current_pr(&self) -> Option<u64> {
+        self.current_pr
+    }
+
+    pub fn set_current_pr(mut self, pr_number: Option<u64>) -> Self {
+        self.current_pr = pr_number;
+        self
     }
 
     /// Opens the compose overlay over `snapshot` — called by
@@ -282,6 +298,7 @@ impl ReviewState {
                     location: snapshot.into(),
                     body: buffer,
                     signature,
+                    pr_number: self.current_pr,
                 });
                 self.revision += 1;
             }

@@ -54,6 +54,7 @@ mod right_pane;
 mod scroll_reset;
 mod search;
 mod source_screen;
+mod stack;
 mod update_prompt;
 
 pub(super) fn symbol(id: &str, name: &str) -> ExtractedSymbol {

@@ -173,6 +173,24 @@ fn should_draw_annotations_list_overlay_with_annotation_summary() {
 }
 
 #[test]
+fn should_draw_annotations_list_row_with_pr_number_when_annotation_carries_one() {
+    let report = report_with_one_symbol();
+    let review = ReviewState::default()
+        .set_current_pr(Some(43))
+        .begin_compose(snapshot())
+        .push_char('f')
+        .push_char('i')
+        .push_char('x')
+        .confirm_compose()
+        .open_list();
+    let app = App::new(&report).with_review(review);
+
+    let text = draw_app(&app, &report);
+
+    assert!(text.contains("#43 lib.rs:1-5 foo: fix"));
+}
+
+#[test]
 fn should_draw_annotations_list_overlay_with_trailing_slash_for_a_dir_annotation() {
     let report = report_with_one_symbol();
     let review = ReviewState::default()
