@@ -182,6 +182,12 @@ Enter on a tree row is the universal "open" gesture, and the `?` overlay
 still lists it). Outside stack mode the line is byte-for-byte what it
 is today.
 
+> **Amended by ADR 0076**: the `PR #43 2/3  |  ` prefix is removed once
+> the header ADR 0076 introduces shows stack position instead;
+> `enter: open` returns to the Tree-focus hint unconditionally, and
+> `/: search` becomes the entry stack mode drops instead, to make room
+> for a `gt/gT: PR` hint.
+
 ### D6. Annotations carry their PR; export groups by it
 
 `Annotation` gains `pr_number: Option<u64>`. `ReviewState` gains
@@ -283,3 +289,8 @@ title) alongside them; a number without an entry renders as `## PR
   budget with the new `PR #N k/n` prefix.
 - **Amends ADR 0004**: `--pr` may resolve a chain of PRs, not one; the
   resolve-then-fetch design is unchanged and applied per layer.
+
+## Amended by
+
+- **ADR 0076**: replaces this ADR's status-line `PR #N k/n` prefix with
+  a header row, restoring `enter: open` to the Tree-focus hint.
