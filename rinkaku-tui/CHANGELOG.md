@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.23](https://github.com/hiro-o918/rinkaku/compare/v0.6.22...v0.6.23) (2026-08-30)
+
+
+### Features
+
+* GitHub stacked PR support (ADR 0075) ([#250](https://github.com/hiro-o918/rinkaku/issues/250)) ([c353012](https://github.com/hiro-o918/rinkaku/commit/c353012403a112c22d6d60b8101d04663289bb65))
+* **tui:** PR header tabs for stacked sessions (ADR 0076) ([#252](https://github.com/hiro-o918/rinkaku/issues/252)) ([694ab73](https://github.com/hiro-o918/rinkaku/commit/694ab739faa8bc13c8139a9618df466a03e3d943))
+
+
+### Miscellaneous
+
+* release main ([#248](https://github.com/hiro-o918/rinkaku/issues/248)) ([0da44e9](https://github.com/hiro-o918/rinkaku/commit/0da44e98b3e96e52094678c00a17e372069af305))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.22 to 0.6.23
+
 ## [0.6.22](https://github.com/hiro-o918/rinkaku/compare/v0.6.21...v0.6.22) (2026-08-18)
 
 
