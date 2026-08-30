@@ -505,6 +505,7 @@ mod tests {
 
     fn stack_position() -> crate::stack::StackPosition {
         crate::stack::StackPosition::new(
+            "main".to_string(),
             vec![
                 crate::stack::StackEntry {
                     number: 42,

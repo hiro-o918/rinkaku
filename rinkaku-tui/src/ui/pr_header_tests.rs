@@ -71,6 +71,14 @@ fn tab(number: u64, title: &str, status: TabStatus) -> TabLabel {
     }
 }
 
+fn stack_content(trunk: &str, tabs: Vec<TabLabel>, current: usize) -> HeaderContent {
+    HeaderContent::Stack {
+        trunk: trunk.to_string(),
+        tabs,
+        current,
+    }
+}
+
 fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
     let buffer = terminal.backend().buffer();
     let area = buffer.area;
@@ -147,20 +155,25 @@ fn should_build_stack_content_with_ready_status_from_cache_slots() {
     );
     cache.set(2, crate::stack::Slot::Failed("boom".to_string()));
     let app = App::new(&report)
-        .with_stack(Some(StackPosition::new(stack_entries(), 1)))
+        .with_stack(Some(StackPosition::new(
+            "main".to_string(),
+            stack_entries(),
+            1,
+        )))
         .with_pr_analysis_cache(Some(cache));
 
     let actual = header_content(&app);
 
     assert_eq!(
-        Some(HeaderContent::Stack {
-            tabs: vec![
+        Some(stack_content(
+            "main",
+            vec![
                 tab(42, "auth", TabStatus::Ready),
                 tab(43, "api", TabStatus::Current),
                 tab(44, "frontend", TabStatus::Failed),
             ],
-            current: 1,
-        }),
+            1,
+        )),
         actual
     );
 }
@@ -168,19 +181,24 @@ fn should_build_stack_content_with_ready_status_from_cache_slots() {
 #[test]
 fn should_treat_missing_cache_slots_as_pending_when_cache_is_absent() {
     let report = empty_report();
-    let app = App::new(&report).with_stack(Some(StackPosition::new(stack_entries(), 0)));
+    let app = App::new(&report).with_stack(Some(StackPosition::new(
+        "main".to_string(),
+        stack_entries(),
+        0,
+    )));
 
     let actual = header_content(&app);
 
     assert_eq!(
-        Some(HeaderContent::Stack {
-            tabs: vec![
+        Some(stack_content(
+            "main",
+            vec![
                 tab(42, "auth", TabStatus::Current),
                 tab(43, "api", TabStatus::Pending),
                 tab(44, "frontend", TabStatus::Pending),
             ],
-            current: 0,
-        }),
+            0,
+        )),
         actual
     );
 }
@@ -188,7 +206,7 @@ fn should_treat_missing_cache_slots_as_pending_when_cache_is_absent() {
 // --- header_segments (pure layout) ---
 
 #[test]
-fn should_render_single_pr_title_and_hint_when_width_is_generous() {
+fn should_render_single_pr_title_without_a_hint_when_width_is_generous() {
     let content = HeaderContent::Single {
         number: 249,
         title: "add PR header tabs".to_string(),
@@ -197,17 +215,13 @@ fn should_render_single_pr_title_and_hint_when_width_is_generous() {
     let actual = header_segments(60, &content);
 
     assert_eq!(
-        vec![
-            segment("PR #249  add PR header tabs", SegmentKind::Title),
-            segment(" ".repeat(23), SegmentKind::Separator),
-            segment(HINT_TEXT, SegmentKind::Hint),
-        ],
+        vec![segment("PR #249  add PR header tabs", SegmentKind::Title)],
         actual
     );
 }
 
 #[test]
-fn should_drop_the_hint_when_title_alone_fills_the_width() {
+fn should_truncate_single_pr_title_to_the_available_width() {
     let content = HeaderContent::Single {
         number: 249,
         title: "add PR header tabs".to_string(),
@@ -222,144 +236,249 @@ fn should_drop_the_hint_when_title_alone_fills_the_width() {
 }
 
 #[test]
-fn should_render_every_tab_with_titles_when_width_is_generous() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
-            tab(42, "auth", TabStatus::Ready),
-            tab(43, "api", TabStatus::Current),
-            tab(44, "frontend", TabStatus::Pending),
-        ],
-        current: 1,
-    };
-
-    let actual = header_segments(80, &content);
-
-    assert_eq!(
+fn should_render_label_trunk_and_capped_titles_when_width_is_generous() {
+    let title1 = "fix: fetch the single upstream ref for stacked PR detection";
+    let title2 = "feat(tui): render PR header tabs with stack position";
+    let content = stack_content(
+        "main",
         vec![
-            segment("#42 auth", SegmentKind::OtherTab),
-            segment(SEPARATOR, SegmentKind::Separator),
-            segment("#43 api", SegmentKind::CurrentTab),
-            segment(SEPARATOR, SegmentKind::Separator),
-            segment("#44 frontend\u{2026}", SegmentKind::PendingTab),
-            segment(
-                " ".repeat(
-                    80 - "#42 auth \u{2502} #43 api \u{2502} #44 frontend\u{2026}"
-                        .chars()
-                        .count()
-                        - HINT_TEXT.chars().count()
-                ),
-                SegmentKind::Separator
-            ),
-            segment(HINT_TEXT, SegmentKind::Hint),
+            tab(251, title1, TabStatus::Ready),
+            tab(252, title2, TabStatus::Current),
         ],
-        actual
+        1,
     );
-}
-
-#[test]
-fn should_shrink_both_titles_to_keep_every_tab_visible_when_full_titles_overflow_width() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
-            tab(1, &"x".repeat(30), TabStatus::Ready),
-            tab(2, &"y".repeat(30), TabStatus::Current),
-        ],
-        current: 1,
-    };
-
-    let actual = header_segments(50, &content);
-
-    assert_eq!(
-        vec![
-            segment(
-                format!("#1 {}\u{2026}", "x".repeat(12)),
-                SegmentKind::OtherTab
-            ),
-            segment(SEPARATOR, SegmentKind::Separator),
-            segment(
-                format!("#2 {}\u{2026}", "y".repeat(12)),
-                SegmentKind::CurrentTab
-            ),
-            segment(" ".repeat(5), SegmentKind::Separator),
-            segment(HINT_TEXT, SegmentKind::Hint),
-        ],
-        actual
-    );
-}
-
-#[test]
-fn should_reproduce_a_real_two_layer_stack_at_120_columns() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
-            tab(251, &"a".repeat(70), TabStatus::Ready),
-            tab(252, &"b".repeat(55), TabStatus::Current),
-        ],
-        current: 1,
-    };
 
     let actual = header_segments(120, &content);
 
     assert_eq!(
         vec![
+            segment("stack 2/2", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("main", SegmentKind::Trunk),
+            segment(SEPARATOR, SegmentKind::Separator),
             segment(
-                format!("#251 {}\u{2026}", "a".repeat(45)),
+                "#251 fix: fetch the single u\u{2026}",
                 SegmentKind::OtherTab
             ),
             segment(SEPARATOR, SegmentKind::Separator),
             segment(
-                format!("#252 {}\u{2026}", "b".repeat(45)),
+                "#252 feat(tui): render PR he\u{2026}",
                 SegmentKind::CurrentTab
             ),
-            segment(" ".repeat(5), SegmentKind::Separator),
-            segment(HINT_TEXT, SegmentKind::Hint),
         ],
         actual
     );
 }
 
 #[test]
-fn should_keep_both_layers_visible_at_80_columns_when_cursor_is_on_the_second_layer() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
-            tab(251, &"a".repeat(70), TabStatus::Ready),
-            tab(252, &"b".repeat(55), TabStatus::Current),
+fn should_show_five_layers_with_shrunk_titles_at_120_columns() {
+    let titles = [
+        "auth module rewrite",
+        "api client refactor",
+        "frontend integration",
+        "background job queue",
+        "final polish and docs",
+    ];
+    let numbers = [101, 102, 103, 104, 105];
+    let tabs = numbers
+        .iter()
+        .zip(titles)
+        .enumerate()
+        .map(|(index, (&number, title))| {
+            let status = if index == 4 {
+                TabStatus::Current
+            } else {
+                TabStatus::Ready
+            };
+            tab(number, title, status)
+        })
+        .collect();
+    let content = stack_content("main", tabs, 4);
+
+    let actual = header_segments(120, &content);
+
+    assert_eq!(
+        vec![
+            segment("stack 5/5", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("main", SegmentKind::Trunk),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#101 auth module\u{2026}", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#102 api client \u{2026}", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#103 frontend in\u{2026}", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#104 background \u{2026}", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#105 final polis\u{2026}", SegmentKind::CurrentTab),
         ],
-        current: 1,
-    };
+        actual
+    );
+}
+
+#[test]
+fn should_show_five_layers_with_numbers_only_titles_at_80_columns() {
+    let titles = [
+        "auth module rewrite",
+        "api client refactor",
+        "frontend integration",
+        "background job queue",
+        "final polish and docs",
+    ];
+    let numbers = [101, 102, 103, 104, 105];
+    let tabs = numbers
+        .iter()
+        .zip(titles)
+        .enumerate()
+        .map(|(index, (&number, title))| {
+            let status = if index == 4 {
+                TabStatus::Current
+            } else {
+                TabStatus::Ready
+            };
+            tab(number, title, status)
+        })
+        .collect();
+    let content = stack_content("main", tabs, 4);
 
     let actual = header_segments(80, &content);
 
     assert_eq!(
         vec![
-            segment(
-                format!("#251 {}\u{2026}", "a".repeat(25)),
-                SegmentKind::OtherTab
-            ),
+            segment("stack 5/5", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("main", SegmentKind::Trunk),
             segment(SEPARATOR, SegmentKind::Separator),
-            segment(
-                format!("#252 {}\u{2026}", "b".repeat(25)),
-                SegmentKind::CurrentTab
-            ),
-            segment(" ".repeat(5), SegmentKind::Separator),
-            segment(HINT_TEXT, SegmentKind::Hint),
+            segment("#101", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#102", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#103", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#104", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#105", SegmentKind::CurrentTab),
         ],
         actual
     );
 }
 
 #[test]
-fn should_show_numbers_only_before_scrolling_when_shrinking_titles_falls_below_the_floor() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
-            tab(100, "a-fairly-long-title-for-tab-one", TabStatus::Ready),
-            tab(200, "a-fairly-long-title-for-tab-two", TabStatus::Current),
-        ],
-        current: 1,
-    };
+fn should_drop_the_trunk_name_before_scrolling_when_five_layers_barely_fit_numbers_only() {
+    let tabs = (101..=105)
+        .enumerate()
+        .map(|(index, number)| {
+            let status = if index == 4 {
+                TabStatus::Current
+            } else {
+                TabStatus::Ready
+            };
+            tab(number, "irrelevant", status)
+        })
+        .collect();
+    let content = stack_content("main", tabs, 4);
 
-    let actual = header_segments(20, &content);
+    let actual = header_segments(46, &content);
 
     assert_eq!(
         vec![
+            segment("stack 5/5", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("#101", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#102", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#103", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#104", SegmentKind::OtherTab),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#105", SegmentKind::CurrentTab),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_drop_the_trunk_name_when_shrinking_titles_still_does_not_leave_room_for_it() {
+    let content = stack_content(
+        "main",
+        vec![
+            tab(1, &"x".repeat(30), TabStatus::Ready),
+            tab(2, &"y".repeat(30), TabStatus::Current),
+        ],
+        1,
+    );
+
+    let actual = header_segments(60, &content);
+
+    assert_eq!(
+        vec![
+            segment("stack 2/2", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment(
+                format!("#1 {}\u{2026}", "x".repeat(17)),
+                SegmentKind::OtherTab
+            ),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment(
+                format!("#2 {}\u{2026}", "y".repeat(17)),
+                SegmentKind::CurrentTab
+            ),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_always_show_the_label_even_when_nothing_else_fits() {
+    let content = stack_content(
+        "main",
+        vec![
+            tab(42, "auth", TabStatus::Current),
+            tab(43, "api", TabStatus::Ready),
+        ],
+        0,
+    );
+
+    let actual = header_segments(9, &content);
+
+    assert_eq!(vec![segment("stack 1/2", SegmentKind::Label)], actual);
+}
+
+#[test]
+fn should_truncate_the_label_itself_when_width_is_narrower_than_the_label() {
+    let content = stack_content(
+        "main",
+        vec![
+            tab(42, "auth", TabStatus::Current),
+            tab(43, "api", TabStatus::Ready),
+        ],
+        0,
+    );
+
+    let actual = header_segments(5, &content);
+
+    assert_eq!(vec![segment("stac\u{2026}", SegmentKind::Label)], actual);
+}
+
+#[test]
+fn should_show_numbers_only_before_scrolling_when_shrinking_titles_falls_below_the_floor() {
+    let content = stack_content(
+        "main",
+        vec![
+            tab(100, "a-fairly-long-title-for-tab-one", TabStatus::Ready),
+            tab(200, "a-fairly-long-title-for-tab-two", TabStatus::Current),
+        ],
+        1,
+    );
+
+    let actual = header_segments(25, &content);
+
+    assert_eq!(
+        vec![
+            segment("stack 2/2", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
             segment("#100", SegmentKind::OtherTab),
             segment(SEPARATOR, SegmentKind::Separator),
             segment("#200", SegmentKind::CurrentTab),
@@ -370,31 +489,40 @@ fn should_show_numbers_only_before_scrolling_when_shrinking_titles_falls_below_t
 
 #[test]
 fn should_scroll_off_other_tabs_only_once_even_a_numbers_only_strip_of_every_tab_does_not_fit() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
+    let content = stack_content(
+        "main",
+        vec![
             tab(1, "one", TabStatus::Ready),
             tab(2, "two", TabStatus::Ready),
             tab(3, "three", TabStatus::Ready),
             tab(4, "four", TabStatus::Ready),
             tab(5, "five", TabStatus::Current),
         ],
-        current: 4,
-    };
+        4,
+    );
 
-    let actual = header_segments(6, &content);
+    let actual = header_segments(17, &content);
 
-    assert_eq!(vec![segment("#5", SegmentKind::CurrentTab)], actual);
+    assert_eq!(
+        vec![
+            segment("stack 5/5", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("#5", SegmentKind::CurrentTab),
+        ],
+        actual
+    );
 }
 
 #[test]
 fn should_mark_a_failed_tab_with_a_trailing_bang() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
+    let content = stack_content(
+        "main",
+        vec![
             tab(42, "auth", TabStatus::Current),
             tab(43, "api", TabStatus::Failed),
         ],
-        current: 0,
-    };
+        0,
+    );
 
     let actual = header_segments(80, &content);
 
@@ -406,44 +534,20 @@ fn should_mark_a_failed_tab_with_a_trailing_bang() {
 }
 
 #[test]
-fn should_drop_titles_before_dropping_tabs_when_width_is_short() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
-            tab(42, "a-very-long-title-indeed", TabStatus::Ready),
-            tab(43, "another-very-long-title", TabStatus::Current),
-            tab(44, "yet-another-long-title", TabStatus::Ready),
-        ],
-        current: 1,
-    };
-
-    let actual = header_segments(30, &content);
-
-    // NOTE: asserting only that every tab survived (numbers-only form)
-    // rather than the exact byte layout — the point of this case is the
-    // titles-before-tabs drop order, not the precise truncation math
-    // `should_render_every_tab_with_titles_when_width_is_generous` already
-    // pins.
-    let rendered: String = actual.iter().map(|seg| seg.text.as_str()).collect();
-    assert!(rendered.contains("#42"));
-    assert!(rendered.contains("#43"));
-    assert!(rendered.contains("#44"));
-    assert!(!rendered.contains("very-long-title"));
-}
-
-#[test]
 fn should_scroll_the_strip_to_keep_the_current_tab_in_view_when_the_stack_overflows_width() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
+    let content = stack_content(
+        "main",
+        vec![
             tab(1, "one", TabStatus::Ready),
             tab(2, "two", TabStatus::Ready),
             tab(3, "three", TabStatus::Ready),
             tab(4, "four", TabStatus::Ready),
             tab(5, "five", TabStatus::Current),
         ],
-        current: 4,
-    };
+        4,
+    );
 
-    let actual = header_segments(20, &content);
+    let actual = header_segments(31, &content);
 
     let rendered: String = actual.iter().map(|seg| seg.text.as_str()).collect();
     assert!(rendered.contains('5'));
@@ -481,18 +585,16 @@ fn should_truncate_a_cjk_single_pr_title_on_a_column_boundary_when_one_column_sh
 
 #[rstest]
 #[case::single(HeaderContent::Single { number: 249, title: "タイトル".to_string() })]
-#[case::stack(HeaderContent::Stack {
-    tabs: vec![tab(42, "認証機能", TabStatus::Current)],
-    current: 0,
-})]
+#[case::stack(stack_content("認証", vec![tab(42, "認証機能", TabStatus::Current)], 0))]
 fn should_keep_total_segment_width_within_budget_for_cjk_content(#[case] content: HeaderContent) {
-    // NOTE: starts at width 3 (the numbers-only `#42` floor), not 0 — a
-    // stack's current tab is always shown even narrower than that
-    // (`tabs_fitting`'s documented "nothing narrower to fall back to"
-    // exception), which `should_return_no_segments_for_stack_content_when_width_is_zero`
-    // and `should_drop_a_cjk_stack_tab_title_when_one_column_short` already
-    // cover on their own.
-    for width in 3..=40 {
+    // NOTE: starts at width 14 (label "stack 1/1" + 2-space gap + the
+    // numbers-only `#42` floor), not 0 — a stack's current tab is always
+    // shown even narrower than that (`tabs_fitting`'s documented "nothing
+    // narrower to fall back to" exception), which
+    // `should_always_show_the_label_even_when_nothing_else_fits` and
+    // `should_drop_a_cjk_stack_tab_title_to_numbers_only_when_the_shrink_floor_is_not_met`
+    // already cover on their own.
+    for width in 14..=40 {
         let actual = header_segments(width, &content);
 
         let total_width: usize = actual.iter().map(|seg| seg.text.width()).sum();
@@ -504,27 +606,53 @@ fn should_keep_total_segment_width_within_budget_for_cjk_content(#[case] content
 }
 
 #[test]
-fn should_fit_a_cjk_stack_tab_title_exactly_when_width_equals_its_display_width() {
-    let content = HeaderContent::Stack {
-        tabs: vec![tab(42, "認証", TabStatus::Current)],
-        current: 0,
-    };
+fn should_fit_a_cjk_stack_tab_title_with_trunk_exactly_when_width_equals_its_display_width() {
+    let content = stack_content("main", vec![tab(42, "認証", TabStatus::Current)], 0);
 
-    let actual = header_segments(8, &content);
+    let actual = header_segments(26, &content);
 
-    assert_eq!(vec![segment("#42 認証", SegmentKind::CurrentTab)], actual);
+    assert_eq!(
+        vec![
+            segment("stack 1/1", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("main", SegmentKind::Trunk),
+            segment(SEPARATOR, SegmentKind::Separator),
+            segment("#42 認証", SegmentKind::CurrentTab),
+        ],
+        actual
+    );
 }
 
 #[test]
-fn should_drop_a_cjk_stack_tab_title_when_one_column_short() {
-    let content = HeaderContent::Stack {
-        tabs: vec![tab(42, "認証", TabStatus::Current)],
-        current: 0,
-    };
+fn should_drop_the_trunk_name_when_one_column_short_of_fitting_it_with_the_tab() {
+    let content = stack_content("main", vec![tab(42, "認証", TabStatus::Current)], 0);
 
-    let actual = header_segments(7, &content);
+    let actual = header_segments(25, &content);
 
-    assert_eq!(vec![segment("#42", SegmentKind::CurrentTab)], actual);
+    assert_eq!(
+        vec![
+            segment("stack 1/1", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("#42 認証", SegmentKind::CurrentTab),
+        ],
+        actual
+    );
+}
+
+#[test]
+fn should_drop_a_cjk_stack_tab_title_to_numbers_only_when_the_shrink_floor_is_not_met() {
+    let content = stack_content("main", vec![tab(42, "認証", TabStatus::Current)], 0);
+
+    let actual = header_segments(18, &content);
+
+    assert_eq!(
+        vec![
+            segment("stack 1/1", SegmentKind::Label),
+            segment("  ", SegmentKind::Separator),
+            segment("#42", SegmentKind::CurrentTab),
+        ],
+        actual
+    );
 }
 
 #[test]
@@ -559,13 +687,14 @@ fn should_return_no_segments_for_single_pr_content_when_width_is_zero() {
 
 #[test]
 fn should_return_no_segments_for_stack_content_when_width_is_zero() {
-    let content = HeaderContent::Stack {
-        tabs: vec![
+    let content = stack_content(
+        "main",
+        vec![
             tab(42, "auth", TabStatus::Ready),
             tab(43, "api", TabStatus::Current),
         ],
-        current: 1,
-    };
+        1,
+    );
 
     let actual = header_segments(0, &content);
 
@@ -578,17 +707,22 @@ fn should_return_no_segments_for_stack_content_when_width_is_zero() {
 fn should_render_stack_header_row_above_the_entry_screen() {
     let report = empty_report();
     let app = App::new(&report)
-        .with_stack(Some(StackPosition::new(stack_entries(), 1)))
+        .with_stack(Some(StackPosition::new(
+            "main".to_string(),
+            stack_entries(),
+            1,
+        )))
         .with_pr_analysis_cache(None);
 
     let terminal = draw_frame(&app, &report, 80, 20);
 
     let text = buffer_text(&terminal);
     let header_row = text.lines().next().expect("header row");
+    assert!(header_row.contains("stack 2/3"));
+    assert!(header_row.contains("main"));
     assert!(header_row.contains("#42 auth"));
     assert!(header_row.contains("#43 api"));
     assert!(header_row.contains("#44 frontend"));
-    assert!(header_row.contains("open PR"));
 }
 
 #[test]
@@ -602,6 +736,7 @@ fn should_render_single_pr_header_row_above_the_entry_screen() {
     let header_row = text.lines().next().expect("header row");
     assert!(header_row.contains("PR #249"));
     assert!(header_row.contains("add PR header tabs"));
+    assert!(!header_row.contains("open PR"));
 }
 
 #[test]

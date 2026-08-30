@@ -316,6 +316,7 @@ impl TuiSession {
         mut update_check: Option<std::sync::mpsc::Receiver<String>>,
         locale: Locale,
     ) -> std::io::Result<bool> {
+        let trunk = position.trunk().to_string();
         let entries = position.entries().to_vec();
         let mut review = ReviewState::default();
         let mut previous_cursor = position.cursor();
@@ -368,7 +369,7 @@ impl TuiSession {
                 layer_review_ports,
                 update_check.take(),
                 locale,
-                Some(StackPosition::new(entries.clone(), cursor)),
+                Some(StackPosition::new(trunk.clone(), entries.clone(), cursor)),
                 Some(Arc::clone(&cache)),
                 &mut review,
             )?;

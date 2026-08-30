@@ -24,24 +24,35 @@ single-PR — and omits it entirely otherwise. stdin/`--base` sessions
 keep today's layout byte-for-byte; no existing non-`--pr` rendering test
 changes.
 
-### D2. Stack mode renders one tab per layer; single-PR mode renders a plain title line
+### D2. Stack mode renders a label, the trunk, and one tab per layer; single-PR mode renders a plain title line
 
-Stack mode: `#2063 auth │ #2055 api │ #2056 provider │ …`, bottom-to-top,
-current layer bold+reversed, a `Pending`/`InProgress` layer dimmed with a
-trailing `…`, a `Failed` layer dimmed with a trailing `!`. Every layer's
-tab stays visible for as long as it can: full titles, then titles shrunk
-to an equal per-tab column budget (a fixed floor of 8 columns, split
-evenly across tabs rather than proportionally to title length — simpler
-to reason about, and every tab ends up equally readable rather than the
-longest title being squeezed hardest), then numbers only. Only once even
-a numbers-only strip of every layer doesn't fit does the strip scroll,
-dropping tabs off one end to keep the current layer in view. The
-right-aligned `w: open PR` hint is dropped before any of that: it is
-tried after each of the three "every tab visible" layouts, but is gone by
-the time the strip has to scroll.
+Stack mode: `stack 2/2  main ▸ #2063 auth ▸ #2055 api`, bottom-to-top,
+current layer bold with the crate's accent color
+(`crate::ui::style::pane_border_style`'s `Color::Cyan`, the same "this one
+is active" signal the focused-pane border already uses), a
+`Pending`/`InProgress` layer dimmed with a trailing `…`, a `Failed` layer
+dimmed with a trailing `!`. The leading `stack k/n` label (1-based cursor
+position over layer count) is always shown regardless of width — every
+other element budgets around it rather than trying to drop it. Every
+layer's tab stays visible for as long as it can: full titles (capped at
+24 display columns even when the terminal is wider, so a stack of several
+layers doesn't let the current tab's title swallow all spare width), then
+titles shrunk to an equal per-tab column budget (a fixed floor of 8
+columns, split evenly across tabs rather than proportionally to title
+length — simpler to reason about, and every tab ends up equally readable
+rather than the longest title being squeezed hardest), then numbers only.
+The stack's base branch name (the trunk, e.g. `main`) is shown ahead of
+the tabs, joined by ` ▸ `, whenever it fits alongside every layer at the
+current title width; it is dropped before any tab is ever dropped or
+title-shrinking abandoned for numbers-only, so a reviewer sees "this
+layer is on top of that layer, which is on top of trunk" for as long as
+there is room, and loses the trunk's own name first when there isn't.
+Only once even a numbers-only strip of every layer (without the trunk)
+doesn't fit does the strip scroll, dropping tabs off one end to keep the
+current layer in view.
 
-Single-PR mode: `PR #249  <title>` on the left, `w: open PR` on the
-right — the same building blocks (title, hint), one row of content.
+Single-PR mode: `PR #249  <title>` — the title truncated to whatever
+width remains, no other segment.
 
 ### D3. Segment computation is a pure function; the cache is read live at draw time
 

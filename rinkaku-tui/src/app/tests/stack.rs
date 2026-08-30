@@ -5,6 +5,7 @@ use pretty_assertions::assert_eq;
 
 fn stack_position(cursor: usize) -> StackPosition {
     StackPosition::new(
+        "main".to_string(),
         vec![
             StackEntry {
                 number: 42,

@@ -19,17 +19,23 @@ pub struct StackEntry {
 /// The stack's open layers bottom-first, plus which one is on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackPosition {
+    trunk: String,
     entries: Vec<StackEntry>,
     cursor: usize,
 }
 
 impl StackPosition {
-    pub fn new(entries: Vec<StackEntry>, cursor: usize) -> Self {
+    pub fn new(trunk: String, entries: Vec<StackEntry>, cursor: usize) -> Self {
         let clamped = cursor.min(entries.len().saturating_sub(1));
         Self {
+            trunk,
             entries,
             cursor: clamped,
         }
+    }
+
+    pub fn trunk(&self) -> &str {
+        &self.trunk
     }
 
     /// Up is away from trunk, matching `gh stack up`.
@@ -217,7 +223,7 @@ mod tests {
 
     #[test]
     fn should_advance_cursor_when_moving_up_below_the_top() {
-        let mut position = StackPosition::new(entries(), 0);
+        let mut position = StackPosition::new("main".to_string(), entries(), 0);
 
         let moved = position.move_up();
 
@@ -226,7 +232,7 @@ mod tests {
 
     #[test]
     fn should_clamp_cursor_when_moving_up_at_the_top() {
-        let mut position = StackPosition::new(entries(), 2);
+        let mut position = StackPosition::new("main".to_string(), entries(), 2);
 
         let moved = position.move_up();
 
@@ -235,7 +241,7 @@ mod tests {
 
     #[test]
     fn should_clamp_cursor_when_moving_down_at_the_bottom() {
-        let mut position = StackPosition::new(entries(), 0);
+        let mut position = StackPosition::new("main".to_string(), entries(), 0);
 
         let moved = position.move_down();
 
@@ -244,11 +250,20 @@ mod tests {
 
     #[test]
     fn should_render_pr_number_and_one_based_position_when_labelled() {
-        let position = StackPosition::new(entries(), 1);
+        let position = StackPosition::new("main".to_string(), entries(), 1);
 
         let actual = position.label();
 
         assert_eq!("PR #43 2/3".to_string(), actual);
+    }
+
+    #[test]
+    fn should_expose_the_trunk_name_passed_to_new() {
+        let position = StackPosition::new("main".to_string(), entries(), 0);
+
+        let actual = position.trunk();
+
+        assert_eq!("main", actual);
     }
 
     #[rstest]
