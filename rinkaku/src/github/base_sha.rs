@@ -8,14 +8,22 @@ pub(crate) fn fetch_pr_head(number: u64, cwd: Option<&std::path::Path>) -> anyho
     run_git_fetch(&format!("refs/pull/{number}/head"), cwd)
 }
 
-/// Fetches every PR head in `numbers` with one multi-refspec `git fetch`
-/// (ADR 0075) and returns their SHAs in the same order, read from
-/// `FETCH_HEAD`'s one-line-per-refspec content.
+/// Fetches every PR head in `numbers`, one `git fetch` per PR via
+/// [`fetch_pr_head`], and returns their SHAs in the same order.
+///
+/// ADR 0075 describes a single multi-refspec `git fetch` parsing
+/// `FETCH_HEAD`'s one-line-per-refspec content; a loop over the existing
+/// per-PR fetch was chosen instead because parsing multi-refspec
+/// `FETCH_HEAD` order reliably is not worth the added complexity for a
+/// one-off stack (typically a handful of layers).
 pub(crate) fn fetch_pr_heads(
     numbers: &[u64],
     cwd: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<String>> {
-    todo!("fetch refs/pull/<n>/head for {numbers:?} in {cwd:?} and parse FETCH_HEAD")
+    numbers
+        .iter()
+        .map(|&number| fetch_pr_head(number, cwd))
+        .collect()
 }
 
 /// Fetches branch `name` into the repository at `cwd` and returns the

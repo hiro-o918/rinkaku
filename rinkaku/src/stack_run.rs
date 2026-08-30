@@ -4,8 +4,11 @@
 //! fills the TUI's `PrAnalysisCache` while the reviewer reads.
 
 use crate::cli::Cli;
-use crate::github::base_sha::fetch_pr_heads;
+use crate::github::base_sha::{
+    fetch_branch_head, fetch_oid, fetch_pr_heads, object_exists_locally, resolve_pr_base_sha,
+};
 use crate::github::pr_arg::{PrArg, parse_pr_arg};
+use crate::github::pr_info::ensure_fetched_head_matches;
 use crate::github::remote::{git_remote_origin_url, parse_github_remote};
 use crate::github::stack::{PrStack, StackPr, fetch_pr_stack};
 use crate::github::workdir::resolve_pr_workdir;
@@ -132,16 +135,79 @@ pub(crate) fn run_stack_session(
     Ok(run_result?)
 }
 
+/// The outcome of resolving one stack layer's base commit: the resolved SHA
+/// and, when the availability cascade (ADR 0007) fell all the way back to
+/// the base branch's tip, the note to surface through [`AnalysisProgress`]
+/// the same way the single-PR path does.
+struct LayerBaseResolution {
+    base_sha: String,
+    fallback_note: Option<String>,
+}
+
+/// Verifies `pr`'s fetched head against what GitHub reported, then resolves
+/// its base commit through the same [`resolve_pr_base_sha`] cascade the
+/// single-PR path uses (`main.rs`'s `run_analysis`) — pure aside from the
+/// injected closures, so it is unit-testable without shelling out to `git`.
+fn resolve_layer(
+    pr: &StackPr,
+    fetched_head: &str,
+    object_exists: impl FnMut(&str) -> bool,
+    fetch_base_branch: impl FnMut() -> anyhow::Result<String>,
+    fetch_oid: impl FnMut(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<LayerBaseResolution> {
+    ensure_fetched_head_matches(pr.number, fetched_head, &pr.head_ref_oid)?;
+    let (base_sha, used_fallback) = resolve_pr_base_sha(
+        &pr.base_ref_oid,
+        object_exists,
+        fetch_base_branch,
+        fetch_oid,
+    )?;
+    let fallback_note = used_fallback.then(|| {
+        format!(
+            "warning: could not resolve PR #{number}'s base commit ({base_oid}) locally; \
+             falling back to the current tip of {base_branch}, which may not reproduce the \
+             original PR diff for a merged PR",
+            number = pr.number,
+            base_oid = pr.base_ref_oid,
+            base_branch = pr.base_ref_name,
+        )
+    });
+    Ok(LayerBaseResolution {
+        base_sha,
+        fallback_note,
+    })
+}
+
 fn resolve_layer_shas(
     plan: &StackPlan,
     progress: &dyn AnalysisProgress,
 ) -> anyhow::Result<Vec<ResolvedLayer>> {
     let numbers: Vec<u64> = plan.stack.prs.iter().map(|pr| pr.number).collect();
-    let heads = fetch_pr_heads(&numbers, plan.workdir.as_deref())?;
-    let _ = (progress, heads);
-    todo!(
-        "verify each head via ensure_fetched_head_matches, resolve each base via resolve_pr_base_sha"
-    )
+    let cwd = plan.workdir.as_deref();
+    let heads = fetch_pr_heads(&numbers, cwd)?;
+
+    plan.stack
+        .prs
+        .iter()
+        .zip(heads)
+        .map(|(pr, head_sha)| {
+            let resolution = resolve_layer(
+                pr,
+                &head_sha,
+                |oid| object_exists_locally(cwd, oid),
+                || fetch_branch_head(&pr.base_ref_name, cwd),
+                |oid| fetch_oid(cwd, oid),
+            )?;
+            if let Some(note) = resolution.fallback_note {
+                progress.note(note);
+            }
+            Ok(ResolvedLayer {
+                pr: pr.clone(),
+                base_sha: resolution.base_sha,
+                head_sha,
+            })
+        })
+        .collect()
 }
 
 fn analyze_layer(
@@ -211,5 +277,79 @@ fn pr_context(plan: &StackPlan, layer: &ResolvedLayer) -> PrContext {
         repo: plan.repo.clone(),
         number: layer.pr.number,
         head_sha: layer.head_sha.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn stack_pr() -> StackPr {
+        StackPr {
+            number: 43,
+            title: "api".to_string(),
+            head_ref_name: "api".to_string(),
+            base_ref_name: "auth".to_string(),
+            base_ref_oid: "base789".to_string(),
+            head_ref_oid: "head123".to_string(),
+        }
+    }
+
+    #[test]
+    fn should_resolve_base_without_fallback_when_head_matches_and_base_exists_locally() {
+        let pr = stack_pr();
+
+        let actual = resolve_layer(
+            &pr,
+            "head123",
+            |_oid| true,
+            || panic!("fetch_base_branch must not run when the base already exists locally"),
+            |_oid| panic!("fetch_oid must not run when the base already exists locally"),
+        )
+        .expect("should resolve without error");
+
+        assert_eq!("base789".to_string(), actual.base_sha);
+        assert_eq!(None, actual.fallback_note);
+    }
+
+    #[test]
+    fn should_error_when_fetched_head_does_not_match_the_reported_head() {
+        let pr = stack_pr();
+
+        let actual = resolve_layer(
+            &pr,
+            "unexpected-head",
+            |_oid| true,
+            || panic!("fetch_base_branch must not run when the head check fails first"),
+            |_oid| panic!("fetch_oid must not run when the head check fails first"),
+        );
+
+        assert!(actual.is_err());
+    }
+
+    #[test]
+    fn should_carry_a_fallback_note_when_the_base_cascade_falls_back_to_the_branch_tip() {
+        let pr = stack_pr();
+
+        let actual = resolve_layer(
+            &pr,
+            "head123",
+            |_oid| false,
+            || Ok("branch-tip-sha".to_string()),
+            |_oid| anyhow::bail!("simulated: base789 not found on the remote"),
+        )
+        .expect("should fall back rather than error");
+
+        assert_eq!("branch-tip-sha".to_string(), actual.base_sha);
+        assert_eq!(
+            Some(
+                "warning: could not resolve PR #43's base commit (base789) locally; falling \
+                 back to the current tip of auth, which may not reproduce the original PR diff \
+                 for a merged PR"
+                    .to_string()
+            ),
+            actual.fallback_note
+        );
     }
 }
