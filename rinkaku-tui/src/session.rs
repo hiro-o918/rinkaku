@@ -16,6 +16,7 @@ use crate::run_app;
 use crate::source::{SourceReader, WorkingTreeSourceReader};
 use crate::splash;
 use crate::stack::{PrAnalysisCache, StackPosition};
+use crate::stack_driver;
 use ratatui::crossterm::event;
 use ratatui::crossterm::execute;
 use rinkaku_core::render::Report;
@@ -277,27 +278,81 @@ impl TuiSession {
     /// the terminal unconditionally, like [`TuiSession::run`].
     #[allow(clippy::too_many_arguments)]
     pub fn run_stack(
-        self,
+        mut self,
         position: StackPosition,
         cache: Arc<PrAnalysisCache>,
         source_reader_for: &dyn Fn(&PrContext) -> Box<dyn SourceReader>,
         entry_path: Option<&str>,
         repo_root: &std::path::Path,
         review_ports: ReviewPorts<'_>,
-        update_check: Option<std::sync::mpsc::Receiver<String>>,
+        mut update_check: Option<std::sync::mpsc::Receiver<String>>,
         locale: Locale,
     ) -> std::io::Result<bool> {
-        let _ = (
-            position,
-            cache,
-            source_reader_for,
-            entry_path,
-            repo_root,
-            review_ports,
-            update_check,
-            locale,
-        );
-        todo!("loop over run_app per layer until AppExit::Quit/UpdateRequested")
+        let entries = position.entries().to_vec();
+        let mut review = ReviewState::default();
+        let mut previous_cursor = position.cursor();
+        let mut cursor = previous_cursor;
+        let update_requested = loop {
+            cache.set_cursor(cursor);
+            let slot_outcome = match cache.get(cursor) {
+                crate::stack::Slot::Ready(analysis) => Ok(analysis),
+                crate::stack::Slot::Failed(message) => Err(message),
+                crate::stack::Slot::Pending | crate::stack::Slot::InProgress => {
+                    self.draw_splash(&splash::SplashState::label_only(format!(
+                        "Analyzing PR #{} ({}/{})…",
+                        entries[cursor].number,
+                        cursor + 1,
+                        entries.len(),
+                    )))?;
+                    cache.wait_ready(cursor)
+                }
+            };
+            let (slot_outcome, analysis) = match slot_outcome {
+                Ok(analysis) => (stack_driver::SlotOutcome::Ready, Some(analysis)),
+                Err(message) => {
+                    review = review.set_status(message);
+                    (stack_driver::SlotOutcome::Failed, None)
+                }
+            };
+            let stack_driver::StackStep::Enter(target) =
+                stack_driver::step_after_slot(slot_outcome, cursor, previous_cursor)
+            else {
+                unreachable!("step_after_slot only ever returns Enter")
+            };
+            cursor = target;
+            let Some(analysis) = analysis else {
+                continue;
+            };
+            previous_cursor = cursor;
+
+            let source_reader = source_reader_for(&analysis.pr);
+            let mut layer_review_ports = review_ports.clone();
+            layer_review_ports.pr_context = Some(analysis.pr.clone());
+            review = review.set_current_pr(Some(analysis.pr.number));
+
+            let exit = run_app(
+                &mut self.terminal,
+                &analysis.report,
+                &analysis.diff_text,
+                entry_path,
+                repo_root,
+                source_reader.as_ref(),
+                layer_review_ports,
+                update_check.take(),
+                locale,
+                Some(StackPosition::new(entries.clone(), cursor)),
+                &mut review,
+            )?;
+
+            match stack_driver::step_after_exit(exit) {
+                stack_driver::StackStep::Enter(target) => cursor = target,
+                stack_driver::StackStep::Quit => break false,
+                stack_driver::StackStep::UpdateRequested => break true,
+            }
+        };
+        let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
+        ratatui::restore();
+        Ok(update_requested)
     }
 }
 

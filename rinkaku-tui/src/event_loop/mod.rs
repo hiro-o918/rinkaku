@@ -483,7 +483,8 @@ pub(crate) fn run_app(
             // export menu's own confirm step.
             let mut review = app.review().clone();
             if let Some(export) = review.take_pending_export() {
-                review = perform_export(review, &review_ports, export);
+                let stack_entries = app.stack().map(StackPosition::entries).unwrap_or_default();
+                review = perform_export(review, &review_ports, export, stack_entries);
                 app = app.with_review(review);
             }
 

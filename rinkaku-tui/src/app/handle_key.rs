@@ -747,7 +747,16 @@ impl App {
             // for match exhaustiveness.
             (Screen::Entry, _, InputKey::OpenPrInBrowser) => {}
             (Screen::Entry, _, InputKey::NextPr | InputKey::PrevPr) => {
-                todo!("move the stack cursor and record a pr_switch_request (ADR 0075)")
+                if let Some(stack) = &mut self.stack {
+                    let moved = if key == InputKey::NextPr {
+                        stack.move_up()
+                    } else {
+                        stack.move_down()
+                    };
+                    if moved {
+                        self.pr_switch_request = Some(stack.cursor());
+                    }
+                }
             }
             // `U` (ADR 0054) reaches this arm only when no update is
             // available (`self.update_available.is_none()`) — the branch

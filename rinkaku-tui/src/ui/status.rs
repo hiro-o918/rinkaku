@@ -85,6 +85,12 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
                 crate::order::OrderMode::AlphaNumeric => "alphabetical",
             };
             let keys = match app.focus() {
+                // ADR 0075: the `PR #N k/n` prefix pushes this line past
+                // the 80-column budget (#196), so stack mode drops
+                // `enter: open` — the `?` overlay still lists it.
+                crate::app::Focus::Tree if app.stack().is_some() => {
+                    "j/k: move  /: search  ?: help  q: quit"
+                }
                 crate::app::Focus::Tree => "j/k: move  /: search  enter: open  ?: help  q: quit",
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
                     "j/k: scroll  h/esc: back  ]/[: hunk  ?: help  q: quit"
@@ -133,7 +139,7 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
 fn stack_prefix(stack: Option<&StackPosition>) -> String {
     match stack {
         None => String::new(),
-        Some(position) => todo!("render {} as the status-line prefix", position.label()),
+        Some(position) => format!("{}  |  ", position.label()),
     }
 }
 
@@ -529,7 +535,6 @@ mod tests {
     // ADR 0075: `enter: open` is dropped from the Tree-focus hints in stack
     // mode so the prefixed line stays inside the 80-column budget (#196).
     #[test]
-    #[ignore = "not implemented"]
     fn should_prefix_status_line_with_pr_label_when_in_stack_mode() {
         let report = empty_report_for_status_line();
         let app = App::new(&report).with_stack(Some(stack_position()));
@@ -544,7 +549,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not implemented"]
     fn should_fit_the_stack_mode_tree_hint_line_within_80_columns() {
         let report = report_with_one_symbol();
         let app = App::new(&report).with_stack(Some(stack_position()));

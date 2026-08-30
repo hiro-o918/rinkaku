@@ -145,7 +145,7 @@ pub struct App {
     pub(super) update_requested: bool,
     /// The stack this session reviews (ADR 0075), `None` outside stack mode.
     pub(super) stack: Option<StackPosition>,
-    /// Set by `p`/`P`; drained by `crate::run_app`, which exits with
+    /// Set by `gt`/`gT`; drained by `crate::run_app`, which exits with
     /// `AppExit::SwitchPr` so the driver can re-enter over the new layer.
     pub(super) pr_switch_request: Option<usize>,
 }
