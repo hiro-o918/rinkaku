@@ -265,6 +265,7 @@ impl TuiSession {
             update_check,
             locale,
             None,
+            None,
             &mut review,
         );
         let _ = execute!(std::io::stdout(), event::DisableMouseCapture);
@@ -368,6 +369,7 @@ impl TuiSession {
                 update_check.take(),
                 locale,
                 Some(StackPosition::new(entries.clone(), cursor)),
+                Some(Arc::clone(&cache)),
                 &mut review,
             )?;
 

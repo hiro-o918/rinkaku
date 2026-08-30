@@ -15,6 +15,7 @@ mod diff_pane;
 mod entry;
 mod help_overlay;
 mod overlay;
+mod pr_header;
 mod review_overlay;
 mod scroll;
 mod source_screen;
@@ -29,6 +30,7 @@ use crate::source::HighlightedSourceView;
 use entry::draw_entry_screen;
 use help_overlay::draw_help_overlay;
 use overlay::{draw_jump_popup, draw_update_prompt};
+use pr_header::draw_pr_header;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use rinkaku_core::render::Report;
@@ -184,6 +186,19 @@ pub fn draw(
     locale: Locale,
 ) -> DrawOutcome {
     let area = frame.area();
+    // ADR 0076: the header row only exists in `--pr` mode (`header_content`
+    // is `None` for stdin/`--base` sessions), so a non-`--pr` session's
+    // layout below is untouched — same `body`/`status_area` split as before
+    // this ADR.
+    let header_content = pr_header::header_content(app);
+    let (header_area, area) = match &header_content {
+        Some(_) => {
+            let [header_area, rest] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+            (Some(header_area), rest)
+        }
+        None => (None, area),
+    };
     let [body, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
 
@@ -259,6 +274,10 @@ pub fn draw(
             }
         }
     };
+
+    if let (Some(content), Some(header_area)) = (&header_content, header_area) {
+        draw_pr_header(frame, content, header_area);
+    }
 
     draw_status_line(frame, app, report, status_area);
 

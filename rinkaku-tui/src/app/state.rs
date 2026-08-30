@@ -6,12 +6,13 @@
 
 use crate::nav::{self, Nav};
 use crate::order::{DirRank, OrderMode, rank_directories};
-use crate::review::ReviewState;
+use crate::review::{PrContext, ReviewState};
 use crate::search::SearchState;
-use crate::stack::StackPosition;
+use crate::stack::{PrAnalysisCache, StackPosition};
 use crate::tree::{Tree, build_tree};
 use rinkaku_core::render::Report;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::{DiffViewMode, Focus, JumpPopup, PendingPrefix, RightPane, Screen};
 
@@ -20,7 +21,7 @@ use super::{DiffViewMode, Focus, JumpPopup, PendingPrefix, RightPane, Screen};
 /// message for the caller to render. Rebuilt once per `Report` (in
 /// [`App::new`]) and then evolved purely via [`App::handle_key`] — no
 /// field here is re-derived from IO after construction.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct App {
     pub(super) tree: Tree,
     pub(super) nav: Nav,
@@ -148,7 +149,59 @@ pub struct App {
     /// Set by `gt`/`gT`; drained by `crate::run_app`, which exits with
     /// `AppExit::SwitchPr` so the driver can re-enter over the new layer.
     pub(super) pr_switch_request: Option<usize>,
+    /// The current layer's PR identity (ADR 0076's header), `None` outside
+    /// `--pr` mode — mirrors `review_ports.pr_context` at the point
+    /// `crate::event_loop::run_app` builds this session's `App`.
+    pub(super) pr_context: Option<PrContext>,
+    /// The stack's background-analysis cache (ADR 0075 D3), read directly
+    /// by the header at draw time for each layer's live `Slot` status
+    /// (ADR 0076 D3) — `None` outside stack mode.
+    pub(super) pr_analysis_cache: Option<Arc<PrAnalysisCache>>,
 }
+
+/// Manual impl rather than `#[derive]`: [`PrAnalysisCache`] wraps a
+/// `Mutex`/`Condvar` for cross-thread synchronization (ADR 0075 D3) and has
+/// no meaningful value equality of its own, so [`Self::pr_analysis_cache`]
+/// compares by `Arc` identity (same cache instance, or both `None`) while
+/// every other field compares by value.
+impl PartialEq for App {
+    fn eq(&self, other: &Self) -> bool {
+        self.tree == other.tree
+            && self.nav == other.nav
+            && self.ranks == other.ranks
+            && self.order_mode == other.order_mode
+            && self.screen == other.screen
+            && self.right_pane == other.right_pane
+            && self.blast_radius_return_pane == other.blast_radius_return_pane
+            && self.diff_view_mode == other.diff_view_mode
+            && self.right_pane_scroll == other.right_pane_scroll
+            && self.focus == other.focus
+            && self.help_open == other.help_open
+            && self.help_scroll == other.help_scroll
+            && self.pending_prefix == other.pending_prefix
+            && self.jump_popup == other.jump_popup
+            && self.jump_back == other.jump_back
+            && self.jump_forward == other.jump_forward
+            && self.status == other.status
+            && self.should_quit == other.should_quit
+            && self.review == other.review
+            && self.search == other.search
+            && self.review_sink_a_available == other.review_sink_a_available
+            && self.update_available == other.update_available
+            && self.update_prompt_open == other.update_prompt_open
+            && self.update_requested == other.update_requested
+            && self.stack == other.stack
+            && self.pr_switch_request == other.pr_switch_request
+            && self.pr_context == other.pr_context
+            && match (&self.pr_analysis_cache, &other.pr_analysis_cache) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for App {}
 
 impl App {
     /// Builds the initial application state from `report`: the directory
@@ -191,6 +244,8 @@ impl App {
             update_requested: false,
             stack: None,
             pr_switch_request: None,
+            pr_context: None,
+            pr_analysis_cache: None,
         }
     }
 
@@ -205,6 +260,32 @@ impl App {
 
     pub fn take_pr_switch_request(&mut self) -> Option<usize> {
         self.pr_switch_request.take()
+    }
+
+    /// Sets the current layer's PR identity (ADR 0076) — `crate::event_loop::run_app`
+    /// calls this once, right after `Self::new`, with `review_ports.pr_context`.
+    pub fn with_pr_context(mut self, pr_context: Option<PrContext>) -> Self {
+        self.pr_context = pr_context;
+        self
+    }
+
+    /// The current layer's PR identity (ADR 0076's header), `None` outside
+    /// `--pr` mode.
+    pub fn pr_context(&self) -> Option<&PrContext> {
+        self.pr_context.as_ref()
+    }
+
+    /// Sets the stack's background-analysis cache (ADR 0076) — `crate::event_loop::run_app`
+    /// calls this once, right after `Self::new`, mirroring `Self::with_stack`.
+    pub fn with_pr_analysis_cache(mut self, cache: Option<Arc<PrAnalysisCache>>) -> Self {
+        self.pr_analysis_cache = cache;
+        self
+    }
+
+    /// The stack's background-analysis cache (ADR 0076), `None` outside
+    /// stack mode — the header reads this directly at draw time.
+    pub fn pr_analysis_cache(&self) -> Option<&Arc<PrAnalysisCache>> {
+        self.pr_analysis_cache.as_ref()
     }
 
     /// Sets whether sink A (a GitHub PR review) is on the export menu for
