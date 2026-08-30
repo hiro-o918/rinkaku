@@ -176,6 +176,10 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
             // single-key gesture (`ScrollToBottom` below), unrelated to
             // this prefix — a second `g` in this arm is what means "top".
             KeyCode::Char('g') => return Some(InputKey::ScrollToTop),
+            // `gt`/`gT` (ADR 0075): vim's next/previous-tab pair, reused
+            // here for the stack's next/previous layer.
+            KeyCode::Char('t') => return Some(InputKey::NextPr),
+            KeyCode::Char('T') => return Some(InputKey::PrevPr),
             _ => {}
         }
     }
@@ -233,8 +237,8 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         KeyCode::Char('v') => Some(InputKey::ToggleSplitView),
         // `G` (`Shift-g`, ADR 0026): scroll to the bottom. Distinct from
         // single-key lowercase `g` (`PendingGoto` below), which is the
-        // leading key of the `gd`/`gr`/`gg` two-key sequences resolved
-        // at the top of this function.
+        // leading key of the `gd`/`gr`/`gg`/`gt`/`gT` two-key sequences
+        // resolved at the top of this function.
         KeyCode::Char('G') => Some(InputKey::ScrollToBottom),
         // `h`, or Esc while the right pane has focus: return focus to the
         // tree (ADR 0020's neovim-style "move left/back"). Checked before
@@ -280,8 +284,6 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // special-cases the actual dispatch (it needs the session's
         // `PrContext`, which `App` doesn't hold).
         KeyCode::Char('w') => Some(InputKey::OpenPrInBrowser),
-        KeyCode::Char('p') => Some(InputKey::NextPr),
-        KeyCode::Char('P') => Some(InputKey::PrevPr),
         // `u` (ADR 0054): opens the update confirmation popup. Global,
         // like `w`/`d`/`r`/`s`; `App::handle_key`'s own arm no-ops unless
         // `App::update_available` is `Some`.

@@ -22,7 +22,6 @@ fn stack_position(cursor: usize) -> StackPosition {
 }
 
 #[test]
-#[ignore = "not implemented"]
 fn should_request_switch_to_the_layer_above_when_next_pr_is_pressed_in_stack_mode() {
     let report = empty_report();
     let mut app = App::new(&report)
@@ -35,7 +34,6 @@ fn should_request_switch_to_the_layer_above_when_next_pr_is_pressed_in_stack_mod
 }
 
 #[test]
-#[ignore = "not implemented"]
 fn should_not_request_a_switch_when_prev_pr_is_pressed_at_the_bottom() {
     let report = empty_report();
     let mut app = App::new(&report)
@@ -48,7 +46,6 @@ fn should_not_request_a_switch_when_prev_pr_is_pressed_at_the_bottom() {
 }
 
 #[test]
-#[ignore = "not implemented"]
 fn should_ignore_pr_keys_when_not_in_stack_mode() {
     let report = empty_report();
     let mut app = App::new(&report)
