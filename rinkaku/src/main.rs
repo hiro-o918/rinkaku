@@ -493,7 +493,7 @@ fn run_analysis(cli: &Cli, progress: &dyn AnalysisProgress) -> anyhow::Result<An
         // doc comment on why that is a soft failure, not a hard error —
         // the analysis above has already succeeded by this point, and
         // losing sink A is strictly less bad than losing the whole run).
-        let pr_context = resolve_pr_context(&parsed, cwd, number, head_sha);
+        let pr_context = resolve_pr_context(&parsed, cwd, number, pr_info.title.clone(), head_sha);
         (report, diff_text, pr_context)
     } else if let Some(base) = &cli.base {
         let (report, diff_text) = run_base_pipeline(cli, base, &cli.head, None, progress)?;
@@ -629,6 +629,7 @@ fn resolve_pr_context(
     parsed: &PrArg,
     cwd: Option<&std::path::Path>,
     number: u64,
+    title: String,
     head_sha: String,
 ) -> Option<PrContext> {
     let (owner, repo) = match parsed {
@@ -642,6 +643,7 @@ fn resolve_pr_context(
         owner,
         repo,
         number,
+        title,
         head_sha,
     })
 }

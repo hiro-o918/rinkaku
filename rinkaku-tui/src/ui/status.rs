@@ -4,7 +4,6 @@
 
 use crate::app::{App, Screen};
 use crate::search::SearchMode;
-use crate::stack::StackPosition;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -85,11 +84,14 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
                 crate::order::OrderMode::AlphaNumeric => "alphabetical",
             };
             let keys = match app.focus() {
-                // ADR 0075: the `PR #N k/n` prefix pushes this line past
-                // the 80-column budget (#196), so stack mode drops
-                // `enter: open` — the `?` overlay still lists it.
+                // ADR 0076: the header row now shows stack position, so
+                // `enter: open` is unconditional again (ADR 0075 D5's own
+                // drop is reverted). Stack mode instead drops `/: search`
+                // to make room for `gt/gT: PR` — search is a Tree-pane
+                // feature the `?` overlay still documents in full,
+                // orthogonal to which PR is on screen.
                 crate::app::Focus::Tree if app.stack().is_some() => {
-                    "j/k: move  /: search  ?: help  q: quit"
+                    "j/k: move  enter: open  gt/gT: PR  ?: help  q: quit"
                 }
                 crate::app::Focus::Tree => "j/k: move  /: search  enter: open  ?: help  q: quit",
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
@@ -129,17 +131,9 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
         None => help,
     };
 
-    let line = match app.status() {
+    match app.status() {
         Some(status) => format!("{status}  |  {help}"),
         None => help,
-    };
-    format!("{}{line}", stack_prefix(app.stack()))
-}
-
-fn stack_prefix(stack: Option<&StackPosition>) -> String {
-    match stack {
-        None => String::new(),
-        Some(position) => format!("{}  |  ", position.label()),
     }
 }
 
@@ -511,6 +505,7 @@ mod tests {
 
     fn stack_position() -> crate::stack::StackPosition {
         crate::stack::StackPosition::new(
+            "main".to_string(),
             vec![
                 crate::stack::StackEntry {
                     number: 42,
@@ -532,26 +527,36 @@ mod tests {
         )
     }
 
-    // ADR 0075: `enter: open` is dropped from the Tree-focus hints in stack
-    // mode so the prefixed line stays inside the 80-column budget (#196).
+    // ADR 0076: the header row now carries stack position, so the status
+    // line no longer prefixes it there — instead `/: search` is dropped
+    // from the Tree-focus hints (search is fully documented in the `?`
+    // overlay) to make room for `enter: open` (restored unconditionally)
+    // plus the new `gt/gT: PR` hint, inside the 80-column budget (#196).
     #[test]
-    fn should_prefix_status_line_with_pr_label_when_in_stack_mode() {
+    fn should_show_stack_mode_tree_hints_without_a_status_line_prefix() {
         let report = empty_report_for_status_line();
         let app = App::new(&report).with_stack(Some(stack_position()));
 
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "PR #43 2/3  |  order: topological  |  j/k: move  /: search  ?: help  q: quit"
+            "order: topological  |  j/k: move  enter: open  gt/gT: PR  ?: help  q: quit"
                 .to_string(),
             actual
         );
     }
 
-    #[test]
-    fn should_fit_the_stack_mode_tree_hint_line_within_80_columns() {
+    #[rstest::rstest]
+    #[case::topological(vec![])]
+    #[case::alphabetical(vec![crate::app::InputKey::ToggleOrder])]
+    fn should_fit_the_stack_mode_tree_hint_line_within_80_columns(
+        #[case] keys: Vec<crate::app::InputKey>,
+    ) {
         let report = report_with_one_symbol();
-        let app = App::new(&report).with_stack(Some(stack_position()));
+        let app = keys
+            .into_iter()
+            .fold(App::new(&report), |app, key| app.handle_key(key))
+            .with_stack(Some(stack_position()));
 
         let actual = status_line_text(&app, &report);
 
@@ -559,19 +564,6 @@ mod tests {
             actual.chars().count() <= 80,
             "stack-mode hint line is {} columns, over the 80-column budget: {actual}",
             actual.chars().count(),
-        );
-    }
-
-    #[test]
-    fn should_not_prefix_status_line_when_not_in_stack_mode() {
-        let report = empty_report_for_status_line();
-        let app = App::new(&report);
-
-        let actual = status_line_text(&app, &report);
-
-        assert!(
-            !actual.starts_with("PR #"),
-            "unexpected stack prefix: {actual}"
         );
     }
 

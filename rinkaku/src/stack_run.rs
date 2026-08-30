@@ -96,7 +96,11 @@ pub(crate) fn run_stack_session(
     cache.set(plan.cursor, Slot::Ready(Arc::new(initial)));
     let (session, buffered_notes) = progress.into_session_and_notes();
 
-    let position = StackPosition::new(stack_entries(&layers), plan.cursor);
+    let position = StackPosition::new(
+        plan.stack.base_ref_name.clone(),
+        stack_entries(&layers),
+        plan.cursor,
+    );
     let stack_pr_contexts: Vec<PrContext> = layers
         .iter()
         .map(|layer| pr_context(&plan, layer))
@@ -276,6 +280,7 @@ fn pr_context(plan: &StackPlan, layer: &ResolvedLayer) -> PrContext {
         owner: plan.owner.clone(),
         repo: plan.repo.clone(),
         number: layer.pr.number,
+        title: layer.pr.title.clone(),
         head_sha: layer.head_sha.clone(),
     }
 }

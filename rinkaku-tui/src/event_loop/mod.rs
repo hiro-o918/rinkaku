@@ -91,11 +91,14 @@ pub(crate) fn run_app(
     update_check: Option<std::sync::mpsc::Receiver<String>>,
     locale: Locale,
     stack: Option<StackPosition>,
+    pr_analysis_cache: Option<std::sync::Arc<crate::stack::PrAnalysisCache>>,
     review: &mut ReviewState,
 ) -> std::io::Result<AppExit> {
     let mut app = App::new(report)
         .with_review_sink_a_available(review_ports.pr_context.is_some())
         .with_stack(stack)
+        .with_pr_context(review_ports.pr_context.clone())
+        .with_pr_analysis_cache(pr_analysis_cache)
         .with_review(std::mem::take(review));
     if let Some(path) = entry_path {
         app = app.with_entry_pivot(path);
