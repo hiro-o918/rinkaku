@@ -182,11 +182,11 @@ Enter on a tree row is the universal "open" gesture, and the `?` overlay
 still lists it). Outside stack mode the line is byte-for-byte what it
 is today.
 
-> **Amended by ADR 0076**: the `PR #43 2/3  |  ` prefix is removed once
-> the header ADR 0076 introduces shows stack position instead;
-> `enter: open` returns to the Tree-focus hint unconditionally, and
-> `/: search` becomes the entry stack mode drops instead, to make room
-> for a `gt/gT: PR` hint.
+> **Amended by ADR 0076**: the status-line `PR #N k/n` prefix was removed
+> once the header row introduced there took over showing the stack
+> position, and the hint budget went to `gt/gT: PR`; `enter: open`
+> returns to the Tree-focus hint unconditionally, and `/: search`
+> becomes the entry stack mode drops instead, to make room for it.
 
 ### D6. Annotations carry their PR; export groups by it
 
