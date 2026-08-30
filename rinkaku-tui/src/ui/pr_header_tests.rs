@@ -621,3 +621,29 @@ fn should_render_the_same_frame_as_before_the_header_existed_when_no_pr_context_
         "expected a pane border, got: {first_row}"
     );
 }
+
+#[rstest]
+#[case::should_merge_the_pending_marker_into_a_truncated_title(
+    TabStatus::Pending,
+    Some(6),
+    "#7 abcde\u{2026}"
+)]
+#[case::should_append_the_pending_marker_after_a_full_title(
+    TabStatus::Pending,
+    Some(20),
+    "#7 abcdefgh\u{2026}"
+)]
+#[case::should_keep_the_failed_marker_after_a_truncated_title(
+    TabStatus::Failed,
+    Some(6),
+    "#7 abcde\u{2026}!"
+)]
+fn tab_text_status_markers(
+    #[case] status: TabStatus,
+    #[case] title_width: Option<usize>,
+    #[case] expected: &str,
+) {
+    let (actual, _) = tab_text(&tab(7, "abcdefgh", status), title_width);
+
+    assert_eq!(expected.to_string(), actual);
+}

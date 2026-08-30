@@ -128,7 +128,11 @@ fn tab_text(tab: &TabLabel, title_width: Option<usize>) -> (String, SegmentKind)
         TabStatus::Current | TabStatus::Ready => "",
     };
     let text = match title_width {
-        Some(budget) => format!("#{} {}{suffix}", tab.number, truncate(&tab.title, budget)),
+        Some(budget) => {
+            let title = truncate(&tab.title, budget);
+            let suffix = if title.ends_with(suffix) { "" } else { suffix };
+            format!("#{} {title}{suffix}", tab.number)
+        }
         None => format!("#{}{suffix}", tab.number),
     };
     let kind = match tab.status {
