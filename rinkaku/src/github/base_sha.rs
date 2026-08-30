@@ -1,11 +1,13 @@
 //! `--pr` mode base-SHA resolution (ADR 0007) and the `git fetch` helpers it drives.
 
-/// Fetches PR `number`'s head ref into the repository at `cwd` and
-/// returns the fetched commit's SHA, via
-/// `git fetch origin refs/pull/<number>/head` followed by
-/// `git rev-parse FETCH_HEAD`.
+/// Fetches PR `number`'s head into the repository at `cwd` and returns
+/// the fetched commit's SHA, via `fetch_pr_heads`'s named-ref fetch — see
+/// its doc comment for why `FETCH_HEAD` is unsafe here too.
 pub(crate) fn fetch_pr_head(number: u64, cwd: Option<&std::path::Path>) -> anyhow::Result<String> {
-    run_git_fetch(&format!("refs/pull/{number}/head"), cwd)
+    fetch_pr_heads(&[number], cwd)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("fetch_pr_heads returned no SHA for PR #{number}"))
 }
 
 /// Fetches every PR head in `numbers` with one multi-refspec `git fetch`
@@ -270,6 +272,53 @@ mod tests {
             let actual = fetch_pr_heads(&[], Some(dir.path())).expect("fetch");
 
             assert_eq!(Vec::<String>::new(), actual);
+        }
+    }
+
+    mod fetch_pr_head_tests {
+        use crate::github::base_sha::fetch_pr_head;
+        use crate::test_util::{init_repo_with_committed_file, run_git};
+        use pretty_assertions::assert_eq;
+
+        fn head_sha(dir: &std::path::Path) -> String {
+            let output = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .expect("git rev-parse");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+
+        #[test]
+        fn should_return_the_pr_head_when_fetched_into_a_named_ref() {
+            let remote = tempfile::TempDir::new().expect("remote dir");
+            init_repo_with_committed_file(remote.path(), "fn one() {}\n");
+            let expected = head_sha(remote.path());
+            run_git(
+                remote.path(),
+                &["update-ref", "refs/pull/7/head", &expected],
+            );
+            let clone = tempfile::TempDir::new().expect("clone dir");
+            let clone_dir = clone.path().join("repo");
+            run_git(
+                clone.path(),
+                &[
+                    "clone",
+                    "--quiet",
+                    remote.path().to_str().expect("utf8 path"),
+                    clone_dir.to_str().expect("utf8 path"),
+                ],
+            );
+
+            let actual = fetch_pr_head(7, Some(&clone_dir)).expect("fetch");
+
+            assert_eq!(expected, actual);
+            let ref_output = std::process::Command::new("git")
+                .args(["rev-parse", "refs/rinkaku/pull/7/head"])
+                .current_dir(&clone_dir)
+                .output()
+                .expect("git rev-parse");
+            assert_eq!(expected, String::from_utf8_lossy(&ref_output.stdout).trim());
         }
     }
 
