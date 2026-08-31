@@ -19,6 +19,7 @@ const TIP_KEYS: &[&str] = &[
     "reading_order",
     "diff_pane_sync",
     "entry_blast_radius",
+    "review_notes",
     "discoverability",
 ];
 

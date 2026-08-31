@@ -82,4 +82,5 @@ tips:
   reading_order: "The file tree is in topological order by default — just read it top to bottom."
   diff_pane_sync: "The file tree and the Diff pane scroll together, so you can follow a signature straight to its implementation."
   entry_blast_radius: "Only care about one subtree? --entry <path> re-roots the tree there and shows what would be affected."
+  review_notes: "Press a on a symbol row to leave a note; A lists your notes and exports them as a GitHub PR review or to the clipboard."
   discoverability: "Press ? for the full keymap, / to search."
