@@ -76,3 +76,10 @@ help:
     blast_radius: "選択したディレクトリ/ファイルを起点とする依存ツリー — 変更した場合に影響する範囲を示す"
     cycle: "依存の循環: 複数のシンボルが互いに依存し合っており、ツリーが最初に現れた地点を指して止まる"
     jumplist: "gd/gr のジャンプ履歴 — ctrl-o/ctrl-i で前後に移動できる"
+tips:
+  stacked_pr: "stacked PR をレビュー中？ --pr に番号を渡せば stack の全レイヤーがまとめて開きます。gt / gT でレイヤーを切り替えられます。"
+  llm_export: "LLM に渡したいときは、rinkaku --base main --format json（または md）で差分全体ではなく change map だけを抽出できます。"
+  reading_order: "どこから読むか迷ったら、ファイル一覧は既定で依存順（トポロジカル順）に並んでいるので、上から順に読めば大丈夫です。"
+  diff_pane_sync: "ファイル一覧と Diff ペインは連動してスクロールします。シグネチャを追いながら実装差分を確認できます。"
+  entry_blast_radius: "特定のサブツリーだけ見たいときは、--entry <path> でそこを起点にファイル一覧を再構成し、blast radius 表示で開始できます。"
+  discoverability: "? でキーマップ一覧、/ で検索できます。"

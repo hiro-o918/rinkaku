@@ -24,12 +24,14 @@ use std::sync::Mutex;
 /// live terminal, the currently-cached phase label (so a file-progress
 /// redraw can still show *which* phase is measuring that progress, since
 /// `rinkaku-core`'s `on_progress` callback only ever receives `(done,
-/// total)`), and the buffered notes (ADR 0033's note-deferral decision, see
+/// total)`), the buffered notes (ADR 0033's note-deferral decision, see
 /// [`AnalysisProgress::note`]'s own doc comment for why raw `eprintln!`
-/// during `--tui` mode corrupts the alternate screen).
+/// during `--tui` mode corrupts the alternate screen), and the usecase tip
+/// (ADR 0077) carried unchanged across every redraw for this run.
 struct SplashProgressState {
     session: TuiSession,
     phase_label: String,
+    tip: Option<String>,
     buffered_notes: Vec<String>,
 }
 
@@ -46,12 +48,15 @@ pub(crate) struct SplashProgress {
 impl SplashProgress {
     /// `session` must already be initialized (`TuiSession::init`) — this
     /// type only draws on it, it does not own the init/teardown lifecycle
-    /// itself (`main.rs` does, via `TuiSession`'s own `Drop`/`run`).
-    pub(crate) fn new(session: TuiSession) -> Self {
+    /// itself (`main.rs` does, via `TuiSession`'s own `Drop`/`run`). `tip`
+    /// (ADR 0077) is picked once by the caller (`rinkaku_tui::tips::pick_tip`)
+    /// and held for every redraw this instance performs.
+    pub(crate) fn new(session: TuiSession, tip: Option<String>) -> Self {
         Self {
             inner: Mutex::new(SplashProgressState {
                 session,
                 phase_label: phase_message(AnalysisPhase::Starting).to_string(),
+                tip,
                 buffered_notes: Vec::new(),
             }),
         }
@@ -103,7 +108,11 @@ impl AnalysisProgress for SplashProgress {
             .lock()
             .expect("splash progress mutex must not be poisoned");
         guard.phase_label.clone_from(&label);
-        let _ = guard.session.draw_splash(&SplashState::label_only(label));
+        let mut state = SplashState::label_only(label);
+        if let Some(tip) = guard.tip.clone() {
+            state = state.with_tip(tip);
+        }
+        let _ = guard.session.draw_splash(&state);
     }
 
     fn report_file_progress(&self, done: usize, total: usize) {
@@ -112,9 +121,11 @@ impl AnalysisProgress for SplashProgress {
             .lock()
             .expect("splash progress mutex must not be poisoned");
         let label = guard.phase_label.clone();
-        let _ = guard
-            .session
-            .draw_splash(&SplashState::with_progress(label, done, total));
+        let mut state = SplashState::with_progress(label, done, total);
+        if let Some(tip) = guard.tip.clone() {
+            state = state.with_tip(tip);
+        }
+        let _ = guard.session.draw_splash(&state);
     }
 
     /// Buffers `message` instead of printing it immediately (ADR 0033):
