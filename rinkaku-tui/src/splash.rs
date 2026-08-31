@@ -12,7 +12,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Gauge, Paragraph};
 
@@ -77,13 +77,13 @@ impl SplashState {
     }
 }
 
-/// The tip's reserved row budget (one blank separator line + up to two
+/// The tip's reserved row budget (one blank separator line + up to three
 /// wrapped lines of text) — bounds how many rows [`draw_splash`] must find
 /// spare before it draws a tip at all, since the tip is skipped rather
 /// than truncated on a terminal too short to fit it (this module's own
 /// precedent: [`SplashState::progress`]'s gauge already only draws when
 /// `Some`, never in a squeezed partial form).
-const TIP_ROWS: u16 = 3;
+const TIP_ROWS: u16 = 4;
 
 /// Draws one splash frame: the logo centered in the upper portion of the
 /// screen, the phase label beneath it, and — when [`SplashState::progress`]
@@ -155,23 +155,37 @@ pub fn draw_splash(frame: &mut Frame, state: &SplashState) {
     }
 
     if let Some(tip) = tip {
-        let tip_area = centered_band(rows[next_row]);
-        let tip_paragraph = Paragraph::new(tip)
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center)
-            .wrap(ratatui::widgets::Wrap { trim: true });
+        let [_, tip_text_rows] =
+            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(rows[next_row]);
+        let tip_area = centered_band_of(tip_text_rows, TIP_BAND_WIDTH);
+        let tip_paragraph = Paragraph::new(Line::from(vec![
+            Span::styled(
+                TIP_PREFIX,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(tip),
+        ]))
+        .alignment(Alignment::Center)
+        .wrap(ratatui::widgets::Wrap { trim: true });
         frame.render_widget(tip_paragraph, tip_area);
     }
 }
+
+const TIP_PREFIX: &str = "Tip: ";
 
 /// Narrows `area` to a centered horizontal band — the full terminal width
 /// looks disproportionately wide for a single progress bar or tip line
 /// sitting under a comparatively narrow logo/label, so this caps it at
 /// [`BAND_WIDTH`] columns (or the full area, whichever is narrower, for a
-/// terminal too small to fit that). Shared by the gauge and the tip
-/// (ADR 0077) so both sit at the same width.
+/// terminal too small to fit that).
 fn centered_band(area: Rect) -> Rect {
-    let width = BAND_WIDTH.min(area.width);
+    centered_band_of(area, BAND_WIDTH)
+}
+
+fn centered_band_of(area: Rect, max_width: u16) -> Rect {
+    let width = max_width.min(area.width);
     let [_, band, _] = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(width),
@@ -182,6 +196,10 @@ fn centered_band(area: Rect) -> Rect {
 }
 
 const BAND_WIDTH: u16 = 40;
+
+/// Wider than [`BAND_WIDTH`]: a tip is a sentence or two, and at the
+/// gauge's width it wrapped onto three cramped lines under a 46-column logo.
+const TIP_BAND_WIDTH: u16 = 80;
 
 /// `done / total` clamped into `Gauge::ratio`'s required `0.0..=1.0` range —
 /// extracted as its own pure function so the clamping (needed because
@@ -271,16 +289,16 @@ mod tests {
             .expect("draw");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("Use gt/gT to switch PRs"));
+        assert!(text.contains("Tip: Use gt/gT to switch PRs"));
     }
 
     #[test]
     fn should_omit_tip_when_terminal_height_is_insufficient() {
         // `label_only`'s core content needs 7 rows (5-line logo + blank +
-        // label); `TIP_ROWS` (3) pushes the requirement to 10, so a
+        // label); `TIP_ROWS` (4) pushes the requirement to 11, so a
         // terminal one row short of that must render no tip rather than a
         // truncated one.
-        let mut terminal = Terminal::new(TestBackend::new(80, 9)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).expect("terminal");
         let state = SplashState::label_only("Resolving PR...").with_tip("Use gt/gT to switch PRs");
 
         terminal
