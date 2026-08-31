@@ -101,7 +101,11 @@ pub fn draw_splash(frame: &mut Frame, state: &SplashState) {
 
     let logo_height = LOGO_LINES.len() as u16;
     let core_height = logo_height + 1 + 1 + if state.progress.is_some() { 1 } else { 0 };
-    let show_tip = state.tip.is_some() && area.height >= core_height + TIP_ROWS;
+    let tip = state
+        .tip
+        .as_deref()
+        .filter(|_| area.height >= core_height + TIP_ROWS);
+    let show_tip = tip.is_some();
     // Logo + one blank line + phase label + (optional) gauge + (optional)
     // tip, vertically centered as a block rather than each line
     // individually — a fixed-height `Constraint::Length` block sized to
@@ -150,9 +154,7 @@ pub fn draw_splash(frame: &mut Frame, state: &SplashState) {
         next_row += 1;
     }
 
-    if show_tip {
-        // `show_tip` already implies `state.tip.is_some()`.
-        let tip = state.tip.as_deref().unwrap_or_default();
+    if let Some(tip) = tip {
         let tip_area = centered_band(rows[next_row]);
         let tip_paragraph = Paragraph::new(tip)
             .style(Style::default().fg(Color::DarkGray))
