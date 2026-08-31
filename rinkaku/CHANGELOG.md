@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.25](https://github.com/hiro-o918/rinkaku/compare/v0.6.24...v0.6.25) (2026-08-31)
+
+
+### Features
+
+* **tui:** show a usecase tip on the splash screen (ADR 0077) ([#255](https://github.com/hiro-o918/rinkaku/issues/255)) ([34268e2](https://github.com/hiro-o918/rinkaku/commit/34268e2241ef2fde23a2ac3234272239a3b22bce))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.23 to 0.6.24
+    * rinkaku-tui bumped from 0.6.23 to 0.6.24
+
 ## [0.6.24](https://github.com/hiro-o918/rinkaku/compare/v0.6.23...v0.6.24) (2026-08-30)
 
 
