@@ -63,6 +63,7 @@ pub mod splash;
 mod split_pairing;
 pub mod stack;
 mod stack_driver;
+pub mod tips;
 pub mod tree;
 pub mod ui;
 

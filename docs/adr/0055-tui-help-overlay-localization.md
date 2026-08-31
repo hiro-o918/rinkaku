@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-15
+- Amended by ADR 0077 (extends localization scope to the splash screen's usecase tip)
 
 ## Context
 

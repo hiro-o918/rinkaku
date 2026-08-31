@@ -87,10 +87,12 @@ use rinkaku_core::render::{Report, render};
 use rinkaku_tui::TuiSession;
 use rinkaku_tui::locale::detect_locale;
 use rinkaku_tui::review::PrContext;
+use rinkaku_tui::tips::pick_tip;
 use spinner::{AnalysisPhase, Spinner};
 use splash_progress::SplashProgress;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Shared `env_logger` setup for every display mode: `info`-level default
 /// (env_logger's own default is error-only, which meant `--pr`/`--base`
@@ -105,6 +107,18 @@ fn logger_builder() -> env_logger::Builder {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
     builder.format_timestamp(None).format_target(false);
     builder
+}
+
+/// Seed for [`pick_tip`] (ADR 0077): the wall clock at startup, not a true
+/// RNG — this only needs to vary run to run, not be unpredictable, so
+/// `SystemTime::now()` is enough and avoids adding a `rand` dependency.
+/// Falls back to `0` on a pre-1970 clock (`UNIX_EPOCH` duration error),
+/// which still resolves to a valid tip via `pick_tip`'s modulo.
+fn splash_tip_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -201,11 +215,20 @@ fn main() -> anyhow::Result<()> {
                 std::env::var("LC_MESSAGES").ok().as_deref(),
                 std::env::var("LANG").ok().as_deref(),
             );
+            // ADR 0077: one usecase tip, picked once for this run and held
+            // for the whole splash duration — never rotated, since a
+            // rotating tip would itself read as fake progress motion (ADR
+            // 0033 decision 3). `pick_tip` is pure; the seed is real IO
+            // (`SystemTime::now()`) done here at the composition root.
+            let tip = pick_tip(locale, splash_tip_seed());
             let mut session = TuiSession::init()?;
-            session.draw_splash(&rinkaku_tui::splash::SplashState::label_only(
-                spinner::phase_message(AnalysisPhase::Starting),
-            ))?;
-            let progress = SplashProgress::new(session);
+            session.draw_splash(
+                &rinkaku_tui::splash::SplashState::label_only(spinner::phase_message(
+                    AnalysisPhase::Starting,
+                ))
+                .with_tip(tip.clone()),
+            )?;
+            let progress = SplashProgress::new(session, Some(tip));
             // ADR 0075: a stacked PR takes its own driver from here on;
             // every other input mode continues into the single-report path.
             if let Some(plan) = stack_run::discover_stack(&cli, &progress)? {

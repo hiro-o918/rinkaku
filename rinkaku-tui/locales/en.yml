@@ -76,3 +76,11 @@ help:
     blast_radius: "The dependency tree rooted at a selected directory or file, showing what would be affected if it changed"
     cycle: "A dependency loop: two or more symbols depend on each other, so the tree stops and points back to where it first appeared"
     jumplist: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it"
+tips:
+  stacked_pr: "Reviewing a stacked PR? --pr <number> loads every open layer at once — switch layers with gt / gT."
+  llm_export: "Handing this off to an LLM? rinkaku --base main --format json (or md) gives you just the changed signatures and what they depend on, not the full diff."
+  reading_order: "The file tree is in topological order by default — just read it top to bottom."
+  diff_pane_sync: "The file tree and the Diff pane scroll together, so you can follow a signature straight to its implementation."
+  entry_blast_radius: "Only care about one subtree? --entry <path> re-roots the tree there and shows what would be affected."
+  review_notes: "Press a on a symbol row to leave a note; A lists your notes and exports them as a GitHub PR review or to the clipboard."
+  discoverability: "Press ? for the full keymap, / to search."
