@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.27](https://github.com/hiro-o918/rinkaku/compare/v0.6.26...v0.6.27) (2026-09-13)
+
+
+### Features
+
+* **tui:** edit an existing annotation from the annotations list ([#258](https://github.com/hiro-o918/rinkaku/issues/258)) ([455276c](https://github.com/hiro-o918/rinkaku/commit/455276c8031fe0d504747c1df18aa75c97c6b297))
+* **tui:** H/L and g&lt;Tab&gt; for stack layer switching (ADR 0075 amendment) ([#259](https://github.com/hiro-o918/rinkaku/issues/259)) ([2305e0c](https://github.com/hiro-o918/rinkaku/commit/2305e0c294563883729e174423e970e6e4cfb999))
+
+
+### Miscellaneous
+
+* release main ([#257](https://github.com/hiro-o918/rinkaku/issues/257)) ([b66b7ef](https://github.com/hiro-o918/rinkaku/commit/b66b7ef1cd7022fb8dd7fc626108a82ec2b6f628))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * rinkaku-core bumped from 0.6.26 to 0.6.27
+
 ## [0.6.26](https://github.com/hiro-o918/rinkaku/compare/v0.6.25...v0.6.26) (2026-09-13)
 
 
