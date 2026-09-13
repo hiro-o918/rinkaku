@@ -189,6 +189,9 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
             // here for the stack's next/previous layer.
             KeyCode::Char('t') => return Some(InputKey::NextPr),
             KeyCode::Char('T') => return Some(InputKey::PrevPr),
+            // `g<Tab>` (ADR 0075 amendment): vim's own last-tab gesture,
+            // reused for the stack's last-visited layer.
+            KeyCode::Tab => return Some(InputKey::LastPr),
             _ => {}
         }
     }
@@ -297,6 +300,12 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         // like `w`/`d`/`r`/`s`; `App::handle_key`'s own arm no-ops unless
         // `App::update_available` is `Some`.
         KeyCode::Char('u') => Some(InputKey::OpenUpdatePrompt),
+        // `L`/`H` (ADR 0075 amendment): the common vim rebinding of
+        // next/previous tab, mirroring `gt`/`gT` above as a one-key
+        // alternative. Global like `gt`/`gT` — `App::handle_key` no-ops
+        // both outside stack mode.
+        KeyCode::Char('L') => Some(InputKey::NextPr),
+        KeyCode::Char('H') => Some(InputKey::PrevPr),
         // `g` (ADR 0022): the first half of the `gd`/`gr` two-key sequence.
         // Checked after the `pending_prefix` resolution above so a second
         // `g` press (`gg`, not a bound sequence today) simply restarts the

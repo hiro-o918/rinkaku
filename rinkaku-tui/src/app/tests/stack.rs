@@ -22,6 +22,10 @@ fn stack_position(cursor: usize) -> StackPosition {
     )
 }
 
+fn stack_position_with_last_visited(cursor: usize, last_visited: usize) -> StackPosition {
+    stack_position(cursor).with_last_visited(Some(last_visited))
+}
+
 #[test]
 fn should_request_switch_to_the_layer_above_when_next_pr_is_pressed_in_stack_mode() {
     let report = empty_report();
@@ -51,7 +55,32 @@ fn should_ignore_pr_keys_when_not_in_stack_mode() {
     let report = empty_report();
     let mut app = App::new(&report)
         .handle_key(InputKey::NextPr)
-        .handle_key(InputKey::PrevPr);
+        .handle_key(InputKey::PrevPr)
+        .handle_key(InputKey::LastPr);
+
+    let actual = app.take_pr_switch_request();
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_request_switch_to_last_visited_layer_when_last_pr_is_pressed() {
+    let report = empty_report();
+    let mut app = App::new(&report)
+        .with_stack(Some(stack_position_with_last_visited(1, 0)))
+        .handle_key(InputKey::LastPr);
+
+    let actual = app.take_pr_switch_request();
+
+    assert_eq!(Some(0), actual);
+}
+
+#[test]
+fn should_not_request_a_switch_when_last_pr_is_pressed_without_history() {
+    let report = empty_report();
+    let mut app = App::new(&report)
+        .with_stack(Some(stack_position(0)))
+        .handle_key(InputKey::LastPr);
 
     let actual = app.take_pr_switch_request();
 

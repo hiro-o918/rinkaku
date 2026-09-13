@@ -47,6 +47,7 @@ help:
     jump_back: "jumplist の一つ前の位置へ戻る"
     jump_forward: "jumplist の次の位置へ進む"
     next_prev_pr: "stack 内の次 / 前の PR へ切り替え（stacked --pr のみ）"
+    last_pr: "stack 内で直前に見ていた PR へ戻る（stacked --pr のみ）"
     open_pr_in_browser: "現在の PR のページをブラウザで開く（--pr モードのみ）"
     prompt_self_update: "self-update を促す（新しいリリースがある場合のみ表示）"
     toggle_help_overlay: "このヘルプ画面を切り替え"
@@ -78,7 +79,7 @@ help:
     cycle: "依存の循環: 複数のシンボルが互いに依存し合っており、ツリーが最初に現れた地点を指して止まる"
     jumplist: "gd/gr のジャンプ履歴 — ctrl-o/ctrl-i で前後に移動できる"
 tips:
-  stacked_pr: "stacked PR をレビュー中？ --pr に番号を渡せば stack の全レイヤーがまとめて開きます。gt / gT でレイヤーを切り替えられます。"
+  stacked_pr: "stacked PR をレビュー中？ --pr に番号を渡せば stack の全レイヤーがまとめて開きます。H / L でレイヤーを切り替えられます。"
   llm_export: "LLM に渡したいときは、rinkaku --base main --format json（または md）で差分全体ではなく、変更されたシグネチャとその依存関係だけを出力できます。"
   reading_order: "どこから読むか迷ったら、ファイル一覧は既定で依存順（トポロジカル順）に並んでいるので、上から順に読めば大丈夫です。"
   diff_pane_sync: "ファイル一覧と Diff ペインは連動してスクロールします。シグネチャを追いながら実装差分を確認できます。"

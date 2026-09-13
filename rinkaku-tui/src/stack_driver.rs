@@ -56,6 +56,22 @@ pub(crate) fn step_after_exit(exit: AppExit) -> StackStep {
     }
 }
 
+/// The `g<Tab>` history to carry into the next layer's
+/// [`crate::stack::StackPosition`] (ADR 0075 amendment). Re-entering the
+/// layer just rendered (the failed-slot fallback) keeps the history it
+/// already had, so an aborted switch does not erase where `g<Tab>` went.
+pub(crate) fn next_last_visited(
+    rendered_cursor: usize,
+    next_cursor: usize,
+    current_last_visited: Option<usize>,
+) -> Option<usize> {
+    if rendered_cursor == next_cursor {
+        current_last_visited
+    } else {
+        Some(rendered_cursor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +110,26 @@ mod tests {
         let actual = step_after_exit(AppExit::UpdateRequested);
 
         assert_eq!(StackStep::UpdateRequested, actual);
+    }
+
+    #[test]
+    fn should_carry_the_rendered_layer_as_history_when_moving_to_a_different_layer() {
+        let actual = next_last_visited(0, 2, Some(1));
+
+        assert_eq!(Some(0), actual);
+    }
+
+    #[test]
+    fn should_keep_the_existing_history_when_re_entering_the_same_layer() {
+        let actual = next_last_visited(1, 1, Some(0));
+
+        assert_eq!(Some(0), actual);
+    }
+
+    #[test]
+    fn should_have_no_history_when_re_entering_the_first_layer_of_the_session() {
+        let actual = next_last_visited(2, 2, None);
+
+        assert_eq!(None, actual);
     }
 }

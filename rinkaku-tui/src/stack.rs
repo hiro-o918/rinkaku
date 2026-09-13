@@ -22,6 +22,7 @@ pub struct StackPosition {
     trunk: String,
     entries: Vec<StackEntry>,
     cursor: usize,
+    last_visited: Option<usize>,
 }
 
 impl StackPosition {
@@ -31,11 +32,27 @@ impl StackPosition {
             trunk,
             entries,
             cursor: clamped,
+            last_visited: None,
         }
+    }
+
+    /// Sets the layer the reviewer was on immediately before this one, for
+    /// `g<Tab>` (vim's own last-tab gesture) to jump back to (ADR 0075
+    /// amendment). The driver loop (`crate::session::TuiSession`) is the
+    /// only owner of this history — each layer's own `App` is rebuilt from
+    /// scratch on every switch, so `StackPosition` itself never updates
+    /// this field.
+    pub fn with_last_visited(mut self, last_visited: Option<usize>) -> Self {
+        self.last_visited = last_visited;
+        self
     }
 
     pub fn trunk(&self) -> &str {
         &self.trunk
+    }
+
+    pub fn last_visited(&self) -> Option<usize> {
+        self.last_visited
     }
 
     /// Up is away from trunk, matching `gh stack up`.
@@ -54,6 +71,16 @@ impl StackPosition {
             true
         } else {
             false
+        }
+    }
+
+    pub fn move_to_last_visited(&mut self) -> bool {
+        match self.last_visited {
+            Some(target) if target != self.cursor => {
+                self.cursor = target;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -255,6 +282,35 @@ mod tests {
         let actual = position.label();
 
         assert_eq!("PR #43 2/3".to_string(), actual);
+    }
+
+    #[test]
+    fn should_jump_to_last_visited_when_set_and_different_from_cursor() {
+        let mut position =
+            StackPosition::new("main".to_string(), entries(), 2).with_last_visited(Some(0));
+
+        let moved = position.move_to_last_visited();
+
+        assert_eq!((true, 0), (moved, position.cursor()));
+    }
+
+    #[test]
+    fn should_not_move_when_last_visited_is_unset() {
+        let mut position = StackPosition::new("main".to_string(), entries(), 2);
+
+        let moved = position.move_to_last_visited();
+
+        assert_eq!((false, 2), (moved, position.cursor()));
+    }
+
+    #[test]
+    fn should_not_move_when_last_visited_equals_cursor() {
+        let mut position =
+            StackPosition::new("main".to_string(), entries(), 1).with_last_visited(Some(1));
+
+        let moved = position.move_to_last_visited();
+
+        assert_eq!((false, 1), (moved, position.cursor()));
     }
 
     #[test]

@@ -321,6 +321,8 @@ impl TuiSession {
         let mut review = ReviewState::default();
         let mut previous_cursor = position.cursor();
         let mut cursor = previous_cursor;
+        let mut last_visited: Option<usize> = position.last_visited();
+        let mut last_rendered: Option<usize> = None;
         let update_requested = loop {
             cache.set_cursor(cursor);
             let slot_outcome = match cache.get(cursor) {
@@ -352,6 +354,9 @@ impl TuiSession {
             let Some(analysis) = analysis else {
                 continue;
             };
+            if let Some(rendered) = last_rendered {
+                last_visited = stack_driver::next_last_visited(rendered, cursor, last_visited);
+            }
             previous_cursor = cursor;
 
             let source_reader = source_reader_for(&analysis.pr);
@@ -369,10 +374,14 @@ impl TuiSession {
                 layer_review_ports,
                 update_check.take(),
                 locale,
-                Some(StackPosition::new(trunk.clone(), entries.clone(), cursor)),
+                Some(
+                    StackPosition::new(trunk.clone(), entries.clone(), cursor)
+                        .with_last_visited(last_visited),
+                ),
                 Some(Arc::clone(&cache)),
                 &mut review,
             )?;
+            last_rendered = Some(cursor);
 
             match stack_driver::step_after_exit(exit) {
                 stack_driver::StackStep::Enter(target) => cursor = target,
