@@ -728,17 +728,18 @@ impl App {
             // `crate::lib::run_app` special-cases `AnnotationCompose` before
             // dispatch (`InputKey::AnnotationCompose`'s own doc comment) and the
             // review-overlay priority check at the top of this function
-            // intercepts `ComposeChar`/`ComposeBackspace`/`AnnotationDelete`
-            // whenever a review mode is actually open — kept only so the
-            // match stays exhaustive against future refactors, same
-            // reasoning as the `ToggleHelp`/`PopupConfirm` arms above.
+            // intercepts `ComposeChar`/`ComposeBackspace`/`AnnotationDelete`/
+            // `AnnotationEdit` whenever a review mode is actually open — kept
+            // only so the match stays exhaustive against future refactors,
+            // same reasoning as the `ToggleHelp`/`PopupConfirm` arms above.
             (
                 Screen::Entry,
                 _,
                 InputKey::AnnotationCompose
                 | InputKey::ComposeChar(_)
                 | InputKey::ComposeBackspace
-                | InputKey::AnnotationDelete,
+                | InputKey::AnnotationDelete
+                | InputKey::AnnotationEdit,
             ) => {}
             // `w` (ADR 0050) needs the session's `PrContext`, which `App`
             // does not hold — `crate::lib::run_app` special-cases this

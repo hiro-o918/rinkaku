@@ -137,6 +137,27 @@ fn should_draw_compose_overlay_with_location_and_buffer_when_composing() {
 }
 
 #[test]
+fn should_draw_edit_annotation_title_when_editing_an_existing_annotation() {
+    let report = report_with_one_symbol();
+    let review = ReviewState::default()
+        .begin_compose(snapshot())
+        .push_char('f')
+        .push_char('i')
+        .push_char('x')
+        .confirm_compose()
+        .open_list()
+        .begin_edit_selected();
+    let app = App::new(&report).with_review(review);
+
+    let text = draw_app(&app, &report);
+
+    assert!(text.contains("Edit annotation"));
+    assert!(text.contains("lib.rs:1-5 foo"));
+    assert!(text.contains("fix"));
+    assert!(!text.contains("New annotation"));
+}
+
+#[test]
 fn should_draw_compose_overlay_with_trailing_slash_when_composing_over_a_dir_snapshot() {
     let report = report_with_one_symbol();
     let review = ReviewState::default()
@@ -169,6 +190,7 @@ fn should_draw_annotations_list_overlay_with_annotation_summary() {
     assert!(text.contains("Review annotations"));
     assert!(text.contains("lib.rs:1-5 foo: fix"));
     assert!(text.contains("Enter: export"));
+    assert!(text.contains("e: edit"));
     assert!(text.contains("d: delete"));
 }
 

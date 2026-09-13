@@ -34,6 +34,7 @@ help:
     open_annotations_list: "Open the review annotations list"
     annotations_list_move: "Annotations list: move the cursor"
     annotations_list_export: "Annotations list: open the export menu"
+    annotations_list_edit: "Annotations list: edit the selected annotation"
     annotations_list_delete: "Annotations list: delete the selected annotation"
     annotations_list_close: "Annotations list: close"
     toggle_detail_diff: "Toggle the right pane between Detail and Diff"

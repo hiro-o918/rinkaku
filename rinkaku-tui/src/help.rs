@@ -237,6 +237,11 @@ fn review_bindings(locale: Locale) -> Vec<KeyBinding> {
                 .into_owned(),
         },
         KeyBinding {
+            keys: "e",
+            description: rust_i18n::t!("help.binding.annotations_list_edit", locale = tag)
+                .into_owned(),
+        },
+        KeyBinding {
             keys: "d",
             description: rust_i18n::t!("help.binding.annotations_list_delete", locale = tag)
                 .into_owned(),

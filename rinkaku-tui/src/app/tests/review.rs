@@ -36,3 +36,25 @@ fn should_open_export_menu_when_confirming_the_annotations_list() {
         actual.review().mode()
     );
 }
+
+#[test]
+fn should_reopen_compose_over_the_selected_annotation_when_annotation_edit_is_pressed() {
+    let report = report_with_one_symbol();
+    let review = ReviewState::default()
+        .begin_compose(snapshot())
+        .push_char('x')
+        .confirm_compose()
+        .open_list();
+    let app = App::new(&report).with_review(review);
+
+    let actual = app.handle_key(InputKey::AnnotationEdit);
+
+    assert_eq!(
+        &crate::review::ReviewMode::Compose {
+            snapshot: snapshot(),
+            buffer: "x".to_string(),
+            editing: Some(0),
+        },
+        actual.review().mode()
+    );
+}

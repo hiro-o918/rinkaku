@@ -33,6 +33,7 @@ impl App {
                 InputKey::Up => review.list_up(),
                 InputKey::Down => review.list_down(),
                 InputKey::AnnotationDelete => review.delete_selected(),
+                InputKey::AnnotationEdit => review.begin_edit_selected(),
                 InputKey::PopupConfirm => review.open_export_menu(),
                 InputKey::PopupCancel => review.close(),
                 _ => review,
