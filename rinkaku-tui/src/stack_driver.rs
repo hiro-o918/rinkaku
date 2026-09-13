@@ -56,6 +56,15 @@ pub(crate) fn step_after_exit(exit: AppExit) -> StackStep {
     }
 }
 
+/// The `g<Tab>` history entry to carry into the next layer's
+/// [`crate::stack::StackPosition`] (ADR 0075 amendment): the layer most
+/// recently rendered, unless that is `next_cursor` itself (a reviewer
+/// re-entering the same layer, e.g. after a failed slot, must not become
+/// their own history).
+pub(crate) fn next_last_visited(rendered_cursor: usize, next_cursor: usize) -> Option<usize> {
+    (rendered_cursor != next_cursor).then_some(rendered_cursor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +103,19 @@ mod tests {
         let actual = step_after_exit(AppExit::UpdateRequested);
 
         assert_eq!(StackStep::UpdateRequested, actual);
+    }
+
+    #[test]
+    fn should_carry_the_rendered_layer_as_history_when_moving_to_a_different_layer() {
+        let actual = next_last_visited(0, 2);
+
+        assert_eq!(Some(0), actual);
+    }
+
+    #[test]
+    fn should_have_no_history_when_re_entering_the_same_layer() {
+        let actual = next_last_visited(2, 2);
+
+        assert_eq!(None, actual);
     }
 }

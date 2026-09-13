@@ -228,10 +228,16 @@ pub enum InputKey {
     /// special-cases this variant before dispatch rather than routing it
     /// through `App::handle_key`.
     OpenPrInBrowser,
-    /// `gt` (ADR 0075): the stack layer above the current one.
+    /// `gt` / `L` (ADR 0075, `L` added by amendment): the stack layer above
+    /// the current one.
     NextPr,
-    /// `gT` (ADR 0075): the stack layer below the current one.
+    /// `gT` / `H` (ADR 0075, `H` added by amendment): the stack layer below
+    /// the current one.
     PrevPr,
+    /// `g<Tab>` (ADR 0075 amendment): jumps back to the stack layer the
+    /// reviewer was on immediately before the current one, vim's own
+    /// last-tab gesture.
+    LastPr,
     /// `U` (ADR 0054): opens the update confirmation popup once a newer
     /// released version has been found. Deliberately key-gated rather than
     /// auto-opening when the background version-check thread reports: an

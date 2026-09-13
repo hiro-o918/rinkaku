@@ -641,6 +641,61 @@ fn should_translate_uppercase_t_to_prev_pr_when_g_is_pending() {
 }
 
 #[test]
+fn should_translate_uppercase_l_to_next_pr() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('L'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::NextPr), actual);
+}
+
+#[test]
+fn should_translate_uppercase_h_to_prev_pr() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('H'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::PrevPr), actual);
+}
+
+#[test]
+fn should_translate_tab_to_last_pr_when_g_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report).handle_key(InputKey::PendingGoto);
+
+    let actual = translate_key(KeyCode::Tab, KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::LastPr), actual);
+}
+
+#[test]
+fn should_translate_plain_tab_to_jump_forward_when_no_prefix_is_pending() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Tab, KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::JumpForward), actual);
+}
+
+#[test]
+fn should_translate_tab_to_none_when_g_is_pending_and_help_overlay_is_open() {
+    // Mirrors `gt`/`gT`'s own overlay behavior: the help overlay's early
+    // return only special-cases `gg` (`ScrollToTop`), so every other
+    // g-prefixed sequence, including `g<Tab>`, is swallowed while open.
+    let report = empty_report();
+    let app = App::new(&report)
+        .handle_key(InputKey::ToggleHelp)
+        .handle_key(InputKey::PendingGoto);
+
+    let actual = translate_key(KeyCode::Tab, KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
 fn should_translate_lowercase_t_to_none_when_no_prefix_is_pending() {
     let report = empty_report();
     let app = App::new(&report);

@@ -87,11 +87,11 @@ pub(crate) fn status_line_text(app: &App, report: &Report) -> String {
                 // ADR 0076: the header row now shows stack position, so
                 // `enter: open` is unconditional again (ADR 0075 D5's own
                 // drop is reverted). Stack mode instead drops `/: search`
-                // to make room for `gt/gT: PR` — search is a Tree-pane
+                // to make room for `H/L: PR` — search is a Tree-pane
                 // feature the `?` overlay still documents in full,
                 // orthogonal to which PR is on screen.
                 crate::app::Focus::Tree if app.stack().is_some() => {
-                    "j/k: move  enter: open  gt/gT: PR  ?: help  q: quit"
+                    "j/k: move  enter: open  H/L: PR  ?: help  q: quit"
                 }
                 crate::app::Focus::Tree => "j/k: move  /: search  enter: open  ?: help  q: quit",
                 crate::app::Focus::Right if app.right_pane() == crate::app::RightPane::Diff => {
@@ -531,7 +531,8 @@ mod tests {
     // line no longer prefixes it there — instead `/: search` is dropped
     // from the Tree-focus hints (search is fully documented in the `?`
     // overlay) to make room for `enter: open` (restored unconditionally)
-    // plus the new `gt/gT: PR` hint, inside the 80-column budget (#196).
+    // plus the `H/L: PR` hint (ADR 0075 amendment: `gt`/`gT` shortened to
+    // `H`/`L` here), inside the 80-column budget (#196).
     #[test]
     fn should_show_stack_mode_tree_hints_without_a_status_line_prefix() {
         let report = empty_report_for_status_line();
@@ -540,8 +541,7 @@ mod tests {
         let actual = status_line_text(&app, &report);
 
         assert_eq!(
-            "order: topological  |  j/k: move  enter: open  gt/gT: PR  ?: help  q: quit"
-                .to_string(),
+            "order: topological  |  j/k: move  enter: open  H/L: PR  ?: help  q: quit".to_string(),
             actual
         );
     }

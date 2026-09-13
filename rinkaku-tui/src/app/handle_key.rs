@@ -758,6 +758,13 @@ impl App {
                     }
                 }
             }
+            (Screen::Entry, _, InputKey::LastPr) => {
+                if let Some(stack) = &mut self.stack
+                    && stack.move_to_last_visited()
+                {
+                    self.pr_switch_request = Some(stack.cursor());
+                }
+            }
             // `U` (ADR 0054) reaches this arm only when no update is
             // available (`self.update_available.is_none()`) — the branch
             // above this match already intercepts it and opens the popup

@@ -46,6 +46,7 @@ help:
     jump_back: "Jump back to the previous location in the jumplist"
     jump_forward: "Jump forward to the next location in the jumplist"
     next_prev_pr: "Switch to the next / previous PR of the stack (stacked --pr only)"
+    last_pr: "Jump back to the previously visited PR of the stack (stacked --pr only)"
     open_pr_in_browser: "Open the current PR's page in a web browser (--pr mode only)"
     prompt_self_update: "Prompt to self-update (only shown when a newer release is available)"
     toggle_help_overlay: "Toggle this help overlay"
@@ -77,7 +78,7 @@ help:
     cycle: "A dependency loop: two or more symbols depend on each other, so the tree stops and points back to where it first appeared"
     jumplist: "The history of gd/gr jump locations — ctrl-o/ctrl-i move back/forward through it"
 tips:
-  stacked_pr: "Reviewing a stacked PR? --pr <number> loads every open layer at once — switch layers with gt / gT."
+  stacked_pr: "Reviewing a stacked PR? --pr <number> loads every open layer at once — switch layers with H / L."
   llm_export: "Handing this off to an LLM? rinkaku --base main --format json (or md) gives you just the changed signatures and what they depend on, not the full diff."
   reading_order: "The file tree is in topological order by default — just read it top to bottom."
   diff_pane_sync: "The file tree and the Diff pane scroll together, so you can follow a signature straight to its implementation."

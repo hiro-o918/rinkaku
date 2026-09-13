@@ -325,8 +325,12 @@ fn entry_only_bindings(locale: Locale) -> Vec<KeyBinding> {
             description: rust_i18n::t!("help.binding.jump_forward", locale = tag).into_owned(),
         },
         KeyBinding {
-            keys: "gt / gT",
+            keys: "L / H  (gt / gT)",
             description: rust_i18n::t!("help.binding.next_prev_pr", locale = tag).into_owned(),
+        },
+        KeyBinding {
+            keys: "g<Tab>",
+            description: rust_i18n::t!("help.binding.last_pr", locale = tag).into_owned(),
         },
     ]
 }
