@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.26](https://github.com/hiro-o918/rinkaku/compare/v0.6.25...v0.6.26) (2026-09-13)
+
+
+### Miscellaneous
+
+* release main ([#256](https://github.com/hiro-o918/rinkaku/issues/256)) ([08f8bde](https://github.com/hiro-o918/rinkaku/commit/08f8bde0240d39e5dc88b37c9e9fdfd8112e9ba2))
+
 ## [0.6.25](https://github.com/hiro-o918/rinkaku/compare/v0.6.24...v0.6.25) (2026-08-31)
 
 
