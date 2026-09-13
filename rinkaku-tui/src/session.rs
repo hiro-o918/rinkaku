@@ -355,7 +355,7 @@ impl TuiSession {
                 continue;
             };
             if let Some(rendered) = last_rendered {
-                last_visited = stack_driver::next_last_visited(rendered, cursor);
+                last_visited = stack_driver::next_last_visited(rendered, cursor, last_visited);
             }
             previous_cursor = cursor;
 

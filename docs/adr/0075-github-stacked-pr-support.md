@@ -321,6 +321,9 @@ slot's fallback cursor" role — and passes it into the next layer's
 `StackPosition` as `last_visited`. Pressing `g<Tab>` twice toggles
 between two layers: entering layer B from A records A as B's history;
 `g<Tab>` from B enters A, which in turn now records B as A's history.
+A switch whose target slot failed falls back to the layer just rendered
+and keeps that layer's existing history unchanged — an aborted switch
+must not erase where `g<Tab>` was about to go.
 
 **Rejected alternatives:**
 

@@ -74,8 +74,6 @@ impl StackPosition {
         }
     }
 
-    /// `g<Tab>`: jumps to `last_visited` if there is one and it differs
-    /// from the current cursor.
     pub fn move_to_last_visited(&mut self) -> bool {
         match self.last_visited {
             Some(target) if target != self.cursor => {
