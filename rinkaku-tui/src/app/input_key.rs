@@ -220,6 +220,10 @@ pub enum InputKey {
     /// `d` while the annotations list overlay is open: deletes the
     /// annotation under the list cursor.
     AnnotationDelete,
+    /// `e` while the annotations list overlay is open: reopens the compose
+    /// overlay over the annotation under the list cursor, prefilled with
+    /// its existing body.
+    AnnotationEdit,
     /// `w`/`W` (ADR 0050): opens the current PR's page in the reviewer's
     /// default web browser. Global, like `d`/`r`/`s` — translated
     /// regardless of screen/focus. Needs the session's `PrContext`, which

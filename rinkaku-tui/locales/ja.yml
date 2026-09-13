@@ -34,6 +34,7 @@ help:
     open_annotations_list: "レビューアノテーション一覧を開く"
     annotations_list_move: "アノテーション一覧: カーソル移動"
     annotations_list_export: "アノテーション一覧: エクスポートメニューを開く"
+    annotations_list_edit: "アノテーション一覧: 選択中のアノテーションを編集"
     annotations_list_delete: "アノテーション一覧: 選択中のアノテーションを削除"
     annotations_list_close: "アノテーション一覧を閉じる"
     toggle_detail_diff: "右ペインを Detail と Diff で切り替え"

@@ -24,6 +24,7 @@ mod compose_tests {
             &ReviewMode::Compose {
                 snapshot: snapshot("lib.rs"),
                 buffer: String::new(),
+                editing: None,
             },
             state.mode()
         );
@@ -40,6 +41,7 @@ mod compose_tests {
             &ReviewMode::Compose {
                 snapshot: snapshot("lib.rs"),
                 buffer: "hi".to_string(),
+                editing: None,
             },
             state.mode()
         );
@@ -57,6 +59,7 @@ mod compose_tests {
             &ReviewMode::Compose {
                 snapshot: snapshot("lib.rs"),
                 buffer: "h".to_string(),
+                editing: None,
             },
             state.mode()
         );
@@ -91,6 +94,7 @@ mod compose_tests {
             &ReviewMode::Compose {
                 snapshot: snapshot("lib.rs"),
                 buffer: String::new(),
+                editing: None,
             },
             state.mode()
         );
@@ -250,6 +254,138 @@ mod list_tests {
         assert_eq!(&ReviewMode::List { cursor: 0 }, state.mode());
         assert!(state.annotations().is_empty());
         assert_eq!(0, state.revision());
+    }
+}
+
+mod edit_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn state_with_two_annotations() -> ReviewState {
+        ReviewState::default()
+            .begin_compose(snapshot("a.rs"))
+            .push_char('a')
+            .confirm_compose()
+            .begin_compose(snapshot("b.rs"))
+            .push_char('b')
+            .confirm_compose()
+    }
+
+    #[test]
+    fn should_prefill_compose_from_the_selected_annotation_when_beginning_edit() {
+        let state = state_with_two_annotations()
+            .open_list()
+            .list_down()
+            .begin_edit_selected();
+
+        assert_eq!(
+            &ReviewMode::Compose {
+                snapshot: SelectionSnapshot::from(&state.annotations()[1]),
+                buffer: "b".to_string(),
+                editing: Some(1),
+            },
+            state.mode()
+        );
+    }
+
+    #[test]
+    fn should_replace_the_body_and_bump_revision_and_return_to_list_when_confirming_an_edit() {
+        let state = state_with_two_annotations()
+            .open_list()
+            .list_down()
+            .begin_edit_selected()
+            .push_char('!')
+            .confirm_compose();
+
+        assert_eq!(&ReviewMode::List { cursor: 1 }, state.mode());
+        assert_eq!(
+            &[
+                Annotation {
+                    location: AnnotationLocation::from(snapshot("a.rs")),
+                    body: "a".to_string(),
+                    signature: Some("fn foo()".to_string()),
+                    pr_number: None,
+                },
+                Annotation {
+                    location: AnnotationLocation::from(snapshot("b.rs")),
+                    body: "b!".to_string(),
+                    signature: Some("fn foo()".to_string()),
+                    pr_number: None,
+                },
+            ],
+            state.annotations()
+        );
+        assert_eq!(3, state.revision());
+    }
+
+    #[test]
+    fn should_keep_the_original_body_and_still_return_to_list_when_confirming_an_edit_with_a_blank_buffer()
+     {
+        let state = state_with_two_annotations()
+            .open_list()
+            .list_down()
+            .begin_edit_selected()
+            .backspace()
+            .push_char(' ')
+            .confirm_compose();
+
+        assert_eq!(&ReviewMode::List { cursor: 1 }, state.mode());
+        assert_eq!(
+            &[
+                Annotation {
+                    location: AnnotationLocation::from(snapshot("a.rs")),
+                    body: "a".to_string(),
+                    signature: Some("fn foo()".to_string()),
+                    pr_number: None,
+                },
+                Annotation {
+                    location: AnnotationLocation::from(snapshot("b.rs")),
+                    body: "b".to_string(),
+                    signature: Some("fn foo()".to_string()),
+                    pr_number: None,
+                },
+            ],
+            state.annotations()
+        );
+        assert_eq!(2, state.revision());
+    }
+
+    #[test]
+    fn should_return_to_list_at_the_same_cursor_when_cancelling_an_edit() {
+        let state = state_with_two_annotations()
+            .open_list()
+            .list_down()
+            .begin_edit_selected()
+            .push_char('!')
+            .cancel_compose();
+
+        assert_eq!(&ReviewMode::List { cursor: 1 }, state.mode());
+        assert_eq!(
+            &[
+                Annotation {
+                    location: AnnotationLocation::from(snapshot("a.rs")),
+                    body: "a".to_string(),
+                    signature: Some("fn foo()".to_string()),
+                    pr_number: None,
+                },
+                Annotation {
+                    location: AnnotationLocation::from(snapshot("b.rs")),
+                    body: "b".to_string(),
+                    signature: Some("fn foo()".to_string()),
+                    pr_number: None,
+                },
+            ],
+            state.annotations()
+        );
+        assert_eq!(2, state.revision());
+    }
+
+    #[test]
+    fn should_be_a_no_op_when_beginning_edit_on_an_empty_annotation_list() {
+        let state = ReviewState::default().open_list().begin_edit_selected();
+
+        assert_eq!(&ReviewMode::List { cursor: 0 }, state.mode());
+        assert!(state.annotations().is_empty());
     }
 }
 

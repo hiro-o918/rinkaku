@@ -444,6 +444,74 @@ fn should_translate_uppercase_e_to_none() {
 }
 
 #[test]
+fn should_translate_lowercase_e_to_expand_all_while_idle() {
+    let report = empty_report();
+    let app = App::new(&report);
+
+    let actual = translate_key(KeyCode::Char('e'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::ExpandAll), actual);
+}
+
+#[test]
+fn should_translate_lowercase_e_to_annotation_edit_while_annotations_list_is_open() {
+    let report = empty_report();
+    let review = crate::review::ReviewState::default().open_list();
+    let app = App::new(&report).with_review(review);
+
+    let actual = translate_key(KeyCode::Char('e'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::AnnotationEdit), actual);
+}
+
+#[test]
+fn should_translate_lowercase_e_to_none_while_export_menu_is_open() {
+    let report = empty_report();
+    let review = crate::review::ReviewState::default()
+        .open_list()
+        .open_export_menu();
+    let app = App::new(&report).with_review(review);
+
+    let actual = translate_key(KeyCode::Char('e'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_translate_lowercase_e_to_none_while_verdict_menu_is_open() {
+    let report = empty_report();
+    let review = crate::review::ReviewState::default()
+        .open_list()
+        .open_export_menu()
+        .confirm_export(true);
+    let app = App::new(&report).with_review(review);
+
+    let actual = translate_key(KeyCode::Char('e'), KeyModifiers::NONE, &app);
+
+    assert_eq!(None, actual);
+}
+
+#[test]
+fn should_translate_lowercase_e_to_compose_char_while_composing_an_annotation() {
+    let report = report_with_one_symbol();
+    let snapshot = crate::review::SelectionSnapshot {
+        target: crate::review::AnnotationTarget::Symbol,
+        path: "lib.rs".to_string(),
+        symbol_id: Some("lib.rs::foo".to_string()),
+        symbol_name: Some("foo".to_string()),
+        range: Some((1, 1)),
+        anchor: Some((1, 1)),
+        signature: Some("fn foo()".to_string()),
+    };
+    let review = crate::review::ReviewState::default().begin_compose(snapshot);
+    let app = App::new(&report).with_review(review);
+
+    let actual = translate_key(KeyCode::Char('e'), KeyModifiers::NONE, &app);
+
+    assert_eq!(Some(InputKey::ComposeChar('e')), actual);
+}
+
+#[test]
 fn should_translate_uppercase_c_to_none_without_control_modifier() {
     let report = empty_report();
     let app = App::new(&report);

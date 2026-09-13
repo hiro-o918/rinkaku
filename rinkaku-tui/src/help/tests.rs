@@ -210,7 +210,7 @@ fn should_document_review_annotations_bindings_in_a_review_group() {
 
     let keys: Vec<&str> = review.bindings.iter().map(|binding| binding.keys).collect();
 
-    assert_eq!(vec!["a", "A", "j/k", "Enter", "d", "Esc"], keys);
+    assert_eq!(vec!["a", "A", "j/k", "Enter", "e", "d", "Esc"], keys);
 }
 
 #[test]

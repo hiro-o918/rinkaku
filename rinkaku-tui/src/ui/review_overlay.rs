@@ -28,9 +28,11 @@ pub(crate) fn draw_review_overlay(
 ) {
     match review.mode() {
         ReviewMode::Idle => {}
-        ReviewMode::Compose { snapshot, buffer } => {
-            draw_compose_overlay(frame, full_area, snapshot, buffer)
-        }
+        ReviewMode::Compose {
+            snapshot,
+            buffer,
+            editing,
+        } => draw_compose_overlay(frame, full_area, snapshot, buffer, editing.is_some()),
         ReviewMode::List { cursor } => draw_annotations_overlay(frame, review, *cursor, full_area),
         ReviewMode::ExportMenu { cursor } => {
             draw_export_menu_overlay(frame, sink_a_available, *cursor, full_area)
@@ -46,11 +48,17 @@ fn draw_compose_overlay(
     full_area: Rect,
     snapshot: &crate::review::SelectionSnapshot,
     buffer: &str,
+    is_editing: bool,
 ) {
     let overlay_area = centered_rect(full_area, 70, 50);
     frame.render_widget(Clear, overlay_area);
 
-    let title = format!(" New annotation: {} ", compose_title_location(snapshot));
+    let title_label = if is_editing {
+        "Edit annotation"
+    } else {
+        "New annotation"
+    };
+    let title = format!(" {title_label}: {} ", compose_title_location(snapshot));
     let block = Block::bordered().title(title);
     let mut lines: Vec<Line<'static>> = vec![Line::raw(buffer.to_string())];
     lines.push(Line::raw(""));
@@ -132,7 +140,7 @@ fn draw_annotations_overlay(
     }
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "j/k: move  Enter: export  d: delete  Esc/q: close",
+        "j/k: move  Enter: export  e: edit  d: delete  Esc/q: close",
         Style::default().add_modifier(Modifier::DIM),
     ));
 

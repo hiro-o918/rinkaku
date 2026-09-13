@@ -64,10 +64,19 @@ pub(crate) fn translate_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -
         };
     }
     let code = normalize_fullwidth_key(code);
-    match app.review().mode() {
+    let review_mode = app.review().mode();
+    match review_mode {
         review::ReviewMode::List { .. }
         | review::ReviewMode::ExportMenu { .. }
         | review::ReviewMode::VerdictMenu { .. } => {
+            // `e` (edit) only applies to the annotations list itself, not
+            // the export/verdict menus it can open — checked ahead of the
+            // shared list/menu keymap below so it does not have to repeat
+            // that keymap's own arms.
+            if matches!(review_mode, review::ReviewMode::List { .. }) && code == KeyCode::Char('e')
+            {
+                return Some(InputKey::AnnotationEdit);
+            }
             return match code {
                 KeyCode::Up | KeyCode::Char('k') => Some(InputKey::Up),
                 KeyCode::Down | KeyCode::Char('j') => Some(InputKey::Down),

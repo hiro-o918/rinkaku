@@ -88,8 +88,8 @@ caveats on ordering and dependency resolution.
 ### Leaving review notes
 
 Press `a` over a symbol row to attach a note; `A` opens the notes list
-(`j`/`k` to move, `Enter` to export, `d` to delete). Export goes to
-whichever sinks apply to how you launched the TUI:
+(`j`/`k` to move, `Enter` to export, `e` to edit, `d` to delete). Export
+goes to whichever sinks apply to how you launched the TUI:
 
 - **GitHub PR review** — only when you started with `rinkaku --pr
   <url or number>`. Picking this opens a verdict menu (Approve /

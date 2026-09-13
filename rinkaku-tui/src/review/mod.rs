@@ -96,6 +96,24 @@ impl From<SelectionSnapshot> for AnnotationLocation {
     }
 }
 
+/// Rebuilds the [`SelectionSnapshot`] an existing [`Annotation`] was
+/// originally composed from — [`ReviewState::begin_edit_selected`]'s way of
+/// reopening the compose overlay over an annotation already on the list.
+impl From<&Annotation> for SelectionSnapshot {
+    fn from(annotation: &Annotation) -> Self {
+        let location = &annotation.location;
+        Self {
+            target: location.target,
+            path: location.path.clone(),
+            symbol_id: location.symbol_id.clone(),
+            symbol_name: location.symbol_name.clone(),
+            range: location.range,
+            anchor: location.anchor,
+            signature: annotation.signature.clone(),
+        }
+    }
+}
+
 /// A PR's identity, enough to post a review against it (ADR 0048 sink A)
 /// and to label it in the header (ADR 0076): assembled once in `main.rs`
 /// after `run_analysis` succeeds from `PrInfo`/`PrArg`/
@@ -162,6 +180,9 @@ pub enum ReviewMode {
     Compose {
         snapshot: SelectionSnapshot,
         buffer: String,
+        /// `Some(i)` when editing `annotations[i]` in place, `None` when
+        /// composing a new annotation.
+        editing: Option<usize>,
     },
     List {
         cursor: usize,
@@ -262,6 +283,7 @@ impl ReviewState {
         self.mode = ReviewMode::Compose {
             snapshot,
             buffer: String::new(),
+            editing: None,
         };
         self
     }
@@ -284,35 +306,51 @@ impl ReviewState {
         self
     }
 
-    /// Confirms the in-progress compose: appends an [`Annotation`] built
-    /// from the snapshot and buffer and returns to [`ReviewMode::Idle`],
-    /// unless the buffer is empty or whitespace-only, in which case
-    /// composing is simply abandoned (no annotation is added) — mirrors
-    /// [`Self::cancel_compose`] for a blank buffer, since an empty
-    /// annotation carries nothing worth recording. A no-op outside
-    /// [`ReviewMode::Compose`].
+    /// Confirms the in-progress compose, dispatching on `editing` to either
+    /// replace an existing annotation's body or append a new one. A no-op
+    /// outside [`ReviewMode::Compose`].
     pub fn confirm_compose(mut self) -> Self {
-        if let ReviewMode::Compose { snapshot, buffer } = self.mode {
-            if !buffer.trim().is_empty() {
-                let signature = snapshot.signature.clone();
-                self.annotations.push(Annotation {
-                    location: snapshot.into(),
-                    body: buffer,
-                    signature,
-                    pr_number: self.current_pr,
-                });
-                self.revision += 1;
+        if let ReviewMode::Compose {
+            snapshot,
+            buffer,
+            editing,
+        } = self.mode
+        {
+            match editing {
+                Some(index) => {
+                    if !buffer.trim().is_empty() {
+                        self.annotations[index].body = buffer;
+                        self.revision += 1;
+                    }
+                    self.mode = ReviewMode::List { cursor: index };
+                }
+                None => {
+                    if !buffer.trim().is_empty() {
+                        let signature = snapshot.signature.clone();
+                        self.annotations.push(Annotation {
+                            location: snapshot.into(),
+                            body: buffer,
+                            signature,
+                            pr_number: self.current_pr,
+                        });
+                        self.revision += 1;
+                    }
+                    self.mode = ReviewMode::Idle;
+                }
             }
-            self.mode = ReviewMode::Idle;
         }
         self
     }
 
-    /// Abandons the in-progress compose without adding an annotation — a
-    /// no-op outside [`ReviewMode::Compose`].
+    /// Abandons the in-progress compose without changing any annotation,
+    /// returning to wherever it was opened from. A no-op outside
+    /// [`ReviewMode::Compose`].
     pub fn cancel_compose(mut self) -> Self {
-        if matches!(self.mode, ReviewMode::Compose { .. }) {
-            self.mode = ReviewMode::Idle;
+        if let ReviewMode::Compose { editing, .. } = self.mode {
+            self.mode = match editing {
+                Some(index) => ReviewMode::List { cursor: index },
+                None => ReviewMode::Idle,
+            };
         }
         self
     }
@@ -384,6 +422,23 @@ impl ReviewState {
             let new_len = self.annotations.len();
             self.mode = ReviewMode::List {
                 cursor: cursor.min(new_len.saturating_sub(1)),
+            };
+        }
+        self
+    }
+
+    /// Opens the compose overlay over the annotation the list cursor
+    /// currently points at, prefilled with its existing body — a no-op
+    /// outside [`ReviewMode::List`] or when the list is empty.
+    pub fn begin_edit_selected(mut self) -> Self {
+        if let ReviewMode::List { cursor } = self.mode
+            && cursor < self.annotations.len()
+        {
+            let annotation = &self.annotations[cursor];
+            self.mode = ReviewMode::Compose {
+                snapshot: SelectionSnapshot::from(annotation),
+                buffer: annotation.body.clone(),
+                editing: Some(cursor),
             };
         }
         self
