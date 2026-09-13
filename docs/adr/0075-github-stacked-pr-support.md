@@ -188,6 +188,10 @@ is today.
 > returns to the Tree-focus hint unconditionally, and `/: search`
 > becomes the entry stack mode drops instead, to make room for it.
 
+> **Amended below**: `gt`/`gT` gained one-key aliases `L`/`H`, and a new
+> `g<Tab>` jumps back to the last-visited layer; see "Amendment: one-key
+> layer switching and last-visited jump".
+
 ### D6. Annotations carry their PR; export groups by it
 
 `Annotation` gains `pr_number: Option<u64>`. `ReviewState` gains
@@ -277,6 +281,67 @@ title) alongside them; a number without an entry renders as `## PR
   for the current layer's analysis to finish (a scoped thread joins on
   exit; a cancellation flag is checked between layers, not inside
   `analyze_diff`). The wait is bounded by one layer's analysis time.
+
+## Amendment: one-key layer switching and last-visited jump
+
+A reviewer reported `gT` — two keys, one of them Shift — as slower to
+reach than they expected for a gesture pressed once per layer of a deep
+stack. This amendment adds two one-key alternatives on top of D5's
+`gt`/`gT`, which are kept unchanged for compatibility.
+
+**`L`/`H` alias `gt`/`gT`.** Both are unbound today (lowercase `h` is
+`FocusLeft` while the right pane has focus; uppercase `H`/`L` are free
+everywhere), and `H`/`L` is the rebinding a vim user already reaches
+for when `gt`/`gT` feels like too many keystrokes for something pressed
+often — the same rationale D5 gave for choosing `gt`/`gT` itself over
+an unfamiliar pair. Translated to the same `InputKey::NextPr`/`PrevPr`
+variants `gt`/`gT` already produce, so `App::handle_key` needs no new
+arm and every existing D5 behavior (no-op outside stack mode) applies
+unchanged. The status-line `gt/gT: PR` hint (ADR 0076) is shortened to
+`H/L: PR` to keep both primary keys visible within the 80-column
+budget; the `?` overlay documents both forms as `L / H  (gt / gT)`.
+
+**`g<Tab>` jumps to the last-visited layer.** vim's own gesture for "the
+tab I was just on," reusing the existing `g`-prefix state machine (ADR
+0022) the same way `gd`/`gr`/`gt`/`gT` already do — no new prefix key is
+introduced. A new `InputKey::LastPr` is a no-op both outside stack mode
+and when there is no last-visited layer yet.
+
+The history itself belongs to `crate::session::TuiSession`'s driver
+loop, not `StackPosition`: each layer switch tears down and rebuilds
+its own `App`/`StackPosition` from scratch (D4's own design), so
+nothing inside a single layer's session can observe a previous one.
+`StackPosition` gains a `last_visited: Option<usize>` field (set via a
+`with_last_visited` wither, kept separate from the existing
+`new(trunk, entries, cursor)` constructor so its many call sites need
+no change) and `move_to_last_visited`, mirroring `move_up`/`move_down`.
+The driver tracks the last layer that actually rendered — not
+`previous_cursor`, which already serves the unrelated "the failed
+slot's fallback cursor" role — and passes it into the next layer's
+`StackPosition` as `last_visited`. Pressing `g<Tab>` twice toggles
+between two layers: entering layer B from A records A as B's history;
+`g<Tab>` from B enters A, which in turn now records B as A's history.
+
+**Rejected alternatives:**
+
+- **Number jump (`1`-`9` to a layer by position).** Bare digits are
+  vim's count-prefix grammar (`3j`, `5gt` in real vim); claiming them
+  outright would collide with that convention across the rest of this
+  TUI's bindings. A `g1`-`g9` form avoids the collision but stacks
+  rarely run deep enough (D5's own review of real stacks tops out
+  around 4-5 layers) to justify nine new bindings and their `?`-overlay
+  entries for a depth `gt`/`gT`/`L`/`H` already traverse in a few
+  presses.
+- **A leader key.** `g` already serves that role for this TUI's
+  multi-key gestures (`gd`/`gr`/`gg`/`gt`/`gT`, now `g<Tab>`); adding a
+  second leader would fragment one mental model into two for no new
+  capability. Bindings are also not user-configurable yet, so there is
+  no way to let a reviewer choose their own leader instead.
+- **Arrow keys, or `Tab`/`Shift-Tab`.** This TUI's vocabulary is vim's
+  throughout (D5's own reasoning against emacs-style `ctrl-n`/`ctrl-p`
+  applies equally to arrow keys). Plain `Tab` is already bound to
+  `InputKey::JumpForward` (the jumplist, ADR 0022); repurposing it for
+  stack layers would collide with an existing, unrelated gesture.
 
 ## Amendment history of amended ADRs
 
